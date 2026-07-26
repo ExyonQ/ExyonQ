@@ -62,7 +62,7 @@ http = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1", "http2", "client"] }
 hyper-util = { version = "0.1", features = ["server-auto", "client-legacy", "tokio", "http1", "http2"] }
-notify = "7"
+notify = "8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
