@@ -1,0 +1,46 @@
+# Keep Docker build context small for benchmarks/docker/Dockerfile.exyonq
+# (context is repo root). Only paths COPY'd by that Dockerfile need to be present.
+
+.git
+.cursor
+.github
+graphify-out
+target
+**/target
+
+# Huge local evidence / tools — never needed in product image build
+benchmarks/results
+benchmarks/results-dev
+benchmarks/tools
+benchmarks/rivals-cache
+benchmarks/reports
+benchmarks/p1-anton
+benchmarks/p1.7
+benchmarks/p1.7-r
+benchmarks/p1.7-rr
+benchmarks/plan10a
+benchmarks/plan10b
+benchmarks/performance-contract
+benchmarks/baselines
+benchmarks/pingora-reference
+benchmarks/scripts
+benchmarks/modern-rivals
+docs
+study
+fuzz
+dist
+packaging
+integrations
+sbom.cdx.json
+*.md
+!benchmarks/docker/**
+!benchmarks/configs/**
+!benchmarks/scenarios/fixtures/**
+!benchmarks/scenarios/payloads/**
+!benchmarks/exyonq-bench/**
+!benchmarks/mock-upstream/**
+
+# IDE / OS junk
+**/.DS_Store
+**/*.swp
+**/*~

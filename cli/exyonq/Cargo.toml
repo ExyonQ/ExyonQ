@@ -1,0 +1,68 @@
+[package]
+name = "exyonq"
+description = "ExyonQ server CLI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "exyonq"
+path = "src/main.rs"
+
+[features]
+# Default: system allocator + s2n H3 provider (P13D Phase 6R).
+# jemalloc is an opt-in Rust #[global_allocator]; glibc remains libc.
+# Quinn legacy: --features http3-provider-quinn-legacy --no-default-features (rollback).
+default = ["http3-provider-s2n"]
+allocator-jemalloc = ["dep:tikv-jemallocator"]
+http3-provider-quinn-legacy = [
+  "exyonq-core/http3-provider-quinn-legacy",
+  "exyonq-mod-http3/http3-provider-quinn-legacy",
+]
+http3-provider-s2n = [
+  "exyonq-core/http3-provider-s2n",
+  "exyonq-mod-http3/http3-provider-s2n",
+]
+http3-provider-quiche = [
+  "exyonq-core/http3-provider-quiche",
+  "exyonq-mod-http3/http3-provider-quiche",
+]
+# P8O3 diagnostic-only. Default off. Not for release or competitive ranking.
+p8-app-attribution = ["exyonq-core/p8-app-attribution"]
+# P8T STEP_3 diagnostic single-buffer writer. Default off.
+p8-transport-diag = ["exyonq-core/p8-transport-diag"]
+# P8T-FIX A/B baseline (pre-fix 16 KiB batching). Default off.
+p8t-fix-baseline = ["exyonq-core/p8t-fix-baseline"]
+# P8TP EXPERIMENT_2 write_vectored TE frames. Default off.
+p8tp-vectored = ["exyonq-core/p8tp-vectored"]
+# P8TP cork path (needs peer fd capture; inert without box_wire_stream_with_fd).
+p8tp-platform-cork = ["exyonq-core/p8tp-platform-cork"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+exyonq-core = { workspace = true }
+exyonq-platform-linux = { workspace = true }
+exyonq-module-api = { path = "../../module-api" }
+exyonq-mod-fastcgi = { workspace = true, features = ["core-bridge"] }
+exyonq-mod-static = { workspace = true }
+exyonq-mod-proxy = { workspace = true }
+exyonq-mod-htaccess.workspace = true
+exyonq-mod-tls.workspace = true
+exyonq-mod-http3 = { workspace = true }
+exyonq-ops-runtime.workspace = true
+exyonq-discovery-runtime.workspace = true
+exyonq-reload-runtime.workspace = true
+exyonq-acme.workspace = true
+exyonq-metrics.workspace = true
+exyonq-config-ir.workspace = true
+exyonq-config-merge.workspace = true
+exyonq-config-schema.workspace = true
+exyonq-config-surface.workspace = true
+exyonq-config-cli.workspace = true
+exyonq-cache-redis = { path = "../../crates/exyonq-cache-redis" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# Optional process-wide Rust allocator (compile-time only; not a glibc substitute).
+tikv-jemallocator = { version = "0.7", optional = true }

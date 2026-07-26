@@ -1,0 +1,16 @@
+# Local-only: cross-compile Linux GNU from macOS (ring + aws-lc-sys need a target C compiler).
+# Excluded from git via .git/info/exclude — do NOT commit (keeps PR scope clean).
+
+[target.x86_64-unknown-linux-gnu]
+linker = "x86_64-linux-gnu-gcc"
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+[env]
+CC_x86_64_unknown_linux_gnu = "x86_64-linux-gnu-gcc"
+CXX_x86_64_unknown_linux_gnu = "x86_64-linux-gnu-g++"
+AR_x86_64_unknown_linux_gnu = "x86_64-linux-gnu-ar"
+CC_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-gcc"
+CXX_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-g++"
+AR_aarch64_unknown_linux_gnu = "aarch64-linux-gnu-ar"

@@ -1,0 +1,10 @@
+[package]
+name = "exyonq-addon-sdk"
+description = "ExyonQ addon SDK — helpers and builders for addon-api 1.x"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-addon-api = { workspace = true }
+semver = "1"

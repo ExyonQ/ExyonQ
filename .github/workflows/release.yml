@@ -1,0 +1,356 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  security-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --features cli
+      - uses: taiki-e/install-action@nextest
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.3.2.1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: cargo audit
+        run: cargo audit
+      - name: Verify release legal bundle
+        run: bash scripts/legal/verify-release-legal-bundle.sh
+      - name: cargo deny check advisories bans sources
+        run: cargo deny check advisories bans sources
+      - name: security tests
+        run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security)' --test-threads=1
+      - name: verify release audit
+        run: bash scripts/verify-release-audit.sh "${{ steps.ver.outputs.version }}"
+
+  compliance-artifacts:
+    needs: security-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --features cli
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+      - name: Generate release compliance artifacts
+        shell: bash
+        run: bash scripts/legal/generate-release-compliance-artifacts.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-compliance
+          path: |
+            THIRD_PARTY_NOTICES.md
+            sbom.cdx.json
+
+  build:
+    name: ${{ matrix.target }}
+    needs: compliance-artifacts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: exyonq-linux-amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: exyonq-linux-arm64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: exyonq-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: exyonq-windows-amd64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-compliance
+          path: .
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build binaries (unix)
+        if: runner.os != 'Windows'
+        # P1.5-WS6: --locked required for release artifacts.
+        run: cargo build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli --target ${{ matrix.target }}
+      - name: Build binaries (windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --locked -p exyonq --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ "$VERSION" == "$GITHUB_REF" ]]; then VERSION="0.3.2.1"; fi
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu) ARCH_LABEL=amd64 ;;
+            aarch64-unknown-linux-gnu) ARCH_LABEL=arm64 ;;
+            aarch64-apple-darwin) ARCH_LABEL=arm64 ;;
+            *) ARCH_LABEL=unknown ;;
+          esac
+          cp target/${{ matrix.target }}/release/exyonq dist/
+          cp target/${{ matrix.target }}/release/exyonqctl dist/
+          cp target/${{ matrix.target }}/release/exyonq-compat dist/
+          cp LICENSE NOTICE THIRD_PARTY_NOTICES.md sbom.cdx.json dist/
+          # Legacy flat tarball (compat CLI + legal) — retained for historical consumers.
+          tar -czf dist/${{ matrix.artifact }}.tar.gz -C dist \
+            exyonq exyonqctl exyonq-compat LICENSE NOTICE THIRD_PARTY_NOTICES.md sbom.cdx.json
+          # WS6 product layout for Linux GNU (versioned) — matches p15-ws6-build-artifacts staging.
+          if [[ "${{ matrix.target }}" == *-unknown-linux-gnu ]]; then
+            STAGE="$(mktemp -d)"
+            mkdir -p "$STAGE/usr/bin" "$STAGE/etc/exyonq" \
+              "$STAGE/usr/lib/systemd/system" "$STAGE/usr/lib/tmpfiles.d" \
+              "$STAGE/etc/logrotate.d" "$STAGE/usr/share/doc/exyonq" \
+              "$STAGE/usr/share/licenses/exyonq"
+            install -m 0755 dist/exyonq dist/exyonqctl "$STAGE/usr/bin/"
+            install -m 0644 packaging/config/config.toml.example "$STAGE/etc/exyonq/"
+            install -m 0644 packaging/systemd/exyonq.service "$STAGE/usr/lib/systemd/system/"
+            install -m 0644 packaging/tmpfiles.d/exyonq.conf "$STAGE/usr/lib/tmpfiles.d/" || true
+            install -m 0644 packaging/logrotate.d/exyonq "$STAGE/etc/logrotate.d/" || true
+            install -m 0644 packaging/README.md "$STAGE/usr/share/doc/exyonq/README.md" || true
+            install -m 0644 LICENSE NOTICE "$STAGE/usr/share/licenses/exyonq/" || true
+            printf 'version=%s\ntarget=%s\nprofile=release\ncargo_locked=true\n' \
+              "$VERSION" "${{ matrix.target }}" >"$STAGE/build-manifest.txt"
+            printf '{"version":"%s","target":"%s","cargo_locked":true}\n' \
+              "$VERSION" "${{ matrix.target }}" >"$STAGE/build-manifest.json"
+            tar -C "$STAGE" -czf "dist/exyonq-${VERSION}-linux-${ARCH_LABEL}.tar.gz" \
+              usr etc build-manifest.json build-manifest.txt
+            rm -rf "$STAGE"
+          fi
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/exyonq.exe dist/exyonq.exe
+          Copy-Item target/${{ matrix.target }}/release/exyonqctl.exe dist/exyonqctl.exe -ErrorAction SilentlyContinue
+          Copy-Item LICENSE, NOTICE, THIRD_PARTY_NOTICES.md, sbom.cdx.json dist/
+          Compress-Archive -Path dist/exyonq.exe, dist/LICENSE, dist/NOTICE, dist/THIRD_PARTY_NOTICES.md, dist/sbom.cdx.json -DestinationPath dist/${{ matrix.artifact }}.zip -Force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.artifact }}.*
+            dist/exyonq-*-linux-*.tar.gz
+            dist/SHA256SUMS.txt
+            dist/build-manifest.json
+            dist/build-manifest.txt
+          if-no-files-found: warn
+
+  package-linux:
+    name: package deb/rpm amd64
+    needs: [build, compliance-artifacts]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-compliance
+          path: .
+      - uses: actions/download-artifact@v8
+        with:
+          name: exyonq-linux-amd64
+          path: dist
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+      - name: Install nfpm (pinned — no @latest; P1.5-WS6 NFPM_PIN)
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      - name: Build .deb and .rpm
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ "$VERSION" == "$GITHUB_REF" ]]; then VERSION="0.3.2.1"; fi
+          export VERSION ARCH=amd64
+          tar -xzf dist/exyonq-linux-amd64.tar.gz -C dist
+          ls -la dist/
+          nfpm pkg --config packaging/nfpm.yaml --packager deb --target dist/
+          nfpm pkg --config packaging/nfpm.yaml --packager rpm --target dist/
+          ls -la dist/*.{deb,rpm}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: exyonq-linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+
+  checksums:
+    needs: [build, package-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: exyonq-*
+          path: artifacts
+          merge-multiple: true
+      - name: Write SHA256SUMS (basename-relative — install/release flatten)
+        run: |
+          set -euo pipefail
+          : > SHA256SUMS.txt
+          while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            sha256sum "$f" | awk -v b="$base" '{print $1 "  " b}' >> SHA256SUMS.txt
+          done < <(find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z)
+          sort -u -k2,2 SHA256SUMS.txt -o SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          # Fail closed: amd64 .deb/.rpm are required release assets (package-linux).
+          deb_n="$(find artifacts -type f -name '*.deb' | wc -l | tr -d ' ')"
+          rpm_n="$(find artifacts -type f -name '*.rpm' | wc -l | tr -d ' ')"
+          if [[ "$deb_n" -lt 1 || "$rpm_n" -lt 1 ]]; then
+            echo "ERROR: expected >=1 .deb and >=1 .rpm from package-linux (deb=${deb_n} rpm=${rpm_n})" >&2
+            find artifacts -type f | head -50 >&2 || true
+            exit 1
+          fi
+          while IFS= read -r pkg; do
+            base="$(basename "$pkg")"
+            grep -F "  ${base}" SHA256SUMS.txt >/dev/null || {
+              echo "ERROR: missing checksum for package ${base}" >&2
+              exit 1
+            }
+          done < <(find artifacts -type f \( -name '*.deb' -o -name '*.rpm' \))
+          python3 -c '
+          import hashlib, json, pathlib
+          arts = []
+          root = pathlib.Path("artifacts")
+          for pat in ("*.tar.gz", "*.zip", "*.deb", "*.rpm"):
+              for p in sorted(root.rglob(pat)):
+                  h = hashlib.sha256(p.read_bytes()).hexdigest()
+                  arts.append({"name": p.name, "sha256": h, "kind": p.suffix.lstrip(".") or "file"})
+          pathlib.Path("build-manifest.json").write_text(json.dumps({
+              "schema_version": "1.0",
+              "product": "exyonq",
+              "artifacts": arts,
+              "note": "external checksum sidecar; hashes are of published basenames",
+          }, indent=2) + "\n")
+          print("wrote build-manifest.json", len(arts), "artifacts")
+          '
+      - uses: actions/upload-artifact@v7
+        with:
+          name: checksums
+          path: |
+            SHA256SUMS.txt
+            build-manifest.json
+
+  docker:
+    needs: compliance-artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-compliance
+          path: .
+      - name: Set version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.3.2.1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/exyonq/exyonq:${{ steps.ver.outputs.version }}
+            ghcr.io/exyonq/exyonq:v0.3
+            ghcr.io/exyonq/exyonq:latest
+
+  github-release:
+    needs: [security-release, build, checksums, package-linux, docker, compliance-artifacts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.3.2.1" >> "$GITHUB_OUTPUT"
+            echo "tag=v0.3.2.1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-compliance
+          path: compliance
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: exyonq-*
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: checksums
+          path: artifacts
+      - name: Flatten release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name 'SHA256SUMS.txt' -o -name 'build-manifest.json' \) \
+            -exec cp -n {} release-assets/ \;
+          # Prefer checksums artifact copies if present under nested dirs.
+          find artifacts -type f -name 'SHA256SUMS.txt' -exec cp {} release-assets/ \;
+          find artifacts -type f -name 'build-manifest.json' -exec cp {} release-assets/ \;
+          cp compliance/THIRD_PARTY_NOTICES.md compliance/sbom.cdx.json release-assets/
+          ls -la release-assets/
+          # Guard: SHA256SUMS must use basenames only (no artifacts/ prefix).
+          if grep -E '(^|/)?artifacts/' release-assets/SHA256SUMS.txt >/dev/null 2>&1; then
+            echo "ERROR: SHA256SUMS.txt contains path prefixes; installer requires basenames" >&2
+            cat release-assets/SHA256SUMS.txt >&2
+            exit 1
+          fi
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ExyonQ v${{ steps.ver.outputs.version }}
+          body_path: docs/release/v${{ steps.ver.outputs.version }}.md
+          files: release-assets/*
+          fail_on_unmatched_files: true

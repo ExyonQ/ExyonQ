@@ -1,0 +1,19 @@
+[package]
+name = "exyonq-cache-redis"
+description = "WC7B2 — Redis Streams adapter for FPC L2 coordination (invalidation + generation)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-module-api = { workspace = true }
+redis = { version = "0.27.6", default-features = true, features = ["streams", "script"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hmac = "0.12"
+sha2 = "0.10"
+
+[dev-dependencies]
+exyonq-cache = { workspace = true }
+redis = { version = "0.27.6", default-features = true, features = ["streams"] }
+serde_json = { workspace = true }

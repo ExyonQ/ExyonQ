@@ -1,0 +1,16 @@
+/var/log/exyonq/*.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 exyonq exyonq
+    sharedscripts
+    postrotate
+        # Prefer control-plane reload over SIGHUP when the daemon is running.
+        if [ -S /run/exyonq/control.sock ]; then
+            /usr/bin/exyonqctl reload --socket /run/exyonq/control.sock >/dev/null 2>&1 || true
+        fi
+    endscript
+}

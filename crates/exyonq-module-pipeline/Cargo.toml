@@ -1,0 +1,23 @@
+[package]
+name = "exyonq-module-pipeline"
+description = "Cross-cutting module pipeline orchestration (compression, ratelimit, addons)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+exyonq-compression = { workspace = true }
+exyonq-config-ir = { workspace = true }
+exyonq-metrics = { workspace = true }
+exyonq-module-api = { path = "../../module-api" }
+exyonq-ratelimit = { workspace = true }
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+semver.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

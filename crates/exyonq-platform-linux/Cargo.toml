@@ -1,0 +1,31 @@
+[package]
+name = "exyonq-platform-linux"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "INTERNAL WORKSPACE PLATFORM CRATE — Linux platform shell (PS3A). NOT STABLE PUBLIC API."
+
+[dependencies]
+bytes = { workspace = true }
+# P13D: do not enable core HTTP/3 provider defaults here — the leaf binary selects one provider.
+exyonq-core = { path = "../../core", default-features = false }
+exyonq-module-api = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+socket2 = "0.5"
+
+[features]
+# Standalone `cargo check -p exyonq-platform-linux` convenience only.
+# When consumed by `exyonq`, the binary passes default-features=false and selects the provider.
+default = ["http3-provider-s2n"]
+http3-provider-quinn-legacy = ["exyonq-core/http3-provider-quinn-legacy"]
+http3-provider-s2n = ["exyonq-core/http3-provider-s2n"]
+http3-provider-quiche = ["exyonq-core/http3-provider-quiche"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+exyonq-mod-static = { workspace = true }
+exyonq-mod-proxy = { workspace = true }

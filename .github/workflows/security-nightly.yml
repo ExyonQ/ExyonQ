@@ -1,0 +1,41 @@
+name: Security Nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # static_files tests use canonicalize/realpath; Miri isolation blocks those syscalls.
+  MIRIFLAGS: -Zmiri-disable-isolation
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run fuzz targets
+        run: bash scripts/security-fuzz.sh --ci
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - name: Miri static_files tests
+        run: |
+          cargo +nightly miri test -p exyonq-core static_files -- --nocapture
+      - name: Miri sendfile tests
+        run: |
+          cargo +nightly miri test -p exyonq-core sendfile -- --nocapture || true

@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Promote warnings to errors; allow dead_code for env-gated epoll/io_uring paths
+  # that compile in release but activate only via runtime flags (EXYONQ_EPOLL_*).
+  RUSTFLAGS: -Dwarnings -Adead_code
+
+jobs:
+  check:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: verify no private paths
+        run: bash scripts/verify-no-private-paths.sh
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: install nextest
+        uses: taiki-e/install-action@nextest
+      - name: test
+        run: cargo nextest run --workspace --exclude exyonq-wasm-host
+
+  wasm-host-check:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: test wasm host
+        run: cargo test -p exyonq-wasm-host
+      - name: clippy wasm host
+        run: cargo clippy -p exyonq-wasm-host --all-targets -- -D warnings
+
+  semver-checks:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Cache cargo tools
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin
+          key: cargo-tools-semver-${{ runner.os }}
+      - name: install cargo-semver-checks
+        run: cargo install cargo-semver-checks --locked || true
+      - name: addon-api semver
+        # exyonq-addon-api 1.0.0 is not yet published to crates.io and has no
+        # tagged baseline, so a release comparison has nothing to diff against.
+        # Keep informational until the first published baseline exists.
+        run: |
+          if cargo semver-checks check-release -p exyonq-addon-api; then
+            echo "addon-api semver check passed"
+          else
+            echo "Skipped: exyonq-addon-api has no published baseline yet (expected until first crates.io release)"
+          fi
+
+  # build-tier1 only runs on push to main (not on PRs) to avoid
+  # burning expensive macOS (10x) and Windows (2x) runner minutes
+  build-tier1:
+    if: github.event_name == 'push'
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo build --release -p exyonq --target ${{ matrix.target }}

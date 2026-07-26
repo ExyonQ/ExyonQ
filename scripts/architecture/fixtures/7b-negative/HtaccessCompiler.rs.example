@@ -1,0 +1,2 @@
+// 7-B selftest fixture — htaccess runtime forbidden until 05B impl gate.
+pub struct HtaccessCompiler;

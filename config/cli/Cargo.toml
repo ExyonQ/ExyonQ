@@ -1,0 +1,12 @@
+[package]
+name = "exyonq-config-cli"
+description = "Shared offline config CLI logic (lint/test/explain/format) for exyonqctl and exyonq"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-config-ir.workspace = true
+exyonq-config-merge.workspace = true
+exyonq-config-surface.workspace = true
+exyonq-runtime-plan.workspace = true

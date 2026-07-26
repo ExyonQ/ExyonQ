@@ -1,0 +1,29 @@
+# cargo-about config — `accepted` MUST cover every entry in deny.toml [licenses].allow.
+# Extra entries (MIT-0, 0BSD, Unlicense) satisfy dual-licensed crate OR branches.
+# Verified by scripts/legal/verify-license-policy-alignment.sh
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "OpenSSL",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+    "Unlicense",
+]
+
+ignore-dev-dependencies = true
+ignore-build-dependencies = false
+
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]

@@ -1,0 +1,23 @@
+name: Wasmtime weekly watch
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wasmtime-watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - uses: Swatinem/rust-cache@v2
+      - name: wasmtime watch report
+        run: bash scripts/deps/wasmtime-watch.sh
+      - name: cargo audit (signal)
+        run: cargo install cargo-audit --locked && cargo audit || true

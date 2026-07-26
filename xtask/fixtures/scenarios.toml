@@ -1,0 +1,131 @@
+# Performance scenario parameters (Tier A benchmarks)
+# Keys: scenario id (p1, p2, ...)
+
+[load_tiers]
+percentages = [30, 60, 90]
+duration = "120s"
+warmup = "20s"
+tool = "vegeta"
+
+[modo_a]
+warmup = "20s"
+percentiles_duration = "10s"
+percentiles_scenarios = ["p1", "p4", "p6", "p11"]
+loadgen_sat_threshold_pct = 90
+
+[peak_scan]
+scenarios = ["p4", "p6"]
+percentages = [80, 90, 100]
+duration = "5m"
+warmup = "20s"
+tool = "vegeta"
+target = "exyonq"
+note = "Internal peak knee + RAM creep scan; not published in comparative-status.html"
+
+[p1]
+label = "Static 1 KiB"
+path = "/site/1k.bin"
+connections = 100
+duration = "30s"
+status = "active"
+
+[p2]
+label = "Static 64 KiB"
+path = "/site/64k.bin"
+connections = 100
+duration = "30s"
+status = "active"
+
+[p3]
+label = "Static 1 MiB"
+path = "/site/1m.bin"
+connections = 100
+duration = "30s"
+status = "active"
+
+[p4]
+label = "Proxy 1 KiB"
+path = "/api/"
+connections = 100
+duration = "30s"
+status = "active"
+
+[p5]
+label = "Proxy keep-alive close"
+path = "/api/"
+connections = 100
+duration = "30s"
+status = "active"
+load_extra = "connection-close"
+
+[p6]
+label = "Proxy high concurrency"
+path = "/api/"
+connections = 200
+duration = "30s"
+status = "active"
+
+[p7]
+label = "Static many routes"
+path = "/site/routes/route050.bin"
+connections = 100
+duration = "30s"
+status = "active"
+path_list = "p7-paths.txt"
+
+[p8]
+label = "SSE long stream"
+path = "/api/stream"
+connections = 100
+duration = "30s"
+status = "active"
+exyonq = "run"
+note = "SSE proxy pass-through to mock upstream"
+
+[p9]
+label = "Large payload gzip"
+path = "/site/64k.bin"
+connections = 100
+duration = "30s"
+status = "active"
+exyonq = "modules"
+note = "Compression module enabled (rivals from cache)"
+
+[p10]
+label = "Multi-tenant rate limit"
+path = "/api/"
+connections = 100
+duration = "30s"
+status = "active"
+exyonq = "modules"
+note = "Rate limit module enabled (rivals from cache)"
+
+[p11]
+label = "TLS termination HTTP/2"
+path = "/site/1k.bin"
+connections = 100
+duration = "30s"
+status = "active"
+exyonq = "tls"
+scheme = "https"
+note = "TLS + ALPN h2 on port 8443"
+
+[p12]
+label = "Observability under load"
+path = "/api/"
+connections = 100
+duration = "30s"
+status = "active"
+exyonq = "modules"
+note = "Metrics module overhead (rivals from cache)"
+
+[p13]
+label = "HTTP/3 QUIC"
+path = "/site/1k.bin"
+connections = 100
+duration = "10s"
+status = "active"
+exyonq = "http3"
+scheme = "https"
+port = 8444
+note = "QUIC/HTTP/3 on UDP 8444 (exyonq-only smoke; rivals skipped)"

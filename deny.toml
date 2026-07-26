@@ -1,0 +1,33 @@
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+unmaintained = "workspace"
+ignore = [
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained; direct dep until rustls-pki-types migration" },
+]
+
+# License allow-list — keep aligned with scripts/legal/about.toml `accepted`.
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "OpenSSL",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"

@@ -1,0 +1,21 @@
+[package]
+name = "exyonq-wasm-host"
+description = "Wasmtime host for ExyonQ L4 plugins (v0.4 prep)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dashmap.workspace = true
+thiserror.workspace = true
+wasmtime.workspace = true
+wat = "1"
+
+[dev-dependencies]
+wat = "1"
+tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "invoke_latency"
+harness = false

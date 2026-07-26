@@ -1,0 +1,16 @@
+[package]
+name = "exyonq-discovery-runtime"
+description = "ExyonQ discovery runtime — file/env JSON upstream overlay (KD4.10)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-config-ir.workspace = true
+exyonq-module-api = { path = "../../module-api" }
+exyonq-runtime-plan = { workspace = true }
+tracing.workspace = true
+
+[dev-dependencies]
+exyonq-config-ir.workspace = true
+tempfile = "3"

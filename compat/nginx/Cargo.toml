@@ -1,0 +1,18 @@
+[package]
+name = "exyonq-compat-nginx"
+description = "NGINX config importer (Plan 09 Tier 1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+exyonq-compat-common = { path = "../common" }
+exyonq-config-ir = { path = "../../config/ir" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Product H3 default (s2n). Quinn legacy is rollback-only and exclusive — do not enable here.
+exyonq-core = { workspace = true, default-features = false, features = ["http3-provider-s2n"] }

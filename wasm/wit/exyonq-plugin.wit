@@ -1,0 +1,223 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// ExyonQ Plugin Interface Definition (WIT — WebAssembly Interface Types)
+// Versión: 0.1.0 | Runtime target: Wasmtime + WASI Preview 2
+//
+// Este archivo define el contrato entre el core de ExyonQ y cualquier addon
+// compilado a WASM. Los addons no tienen acceso directo a memoria del host —
+// toda comunicación ocurre a través de este ABI tipado y auditado.
+// ─────────────────────────────────────────────────────────────────────────────
+
+package exyonq:plugin@0.1.0;
+
+// ── Tipos compartidos ─────────────────────────────────────────────────────────
+interface types {
+    // Identificador opaco de una conexión TCP gestionada por el core
+    type conn-id = u64;
+
+    // Identificador opaco de una petición HTTP activa
+    type request-id = u64;
+
+    // Resultado de un filtro: continuar la cadena o interrumpir con respuesta
+    variant filter-action {
+        // Continuar al siguiente filtro en la cadena
+        continue,
+        // Detener la cadena y enviar respuesta inmediata al cliente
+        respond(response-stub),
+        // Cerrar la conexión sin respuesta (para ataques DDoS)
+        close-connection,
+    }
+
+    record response-stub {
+        status: u16,
+        // Headers como pares clave/valor — el core los serializa sin copias extras
+        headers: list<tuple<string, string>>,
+        // Cuerpo como bytes — zero-copy: apunta a región del linear memory del guest
+        body: option<list<u8>>,
+    }
+
+    // Metadatos de conexión TCP (sin copia de payload — solo metadatos)
+    record conn-meta {
+        id: conn-id,
+        // IP origen serializada como string para evitar union types en ABI
+        remote-addr: string,
+        remote-port: u16,
+        local-port: u16,
+        // true si TLS está negociado en esta conexión
+        tls: bool,
+        // Protocolo negociado: "h1", "h2", "h3"
+        protocol: string,
+        // Timestamp Unix en microsegundos
+        established-at: u64,
+    }
+
+    // Vista de petición HTTP — NO copia el body; body-ptr apunta a memoria guest
+    record request-view {
+        id: request-id,
+        conn-id: conn-id,
+        method: string,
+        path: string,
+        // Host del header :authority o Host
+        host: string,
+        headers: list<tuple<string, string>>,
+        // Puntero + longitud al body en linear memory del guest (zero-copy)
+        // El core escribe el body ahí mediante shared-memory write (ver host-io)
+        body-len: u32,
+        // Timestamp de llegada en microsegundos desde epoch
+        arrived-at: u64,
+    }
+
+    // Resultado de métricas que el plugin puede emitir al sistema de observabilidad
+    record metric-event {
+        // Nombre en formato prometheus-compatible
+        name: string,
+        value: f64,
+        // Labels como pares clave/valor
+        labels: list<tuple<string, string>>,
+        // "counter" | "gauge" | "histogram"
+        kind: string,
+    }
+}
+
+// ── Host functions: I/O de bajo nivel (expuestas por el core al plugin) ───────
+// El core implementa estas funciones; el plugin las importa.
+// Principio zero-copy: el core NO copia datos — escribe directamente en la
+// linear memory del guest usando write-to-guest-mem.
+interface host-io {
+    use types.{conn-id, request-id, metric-event};
+
+    // Lee bytes de la conexión TCP directamente en linear memory del guest.
+    // Retorna bytes leídos. NO hay buffer intermedio en el host.
+    // 'buf-ptr' y 'buf-len' son offsets en la linear memory del módulo WASM.
+    read-conn-bytes: func(
+        conn: conn-id,
+        buf-ptr: u32,   // offset en linear memory del guest
+        buf-len: u32,   // capacidad del buffer
+    ) -> result<u32, string>;
+
+    // Escribe bytes desde linear memory del guest directamente al socket.
+    // El core usa writev/io_uring para evitar copias kernel adicionales.
+    write-conn-bytes: func(
+        conn: conn-id,
+        buf-ptr: u32,
+        buf-len: u32,
+    ) -> result<u32, string>;
+
+    // Obtiene el cuerpo de la petición HTTP en la linear memory del guest.
+    // El core mapea el body buffer del request directamente al linear memory
+    // del plugin — sin malloc ni memcpy adicional en el host.
+    get-request-body: func(
+        req: request-id,
+        dst-ptr: u32,   // destino en linear memory del guest
+        dst-len: u32,
+    ) -> result<u32, string>;
+
+    // Modifica o agrega un header a la respuesta (antes de flush)
+    set-response-header: func(
+        req: request-id,
+        name: string,
+        value: string,
+    ) -> result<_, string>;
+
+    // Emite un evento de métrica al colector interno (Prometheus/OTEL)
+    emit-metric: func(event: metric-event) -> result<_, string>;
+
+    // Lee el tiempo monotónico actual en nanosegundos (para rate limiting)
+    monotonic-now-ns: func() -> u64;
+
+    // Acceso a estado compartido key-value gestionado por el core
+    // Útil para contadores de rate limiting compartidos entre instancias
+    kv-get: func(key: string) -> option<list<u8>>;
+    kv-set: func(key: string, value: list<u8>, ttl-ms: u32) -> result<_, string>;
+    // Compare-and-swap atómico — crítico para rate limiting distribuido
+    kv-cas: func(
+        key: string,
+        expected: option<list<u8>>,
+        new-value: list<u8>,
+        ttl-ms: u32,
+    ) -> result<bool, string>;
+
+    // Log estructurado al sistema de logs del core
+    log: func(level: string, msg: string, fields: list<tuple<string, string>>);
+}
+
+// ── Hooks de filtro de RED (L4) — implementados por el plugin ────────────────
+// El core llama a estas funciones exportadas por el addon WASM.
+interface network-filter {
+    use types.{conn-meta, filter-action};
+
+    // Llamado cuando se acepta una nueva conexión TCP, antes de leer datos.
+    // Uso típico: IP ACL, DDoS protection, geo-blocking.
+    on-new-connection: func(conn: conn-meta) -> filter-action;
+
+    // Llamado cuando llegan bytes TCP (primer buffer, antes de parse HTTP).
+    // 'buf-ptr' apunta a los bytes en linear memory del guest (ya escritos por host-io).
+    // Uso típico: detección de protocolos, TLS fingerprinting.
+    on-data: func(
+        conn-id: u64,
+        buf-ptr: u32,
+        buf-len: u32,
+    ) -> filter-action;
+
+    // Llamado cuando se cierra la conexión (cleanup de estado).
+    on-connection-close: func(conn-id: u64, reason: string);
+}
+
+// ── Hooks de filtro HTTP (L7) — implementados por el plugin ──────────────────
+interface http-filter {
+    use types.{request-view, filter-action, response-stub};
+
+    // Llamado después de parsear los headers HTTP, antes de leer el body.
+    // Zero-copy: request-view no contiene el body — solo metadata + headers.
+    // Para leer el body usar host-io.get-request-body.
+    on-request-headers: func(req: request-view) -> filter-action;
+
+    // Llamado después de recibir el body completo.
+    // El body está en linear memory del guest (escrito por host-io).
+    on-request-body: func(req-id: u64, body-ptr: u32, body-len: u32) -> filter-action;
+
+    // Llamado antes de enviar headers de respuesta al cliente.
+    // Permite modificar headers de respuesta (e.g., CORS, security headers).
+    on-response-headers: func(
+        req-id: u64,
+        status: u16,
+        headers: list<tuple<string, string>>,
+    ) -> filter-action;
+
+    // Llamado al finalizar la petición (telemetría, cleanup).
+    on-request-complete: func(
+        req-id: u64,
+        // Código de estado final enviado al cliente
+        final-status: u16,
+        // Latencia total en microsegundos
+        latency-us: u64,
+        // Bytes enviados al cliente
+        bytes-sent: u64,
+    );
+}
+
+// ── Lifecycle del plugin ──────────────────────────────────────────────────────
+interface plugin-lifecycle {
+    // Llamado una sola vez al cargar el módulo WASM.
+    // 'config-ptr' apunta a JSON de configuración en linear memory del guest.
+    // El core escribe el JSON ahí antes de llamar a esta función.
+    init: func(config-ptr: u32, config-len: u32) -> result<_, string>;
+
+    // Llamado periódicamente para garbage collection de estado interno.
+    tick: func(now-ns: u64);
+
+    // Llamado antes de descargar el módulo (graceful shutdown).
+    shutdown: func();
+}
+
+// ── World: combinación de interfaces que un addon puede exportar/importar ─────
+world filter-plugin {
+    // El plugin IMPORTA estas funciones del host (core de ExyonQ)
+    import host-io;
+
+    // El plugin EXPORTA estas funciones al host (el core las llama)
+    export plugin-lifecycle;
+
+    // Un plugin puede implementar uno o ambos niveles de filtrado
+    export network-filter;
+    export http-filter;
+}

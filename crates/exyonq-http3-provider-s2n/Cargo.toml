@@ -1,0 +1,19 @@
+[package]
+name = "exyonq-http3-provider-s2n"
+description = "HTTP/3 / QUIC provider — AWS s2n-quic (P13D intended default)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+exyonq-http3-provider-api = { path = "../exyonq-http3-provider-api" }
+exyonq-module-api = { path = "../../module-api" }
+h3 = "0.0.8"
+http.workspace = true
+s2n-quic = "1.85.0"
+s2n-quic-h3 = "0.2.0"
+tokio.workspace = true
+tracing.workspace = true

@@ -1,0 +1,26 @@
+# ProductProfile = php
+# No implicit cache. Pool reuse across generations = NO (reload rebuilds plan).
+config_version = 2
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["php"]
+
+[[route]]
+name = "php"
+match = { path = "/" }
+fastcgi = "php"
+
+[[fcgi_pool]]
+name = "php"
+address = "/run/php/php-fpm.sock"
+transport = "unix"
+document_root = "/var/www/html"
+max_concurrency = 16
+max_connections = 16
+idle_timeout_ms = 30000
+total_timeout_ms = 30000
+checkout_timeout_ms = 5000
+
+[full_page_cache]
+enabled = false
