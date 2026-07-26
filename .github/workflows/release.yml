@@ -184,7 +184,7 @@ jobs:
         with:
           name: exyonq-linux-amd64
           path: dist
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.22"
       - name: Install nfpm (pinned — no @latest; P1.5-WS6 NFPM_PIN)
