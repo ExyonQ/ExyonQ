@@ -5439,27 +5439,25 @@ limitations under the License.
 Used by:
 
 - exyonq-addon-api 1.0.0
-- exyonq-addon-sdk 0.3.3
-- exyonq-bench 0.3.3
-- exyonq-mock-upstream 0.3.3
-- exyonq 0.3.3
-- exyonq-compat-cli 0.3.3
-- exyonqctl 0.3.3
-- exyonq-compat-common 0.3.3
-- exyonq-compat-nginx 0.3.3
-- exyonq-config-ir 0.3.3
-- exyonq-config-merge 0.3.3
-- exyonq-config-schema 0.3.3
-- exyonq-config-surface 0.3.3
-- exyonq-core 0.3.3
-- exyonq-module-api 0.3.3
-- exyonq-acme 0.3.3
-- exyonq-compression 0.3.3
-- exyonq-metrics 0.3.3
-- exyonq-ratelimit 0.3.3
+- exyonq-addon-sdk 0.4.0
+- exyonq 0.4.0
+- exyonq-compat-cli 0.4.0
+- exyonqctl 0.4.0
+- exyonq-compat-common 0.4.0
+- exyonq-compat-nginx 0.4.0
+- exyonq-config-ir 0.4.0
+- exyonq-config-merge 0.4.0
+- exyonq-config-schema 0.4.0
+- exyonq-config-surface 0.4.0
+- exyonq-core 0.4.0
+- exyonq-module-api 0.4.0
+- exyonq-acme 0.4.0
+- exyonq-compression 0.4.0
+- exyonq-metrics 0.4.0
+- exyonq-ratelimit 0.4.0
 - exyonq-integration-tests 0.0.0
-- exyonq-wasm-host 0.3.3
-- xtask 0.3.3
+- exyonq-wasm-host 0.4.0
+- xtask 0.4.0
 - allocator-api2 0.2.21 — https://github.com/zakarumych/allocator-api2
 - anyhow 1.0.102 — https://github.com/dtolnay/anyhow
 - async-trait 0.1.89 — https://github.com/dtolnay/async-trait

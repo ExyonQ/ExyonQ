@@ -10,8 +10,8 @@ fail=0
 pass() { echo "PASS: $*"; }
 fail_msg() { echo "FAIL: $*" >&2; fail=1; }
 
-TARGET_RC="0.3.3-rc.1"
-DEV_VER="0.3.3"
+TARGET_RC="0.4.0-rc.1"
+DEV_VER="0.4.0"
 
 echo "=== p16-ws3-verify-release-docs ==="
 echo "ROOT=$ROOT"

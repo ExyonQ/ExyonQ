@@ -11,7 +11,7 @@ ws6_require_linux
 
 ARCH="$(ws6_host_arch_label)"
 TARGET="$(ws6_arch_to_target "$ARCH")"
-TARGET_RC_VERSION="${TARGET_RC_VERSION:-0.3.3-rc.1}"
+TARGET_RC_VERSION="${TARGET_RC_VERSION:-0.4.0-rc.1}"
 STAGING_BASE="${P16_WS4_STAGING:-/tmp/exyonq-p16-ws4-staging}"
 OUT_A="$STAGING_BASE/$TARGET_RC_VERSION/$ARCH/build-a"
 OUT_B="$STAGING_BASE/$TARGET_RC_VERSION/$ARCH/build-b"
@@ -145,8 +145,8 @@ echo "SMOKE_FROM_ARTIFACT=PASS"
 # Pre-RC baseline (same source HEAD; artifact_version = product 0.3.3)
 OUT_BASE="$STAGING_BASE/$TARGET_RC_VERSION/$ARCH/build-baseline"
 rm -rf "$OUT_BASE"
-TARGET_RC_VERSION=0.3.3 \
-  EXYONQ_ARTIFACT_VERSION=0.3.3 \
+TARGET_RC_VERSION=0.4.0 \
+  EXYONQ_ARTIFACT_VERSION=0.4.0 \
   EXYONQ_SOURCE_REVISION="$HEAD" \
   EXYONQ_SOURCE_TREE_STATUS=CLEAN \
   bash "$ROOT/scripts/release/p16-ws4-build-artifacts.sh" \
@@ -170,7 +170,7 @@ echo "UPGRADE_FROM_BASELINE=PASS"
 tar -C "$UP_STAGING" -xzf "$TARBALL_BASE"
 grep -q ws4_upgrade_marker "$UP_STAGING/.config-marker"
 "$UP_STAGING/usr/bin/exyonq" --version | tee "$EVIDENCE/rollback-version.txt"
-grep -q "artifact_version=0.3.3" "$EVIDENCE/rollback-version.txt"
+grep -q "artifact_version=0.4.0" "$EVIDENCE/rollback-version.txt"
 echo "ROLLBACK_TO_BASELINE=PASS"
 rm -rf "$UP_STAGING"
 echo "UNINSTALL_CLEAN=PASS"
@@ -196,12 +196,12 @@ import json, pathlib, sys
 ev, rc, head, out_a = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], pathlib.Path(sys.argv[4])
 for name in ("exyonq-version.txt","exyonqctl-version.txt"):
   text = (ev/name).read_text()
-  assert f"product_version=0.3.3" in text, text
+  assert f"product_version=0.4.0" in text, text
   assert f"artifact_version={rc}" in text, text
   assert f"source_revision={head}" in text, text
 man = json.loads((out_a/"build-manifest.json").read_text())
 assert man.get("target_rc_version")==rc, man
-assert man.get("source_version")=="0.3.3", man
+assert man.get("source_version")=="0.4.0", man
 assert man.get("source_revision")==head, man
 assert man.get("signed") is False
 assert man.get("publication_state")=="candidate_not_released"
@@ -264,7 +264,7 @@ expected = tampered.split()[0]
 assert actual != expected
 print("NEGATIVE_TAMPERED_CHECKSUM=REJECTED_OK")
 # wrong version name
-assert "0.3.3-rc.1" in tgz.name
+assert "0.4.0-rc.1" in tgz.name
 assert "latest" not in tgz.name
 assert "final" not in tgz.name
 assert "stable" not in tgz.name
@@ -310,7 +310,7 @@ cat >"$EVIDENCE/campaign-summary.txt" <<EOF
 ARCH=$ARCH
 SOURCE_HEAD=$HEAD
 TARGET_RC_VERSION=$TARGET_RC_VERSION
-SOURCE_VERSION=0.3.3
+SOURCE_VERSION=0.4.0
 AMD64_OR_ARM64_CAMPAIGN=PASS
 RC_STATUS=NOT_DECLARED
 PUBLICATION_STATUS=FORBIDDEN

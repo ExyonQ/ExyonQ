@@ -9,7 +9,7 @@ source "$ROOT/scripts/release/lib/ws6-common.sh"
 
 ws6_require_linux
 
-TARGET_RC_VERSION="${TARGET_RC_VERSION:-0.3.3-rc.1}"
+TARGET_RC_VERSION="${TARGET_RC_VERSION:-0.4.0-rc.1}"
 WS4_SOURCE_HEAD="${WS4_SOURCE_HEAD:-5182e7988ec3f27b009bd3e0ca52a441f2eb58f3}"
 EXPECTED_SHA256="${EXPECTED_SHA256:-}"
 ARTIFACT="${ARTIFACT:-}"
@@ -84,7 +84,7 @@ m = json.load(open(path))
 assert m.get("source_revision") == head, (m.get("source_revision"), head)
 assert m.get("target_rc_version") == rc, m.get("target_rc_version")
 assert m.get("architecture") == arch, m.get("architecture")
-assert m.get("source_version") == "0.3.3"
+assert m.get("source_version") == "0.4.0"
 assert m.get("signed") is False
 assert m.get("publication_state") == "candidate_not_released"
 print("ARTIFACT_SOURCE_HEAD_MATCH=PASS")
@@ -99,7 +99,7 @@ s=json.load(open(sys.argv[1]))
 assert s.get("bomFormat")=="CycloneDX"
 c=(s.get("metadata") or {}).get("component") or {}
 assert c.get("name")=="exyonq"
-assert c.get("version")=="0.3.3"
+assert c.get("version")=="0.4.0"
 print("SBOM_PIN_OK")
 PY
 
@@ -125,7 +125,7 @@ for req in usr/bin/exyonq usr/bin/exyonqctl etc/exyonq/config.toml.example \
 done
 "$EXY" --version | tee "$EVIDENCE/exyonq-version.txt"
 "$CTL" --version | tee "$EVIDENCE/exyonqctl-version.txt"
-grep -q "product_version=0.3.3" "$EVIDENCE/exyonq-version.txt"
+grep -q "product_version=0.4.0" "$EVIDENCE/exyonq-version.txt"
 grep -q "artifact_version=${TARGET_RC_VERSION}" "$EVIDENCE/exyonq-version.txt"
 grep -q "source_revision=${WS4_SOURCE_HEAD}" "$EVIDENCE/exyonq-version.txt"
 echo "INSTALL_FROM_ARTIFACT=PASS" | tee -a "$EVIDENCE/pin.txt"

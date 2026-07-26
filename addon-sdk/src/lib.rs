@@ -43,5 +43,5 @@ pub fn static_descriptor(
 
 /// Convenience for official modules targeting the v0.3.x core line.
 pub fn official_core_compat() -> &'static str {
-    ">=0.1.0, <0.4.0"
+    ">=0.1.0, <0.5.0"
 }

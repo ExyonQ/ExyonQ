@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # P1.6-WS4 — Build RC candidate tarball (and optional amd64 nfpm).
-# Cargo SoT stays 0.3.3; artifact identity = TARGET_RC_VERSION (default 0.3.3-rc.1).
+# Cargo SoT stays 0.4.0; artifact identity = TARGET_RC_VERSION (default 0.4.0-rc.1).
 # BIT_FOR_BIT NOT_CLAIMED. RC_STATUS remains NOT_DECLARED.
 set -euo pipefail
 
@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/release/lib/ws6-common.sh
 source "$ROOT/scripts/release/lib/ws6-common.sh"
 
-TARGET_RC_VERSION="${TARGET_RC_VERSION:-0.3.3-rc.1}"
+TARGET_RC_VERSION="${TARGET_RC_VERSION:-0.4.0-rc.1}"
 SOURCE_VERSION=""
 WORKSPACE=""
 TARGET=""
@@ -53,8 +53,8 @@ SOURCE_VERSION="$(
     | head -n1 \
     | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/'
 )"
-[[ "$SOURCE_VERSION" == "0.3.3" ]] || {
-  echo "ERROR: unexpected Cargo version '$SOURCE_VERSION' (want 0.3.3)" >&2
+[[ "$SOURCE_VERSION" == "0.4.0" ]] || {
+  echo "ERROR: unexpected Cargo version '$SOURCE_VERSION' (want 0.4.0)" >&2
   exit 1
 }
 

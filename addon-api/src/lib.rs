@@ -377,7 +377,7 @@ mod tests {
             name,
             addon_version: "0.1.0",
             addon_api: ApiVersion::V1_0,
-            core_compat: VersionReq::parse(">=0.1.0, <0.4.0").unwrap(),
+            core_compat: VersionReq::parse(">=0.1.0, <0.5.0").unwrap(),
             capabilities: &[Capability::Telemetry],
             cost_class,
             build: BuildKind::Static,

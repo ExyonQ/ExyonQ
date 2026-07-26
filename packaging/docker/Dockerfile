@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Official ExyonQ production image (v0.3+)
+# Official ExyonQ production image (clean tree starts at v0.4.0)
 # Legal bundle (LICENSE, NOTICE, THIRD_PARTY_NOTICES.md, sbom.cdx.json) must exist
 # in the build context — generate via scripts/legal/generate-release-compliance-artifacts.sh
 
@@ -14,7 +14,7 @@ COPY module-api ./module-api
 COPY modules ./modules
 COPY compat ./compat
 COPY cli ./cli
-COPY benchmarks ./benchmarks
+COPY crates ./crates
 COPY wasm ./wasm
 COPY tests ./tests
 COPY xtask ./xtask

@@ -10,8 +10,8 @@ fail=0
 pass() { echo "PASS: $*"; }
 fail_msg() { echo "FAIL: $*" >&2; fail=1; }
 
-TARGET_RC="0.3.3-rc.1"
-DEV_VER="0.3.3"
+TARGET_RC="0.4.0-rc.1"
+DEV_VER="0.4.0"
 SRC_HEAD="5182e7988ec3f27b009bd3e0ca52a441f2eb58f3"
 
 echo "=== p16-ws4-verify-release-docs ==="
