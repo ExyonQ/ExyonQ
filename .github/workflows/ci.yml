@@ -67,7 +67,7 @@ jobs:
         with:
           cache-on-failure: true
       - name: Cache cargo tools
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin
           key: cargo-tools-semver-${{ runner.os }}
