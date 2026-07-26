@@ -1352,7 +1352,7 @@ dependencies = [
  "exyonq-mod-static",
  "exyonq-module-api",
  "libc",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tokio",
  "tracing",
 ]
