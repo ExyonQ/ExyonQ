@@ -32,11 +32,22 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.3.2.1" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # P14SIGN Phase 2: fail-closed — no legacy/untagged fallback
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "ERROR: official release requires refs/tags/v*; untagged fallback FORBIDDEN" >&2
+            exit 1
           fi
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ -z "$VERSION" ]]; then
+            echo "ERROR: empty version derived from tag" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" =~ ^0\.(1|2|3)([.-]|$) ]]; then
+            echo "ERROR: legacy version forbidden: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
       - name: cargo audit
         run: cargo audit
       - name: Verify release legal bundle
@@ -113,8 +124,20 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "ERROR: official release requires refs/tags/v*; untagged fallback FORBIDDEN" >&2
+            exit 1
+          fi
           VERSION="${GITHUB_REF#refs/tags/v}"
-          if [[ "$VERSION" == "$GITHUB_REF" ]]; then VERSION="0.3.2.1"; fi
+          if [[ -z "$VERSION" || "$VERSION" == "$GITHUB_REF" ]]; then
+            echo "ERROR: empty/invalid version from tag" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" =~ ^0\.(1|2|3)([.-]|$) ]]; then
+            echo "ERROR: legacy version forbidden: $VERSION" >&2
+            exit 1
+          fi
           case "${{ matrix.target }}" in
             x86_64-unknown-linux-gnu) ARCH_LABEL=amd64 ;;
             aarch64-unknown-linux-gnu) ARCH_LABEL=arm64 ;;
@@ -193,8 +216,20 @@ jobs:
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - name: Build .deb and .rpm
         run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "ERROR: official release requires refs/tags/v*; untagged fallback FORBIDDEN" >&2
+            exit 1
+          fi
           VERSION="${GITHUB_REF#refs/tags/v}"
-          if [[ "$VERSION" == "$GITHUB_REF" ]]; then VERSION="0.3.2.1"; fi
+          if [[ -z "$VERSION" || "$VERSION" == "$GITHUB_REF" ]]; then
+            echo "ERROR: empty/invalid version from tag" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" =~ ^0\.(1|2|3)([.-]|$) ]]; then
+            echo "ERROR: legacy version forbidden: $VERSION" >&2
+            exit 1
+          fi
           export VERSION ARCH=amd64
           tar -xzf dist/exyonq-linux-amd64.tar.gz -C dist
           ls -la dist/
@@ -212,59 +247,100 @@ jobs:
     needs: [build, package-linux]
     runs-on: ubuntu-latest
     steps:
+      # P14SIGN Phase 3 / Option A cutover:
+      # ROOT_SIGNED_OBJECT = SHA256SUMS.txt
+      # RELEASE_MANIFEST_INCLUDED_IN_SHA256SUMS = YES
+      # ARTIFACTS_INCLUDED_IN_SHA256SUMS = YES
+      # Cosign sign-blob / OCI sign steps intentionally NOT wired (no secrets, no production keys).
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: exyonq-*
-          path: artifacts
+          path: download
           merge-multiple: true
-      - name: Write SHA256SUMS (basename-relative — install/release flatten)
+      - name: Resolve version for Option A manifest
+        id: ver
         run: |
           set -euo pipefail
-          : > SHA256SUMS.txt
-          while IFS= read -r -d '' f; do
-            base="$(basename "$f")"
-            sha256sum "$f" | awk -v b="$base" '{print $1 "  " b}' >> SHA256SUMS.txt
-          done < <(find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z)
-          sort -u -k2,2 SHA256SUMS.txt -o SHA256SUMS.txt
-          cat SHA256SUMS.txt
-          # Fail closed: amd64 .deb/.rpm are required release assets (package-linux).
-          deb_n="$(find artifacts -type f -name '*.deb' | wc -l | tr -d ' ')"
-          rpm_n="$(find artifacts -type f -name '*.rpm' | wc -l | tr -d ' ')"
-          if [[ "$deb_n" -lt 1 || "$rpm_n" -lt 1 ]]; then
-            echo "ERROR: expected >=1 .deb and >=1 .rpm from package-linux (deb=${deb_n} rpm=${rpm_n})" >&2
-            find artifacts -type f | head -50 >&2 || true
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "ERROR: official release requires refs/tags/v*; untagged fallback FORBIDDEN" >&2
             exit 1
           fi
-          while IFS= read -r pkg; do
-            base="$(basename "$pkg")"
-            grep -F "  ${base}" SHA256SUMS.txt >/dev/null || {
-              echo "ERROR: missing checksum for package ${base}" >&2
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ -z "$VERSION" ]]; then
+            echo "ERROR: empty version derived from tag" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" =~ ^0\.(1|2|3)([.-]|$) ]]; then
+            echo "ERROR: legacy version forbidden: $VERSION" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" == "latest" ]]; then
+            echo "ERROR: latest forbidden as version identity" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+      - name: Build Option A unsigned bundle (manifest then SHA256SUMS)
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          COMMIT="$(printf '%s' "${GITHUB_SHA}" | tr 'A-F' 'a-f')"
+          mkdir -p bundle/artifacts
+          while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            cp -n "$f" "bundle/artifacts/${base}"
+          done < <(find download -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z)
+          deb_n="$(find bundle/artifacts -type f -name '*.deb' | wc -l | tr -d ' ')"
+          rpm_n="$(find bundle/artifacts -type f -name '*.rpm' | wc -l | tr -d ' ')"
+          if [[ "$deb_n" -lt 1 || "$rpm_n" -lt 1 ]]; then
+            echo "ERROR: expected >=1 .deb and >=1 .rpm from package-linux (deb=${deb_n} rpm=${rpm_n})" >&2
+            find download -type f | head -50 >&2 || true
+            exit 1
+          fi
+          art_n="$(find bundle/artifacts -type f | wc -l | tr -d ' ')"
+          if [[ "$art_n" -lt 1 ]]; then
+            echo "ERROR: no release artifacts assembled under bundle/artifacts" >&2
+            exit 1
+          fi
+          bash scripts/release/generate-release-manifest.sh \
+            --version "$VERSION" \
+            --git-commit "$COMMIT" \
+            --artifacts-dir bundle/artifacts \
+            --output bundle/release-manifest.json \
+            --force
+          bash scripts/release/generate-checksums.sh \
+            --bundle-root bundle \
+            --output bundle/SHA256SUMS.txt \
+            --force
+          bash scripts/release/verify-checksums.sh --bundle-root bundle
+          # Fail-closed: manifest + every artifact must appear in SHA256SUMS.
+          grep -F "  release-manifest.json" bundle/SHA256SUMS.txt >/dev/null || {
+            echo "ERROR: release-manifest.json missing from SHA256SUMS.txt" >&2
+            exit 1
+          }
+          while IFS= read -r f; do
+            rel="artifacts/$(basename "$f")"
+            grep -F "  ${rel}" bundle/SHA256SUMS.txt >/dev/null || {
+              echo "ERROR: missing checksum for ${rel}" >&2
               exit 1
             }
-          done < <(find artifacts -type f \( -name '*.deb' -o -name '*.rpm' \))
-          python3 -c '
-          import hashlib, json, pathlib
-          arts = []
-          root = pathlib.Path("artifacts")
-          for pat in ("*.tar.gz", "*.zip", "*.deb", "*.rpm"):
-              for p in sorted(root.rglob(pat)):
-                  h = hashlib.sha256(p.read_bytes()).hexdigest()
-                  arts.append({"name": p.name, "sha256": h, "kind": p.suffix.lstrip(".") or "file"})
-          pathlib.Path("build-manifest.json").write_text(json.dumps({
-              "schema_version": "1.0",
-              "product": "exyonq",
-              "artifacts": arts,
-              "note": "external checksum sidecar; hashes are of published basenames",
-          }, indent=2) + "\n")
-          print("wrote build-manifest.json", len(arts), "artifacts")
-          '
+          done < <(find bundle/artifacts -type f)
+          # Forbidden legacy checksum sidecar.
+          if [[ -e bundle/build-manifest.json ]]; then
+            echo "ERROR: legacy build-manifest.json must not be produced" >&2
+            exit 1
+          fi
+          echo "P14SIGN_CI_OPTION_A_CUTOVER=PASS"
+          echo "ROOT_SIGNED_OBJECT=SHA256SUMS.txt"
+          echo "RELEASE_MANIFEST_INCLUDED_IN_SHA256SUMS=YES"
+          echo "ARTIFACTS_INCLUDED_IN_SHA256SUMS=YES"
       - uses: actions/upload-artifact@v7
         with:
           name: checksums
           path: |
-            SHA256SUMS.txt
-            build-manifest.json
-
+            bundle/SHA256SUMS.txt
+            bundle/release-manifest.json
+            bundle/artifacts/*
   docker:
     needs: compliance-artifacts
     runs-on: ubuntu-latest
@@ -280,11 +356,22 @@ jobs:
       - name: Set version
         id: ver
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.3.2.1" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # P14SIGN Phase 2: fail-closed — no legacy/untagged fallback
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "ERROR: official release requires refs/tags/v*; untagged fallback FORBIDDEN" >&2
+            exit 1
           fi
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ -z "$VERSION" ]]; then
+            echo "ERROR: empty version derived from tag" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" =~ ^0\.(1|2|3)([.-]|$) ]]; then
+            echo "ERROR: legacy version forbidden: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -295,10 +382,9 @@ jobs:
           context: .
           file: packaging/docker/Dockerfile
           push: true
+          # P14SIGN: digest is the release identity; do not publish :latest or legacy :v0.3 aliases.
           tags: |
             ghcr.io/exyonq/exyonq:${{ steps.ver.outputs.version }}
-            ghcr.io/exyonq/exyonq:v0.3
-            ghcr.io/exyonq/exyonq:latest
 
   github-release:
     needs: [security-release, build, checksums, package-linux, docker, compliance-artifacts]
@@ -310,13 +396,28 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.3.2.1" >> "$GITHUB_OUTPUT"
-            echo "tag=v0.3.2.1" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # P14SIGN Phase 2: fail-closed — no legacy/untagged fallback
+          if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+            echo "ERROR: official release requires refs/tags/v*; untagged fallback FORBIDDEN" >&2
+            exit 1
           fi
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ -z "$VERSION" || -z "$TAG" ]]; then
+            echo "ERROR: empty version/tag derived from ref" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" =~ ^0\.(1|2|3)([.-]|$) ]]; then
+            echo "ERROR: legacy version forbidden: $VERSION" >&2
+            exit 1
+          fi
+          if [[ "$TAG" != "v${VERSION}" ]]; then
+            echo "ERROR: tag/version mismatch: $TAG vs v${VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
         with:
           name: release-compliance
@@ -330,27 +431,66 @@ jobs:
         with:
           name: checksums
           path: artifacts
-      - name: Flatten release assets
+      - name: Flatten release assets (Option A layout)
         run: |
-          mkdir -p release-assets
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name 'SHA256SUMS.txt' -o -name 'build-manifest.json' \) \
-            -exec cp -n {} release-assets/ \;
-          # Prefer checksums artifact copies if present under nested dirs.
-          find artifacts -type f -name 'SHA256SUMS.txt' -exec cp {} release-assets/ \;
-          find artifacts -type f -name 'build-manifest.json' -exec cp {} release-assets/ \;
+          set -euo pipefail
+          mkdir -p release-assets/artifacts
+          # Prefer Option A checksums artifact layout when present.
+          if [[ -f artifacts/SHA256SUMS.txt ]]; then
+            cp artifacts/SHA256SUMS.txt release-assets/
+          else
+            find artifacts -type f -name 'SHA256SUMS.txt' -exec cp {} release-assets/ \;
+          fi
+          if [[ -f artifacts/release-manifest.json ]]; then
+            cp artifacts/release-manifest.json release-assets/
+          else
+            find artifacts -type f -name 'release-manifest.json' -exec cp {} release-assets/ \;
+          fi
+          while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            case "$base" in
+              SHA256SUMS.txt|release-manifest.json|build-manifest.json) continue ;;
+            esac
+            cp -n "$f" "release-assets/artifacts/${base}"
+          done < <(find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \) -print0)
           cp compliance/THIRD_PARTY_NOTICES.md compliance/sbom.cdx.json release-assets/
-          ls -la release-assets/
-          # Guard: SHA256SUMS must use basenames only (no artifacts/ prefix).
-          if grep -E '(^|/)?artifacts/' release-assets/SHA256SUMS.txt >/dev/null 2>&1; then
-            echo "ERROR: SHA256SUMS.txt contains path prefixes; installer requires basenames" >&2
+          ls -laR release-assets/
+          [[ -f release-assets/SHA256SUMS.txt ]] || {
+            echo "ERROR: missing SHA256SUMS.txt" >&2
+            exit 1
+          }
+          [[ -f release-assets/release-manifest.json ]] || {
+            echo "ERROR: missing release-manifest.json (Option A)" >&2
+            exit 1
+          }
+          if [[ -e release-assets/build-manifest.json ]]; then
+            echo "ERROR: legacy build-manifest.json must not be published" >&2
+            exit 1
+          fi
+          # Option A: SUMS must list release-manifest.json and artifacts/ paths.
+          grep -F "  release-manifest.json" release-assets/SHA256SUMS.txt >/dev/null || {
+            echo "ERROR: SHA256SUMS.txt missing release-manifest.json entry" >&2
+            exit 1
+          }
+          if ! grep -E '  artifacts/' release-assets/SHA256SUMS.txt >/dev/null; then
+            echo "ERROR: SHA256SUMS.txt missing artifacts/ entries (Option A)" >&2
             cat release-assets/SHA256SUMS.txt >&2
             exit 1
           fi
+          bash scripts/release/verify-checksums.sh --bundle-root release-assets || {
+            echo "ERROR: Option A verify-checksums failed on release-assets" >&2
+            exit 1
+          }
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ExyonQ v${{ steps.ver.outputs.version }}
           body_path: docs/release/v${{ steps.ver.outputs.version }}.md
-          files: release-assets/*
+          files: |
+            release-assets/SHA256SUMS.txt
+            release-assets/release-manifest.json
+            release-assets/THIRD_PARTY_NOTICES.md
+            release-assets/sbom.cdx.json
+            release-assets/artifacts/*
           fail_on_unmatched_files: true
