@@ -5,7 +5,9 @@
 use exyonq_cache_redis::{
     EventSigningKeys, RedisCoordConfig, RedisCoordSecrets, RedisCoordinationProvider, ReplayPolicy,
 };
-use exyonq_core::lab_coord_hooks::{install_lab_purge_port_builder, install_lab_subscriber_starter};
+use exyonq_core::lab_coord_hooks::{
+    install_lab_purge_port_builder, install_lab_subscriber_starter,
+};
 use exyonq_core::{cache_purge_port, reload::SharedServerState};
 use exyonq_module_api::{
     invalidation_event_to_purge_op, GenerationStore, InvalidationEvent, InvalidationPublisher,
@@ -19,15 +21,16 @@ struct LabSubscriber(RedisCoordinationProvider);
 struct LabGeneration(RedisCoordinationProvider);
 
 impl InvalidationPublisher for LabPublisher {
-    fn publish(&self, event: InvalidationEvent) -> Result<(), exyonq_module_api::CoordinationError> {
+    fn publish(
+        &self,
+        event: InvalidationEvent,
+    ) -> Result<(), exyonq_module_api::CoordinationError> {
         self.0.publish(event)
     }
 }
 
 impl InvalidationSubscriber for LabSubscriber {
-    fn try_recv(
-        &self,
-    ) -> Result<Option<InvalidationEvent>, exyonq_module_api::CoordinationError> {
+    fn try_recv(&self) -> Result<Option<InvalidationEvent>, exyonq_module_api::CoordinationError> {
         self.0.try_recv()
     }
     fn stop(&self) {
@@ -86,11 +89,7 @@ pub fn maybe_install_l2_coord_lab(app: &exyonq_config_ir::AppConfig) -> anyhow::
 
     let site_ids: Vec<u64> = std::env::var("EXYONQ_L2_KNOWN_SITE_IDS")
         .ok()
-        .map(|s| {
-            s.split(',')
-                .filter_map(|p| p.trim().parse().ok())
-                .collect()
-        })
+        .map(|s| s.split(',').filter_map(|p| p.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![1]);
 
     let cfg = RedisCoordConfig {
@@ -123,8 +122,9 @@ pub fn maybe_install_l2_coord_lab(app: &exyonq_config_ir::AppConfig) -> anyhow::
     // IR security paths → env for EventSigningKeys::from_env (FILE precedence).
     apply_ir_security_env(&dc.security);
 
-    let keys = EventSigningKeys::from_env()
-        .map_err(|_| anyhow::anyhow!("L2 lab: HMAC keys required (IR security paths or EXYONQ_L2_EVENT_HMAC_*)"))?;
+    let keys = EventSigningKeys::from_env().map_err(|_| {
+        anyhow::anyhow!("L2 lab: HMAC keys required (IR security paths or EXYONQ_L2_EVENT_HMAC_*)")
+    })?;
     let secrets = RedisCoordSecrets::from_env();
     let provider = RedisCoordinationProvider::connect(cfg, secrets, keys)
         .map_err(|e| anyhow::anyhow!("L2 lab Redis connect failed: {:?}", e.reason))?;
@@ -186,16 +186,10 @@ fn apply_ir_security_env(sec: &exyonq_config_ir::DistributedCacheSecurityConfig)
         std::env::set_var("EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_ID", &sec.active_key_id);
     }
     if !sec.active_key_file.is_empty() {
-        std::env::set_var(
-            "EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_FILE",
-            &sec.active_key_file,
-        );
+        std::env::set_var("EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_FILE", &sec.active_key_file);
     }
     if !sec.previous_key_id.is_empty() {
-        std::env::set_var(
-            "EXYONQ_L2_EVENT_HMAC_PREVIOUS_KEY_ID",
-            &sec.previous_key_id,
-        );
+        std::env::set_var("EXYONQ_L2_EVENT_HMAC_PREVIOUS_KEY_ID", &sec.previous_key_id);
     }
     if !sec.previous_key_file.is_empty() {
         std::env::set_var(

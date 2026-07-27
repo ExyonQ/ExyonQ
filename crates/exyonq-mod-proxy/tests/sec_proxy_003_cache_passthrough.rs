@@ -121,9 +121,11 @@ fn boxed_instrumented(
     .boxed()
 }
 
-async fn serve_load(load: ProxyCacheLoad, path: &str, max: usize) -> Response<
-    http_body_util::combinators::BoxBody<Bytes, hyper::Error>,
-> {
+async fn serve_load(
+    load: ProxyCacheLoad,
+    path: &str,
+    max: usize,
+) -> Response<http_body_util::combinators::BoxBody<Bytes, hyper::Error>> {
     let cache = ResponseCache::with_limits(100, 1024 * 1024);
     let singleflight = Singleflight::new();
     let key = test_key(path);
@@ -195,9 +197,7 @@ async fn body_under_max_materializes_and_inserts() {
     let load = prepare_proxy_cache_load(response, 1024, &[]).await;
     match &load {
         ProxyCacheLoad::Materialized {
-            cacheable,
-            body,
-            ..
+            cacheable, body, ..
         } => {
             assert!(*cacheable);
             assert_eq!(&body[..], b"ok");
@@ -442,7 +442,9 @@ async fn unknown_length_oversize_passthrough_complete() {
     let load = prepare_proxy_cache_load(response, 64, &[]).await;
     assert!(matches!(load, ProxyCacheLoad::Passthrough { .. }));
     assert_eq!(
-        collect_body(serve_load(load, "/unk", 64).await).await.as_ref(),
+        collect_body(serve_load(load, "/unk", 64).await)
+            .await
+            .as_ref(),
         &body
     );
 }

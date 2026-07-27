@@ -79,8 +79,13 @@ pub struct FcgiCompiledSlot {
 /// Failure building or publishing a FastCGI generation (fail closed → keep previous).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FcgiBindError {
-    InvalidEndpoint { pool: String, detail: String },
-    InvalidCapacity { pool: String },
+    InvalidEndpoint {
+        pool: String,
+        detail: String,
+    },
+    InvalidCapacity {
+        pool: String,
+    },
     /// Global drain in progress — reload must not reactivate admission.
     Draining,
     Poisoned,

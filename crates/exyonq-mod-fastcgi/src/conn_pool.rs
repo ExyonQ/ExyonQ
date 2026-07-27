@@ -839,8 +839,8 @@ mod tests {
                     .unwrap();
                     let mut end_body = [0u8; 8];
                     end_body[4] = crate::FCGI_REQUEST_COMPLETE;
-                    let end =
-                        crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body).unwrap();
+                    let end = crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body)
+                        .unwrap();
                     let _ = s.write_all(&stdout);
                     let _ = s.write_all(&end);
                     let _ = s.flush();
@@ -858,8 +858,8 @@ mod tests {
                     .unwrap();
                     let mut end_body = [0u8; 8];
                     end_body[4] = crate::FCGI_REQUEST_COMPLETE;
-                    let end =
-                        crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body).unwrap();
+                    let end = crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body)
+                        .unwrap();
                     let _ = s.write_all(&stdout);
                     let _ = s.write_all(&end);
                     let _ = s.flush();

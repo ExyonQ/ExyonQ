@@ -33,7 +33,7 @@ pub use metrics::{
     l2_redis_ack_failure_total, l2_redis_command_timeout_total, l2_redis_connect_failure_total,
     l2_redis_connect_total, l2_redis_hmac_reject_total, l2_redis_provider_degraded,
     l2_redis_publish_failure_total, l2_redis_publish_total, l2_redis_receive_total,
-    l2_redis_reconnect_total, l2_redis_reconcile_failure_total, l2_redis_reconcile_total,
+    l2_redis_reconcile_failure_total, l2_redis_reconcile_total, l2_redis_reconnect_total,
     l2_redis_replay_reject_total, lock_redis_metrics_for_tests, reset_redis_metrics_for_tests,
 };
 pub use provider::RedisCoordinationProvider;

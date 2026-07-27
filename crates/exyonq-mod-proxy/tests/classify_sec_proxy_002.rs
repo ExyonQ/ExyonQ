@@ -2,9 +2,7 @@
 //! Lives under tests/ so dependency hot-path BoxBody budgets on src/ are unchanged.
 
 use bytes::Bytes;
-use exyonq_mod_proxy::{
-    take_streaming, BENCH_SMALL_UPSTREAM_BODY,
-};
+use exyonq_mod_proxy::{take_streaming, BENCH_SMALL_UPSTREAM_BODY};
 use exyonq_module_api::proxy_dispatch::{ProxyDispatchOutcome, ProxyMethod};
 use http_body_util::{BodyExt, Full};
 use hyper::Response;
@@ -12,9 +10,7 @@ use hyper::Response;
 // Re-export path: classify_hyper_response is crate-public via hyper_forward.
 use exyonq_mod_proxy::hyper_forward::classify_hyper_response;
 
-fn full_body(
-    bytes: Bytes,
-) -> http_body_util::combinators::BoxBody<Bytes, hyper::Error> {
+fn full_body(bytes: Bytes) -> http_body_util::combinators::BoxBody<Bytes, hyper::Error> {
     Full::from(bytes).map_err(|never| match never {}).boxed()
 }
 

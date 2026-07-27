@@ -15,10 +15,10 @@
  */
 //! Shared Linux listen bind (SO_REUSEADDR + SO_REUSEPORT) for platform workers.
 
+use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{SocketAddr, TcpListener};
 use std::os::fd::AsRawFd;
-use socket2::{Domain, Protocol, Socket, Type};
 
 pub(crate) fn bind_tuned_std(addr: SocketAddr) -> io::Result<TcpListener> {
     let domain = Domain::for_address(addr);

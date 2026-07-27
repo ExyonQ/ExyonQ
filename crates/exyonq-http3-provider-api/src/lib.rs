@@ -85,7 +85,9 @@ impl Http3ProviderConfig {
     pub fn validate(&self) -> Result<(), Http3ProviderError> {
         // RFC 9000 max_ack_delay is encoded in ms; reject absurd values.
         if self.max_ack_delay_ms > 25_000 {
-            return Err(Http3ProviderError::InvalidMaxAckDelay(self.max_ack_delay_ms));
+            return Err(Http3ProviderError::InvalidMaxAckDelay(
+                self.max_ack_delay_ms,
+            ));
         }
         if self.request_body_drain_cap_bytes == 0 {
             return Err(Http3ProviderError::InvalidDrainCap);
@@ -157,7 +159,10 @@ mod tests {
     #[test]
     fn parse_provider_ids() {
         assert_eq!(Http3ProviderId::parse("s2n").unwrap(), Http3ProviderId::S2n);
-        assert_eq!(Http3ProviderId::parse("quiche").unwrap(), Http3ProviderId::Quiche);
+        assert_eq!(
+            Http3ProviderId::parse("quiche").unwrap(),
+            Http3ProviderId::Quiche
+        );
         assert!(Http3ProviderId::parse("nginx").is_err());
         assert_eq!(
             Http3ProviderId::parse_product("s2n").unwrap(),

@@ -56,9 +56,7 @@ fn disabled_zero_skips_tree_walk_bodies() {
     let service = preload_with(limits, &root);
     assert_eq!(service.cache_len(), 0);
     // On-demand resolve still works.
-    let path = service
-        .resolve_live_file_path("/site/a.txt")
-        .expect("live");
+    let path = service.resolve_live_file_path("/site/a.txt").expect("live");
     assert!(path.ends_with("a.txt"));
 }
 

@@ -17,13 +17,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 use exyonq_compat_nginx::{
     redact_product_report, MigrateOptions, OutputFormat, ProductImportReport, ReportFormat,
 };
-use exyonq_config_ir::redact_secrets;
 use exyonq_config_cli::{
     classify_reload_diff, emit_result, explain, format_config_status, format_exy,
     format_generation, lint, profile_explain, profile_list, profile_render, profile_test,
     reload_check, test_config, CheckOptions, ExplainRequest, FormatMode, FormatRequest,
     OutputFormat as ConfigOut, ProfileCliInputs,
 };
+use exyonq_config_ir::redact_secrets;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -532,11 +532,7 @@ fn run_config_reload(
             Ok(r) => (Some(r.fingerprint), Some(r.generation)),
             Err(_) => (None, None),
         };
-        return emit_result(&classify_reload_diff(
-            &path,
-            cur_fp.as_deref(),
-            cur_gen,
-        ));
+        return emit_result(&classify_reload_diff(&path, cur_fp.as_deref(), cur_gen));
     }
     // Live structural reload: PATH must be the daemon-bound config (honesty).
     // Control plane reloads the process-bound path only; PATH is the operator
@@ -558,7 +554,10 @@ fn run_config_reload(
     let cand = match std::fs::canonicalize(&path) {
         Ok(p) => p,
         Err(err) => {
-            eprintln!("exyonqctl config reload: canonicalize {}: {err}", path.display());
+            eprintln!(
+                "exyonqctl config reload: canonicalize {}: {err}",
+                path.display()
+            );
             return ExitCode::from(2);
         }
     };
@@ -600,11 +599,8 @@ fn run_config_status(
 ) -> ExitCode {
     match invoke_control(&control_socket(socket), "status\n") {
         Ok(r) => {
-            let src = source_config.or_else(|| {
-                std::env::var("EXYONQ_CONFIG")
-                    .ok()
-                    .map(PathBuf::from)
-            });
+            let src =
+                source_config.or_else(|| std::env::var("EXYONQ_CONFIG").ok().map(PathBuf::from));
             emit_result(&format_config_status(
                 r.generation,
                 &r.fingerprint,
@@ -623,7 +619,11 @@ fn run_config_status(
 
 fn run_config_generation(format: DiagFormat, socket: Option<PathBuf>) -> ExitCode {
     match invoke_control(&control_socket(socket), "status\n") {
-        Ok(r) => emit_result(&format_generation(r.generation, &r.fingerprint, map_fmt(format))),
+        Ok(r) => emit_result(&format_generation(
+            r.generation,
+            &r.fingerprint,
+            map_fmt(format),
+        )),
         Err(err) => {
             eprintln!("exyonqctl config generation: {err}");
             ExitCode::from(1)
@@ -724,7 +724,10 @@ fn run_migrate_nginx(
     let source_bytes = match std::fs::read(&input) {
         Ok(b) => b,
         Err(err) => {
-            eprintln!("exyonqctl config migrate-nginx: read {}: {err}", input.display());
+            eprintln!(
+                "exyonqctl config migrate-nginx: read {}: {err}",
+                input.display()
+            );
             return ExitCode::from(2);
         }
     };
@@ -732,10 +735,7 @@ fn run_migrate_nginx(
     let mut migrate_out = match exyonq_compat_nginx::migrate_file(&input, &options) {
         Ok(o) => o,
         Err(err) => {
-            eprintln!(
-                "EXY-IMPORT-0001: {}",
-                redact_secrets(&format!("{err:#}"))
-            );
+            eprintln!("EXY-IMPORT-0001: {}", redact_secrets(&format!("{err:#}")));
             return ExitCode::from(1);
         }
     };
@@ -756,10 +756,7 @@ fn run_migrate_nginx(
                 o.config
             }
             Err(err) => {
-                eprintln!(
-                    "EXY-IMPORT-0001: {}",
-                    redact_secrets(&format!("{err:#}"))
-                );
+                eprintln!("EXY-IMPORT-0001: {}", redact_secrets(&format!("{err:#}")));
                 return ExitCode::from(1);
             }
         }
@@ -868,11 +865,9 @@ fn emit_product_report(
 
 fn run_htaccess(command: HtaccessCommand) -> ExitCode {
     match command {
-        HtaccessCommand::Check {
-            path,
-            site,
-            format,
-        } => htaccess_compile_report(&path, &site, format, true),
+        HtaccessCommand::Check { path, site, format } => {
+            htaccess_compile_report(&path, &site, format, true)
+        }
         HtaccessCommand::Compile {
             path,
             site,
@@ -917,10 +912,7 @@ fn htaccess_compile_report(
             }
         }
         Err(err) => {
-            eprintln!(
-                "EXY-HTACCESS-0004: {}",
-                redact_secrets(&err.to_string())
-            );
+            eprintln!("EXY-HTACCESS-0004: {}", redact_secrets(&err.to_string()));
             eprintln!("EXY-HTACCESS-0005: previous overlay retained (CLI dry-run; no publish)");
             ExitCode::from(1)
         }

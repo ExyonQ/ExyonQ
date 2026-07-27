@@ -78,8 +78,12 @@ impl FcgiStream {
 
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<(), WireError> {
         match self {
-            Self::Unix(s) => s.set_write_timeout(timeout).map_err(|_| WireError::IoFailed),
-            Self::Tcp(s) => s.set_write_timeout(timeout).map_err(|_| WireError::IoFailed),
+            Self::Unix(s) => s
+                .set_write_timeout(timeout)
+                .map_err(|_| WireError::IoFailed),
+            Self::Tcp(s) => s
+                .set_write_timeout(timeout)
+                .map_err(|_| WireError::IoFailed),
         }
     }
 

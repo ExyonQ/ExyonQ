@@ -200,27 +200,12 @@ mod tests {
 
     fn assert_variants_match(f: &FixtureSet) {
         let snap = f.snap;
-        let m = read_wire_plan_m2(
-            fixtures::stream(1),
-            f.head.clone(),
-            f.rest.clone(),
-            &snap,
-        )
-        .unwrap();
-        let x = read_wire_plan_x2(
-            fixtures::stream(2),
-            f.head.clone(),
-            f.rest.clone(),
-            &snap,
-        )
-        .unwrap();
-        let fp = read_wire_plan_f2(
-            fixtures::stream(3),
-            f.head.clone(),
-            f.rest.clone(),
-            &snap,
-        )
-        .unwrap();
+        let m =
+            read_wire_plan_m2(fixtures::stream(1), f.head.clone(), f.rest.clone(), &snap).unwrap();
+        let x =
+            read_wire_plan_x2(fixtures::stream(2), f.head.clone(), f.rest.clone(), &snap).unwrap();
+        let fp =
+            read_wire_plan_f2(fixtures::stream(3), f.head.clone(), f.rest.clone(), &snap).unwrap();
         assert_eq!(m.kind(), f.expected);
         assert_eq!(x.kind(), f.expected);
         assert_eq!(fp.kind(), f.expected);
@@ -253,7 +238,8 @@ mod tests {
         let head = fixtures::head_static();
         let rest = fixtures::rest_empty();
         let snap = fixtures::borrowed_snap();
-        let plan = read_wire_plan_x2(fixtures::stream(9), head.clone(), rest.clone(), &snap).unwrap();
+        let plan =
+            read_wire_plan_x2(fixtures::stream(9), head.clone(), rest.clone(), &snap).unwrap();
         match plan {
             SpikeWirePlan::Static(_, h, r) => {
                 assert_eq!(h, head);

@@ -111,7 +111,8 @@ pub fn forward_on_stream(
 ) -> Result<ForwardResponse, WireError> {
     let mut frames = Vec::new();
     frames.push(
-        encode_begin_request_frame_with_flags(request_id, begin_flags).map_err(WireError::Encode)?,
+        encode_begin_request_frame_with_flags(request_id, begin_flags)
+            .map_err(WireError::Encode)?,
     );
     frames.extend(encode_params_frames_owned(request_id, params).map_err(WireError::Encode)?);
     frames.extend(encode_stdin_frames(request_id, stdin).map_err(WireError::Encode)?);
@@ -121,8 +122,8 @@ pub fn forward_on_stream(
     }
 
     let response_frames = read_response_frames(stream, request_id)?;
-    let decoded = decode_forward_response_with_stderr(&response_frames, true)
-        .map_err(WireError::Decode)?;
+    let decoded =
+        decode_forward_response_with_stderr(&response_frames, true).map_err(WireError::Decode)?;
 
     Ok(ForwardResponse {
         stdout: decoded.stdout,

@@ -1,10 +1,10 @@
 //! PS0B F2 opaque OnceLock fn-pointer full-path bench (isolated binary).
 
-use exyonq_platform_boundary_spike_kernel::KERNEL_OPAQUE_PLAN;
 use exyonq_platform_boundary_spike_harness::{
     bench_full_path_variant, mode_label, variant_label, BenchMode, BenchShape, BenchVariant,
     FULL_PATH_ITERS, FULL_PATH_RUNS, FULL_PATH_WARMUP,
 };
+use exyonq_platform_boundary_spike_kernel::KERNEL_OPAQUE_PLAN;
 
 fn main() {
     let _ = KERNEL_OPAQUE_PLAN.ensure_registered();

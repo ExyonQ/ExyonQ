@@ -667,7 +667,11 @@ async fn security_secint001_h3_proxy_get_with_upstream() {
                         body.truncate(cl);
                     }
                     // GET → fixed pong; POST → echo; HEAD → headers only.
-                    let out = if cl == 0 { b"pong".as_slice() } else { body.as_slice() };
+                    let out = if cl == 0 {
+                        b"pong".as_slice()
+                    } else {
+                        body.as_slice()
+                    };
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Exyonq-Upstream: h3-proxy\r\nConnection: close\r\n\r\n",
                         out.len()
@@ -689,7 +693,9 @@ async fn security_secint001_h3_proxy_get_with_upstream() {
             let probe = async {
                 let mut stream = TcpStream::connect(upstream_addr).await.ok()?;
                 stream
-                    .write_all(b"GET /ready HTTP/1.1\r\nHost: upstream\r\nConnection: close\r\n\r\n")
+                    .write_all(
+                        b"GET /ready HTTP/1.1\r\nHost: upstream\r\nConnection: close\r\n\r\n",
+                    )
                     .await
                     .ok()?;
                 let mut buf = [0u8; 256];

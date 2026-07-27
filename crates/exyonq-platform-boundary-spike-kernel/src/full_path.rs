@@ -166,12 +166,8 @@ pub fn plan_wire_after_headers_full(
     classify_wire_plan(stream, head, rest, snap)
 }
 
-pub type FullPlanFn = fn(
-    SpikeStream,
-    Bytes,
-    Bytes,
-    &SpikeSnapshotBorrowed,
-) -> Option<SpikeWirePlan<SpikeStream>>;
+pub type FullPlanFn =
+    fn(SpikeStream, Bytes, Bytes, &SpikeSnapshotBorrowed) -> Option<SpikeWirePlan<SpikeStream>>;
 
 /// Opaque `OnceLock` registration — production-like fn pointer table.
 pub struct OpaquePlanRegistry {

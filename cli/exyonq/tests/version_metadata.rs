@@ -40,10 +40,7 @@ fn exyonq_version_reports_workspace_pkg_version() {
     );
     assert!(v.contains("target="), "expected target= field:\n{v}");
     assert!(v.contains("profile="), "expected profile= field:\n{v}");
-    assert!(
-        v.contains("allocator="),
-        "expected allocator= field:\n{v}"
-    );
+    assert!(v.contains("allocator="), "expected allocator= field:\n{v}");
     assert!(
         v.contains("artifact_version="),
         "expected artifact_version= field:\n{v}"

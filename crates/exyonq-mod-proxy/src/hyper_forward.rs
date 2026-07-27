@@ -565,10 +565,7 @@ enum SmallDeclaredRead<B> {
 
 /// Materialize up to `max_bytes` (declared CL). On overflow, return prefix + remainder
 /// for streaming fallback. Generic over body type to keep hot-path type-name budget flat.
-async fn materialize_small_declared_body<B>(
-    mut body: B,
-    max_bytes: usize,
-) -> SmallDeclaredRead<B>
+async fn materialize_small_declared_body<B>(mut body: B, max_bytes: usize) -> SmallDeclaredRead<B>
 where
     B: hyper::body::Body + Unpin,
     B::Data: AsRef<[u8]> + Into<bytes::Bytes>,

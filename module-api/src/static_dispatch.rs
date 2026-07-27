@@ -269,8 +269,7 @@ pub struct StaticDispatchRequest {
 ///
 /// Protocol adapters (e.g. H3 entry) map this signal to their oversized-response policy.
 /// Not a public product API; name is transport-agnostic.
-pub const MATERIALIZATION_BUDGET_EXCEEDED_HEADER: &str =
-    "x-exyonq-materialization-budget-exceeded";
+pub const MATERIALIZATION_BUDGET_EXCEEDED_HEADER: &str = "x-exyonq-materialization-budget-exceeded";
 
 /// Result of a cache-oriented static load (module maps errors to HTTP outcomes).
 #[derive(Debug, Clone, PartialEq, Eq)]

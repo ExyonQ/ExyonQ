@@ -196,20 +196,16 @@ impl ProductImportReport {
                 directive: e.directive.clone(),
                 message: e.message.clone(),
                 mapping: e.mapping.clone(),
-                recommended_action: e.migration_action.clone().or_else(|| {
-                    match tax {
-                        ImportTaxonomy::Unsupported => {
-                            Some("rewrite manually in AppConfig TOML".into())
-                        }
-                        ImportTaxonomy::Lossy => {
-                            Some("review IR; enable --strict to fail CI".into())
-                        }
-                        ImportTaxonomy::RejectedUnsafe => {
-                            Some("remove unsafe directive before migrate".into())
-                        }
-                        ImportTaxonomy::InvalidSource => Some("fix source syntax".into()),
-                        _ => None,
+                recommended_action: e.migration_action.clone().or_else(|| match tax {
+                    ImportTaxonomy::Unsupported => {
+                        Some("rewrite manually in AppConfig TOML".into())
                     }
+                    ImportTaxonomy::Lossy => Some("review IR; enable --strict to fail CI".into()),
+                    ImportTaxonomy::RejectedUnsafe => {
+                        Some("remove unsafe directive before migrate".into())
+                    }
+                    ImportTaxonomy::InvalidSource => Some("fix source syntax".into()),
+                    _ => None,
                 }),
             });
         }

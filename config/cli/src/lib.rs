@@ -4,30 +4,24 @@
 
 mod explain;
 mod format;
-mod load;
 mod limits;
+mod load;
 mod output;
 mod profile;
 mod reload;
 
 pub use explain::{explain, ExplainRequest};
 pub use format::{format_exy, FormatMode, FormatRequest};
-pub use load::{load_app_config, ConfigKind};
 pub use limits::{enforce_diag_cap, MAX_DIAGNOSTICS, MAX_FILE_BYTES, MAX_INCLUDE_DEPTH};
-pub use output::{
-    emit_result, sanitize_control_chars, CliExit, OutputFormat, ToolResult,
-};
-pub use profile::{
-    profile_explain, profile_list, profile_render, profile_test, ProfileCliInputs,
-};
+pub use load::{load_app_config, ConfigKind};
+pub use output::{emit_result, sanitize_control_chars, CliExit, OutputFormat, ToolResult};
+pub use profile::{profile_explain, profile_list, profile_render, profile_test, ProfileCliInputs};
 pub use reload::{
     classify_reload_diff, format_config_status, format_generation, reload_check, reload_precheck,
     ChangeClass, DiffEntry, ReloadPrecheck,
 };
 
-use exyonq_config_ir::{
-    render_human, Diagnostic, DiagnosticCode, DiagnosticDocument, Severity,
-};
+use exyonq_config_ir::{render_human, Diagnostic, DiagnosticCode, DiagnosticDocument, Severity};
 use exyonq_config_merge::load_with_includes;
 use std::path::Path;
 
@@ -293,7 +287,9 @@ root = "/t"
         );
         assert_eq!(r.exit, CliExit::DiagnosticError);
         assert!(r.stdout.contains("EXY-CONFIG-0002"));
-        assert!(r.stdout.contains("\"schema_version\": 1") || r.stdout.contains("\"schema_version\":1"));
+        assert!(
+            r.stdout.contains("\"schema_version\": 1") || r.stdout.contains("\"schema_version\":1")
+        );
         assert!(r.stderr.is_empty());
         let _ = fs::remove_dir_all(dir);
     }

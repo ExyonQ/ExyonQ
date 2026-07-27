@@ -192,10 +192,7 @@ async fn write_streaming_proxy_response_wire<S: AsyncWrite + Unpin>(
     }
 
     // P8T-FIX A/B baseline: pre-fix 16 KiB batching (holds frames until SSE_FLUSH_CHUNK).
-    #[cfg(all(
-        not(feature = "p8-transport-diag"),
-        feature = "p8t-fix-baseline"
-    ))]
+    #[cfg(all(not(feature = "p8-transport-diag"), feature = "p8t-fix-baseline"))]
     {
         wire_io::write_all_async(stream, &wire).await?;
         let mut pending = Vec::new();
@@ -236,10 +233,7 @@ async fn write_streaming_proxy_response_wire<S: AsyncWrite + Unpin>(
     }
 
     // P8T-FIX product default: progressive per-frame TE write + flush.
-    #[cfg(all(
-        not(feature = "p8-transport-diag"),
-        not(feature = "p8t-fix-baseline")
-    ))]
+    #[cfg(all(not(feature = "p8-transport-diag"), not(feature = "p8t-fix-baseline")))]
     {
         write_streaming_te_progressive(stream, &wire, &mut body).await?;
         #[cfg(feature = "p8-app-attribution")]
@@ -732,13 +726,9 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel::<Option<Bytes>>(4);
         tokio::spawn(async move {
-            let _ = tx
-                .send(Some(Bytes::from_static(b"data: one\n\n")))
-                .await;
+            let _ = tx.send(Some(Bytes::from_static(b"data: one\n\n"))).await;
             tokio::time::sleep(Duration::from_millis(40)).await;
-            let _ = tx
-                .send(Some(Bytes::from_static(b"data: two\n\n")))
-                .await;
+            let _ = tx.send(Some(Bytes::from_static(b"data: two\n\n"))).await;
             let _ = tx.send(None).await;
         });
 

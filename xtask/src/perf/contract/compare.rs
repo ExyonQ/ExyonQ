@@ -160,7 +160,9 @@ pub fn fingerprints_comparable(
     }
 }
 
-pub fn tolerances_for_gate(gate: Option<&ScenarioGatePolicy>) -> (Tolerances, Option<Tolerances>, Tolerances) {
+pub fn tolerances_for_gate(
+    gate: Option<&ScenarioGatePolicy>,
+) -> (Tolerances, Option<Tolerances>, Tolerances) {
     match gate {
         None => {
             let d = Tolerances::default();
@@ -198,7 +200,14 @@ pub fn compare_metrics(
     baseline_allowed_errors: f64,
     tolerances: &Tolerances,
 ) -> Verdict {
-    compare_metrics_gated(baseline, current, baseline_allowed_errors, tolerances, Some(tolerances), tolerances)
+    compare_metrics_gated(
+        baseline,
+        current,
+        baseline_allowed_errors,
+        tolerances,
+        Some(tolerances),
+        tolerances,
+    )
 }
 
 pub fn compare_metrics_gated(
@@ -733,10 +742,7 @@ mod tests {
 
     #[test]
     fn overall_pass_with_warning_label() {
-        let merged = merge_verdicts(&[
-            Verdict::Pass,
-            Verdict::Warning(vec!["p99".into()]),
-        ]);
+        let merged = merge_verdicts(&[Verdict::Pass, Verdict::Warning(vec!["p99".into()])]);
         assert_eq!(overall_verdict_label(&merged), "PASS_WITH_WARNING");
     }
 

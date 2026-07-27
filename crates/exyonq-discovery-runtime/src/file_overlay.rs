@@ -60,14 +60,14 @@ impl DiscoveryConfigOverlayService for FileDiscoveryRuntime {
             }
         }
         next
-}
+    }
 
     fn apply_env_file_overlay(&self, config: &AppConfig) -> AppConfig {
         match discovery_path_from_env() {
             Some(path) => self.apply_file_overlay(config, &path),
             None => config.clone(),
         }
-}
+    }
 }
 
 #[cfg(test)]
@@ -101,7 +101,7 @@ target = "http://127.0.0.1:9000"
         )
         .unwrap();
         AppConfig::from_file(&path).expect("config")
-}
+    }
 
     #[test]
     fn invalid_json_keeps_config() {

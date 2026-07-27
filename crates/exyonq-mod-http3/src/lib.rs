@@ -21,12 +21,16 @@
 //! Selection is startup-only via neutral `[http3].provider` (product: s2n|quiche).
 
 #[cfg(any(
-    all(feature = "http3-provider-quinn-legacy", feature = "http3-provider-s2n"),
-    all(feature = "http3-provider-quinn-legacy", feature = "http3-provider-quiche"),
+    all(
+        feature = "http3-provider-quinn-legacy",
+        feature = "http3-provider-s2n"
+    ),
+    all(
+        feature = "http3-provider-quinn-legacy",
+        feature = "http3-provider-quiche"
+    ),
 ))]
-compile_error!(
-    "exyonq-mod-http3: http3-provider-quinn-legacy cannot combine with s2n or quiche"
-);
+compile_error!("exyonq-mod-http3: http3-provider-quinn-legacy cannot combine with s2n or quiche");
 
 #[cfg(not(any(
     feature = "http3-provider-quinn-legacy",
@@ -43,9 +47,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 #[cfg(any(feature = "http3-provider-s2n", feature = "http3-provider-quiche"))]
-use exyonq_http3_provider_api::{
-    Http3ProviderConfig, Http3ProviderError, Http3ProviderId,
-};
+use exyonq_http3_provider_api::{Http3ProviderConfig, Http3ProviderError, Http3ProviderId};
 
 #[derive(Debug, Clone)]
 pub struct Http3Settings {
@@ -161,7 +163,9 @@ where
             }
             #[cfg(not(feature = "http3-provider-quinn-legacy"))]
             {
-                return Err(anyhow::Error::msg("http3 provider quinn-legacy not in this build"));
+                return Err(anyhow::Error::msg(
+                    "http3 provider quinn-legacy not in this build",
+                ));
             }
         }
         "s2n" => {
@@ -183,7 +187,9 @@ where
             }
             #[cfg(not(feature = "http3-provider-quiche"))]
             {
-                return Err(anyhow::Error::msg("http3 provider quiche not in this build"));
+                return Err(anyhow::Error::msg(
+                    "http3 provider quiche not in this build",
+                ));
             }
         }
         other => Err(anyhow::Error::msg(format!(
@@ -301,6 +307,8 @@ mod tests {
         };
         let mut s = Http3Settings::legacy("127.0.0.1:4433".parse().unwrap(), tls);
         s.provider = Some("quiche".into());
-        assert!(resolve_provider(&s).unwrap_err().contains("not in this build"));
+        assert!(resolve_provider(&s)
+            .unwrap_err()
+            .contains("not in this build"));
     }
 }

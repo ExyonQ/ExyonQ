@@ -22,7 +22,9 @@
 //! Policy remains in `PlatformConnectionEntry` / core executor.
 
 use crate::linux_bind::bind_tuned_std;
-use exyonq_core::kernel::{AcceptedConnection, ConnectionServeOutcome, PlatformConnectionEntry, TransportKind};
+use exyonq_core::kernel::{
+    AcceptedConnection, ConnectionServeOutcome, PlatformConnectionEntry, TransportKind,
+};
 use exyonq_core::server::OsWorkerGuard;
 use std::io;
 use std::net::{SocketAddr, TcpListener};

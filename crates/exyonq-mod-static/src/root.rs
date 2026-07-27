@@ -835,10 +835,7 @@ impl StaticRoot {
             {
                 continue;
             }
-            out.push(PreloadCandidate {
-                path,
-                request_path,
-            });
+            out.push(PreloadCandidate { path, request_path });
         }
         Ok(())
     }

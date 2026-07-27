@@ -29,8 +29,8 @@ pub const MAX_INCLUDE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 use exyonq_config_ir::{
     AppConfig, CachePolicyConfig, ConfigError, FcgiPoolConfig, FullPageCacheConfig, Http3Config,
-    RawConfigInput,
-    RouteConfig, ServerConfig, UpstreamConfig, CONFIG_VERSION_V2, DEFAULT_UPSTREAM_TIMEOUT_MS,
+    RawConfigInput, RouteConfig, ServerConfig, UpstreamConfig, CONFIG_VERSION_V2,
+    DEFAULT_UPSTREAM_TIMEOUT_MS,
 };
 use serde::Deserialize;
 use std::collections::HashMap;

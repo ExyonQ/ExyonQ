@@ -560,7 +560,11 @@ fn pop_fifo_victim(inner: &mut ResponseCacheInner, prefer_site: Option<u64>) -> 
             if !inner.entries.contains_key(&key) {
                 continue;
             }
-            if inner.entries.get(&key).is_some_and(|e| e.site_id == site_id) {
+            if inner
+                .entries
+                .get(&key)
+                .is_some_and(|e| e.site_id == site_id)
+            {
                 found = Some(key);
                 break;
             }
@@ -626,7 +630,13 @@ mod tests {
         );
     }
 
-    fn insert_plain(cache: &ResponseCache, site_id: u64, path: &str, body: &'static [u8], ttl: Duration) {
+    fn insert_plain(
+        cache: &ResponseCache,
+        site_id: u64,
+        path: &str,
+        body: &'static [u8],
+        ttl: Duration,
+    ) {
         insert_bytes(cache, site_id, path, Bytes::from_static(body), ttl);
     }
 
@@ -659,11 +669,35 @@ mod tests {
         let _metrics = lock_size_metrics_for_tests();
         // Exact body bytes only (no stored headers) so caps are predictable.
         let cache = ResponseCache::with_limits_and_site_cap(100, 1024 * 1024, Some(20));
-        insert_bytes(&cache, 1, "/a", Bytes::from(vec![1u8; 10]), Duration::from_secs(60));
-        insert_bytes(&cache, 1, "/b", Bytes::from(vec![2u8; 10]), Duration::from_secs(60));
-        insert_bytes(&cache, 2, "/c", Bytes::from(vec![3u8; 10]), Duration::from_secs(60));
+        insert_bytes(
+            &cache,
+            1,
+            "/a",
+            Bytes::from(vec![1u8; 10]),
+            Duration::from_secs(60),
+        );
+        insert_bytes(
+            &cache,
+            1,
+            "/b",
+            Bytes::from(vec![2u8; 10]),
+            Duration::from_secs(60),
+        );
+        insert_bytes(
+            &cache,
+            2,
+            "/c",
+            Bytes::from(vec![3u8; 10]),
+            Duration::from_secs(60),
+        );
         // Site 1 is at 20; another 10-byte insert must prefer site-1 victims.
-        insert_bytes(&cache, 1, "/d", Bytes::from(vec![4u8; 10]), Duration::from_secs(60));
+        insert_bytes(
+            &cache,
+            1,
+            "/d",
+            Bytes::from(vec![4u8; 10]),
+            Duration::from_secs(60),
+        );
         assert!(cache.lookup(&sample_key_for_site(2, "/c")).is_some());
         assert!(cache.lookup(&sample_key_for_site(1, "/d")).is_some());
         assert!(cache.metrics_match_store());
@@ -674,8 +708,12 @@ mod tests {
         let cache = ResponseCache::with_limits(10, 1024 * 1024);
         insert_plain(&cache, 1, "/same", b"one", Duration::from_secs(60));
         insert_plain(&cache, 2, "/same", b"two", Duration::from_secs(60));
-        let a = cache.lookup(&sample_key_for_site(1, "/same")).expect("site1");
-        let b = cache.lookup(&sample_key_for_site(2, "/same")).expect("site2");
+        let a = cache
+            .lookup(&sample_key_for_site(1, "/same"))
+            .expect("site1");
+        let b = cache
+            .lookup(&sample_key_for_site(2, "/same"))
+            .expect("site2");
         assert_eq!(a.body.as_ref(), b"one");
         assert_eq!(b.body.as_ref(), b"two");
     }

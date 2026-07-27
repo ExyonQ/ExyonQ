@@ -328,10 +328,7 @@ fn explain_json(entry: &Entry) -> String {
         json_string_array(entry.codes)
     ));
     match entry.support_limit {
-        Some(s) => out.push_str(&format!(
-            "  \"support_limit\": \"{}\",\n",
-            json_escape(s)
-        )),
+        Some(s) => out.push_str(&format!("  \"support_limit\": \"{}\",\n", json_escape(s))),
         None => out.push_str("  \"support_limit\": null,\n"),
     }
     out.push_str(&format!(
@@ -361,9 +358,9 @@ pub fn explain(req: ExplainRequest) -> ToolResult {
         let _ = path; // pointer+path reserved; catalog explain is sufficient for WS3
     }
 
-    let entry = CATALOG.iter().find(|e| {
-        e.public_term == term || e.aliases.iter().any(|a| a.eq_ignore_ascii_case(&term))
-    });
+    let entry = CATALOG
+        .iter()
+        .find(|e| e.public_term == term || e.aliases.iter().any(|a| a.eq_ignore_ascii_case(&term)));
 
     let Some(entry) = entry else {
         return ToolResult {

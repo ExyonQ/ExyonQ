@@ -347,9 +347,7 @@ async fn async_main() -> anyhow::Result<()> {
             println!("migrated {} -> {}", config.display(), output.display());
         }
         Some(Commands::Fmt { input, write }) => {
-            eprintln!(
-                "warning: `exyonq fmt` is transitional; prefer `exyonqctl config format`"
-            );
+            eprintln!("warning: `exyonq fmt` is transitional; prefer `exyonqctl config format`");
             let mode = if write {
                 FormatMode::Write
             } else {
@@ -482,9 +480,7 @@ fn resolve_fcgi_registration(app_config: &AppConfig) -> Option<FcgiRuntimeRegist
                 .unwrap_or("");
             let pool = app_config.pools_fcgi.get(name);
             let max_conc = pool.map(|p| p.max_concurrency).unwrap_or(16);
-            let max_conn = pool
-                .and_then(|p| p.max_connections)
-                .unwrap_or(max_conc) as usize;
+            let max_conn = pool.and_then(|p| p.max_connections).unwrap_or(max_conc) as usize;
             m.insert(
                 *pool_id,
                 PoolConnCfg {
@@ -501,12 +497,15 @@ fn resolve_fcgi_registration(app_config: &AppConfig) -> Option<FcgiRuntimeRegist
         executor: std::sync::Arc::new(exyonq_mod_fastcgi::FcgiModuleExecutor::production_pools(
             pools_for_exec,
             move |pool_id| {
-                let cfg = conn_cfg_by_id.get(&pool_id).copied().unwrap_or(PoolConnCfg {
-                    max_connections: 16,
-                    idle_ms: 30_000,
-                    total_ms: 30_000,
-                    checkout_ms: 5_000,
-                });
+                let cfg = conn_cfg_by_id
+                    .get(&pool_id)
+                    .copied()
+                    .unwrap_or(PoolConnCfg {
+                        max_connections: 16,
+                        idle_ms: 30_000,
+                        total_ms: 30_000,
+                        checkout_ms: 5_000,
+                    });
                 exyonq_mod_fastcgi::ConnPoolConfig {
                     max_connections: cfg.max_connections,
                     idle_timeout: std::time::Duration::from_millis(cfg.idle_ms),
@@ -577,7 +576,7 @@ mod fcgi_register_tests {
             },
         );
         config
-}
+    }
 
     #[test]
     fn no_env_and_unresolvable_address_skips_registration() {
@@ -602,7 +601,7 @@ listen = "127.0.0.1:8080"
 routes = []
 "#;
         raw.parse().expect("minimal config")
-}
+    }
 }
 
 #[cfg(test)]
@@ -678,5 +677,5 @@ listen = "127.0.0.1:8080"
 routes = []
 "#;
         raw.parse().expect("minimal config")
-}
+    }
 }

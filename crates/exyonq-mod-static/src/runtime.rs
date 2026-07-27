@@ -259,7 +259,8 @@ impl StaticDispatchService for StaticRuntime {
                 // Preload miss / skipped / disabled: serve on demand from disk.
                 let outcome = match root.resolve_live_file_path(request_path) {
                     Ok(path) => {
-                        self.serve_resolved_path(request.method, &path, budget).await
+                        self.serve_resolved_path(request.method, &path, budget)
+                            .await
                     }
                     Err(err) => static_error_outcome(err),
                 };
@@ -419,8 +420,12 @@ impl StaticDispatchService for StaticRuntime {
         match method {
             StaticMethod::Head => match crate::serve_head_sync(path) {
                 Ok(response) => {
-                    hyper_response_to_dispatch_outcome(method, response, materialization_budget_bytes)
-                        .await
+                    hyper_response_to_dispatch_outcome(
+                        method,
+                        response,
+                        materialization_budget_bytes,
+                    )
+                    .await
                 }
                 Err(err) => static_error_outcome(err),
             },

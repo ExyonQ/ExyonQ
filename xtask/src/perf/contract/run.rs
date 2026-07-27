@@ -1,16 +1,16 @@
 use super::compare::{
     build_compare_report_with_mode, compare_median_to_baseline, merge_verdicts, Verdict,
 };
-use super::registry;
 use super::normalize::{normalize_from_summary_json, normalize_raw_rewrk_json, read_summary_file};
+use super::registry;
 use super::scenarios::{
     fingerprint_for_scenario, full_profile, load_contract_scenarios, quick_profile,
     ContractScenario,
 };
 use super::schema::ProfileSpec;
 use super::schema::{
-    read_baseline, write_baseline, write_run, BaselineDocument,
-    BaselineScenarioEntry, RunDocument, CONTRACT_ID, CONTRACT_SCHEMA_VERSION,
+    read_baseline, write_baseline, write_run, BaselineDocument, BaselineScenarioEntry, RunDocument,
+    CONTRACT_ID, CONTRACT_SCHEMA_VERSION,
 };
 use anyhow::Context;
 use clap::Args;
@@ -610,8 +610,7 @@ fn run_one_scenario(
         .env("BENCH_SKIP_UP", "1")
         .env(
             "COMPOSE_PROJECT_NAME",
-            std::env::var("COMPOSE_PROJECT_NAME")
-                .unwrap_or_else(|_| "exyonq-perf-contract".into()),
+            std::env::var("COMPOSE_PROJECT_NAME").unwrap_or_else(|_| "exyonq-perf-contract".into()),
         )
         .env("BENCH_WARMUP_SEC", warmup_sec(profile))
         .env("BENCH_RESULTS_DIR", out_dir)

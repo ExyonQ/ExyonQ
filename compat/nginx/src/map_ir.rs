@@ -88,7 +88,7 @@ pub fn map_to_ir(analyzed: &AnalyzedConfig, report: &mut CompatibilityReport) ->
         static_section: Default::default(),
         full_page_cache: Default::default(),
         http3: Default::default(),
-};
+    };
 
     report.summary.servers_parsed = analyzed.servers.len();
     report.summary.listeners_generated = app.servers.len();

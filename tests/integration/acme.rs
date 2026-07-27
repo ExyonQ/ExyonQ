@@ -56,7 +56,7 @@ fn redirect_config() -> AppConfig {
         static_section: Default::default(),
         full_page_cache: Default::default(),
         http3: Default::default(),
-}
+    }
 }
 
 /// HTTP-01 must resolve while a site-wide redirect is configured (handler checks ACME before routing).

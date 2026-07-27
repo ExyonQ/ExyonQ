@@ -1,9 +1,7 @@
 //! Redis Streams coordination provider (sync control-plane; no L1 hot path).
 
 use crate::config::{RedisCoordConfig, RedisCoordSecrets};
-use crate::health::{
-    CoordinationHealthSnapshot, CoordinationProviderHealth, HealthCell,
-};
+use crate::health::{CoordinationHealthSnapshot, CoordinationProviderHealth, HealthCell};
 use crate::metrics;
 use crate::wire::{decode_signed_event, encode_signed_event};
 use crate::EventSigningKeys;
@@ -131,10 +129,14 @@ impl RedisCoordinationProvider {
             ));
         }
         if cfg.deployment_id.is_empty() || cfg.deployment_id.len() > 64 {
-            return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::InvalidTarget,
+            ));
         }
         if cfg.node_id.is_empty() || cfg.node_id.len() > 64 {
-            return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::InvalidTarget,
+            ));
         }
         // AUTH material only for Client::open — never written back to cfg.endpoint.
         let open_url = match secrets.password.as_ref() {
@@ -266,7 +268,9 @@ impl RedisCoordinationProvider {
         // Bound: never iterate unbounded — config list is the authority.
         if sites.len() > 10_000 {
             metrics::note_reconcile_fail();
-            return Err(CoordinationError::new(CoordinationRejectReason::InternalError));
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::InternalError,
+            ));
         }
         for site_id in sites {
             match self.fetch_remote_generation(site_id) {
@@ -492,7 +496,9 @@ impl GenerationStore for RedisCoordinationProvider {
             return Ok(to);
         }
         if site_id == 0 {
-            return Err(CoordinationError::new(CoordinationRejectReason::InvalidScope));
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::InvalidScope,
+            ));
         }
         let local = self
             .shared
@@ -631,8 +637,7 @@ fn run_read_loop(
             .group(&group, &consumer)
             .count(16)
             .block(1000);
-        let reply: RedisResult<StreamReadReply> =
-            conn.xread_options(&[&stream], &[">"], &opts);
+        let reply: RedisResult<StreamReadReply> = conn.xread_options(&[&stream], &[">"], &opts);
         match reply {
             Ok(reply) => {
                 for key in reply.keys {
@@ -724,11 +729,7 @@ fn deliver_stream_id(
     id: &StreamId,
     tx: &SyncSender<InvalidationEvent>,
 ) -> Result<(), ()> {
-    let payload = id
-        .map
-        .get("e")
-        .and_then(value_as_str)
-        .unwrap_or("");
+    let payload = id.map.get("e").and_then(value_as_str).unwrap_or("");
     match decode_signed_event(
         payload,
         &shared.cfg.deployment_id,
@@ -739,7 +740,10 @@ fn deliver_stream_id(
         Ok(event) => match tx.try_send(event) {
             Ok(()) => {
                 metrics::note_receive();
-                if conn.xack::<_, _, _, u64>(stream, group, &[id.id.as_str()]).is_err() {
+                if conn
+                    .xack::<_, _, _, u64>(stream, group, &[id.id.as_str()])
+                    .is_err()
+                {
                     metrics::note_ack_fail();
                 }
             }

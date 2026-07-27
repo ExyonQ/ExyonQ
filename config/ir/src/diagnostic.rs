@@ -551,12 +551,13 @@ mod tests {
 
     #[test]
     fn human_render_deterministic() {
-        let text = render_human(&[
-            Diagnostic::error(DiagnosticCode::UnknownField, "unknown field `x`")
-                .with_source("c.toml")
-                .with_field("x")
-                .with_suggestion("remove `x`"),
-        ]);
+        let text =
+            render_human(&[
+                Diagnostic::error(DiagnosticCode::UnknownField, "unknown field `x`")
+                    .with_source("c.toml")
+                    .with_field("x")
+                    .with_suggestion("remove `x`"),
+            ]);
         assert!(text.contains("error[EXY-CONFIG-0002]"));
         assert!(text.contains("--> c.toml"));
     }

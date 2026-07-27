@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 use crate::diagnostic::{
-    suggest_typo, Diagnostic, DiagnosticCode, Severity, SpanQuality, SourceSpan, ROOT_FIELD_CATALOG,
-    SERVER_FIELD_CATALOG, span_from_byte_range,
+    span_from_byte_range, suggest_typo, Diagnostic, DiagnosticCode, Severity, SourceSpan,
+    SpanQuality, ROOT_FIELD_CATALOG, SERVER_FIELD_CATALOG,
 };
 use std::path::PathBuf;
 use thiserror::Error;
@@ -180,10 +180,7 @@ impl ConfigError {
                 source_text,
                 byte_range,
             } => Self::ParseLocated {
-                message: format!(
-                    "failed to parse config {}: {message}",
-                    path.display()
-                ),
+                message: format!("failed to parse config {}: {message}", path.display()),
                 source_text,
                 byte_range,
             },
@@ -214,10 +211,8 @@ impl ConfigError {
                     if let Some(field) = extract_unknown_field(message) {
                         d.field = Some(field.clone());
                         d.received = Some(field.clone());
-                        if let Some(sug) =
-                            suggest_typo(&field, ROOT_FIELD_CATALOG).or_else(|| {
-                                suggest_typo(&field, SERVER_FIELD_CATALOG)
-                            })
+                        if let Some(sug) = suggest_typo(&field, ROOT_FIELD_CATALOG)
+                            .or_else(|| suggest_typo(&field, SERVER_FIELD_CATALOG))
                         {
                             d.suggestion = Some(sug);
                         }
@@ -289,17 +284,15 @@ impl ConfigError {
             Self::InvalidListen { value }
             | Self::InvalidMatchPath { value }
             | Self::InvalidUpstreamTarget { value }
-            | Self::InvalidRewriteTarget { value } => Diagnostic::error(
-                DiagnosticCode::InvalidValue,
-                self.to_string(),
-            )
-            .with_received(value.clone()),
+            | Self::InvalidRewriteTarget { value } => {
+                Diagnostic::error(DiagnosticCode::InvalidValue, self.to_string())
+                    .with_received(value.clone())
+            }
 
-            Self::InvalidRedirectStatus { value } => Diagnostic::error(
-                DiagnosticCode::InvalidValue,
-                self.to_string(),
-            )
-            .with_received(value.to_string()),
+            Self::InvalidRedirectStatus { value } => {
+                Diagnostic::error(DiagnosticCode::InvalidValue, self.to_string())
+                    .with_received(value.to_string())
+            }
 
             other => Diagnostic::error(DiagnosticCode::IrValidationError, other.to_string()),
         }

@@ -116,10 +116,7 @@ impl FcgiRuntimeState {
         })
     }
 
-    fn from_compiled(
-        generation: u64,
-        slots: &[FcgiCompiledSlot],
-    ) -> Result<Self, FcgiBindError> {
+    fn from_compiled(generation: u64, slots: &[FcgiCompiledSlot]) -> Result<Self, FcgiBindError> {
         let module = Arc::new(FcgiModuleExecutor::from_compiled_slots(generation, slots)?);
         let mut semaphores = HashMap::new();
         for slot in slots {
@@ -142,9 +139,8 @@ impl FcgiRuntimeState {
     }
 
     fn empty(generation: u64) -> Self {
-        let module = Arc::new(
-            FcgiModuleExecutor::from_compiled_slots(generation, &[]).expect("empty"),
-        );
+        let module =
+            Arc::new(FcgiModuleExecutor::from_compiled_slots(generation, &[]).expect("empty"));
         Self {
             generation,
             executor: ActiveExecutor::Module(Arc::clone(&module)),
@@ -312,8 +308,7 @@ impl FcgiDispatchService for FcgiRuntime {
     }
 
     fn begin_drain(&self) {
-        self.global_drain
-            .store(true, Ordering::Release);
+        self.global_drain.store(true, Ordering::Release);
         let active = self.load_active();
         active.executor.begin_drain();
         metrics::note_fcgi_pool_generation_drained();
@@ -352,8 +347,7 @@ impl FcgiDispatchService for FcgiRuntime {
         };
         Self::reap_retiring_in(&mut next);
         self.registry.swap(Arc::new(next));
-        self.active_generation
-            .store(generation, Ordering::Release);
+        self.active_generation.store(generation, Ordering::Release);
         metrics::set_fcgi_pool_generation_active(generation);
         Ok(())
     }

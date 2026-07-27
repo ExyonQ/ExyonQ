@@ -1263,7 +1263,10 @@ mod tests {
             let head_part = head.slice(0..end + 4);
             let rest = head.slice(end + 4..);
             let result = serve_blocking_sync(&root, &mut server, head_part, rest);
-            assert!(result.is_ok(), "keep-alive timeout must not error: {result:?}");
+            assert!(
+                result.is_ok(),
+                "keep-alive timeout must not error: {result:?}"
+            );
             let _ = client.join();
 
             match prev {

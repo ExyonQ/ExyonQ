@@ -174,9 +174,13 @@ mod tests {
     #[tokio::test]
     async fn finite_single_buffer_matches_te_shape() {
         let mut out = Vec::new();
-        write_finite_te_single_buffer(&mut out, b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", b"data: x\n\n")
-            .await
-            .expect("write");
+        write_finite_te_single_buffer(
+            &mut out,
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+            b"data: x\n\n",
+        )
+        .await
+        .expect("write");
         let s = String::from_utf8(out).expect("utf8");
         assert!(s.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(s.contains("\r\ndata: x\n\n\r\n"));

@@ -592,7 +592,7 @@ mod tests {
             static_section: Default::default(),
             full_page_cache: Default::default(),
             http3: Default::default(),
-};
+        };
         let snap = compile_config(config);
         assert!(snap.route_backend_id(0).is_none());
     }
@@ -636,7 +636,7 @@ mod tests {
             static_section: Default::default(),
             full_page_cache: Default::default(),
             http3: Default::default(),
-};
+        };
         let snap = compile_config(config);
         let api_id = snap.route_backend_id(0).unwrap();
         assert!(matches!(

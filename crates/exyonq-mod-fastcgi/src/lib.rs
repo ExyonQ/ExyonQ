@@ -68,12 +68,23 @@ pub use caps::{
     MAX_FCGI_STDERR_BYTES, MAX_FCGI_STDIN_BYTES,
 };
 pub use client::{ClientError, ForwardResponse, PhpFpmClient, PoolLabel};
+pub use commit::CommitStage;
+#[cfg(unix)]
+pub use conn_pool::{
+    next_pool_generation, ConnPool, ConnPoolConfig, ConnPoolSet, ConnPoolStats,
+    DEFAULT_FCGI_IDLE_TIMEOUT,
+};
 pub use encode::{
     append_length, decode_forward_response, decode_forward_response_with_stderr,
     encode_begin_request_frame, encode_begin_request_frame_with_flags, encode_params_body,
-    encode_params_body_owned, encode_params_frames, encode_params_frames_owned, encode_record_frame,
-    encode_stdin_frames, DecodeError, DecodedResponse, EncodeError,
+    encode_params_body_owned, encode_params_frames, encode_params_frames_owned,
+    encode_record_frame, encode_stdin_frames, DecodeError, DecodedResponse, EncodeError,
 };
+pub use exyonq_module_api::fcgi_dispatch::{
+    FcgiBindError, FcgiCompiledSlot, FcgiRuntimeRegistration,
+};
+#[cfg(unix)]
+pub use fcgi_stream::{FcgiStream, PoolEndpoint};
 #[cfg(test)]
 pub use metrics::fcgi_metric_test_gate;
 pub use metrics::{
@@ -93,30 +104,20 @@ pub use pool::{
 pub use record::{
     RecordHeader, END_REQUEST_BODY_LEN, FCGI_ABORT_REQUEST, FCGI_BEGIN_REQUEST, FCGI_END_REQUEST,
     FCGI_KEEP_CONN, FCGI_PARAMS, FCGI_REQUEST_COMPLETE, FCGI_STDERR, FCGI_STDIN, FCGI_STDOUT,
-    FCGI_VERSION_1, MAX_CONTENT_LENGTH, MAX_PADDING_LENGTH, MAX_RECORD_FRAME_LEN, RECORD_HEADER_LEN,
+    FCGI_VERSION_1, MAX_CONTENT_LENGTH, MAX_PADDING_LENGTH, MAX_RECORD_FRAME_LEN,
+    RECORD_HEADER_LEN,
 };
 pub use runtime::{FcgiRuntime, FCGI_DELEGATE_TIMEOUT};
-pub use exyonq_module_api::fcgi_dispatch::{
-    FcgiBindError, FcgiCompiledSlot, FcgiRuntimeRegistration,
-};
 pub use script_resolver::FastcgiScriptResolver;
+pub use timeout_budget::{
+    TimeoutBudget, TimeoutPhase, DEFAULT_FCGI_CHECKOUT_TIMEOUT, DEFAULT_FCGI_TOTAL_TIMEOUT,
+};
 pub use transport::{
     FastcgiRecordTransport, InertTransport, TransportError, ValidatingMockTransport,
 };
 #[cfg(unix)]
 pub use unix_connect::connect_unix_stream;
 pub use unix_transport::UnixFpmTransport;
-#[cfg(unix)]
-pub use conn_pool::{
-    next_pool_generation, ConnPool, ConnPoolConfig, ConnPoolSet, ConnPoolStats,
-    DEFAULT_FCGI_IDLE_TIMEOUT,
-};
-#[cfg(unix)]
-pub use fcgi_stream::{FcgiStream, PoolEndpoint};
-pub use commit::CommitStage;
-pub use timeout_budget::{
-    TimeoutBudget, TimeoutPhase, DEFAULT_FCGI_CHECKOUT_TIMEOUT, DEFAULT_FCGI_TOTAL_TIMEOUT,
-};
 pub use wire::{WireEndpoint, WireError, WireTransport};
 
 /// Stable module identifier for composition registration (future PR-7).

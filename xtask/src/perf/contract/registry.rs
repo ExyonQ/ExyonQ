@@ -72,9 +72,7 @@ pub fn resolve_baseline_path_for(
         .with_context(|| format!("no contract reference for {key}"))?;
     if let Some(status) = entry.approval_status.as_deref() {
         if status != "APPROVED" && status != "accepted" {
-            anyhow::bail!(
-                "contract reference {key} approval_status={status} (not APPROVED)"
-            );
+            anyhow::bail!("contract reference {key} approval_status={status} (not APPROVED)");
         }
     }
     Ok(repo_root.join("benchmarks/baselines").join(&entry.path))
@@ -143,7 +141,8 @@ mod tests {
             repo,
             "proposed/linux-x86_64-epoll_static-performance-contract-v1.json",
         );
-        let path = resolve_baseline_path_for(repo, "linux-x86_64", "epoll_static").expect("resolve");
+        let path =
+            resolve_baseline_path_for(repo, "linux-x86_64", "epoll_static").expect("resolve");
         assert!(path.ends_with("linux-x86_64-epoll_static-performance-contract-v1.json"));
     }
 
@@ -163,7 +162,8 @@ mod tests {
 }"#,
         );
         touch_baseline(repo, "performance-contract-v1.json");
-        let path = resolve_baseline_path_for(repo, "linux-aarch64", "default_tokio").expect("resolve");
+        let path =
+            resolve_baseline_path_for(repo, "linux-aarch64", "default_tokio").expect("resolve");
         assert!(path.ends_with("performance-contract-v1.json"));
     }
 

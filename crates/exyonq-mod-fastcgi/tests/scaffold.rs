@@ -35,14 +35,9 @@ fn src_has_no_transport_symbols_outside_wire_module() {
             ("tokio::net", &|c| c.contains("tokio::net")),
             ("std::net", &|c| c.contains("std::net")),
             ("unsafe", &|c| c.contains("unsafe")),
-            (
-                "connect(",
-                &|c| {
-                    c.contains(".connect(")
-                        || c.contains("::connect(")
-                        || c.contains("fn connect(")
-                },
-            ),
+            ("connect(", &|c| {
+                c.contains(".connect(") || c.contains("::connect(") || c.contains("fn connect(")
+            }),
         ];
         for (label, pred) in forbidden_checks {
             assert!(

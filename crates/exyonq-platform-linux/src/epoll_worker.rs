@@ -22,8 +22,8 @@
 use crate::linux_bind::bind_tuned_std;
 use bytes::Bytes;
 use exyonq_core::kernel::{
-    ConnectionServeOutcome, EpollAttachDecision, EpollAttachRejectReason, EpollConnectionAttachment,
-    EpollKeepaliveTransfer, PlatformConnectionEntry,
+    ConnectionServeOutcome, EpollAttachDecision, EpollAttachRejectReason,
+    EpollConnectionAttachment, EpollKeepaliveTransfer, PlatformConnectionEntry,
 };
 use exyonq_core::server::OsWorkerGuard;
 use exyonq_module_api::static_epoll::{self, StaticEpollPumpResult, StaticEpollSession};
@@ -38,7 +38,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tracing::warn;
-
 
 const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
@@ -272,7 +271,6 @@ pub fn enqueue_keepalive_transfer(
         })
 }
 
-
 /// Productive epoll-listen starter registered at composition root.
 pub fn start_epoll_listen_workers(
     listen: SocketAddr,
@@ -369,7 +367,9 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 
 fn request_headers_safe_for_wire(head: &[u8]) -> bool {
     fn count_field(head: &[u8], name: &[u8]) -> usize {
-        head.windows(name.len()).filter(|window| *window == name).count()
+        head.windows(name.len())
+            .filter(|window| *window == name)
+            .count()
     }
     if count_field(head, b"Content-Length:") > 1 {
         return false;
@@ -471,7 +471,6 @@ fn add_registered_conn(
     }
     Ok(())
 }
-
 
 struct ConnState {
     buf: [u8; MAX_HEADER],
@@ -615,7 +614,7 @@ fn drain_epoll_fd(
     entry: &PlatformConnectionEntry,
 ) -> io::Result<()> {
     let _ = entry; // identity reserved for future mechanism diagnostics
-    // ADR-025 PR #2: gated sendfile conns are driven by the non-blocking FSM, never Handoff.
+                   // ADR-025 PR #2: gated sendfile conns are driven by the non-blocking FSM, never Handoff.
     if conns.get(&fd).map(|c| c.sendfile).unwrap_or(false) {
         drive_sendfile_fd(epfd, fd, conns);
         return Ok(());
@@ -810,11 +809,7 @@ enum ReadServe {
 /// body parks (`PumpResult::Parked`), restoring `EPOLLIN` on resume-`Complete`. The common
 /// case (healthy socket) completes in the first drain with **0** `EPOLL_CTL_MOD` per request.
 /// `Parked` stops the loop immediately and is never mapped to a retry (PR #1 contract).
-fn drive_sendfile_fd(
-    epfd: RawFd,
-    fd: RawFd,
-    conns: &mut HashMap<RawFd, ConnState>,
-) {
+fn drive_sendfile_fd(epfd: RawFd, fd: RawFd, conns: &mut HashMap<RawFd, ConnState>) {
     loop {
         let sending_phase = match conns.get(&fd) {
             None => {
@@ -1104,4 +1099,3 @@ fn detach_conn_for_handoff(
     let _ = unsafe { libc::epoll_ctl(epfd, EPOLL_CTL_DEL, fd, std::ptr::null_mut()) };
     Some((state.attachment, state.peer))
 }
-

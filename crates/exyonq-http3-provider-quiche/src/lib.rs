@@ -260,13 +260,8 @@ where
                 let scid = hdr.dcid.clone();
                 let scid_owned = scid.clone().into_owned();
 
-                let conn = match quiche::accept(
-                    &scid,
-                    Some(&odcid),
-                    local_addr,
-                    from,
-                    &mut config,
-                ) {
+                let conn = match quiche::accept(&scid, Some(&odcid), local_addr, from, &mut config)
+                {
                     Ok(c) => c,
                     Err(e) => {
                         warn!(?e, "quiche accept failed");

@@ -89,8 +89,7 @@ impl WireTransport {
         params: &[(String, String)],
         stdin: &[u8],
     ) -> Result<ForwardResponse, WireError> {
-        let begin =
-            encode_begin_request_frame(self.request_id).map_err(WireError::Encode)?;
+        let begin = encode_begin_request_frame(self.request_id).map_err(WireError::Encode)?;
         let param_frames =
             encode_params_frames_owned(self.request_id, params).map_err(WireError::Encode)?;
         let stdin_frames =
@@ -260,7 +259,10 @@ pub enum WireError {
     Encode(EncodeError),
     Decode(DecodeError),
     InvalidFrame(ParseError),
-    WrongRequestId { expected: u16, got: u16 },
+    WrongRequestId {
+        expected: u16,
+        got: u16,
+    },
 }
 
 impl From<WireError> for TransportError {

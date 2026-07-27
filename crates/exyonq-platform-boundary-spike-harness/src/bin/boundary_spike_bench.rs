@@ -4,8 +4,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use exyonq_platform_boundary_spike_harness::{
-    read_wire_plan_cross_fnptr, read_wire_plan_cross_static, read_wire_plan_monolith,
-    BENCH_STATE, HEAD_HYPER_FALLBACK, HEAD_P1_PROXY, HEAD_P1_STATIC, REST_EMPTY,
+    read_wire_plan_cross_fnptr, read_wire_plan_cross_static, read_wire_plan_monolith, BENCH_STATE,
+    HEAD_HYPER_FALLBACK, HEAD_P1_PROXY, HEAD_P1_STATIC, REST_EMPTY,
 };
 use exyonq_platform_boundary_spike_kernel::plan_fn_ptr;
 

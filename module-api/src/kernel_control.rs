@@ -295,7 +295,12 @@ mod outcome_code_tests {
 
     #[test]
     fn rejected_and_failed_codes_require_ok_false() {
-        for code in ["EXY-RELOAD-0002", "EXY-RELOAD-0003", "EXY-RELOAD-0009", "EXY-RELOAD-0010"] {
+        for code in [
+            "EXY-RELOAD-0002",
+            "EXY-RELOAD-0003",
+            "EXY-RELOAD-0009",
+            "EXY-RELOAD-0010",
+        ] {
             let o = OpsCommandOutcome::from_parts(
                 false,
                 OpsCommand::Reload,

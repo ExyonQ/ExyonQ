@@ -34,8 +34,8 @@ impl std::fmt::Debug for EventSigningKeys {
 
 impl EventSigningKeys {
     pub fn from_env() -> Result<Self, CoordinationError> {
-        let active_key_id = std::env::var("EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_ID")
-            .unwrap_or_else(|_| "k1".into());
+        let active_key_id =
+            std::env::var("EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_ID").unwrap_or_else(|_| "k1".into());
         let active_key = read_secret_bytes("EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY")?;
         if active_key.is_empty() || active_key_id.is_empty() {
             return Err(CoordinationError::new(
@@ -106,9 +106,8 @@ fn read_secret_bytes(env: &str) -> Result<Vec<u8>, CoordinationError> {
                 CoordinationRejectReason::ProviderUnavailable,
             ));
         }
-        return std::fs::read(path).map_err(|_| {
-            CoordinationError::new(CoordinationRejectReason::ProviderUnavailable)
-        });
+        return std::fs::read(path)
+            .map_err(|_| CoordinationError::new(CoordinationRejectReason::ProviderUnavailable));
     }
     std::env::var(env)
         .map(|s| s.into_bytes())
@@ -190,9 +189,8 @@ pub fn sign_mac(
 ) -> Result<(String, String), CoordinationError> {
     let key_id = keys.active_key_id.clone();
     let bytes = canonical_signing_bytes(event, deployment_id, &key_id);
-    let mut mac = HmacSha256::new_from_slice(&keys.active_key).map_err(|_| {
-        CoordinationError::new(CoordinationRejectReason::InternalError)
-    })?;
+    let mut mac = HmacSha256::new_from_slice(&keys.active_key)
+        .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
     mac.update(&bytes);
     let tag = mac.finalize().into_bytes();
     Ok((key_id, hex_encode(&tag)))
@@ -206,15 +204,15 @@ pub fn verify_mac(
     keys: &EventSigningKeys,
 ) -> Result<(), CoordinationError> {
     let Some(key) = keys.key_for_id(key_id) else {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidTarget,
+        ));
     };
-    let expected = hex_decode(mac_hex).ok_or_else(|| {
-        CoordinationError::new(CoordinationRejectReason::InvalidTarget)
-    })?;
+    let expected = hex_decode(mac_hex)
+        .ok_or_else(|| CoordinationError::new(CoordinationRejectReason::InvalidTarget))?;
     let bytes = canonical_signing_bytes(event, deployment_id, key_id);
-    let mut mac = HmacSha256::new_from_slice(key).map_err(|_| {
-        CoordinationError::new(CoordinationRejectReason::InternalError)
-    })?;
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
     mac.update(&bytes);
     mac.verify_slice(&expected)
         .map_err(|_| CoordinationError::new(CoordinationRejectReason::InvalidTarget))?;
@@ -227,10 +225,14 @@ pub fn check_issued_at(
     now_ms: u64,
 ) -> Result<(), CoordinationError> {
     if issued_at_unix_ms > now_ms.saturating_add(replay.max_future_skew_ms) {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidTarget,
+        ));
     }
     if now_ms.saturating_sub(issued_at_unix_ms) > replay.max_age_ms {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidTarget,
+        ));
     }
     Ok(())
 }
@@ -294,10 +296,7 @@ mod tests {
     fn unique_tmp(tag: &str) -> std::path::PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "wc7d_hmac_{tag}_{}_{n}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("wc7d_hmac_{tag}_{}_{n}", std::process::id()))
     }
     use exyonq_module_api::{UrlTarget, COORDINATION_PROTOCOL_VERSION};
 
@@ -324,14 +323,7 @@ mod tests {
         let keys = EventSigningKeys::for_tests("k1", b"secret-key-material-32bytes!!");
         let ev = sample();
         let (kid, mac) = sign_mac(&ev, "deploy1", &keys).unwrap();
-        verify_mac(
-            &ev,
-            "deploy1",
-            &kid,
-            &mac,
-            &keys,
-        )
-        .unwrap();
+        verify_mac(&ev, "deploy1", &kid, &mac, &keys).unwrap();
         check_issued_at(
             ev.issued_at_unix_ms,
             &ReplayPolicy {
@@ -349,14 +341,7 @@ mod tests {
         let mut ev = sample();
         let (kid, mac) = sign_mac(&ev, "deploy1", &keys).unwrap();
         ev.site_id = 99;
-        assert!(verify_mac(
-            &ev,
-            "deploy1",
-            &kid,
-            &mac,
-            &keys,
-        )
-        .is_err());
+        assert!(verify_mac(&ev, "deploy1", &kid, &mac, &keys,).is_err());
     }
 
     #[test]
@@ -364,14 +349,7 @@ mod tests {
         let keys = EventSigningKeys::for_tests("k1", b"secret-key-material-32bytes!!");
         let ev = sample();
         let (_kid, mac) = sign_mac(&ev, "deploy1", &keys).unwrap();
-        assert!(verify_mac(
-            &ev,
-            "deploy1",
-            "k-unknown",
-            &mac,
-            &keys,
-        )
-        .is_err());
+        assert!(verify_mac(&ev, "deploy1", "k-unknown", &mac, &keys,).is_err());
     }
 
     #[test]
@@ -382,14 +360,7 @@ mod tests {
         let old_only = EventSigningKeys::for_tests("k1", b"old-secret-key-material-32b!!");
         let (kid, mac) = sign_mac(&ev, "deploy1", &old_only).unwrap();
         assert_eq!(kid, "k1");
-        verify_mac(
-            &ev,
-            "deploy1",
-            &kid,
-            &mac,
-            &keys,
-        )
-        .unwrap();
+        verify_mac(&ev, "deploy1", &kid, &mac, &keys).unwrap();
     }
 
     #[test]
@@ -494,7 +465,10 @@ mod tests {
         let path = unique_tmp("conflict");
         std::fs::write(&path, b"from-file-wins-over-env-secret!!!!").unwrap();
         std::env::set_var("EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_ID", "k1");
-        std::env::set_var("EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY", "from-env-must-be-ignored");
+        std::env::set_var(
+            "EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY",
+            "from-env-must-be-ignored",
+        );
         std::env::set_var(
             "EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_FILE",
             path.to_str().unwrap(),

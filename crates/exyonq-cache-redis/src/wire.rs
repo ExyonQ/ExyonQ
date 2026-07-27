@@ -29,11 +29,12 @@ pub fn encode_signed_event(
         mac,
         event: event.clone(),
     };
-    let s = serde_json::to_string(&env).map_err(|_| {
-        CoordinationError::new(CoordinationRejectReason::InternalError)
-    })?;
+    let s = serde_json::to_string(&env)
+        .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
     if s.len() > max_bytes {
-        return Err(CoordinationError::new(CoordinationRejectReason::OversizedEvent));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::OversizedEvent,
+        ));
     }
     Ok(s)
 }
@@ -46,25 +47,22 @@ pub fn decode_signed_event(
     max_bytes: usize,
 ) -> Result<InvalidationEvent, CoordinationError> {
     if raw.len() > max_bytes {
-        return Err(CoordinationError::new(CoordinationRejectReason::OversizedEvent));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::OversizedEvent,
+        ));
     }
-    let env: SignedWireEnvelope = serde_json::from_str(raw).map_err(|_| {
-        CoordinationError::new(CoordinationRejectReason::InvalidTarget)
-    })?;
+    let env: SignedWireEnvelope = serde_json::from_str(raw)
+        .map_err(|_| CoordinationError::new(CoordinationRejectReason::InvalidTarget))?;
     if env.key_id.is_empty() || env.mac.is_empty() {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidTarget,
+        ));
     }
     if let Err(e) = check_issued_at(env.event.issued_at_unix_ms, replay, now_unix_ms()) {
         crate::metrics::note_replay_reject();
         return Err(e);
     }
-    if let Err(e) = verify_mac(
-        &env.event,
-        deployment_id,
-        &env.key_id,
-        &env.mac,
-        keys,
-    ) {
+    if let Err(e) = verify_mac(&env.event, deployment_id, &env.key_id, &env.mac, keys) {
         crate::metrics::note_hmac_reject();
         return Err(e);
     }
@@ -79,11 +77,12 @@ pub fn decode_event_unsigned_for_tests(
     max_bytes: usize,
 ) -> Result<InvalidationEvent, CoordinationError> {
     if raw.len() > max_bytes {
-        return Err(CoordinationError::new(CoordinationRejectReason::OversizedEvent));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::OversizedEvent,
+        ));
     }
-    let event: InvalidationEvent = serde_json::from_str(raw).map_err(|_| {
-        CoordinationError::new(CoordinationRejectReason::InvalidTarget)
-    })?;
+    let event: InvalidationEvent = serde_json::from_str(raw)
+        .map_err(|_| CoordinationError::new(CoordinationRejectReason::InvalidTarget))?;
     validate_invalidation_event(&event, max_bytes)?;
     Ok(event)
 }
@@ -96,9 +95,7 @@ mod tests {
         l2_redis_hmac_reject_total, l2_redis_replay_reject_total, lock_redis_metrics_for_tests,
         reset_redis_metrics_for_tests,
     };
-    use exyonq_module_api::{
-        InvalidationOperation, UrlTarget, COORDINATION_PROTOCOL_VERSION,
-    };
+    use exyonq_module_api::{InvalidationOperation, UrlTarget, COORDINATION_PROTOCOL_VERSION};
 
     fn sample() -> InvalidationEvent {
         InvalidationEvent {
@@ -135,14 +132,7 @@ mod tests {
         };
         let raw = serde_json::to_string(&env).unwrap();
         let before = l2_redis_hmac_reject_total();
-        assert!(decode_signed_event(
-            &raw,
-            "d",
-            &keys,
-            &ReplayPolicy::default(),
-            8192,
-        )
-        .is_err());
+        assert!(decode_signed_event(&raw, "d", &keys, &ReplayPolicy::default(), 8192,).is_err());
         assert_eq!(
             l2_redis_hmac_reject_total(),
             before + 1,

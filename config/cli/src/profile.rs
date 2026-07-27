@@ -74,11 +74,7 @@ pub fn profile_list(format: OutputFormat) -> ToolResult {
     }
 }
 
-pub fn profile_render(
-    name: &str,
-    inputs: &ProfileCliInputs,
-    format: OutputFormat,
-) -> ToolResult {
+pub fn profile_render(name: &str, inputs: &ProfileCliInputs, format: OutputFormat) -> ToolResult {
     let Some(profile) = ProductProfile::parse(name) else {
         return unknown_profile(name);
     };
@@ -165,7 +161,10 @@ pub fn profile_test(name: &str, inputs: &ProfileCliInputs, format: OutputFormat)
             return ToolResult {
                 exit: CliExit::DiagnosticError,
                 stdout: String::new(),
-                stderr: format!("error[EXY-CONFIG-0004]: {}\n", sanitize_control_chars(&e.to_string())),
+                stderr: format!(
+                    "error[EXY-CONFIG-0004]: {}\n",
+                    sanitize_control_chars(&e.to_string())
+                ),
             };
         }
     };
@@ -176,7 +175,10 @@ pub fn profile_test(name: &str, inputs: &ProfileCliInputs, format: OutputFormat)
                 OutputFormat::Human => ToolResult {
                     exit: CliExit::Ok,
                     stdout: String::new(),
-                    stderr: format!("profile {} OK (expanded + RuntimePlan compile; discarded)\n", profile.as_str()),
+                    stderr: format!(
+                        "profile {} OK (expanded + RuntimePlan compile; discarded)\n",
+                        profile.as_str()
+                    ),
                 },
                 OutputFormat::Json => ToolResult {
                     exit: CliExit::Ok,

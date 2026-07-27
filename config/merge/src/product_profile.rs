@@ -221,10 +221,7 @@ fn toml_string(s: &str) -> String {
     format!("{s:?}")
 }
 
-fn assert_product_invariants(
-    profile: ProductProfile,
-    cfg: &AppConfig,
-) -> Result<(), ConfigError> {
+fn assert_product_invariants(profile: ProductProfile, cfg: &AppConfig) -> Result<(), ConfigError> {
     if matches!(profile, ProductProfile::Php | ProductProfile::Wordpress)
         && cfg.full_page_cache.enabled
     {
@@ -277,25 +274,25 @@ mod tests {
 
     #[test]
     fn wordpress_cache_off_htaccess_overlay() {
-        let cfg = expand_product_profile(ProductProfile::Wordpress, &ProductProfileInputs::default())
-            .unwrap();
+        let cfg =
+            expand_product_profile(ProductProfile::Wordpress, &ProductProfileInputs::default())
+                .unwrap();
         assert!(!cfg.full_page_cache.enabled);
         let wp = cfg.routes.iter().find(|r| r.name == "wordpress").unwrap();
-        assert_eq!(
-            wp.htaccess,
-            exyonq_config_ir::HtaccessMode::Overlay
-        );
+        assert_eq!(wp.htaccess, exyonq_config_ir::HtaccessMode::Overlay);
         assert!(wp.cache.is_none());
     }
 
     #[test]
     fn static_has_no_proxy() {
-        let cfg =
-            expand_product_profile(ProductProfile::Static, &ProductProfileInputs::default())
-                .unwrap();
+        let cfg = expand_product_profile(ProductProfile::Static, &ProductProfileInputs::default())
+            .unwrap();
         assert!(cfg.upstreams.is_empty());
         assert!(cfg.pools_fcgi.is_empty());
-        assert_eq!(cfg.routes[0].root.as_ref().unwrap(), PathBuf::from("/var/www/html").as_path());
+        assert_eq!(
+            cfg.routes[0].root.as_ref().unwrap(),
+            PathBuf::from("/var/www/html").as_path()
+        );
     }
 
     #[test]
@@ -311,7 +308,8 @@ mod tests {
         let inputs = ProductProfileInputs::default();
         for p in ProductProfile::all() {
             let path = root.join(format!("{}.toml", p.as_str()));
-            let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            let expected =
+                std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
             let got = render_product_profile_toml(*p, &inputs);
             assert_eq!(got.trim(), expected.trim(), "golden {}", p.as_str());
         }

@@ -228,7 +228,6 @@ mod tests {
                     draining: false,
                     version: None,
                     reload_in_progress: false,
-
                 },
                 error: None,
                 code: None,

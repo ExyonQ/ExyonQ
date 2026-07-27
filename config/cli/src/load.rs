@@ -25,8 +25,8 @@ pub fn load_app_config(path: &Path) -> Result<AppConfig, String> {
     match detect_kind(path) {
         ConfigKind::Exy => {
             let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            let toml = compile_serverfile(&raw, CompileOptions::default())
-                .map_err(|e| e.to_string())?;
+            let toml =
+                compile_serverfile(&raw, CompileOptions::default()).map_err(|e| e.to_string())?;
             AppConfig::parse_str(&toml).map_err(|e| e.to_string())
         }
         ConfigKind::Toml => load_with_includes(path).map_err(|e| e.to_string()),

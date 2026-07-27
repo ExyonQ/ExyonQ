@@ -306,10 +306,7 @@ async fn handle_client(
                 CachePurgeOutcome::fail(op_label(&op), site_id_of(&op), 0, "unauthenticated")
             } else {
                 let site = site_id_of(&op);
-                let allowed = limiter
-                    .lock()
-                    .map(|mut g| g.allow(site))
-                    .unwrap_or(false);
+                let allowed = limiter.lock().map(|mut g| g.allow(site)).unwrap_or(false);
                 if !allowed {
                     exyonq_cache::note_fpc_purge_request();
                     exyonq_cache::note_fpc_purge_rejected("rate_limited");
@@ -395,13 +392,14 @@ mod tests {
         }
         match parse_purge_line("purge url 42 http example.test /public/index.php secret") {
             ParsedPurge::Op {
-                op: CachePurgeOp::Url {
-                    site_id: 42,
-                    scheme,
-                    host,
-                    path,
-                    query,
-                },
+                op:
+                    CachePurgeOp::Url {
+                        site_id: 42,
+                        scheme,
+                        host,
+                        path,
+                        query,
+                    },
                 ..
             } => {
                 assert_eq!(scheme, "http");

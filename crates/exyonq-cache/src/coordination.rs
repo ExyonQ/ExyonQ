@@ -27,8 +27,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::metrics::{
-    note_l2_generation_advance, note_l2_generation_rollback_rejected, note_l2_invalidation_duplicate,
-    note_l2_invalidation_publish, note_l2_invalidation_publish_failure, note_l2_invalidation_receive,
+    note_l2_generation_advance, note_l2_generation_rollback_rejected,
+    note_l2_invalidation_duplicate, note_l2_invalidation_publish,
+    note_l2_invalidation_publish_failure, note_l2_invalidation_receive,
     note_l2_invalidation_rejected, note_l2_subscriber_overflow, note_l2_subscriber_restart,
 };
 
@@ -84,9 +85,7 @@ impl LocalCoordinationHub {
     }
 
     pub fn set_force_queue_full(&self, full: bool) {
-        self.inner
-            .force_queue_full
-            .store(full, Ordering::Relaxed);
+        self.inner.force_queue_full.store(full, Ordering::Relaxed);
     }
 
     pub fn next_event_id(&self) -> u128 {
@@ -223,7 +222,9 @@ impl LocalCoordinationProvider {
             .lock()
             .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
         let Some(_state) = guard.as_ref() else {
-            return Err(CoordinationError::new(CoordinationRejectReason::InternalError));
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::InternalError,
+            ));
         };
         // Re-publish via hub targeting only this node by temporary fanout — use direct channel
         // through hub publish filtered: instead send via a one-shot re-queue using publish
@@ -240,16 +241,16 @@ impl LocalCoordinationProvider {
                     Ok(()) => return Ok(()),
                     Err(_) => {
                         note_l2_subscriber_overflow();
-                        note_l2_invalidation_rejected(
-                            CoordinationRejectReason::QueueFull.as_str(),
-                        );
+                        note_l2_invalidation_rejected(CoordinationRejectReason::QueueFull.as_str());
                         self.mark_uncertain(event.site_id);
                         return Err(CoordinationError::new(CoordinationRejectReason::QueueFull));
                     }
                 }
             }
         }
-        Err(CoordinationError::new(CoordinationRejectReason::InternalError))
+        Err(CoordinationError::new(
+            CoordinationRejectReason::InternalError,
+        ))
     }
 
     fn mark_uncertain(&self, site_id: u64) {
@@ -257,7 +258,10 @@ impl LocalCoordinationProvider {
             m.insert(site_id, ());
         }
         // Safe fallback: bump generation so stale L1 cannot linger without notice.
-        let _ = self.advance_generation(site_id, self.get_generation(site_id).unwrap_or(0).saturating_add(1));
+        let _ = self.advance_generation(
+            site_id,
+            self.get_generation(site_id).unwrap_or(0).saturating_add(1),
+        );
     }
 
     pub fn take_uncertain_sites(&self) -> Vec<u64> {
@@ -291,10 +295,10 @@ impl LocalCoordinationProvider {
             return Ok(None);
         }
         if event.protocol_version != COORDINATION_PROTOCOL_VERSION {
-            note_l2_invalidation_rejected(
-                CoordinationRejectReason::UnknownVersion.as_str(),
-            );
-            return Err(CoordinationError::new(CoordinationRejectReason::UnknownVersion));
+            note_l2_invalidation_rejected(CoordinationRejectReason::UnknownVersion.as_str());
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::UnknownVersion,
+            ));
         }
         Ok(Some(event))
     }
@@ -399,7 +403,9 @@ impl GenerationStore for LocalCoordinationProvider {
             return Ok(to);
         }
         if site_id == 0 {
-            return Err(CoordinationError::new(CoordinationRejectReason::InvalidScope));
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::InvalidScope,
+            ));
         }
         let mut gens = self
             .hub

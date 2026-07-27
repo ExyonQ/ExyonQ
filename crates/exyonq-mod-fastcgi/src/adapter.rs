@@ -451,13 +451,7 @@ pub fn resolve_pool_endpoints(
             .map(|s| s.as_str())
             .unwrap_or("auto");
 
-        let address = configured.or_else(|| {
-            if pool_id == 0 {
-                env_socket
-            } else {
-                None
-            }
-        });
+        let address = configured.or_else(|| if pool_id == 0 { env_socket } else { None });
         let Some(address) = address else {
             continue;
         };

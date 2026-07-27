@@ -26,8 +26,8 @@ mod static_preload;
 pub use canonical::{canonical_json, fingerprint, IrFingerprint};
 pub use diagnostic::{
     offset_to_position, redact_secrets, render_human, sort_diagnostics, span_from_byte_range,
-    suggest_typo, Diagnostic, DiagnosticCode, DiagnosticDocument, Position, ROOT_FIELD_CATALOG,
-    SERVER_FIELD_CATALOG, Severity, SourceSpan, SpanQuality,
+    suggest_typo, Diagnostic, DiagnosticCode, DiagnosticDocument, Position, Severity, SourceSpan,
+    SpanQuality, ROOT_FIELD_CATALOG, SERVER_FIELD_CATALOG,
 };
 pub use error::ConfigError;
 pub use full_page_cache::{
@@ -701,10 +701,7 @@ fn validate_distributed_cache(cfg: &DistributedCacheConfig) -> Result<(), Config
             "full_page_cache.distributed_cache.dedup_ttl_ms must be non-zero when enabled".into(),
         ));
     }
-    if !cfg.provider.is_empty()
-        && cfg.provider != "local"
-        && cfg.provider != "redis"
-    {
+    if !cfg.provider.is_empty() && cfg.provider != "local" && cfg.provider != "redis" {
         return Err(ConfigError::Parse(
             "full_page_cache.distributed_cache.provider must be empty, \"local\", or \"redis\""
                 .into(),
@@ -760,7 +757,8 @@ fn validate_distributed_cache(cfg: &DistributedCacheConfig) -> Result<(), Config
                     .into(),
             ));
         }
-        if (!cfg.security.previous_key_file.is_empty()) != (!cfg.security.previous_key_id.is_empty())
+        if (!cfg.security.previous_key_file.is_empty())
+            != (!cfg.security.previous_key_id.is_empty())
         {
             return Err(ConfigError::Parse(
                 "full_page_cache.distributed_cache.security previous_key_id and previous_key_file must be set together"
@@ -965,7 +963,6 @@ fn validate_fcgi_max_concurrency(pool: &str, value: u32) -> Result<(), ConfigErr
         })
     }
 }
-
 
 fn validate_fcgi_max_connections(
     pool: &str,
@@ -1861,7 +1858,10 @@ replay_window_ms = 300000
             "/run/secrets/l2_hmac_active"
         );
         assert_eq!(
-            cfg.full_page_cache.distributed_cache.security.replay_window_ms,
+            cfg.full_page_cache
+                .distributed_cache
+                .security
+                .replay_window_ms,
             300_000
         );
     }

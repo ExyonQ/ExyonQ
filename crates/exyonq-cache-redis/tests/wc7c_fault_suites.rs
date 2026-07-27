@@ -70,7 +70,10 @@ fn wc7c_partition_repeat_5x_missed_event_reconcile() {
         let ns = format!("exyonq:fpc:v1:part{}:{}", i, std::process::id());
         let a = open(&ns, "a");
         // B offline (no subscriber) while A advances
-        assert_eq!(a.advance_generation(1, 10 + i as u64).unwrap(), 10 + i as u64);
+        assert_eq!(
+            a.advance_generation(1, 10 + i as u64).unwrap(),
+            10 + i as u64
+        );
         let b = open(&ns, "b");
         b.start_subscriber().unwrap(); // reconcile on start
         assert!(b.get_generation(1).unwrap() >= 10 + i as u64);

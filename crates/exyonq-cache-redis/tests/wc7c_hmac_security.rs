@@ -166,23 +166,9 @@ fn wc7c_key_rotation_overlap() {
     let e = ev(7);
     let (kid, mac) = sign_mac(&e, "dep", &old).unwrap();
     assert_eq!(kid, "k1");
-    verify_mac(
-        &e,
-        "dep",
-        &kid,
-        &mac,
-        &overlap,
-    )
-    .unwrap();
+    verify_mac(&e, "dep", &kid, &mac, &overlap).unwrap();
     let retired = EventSigningKeys::for_tests("k2", b"new-key-material-32bytes-here!!");
-    assert!(verify_mac(
-        &e,
-        "dep",
-        &kid,
-        &mac,
-        &retired,
-    )
-    .is_err());
+    assert!(verify_mac(&e, "dep", &kid, &mac, &retired,).is_err());
 }
 
 #[test]

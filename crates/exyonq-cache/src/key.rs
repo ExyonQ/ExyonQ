@@ -193,15 +193,15 @@ mod tests {
     #[test]
     fn empty_allowlist_drops_all_query() {
         assert_eq!(canonicalize_query("a=1&b=2", &[]), "");
-        assert_eq!(canonicalize_query_safe("utm_source=x&p=1", &["p", "utm_source"]), "p=1");
+        assert_eq!(
+            canonicalize_query_safe("utm_source=x&p=1", &["p", "utm_source"]),
+            "p=1"
+        );
     }
 
     #[test]
     fn allowlist_sorts_and_filters() {
-        assert_eq!(
-            canonicalize_query("z=9&a=1&drop=1", &["z", "a"]),
-            "a=1&z=9"
-        );
+        assert_eq!(canonicalize_query("z=9&a=1&drop=1", &["z", "a"]), "a=1&z=9");
     }
 
     #[test]

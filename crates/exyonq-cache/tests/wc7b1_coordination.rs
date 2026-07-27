@@ -66,11 +66,7 @@ impl Node {
         let mut port = DirectL1PurgePort::new(Arc::clone(&cache), site);
         port.allowed_sites = sites;
         port.runtime_generation = 1;
-        Self {
-            cache,
-            coord,
-            port,
-        }
+        Self { cache, coord, port }
     }
 
     fn publish_local_purge(&self, op: CachePurgeOp) -> bool {
@@ -99,18 +95,10 @@ fn two_node_url_purge() {
     let a = Node::open(&hub, "node-a", site_a, vec![site_a, site_b]);
     let b = Node::open(&hub, "node-b", site_a, vec![site_a, site_b]);
 
-    test_insert(
-        &a.cache, site_a, 0, 1, 1, "ex.test", "/page", b"A",
-    );
-    test_insert(
-        &b.cache, site_a, 0, 1, 1, "ex.test", "/page", b"A",
-    );
-    test_insert(
-        &b.cache, site_a, 0, 1, 1, "ex.test", "/other", b"O",
-    );
-    test_insert(
-        &b.cache, site_b, 1, 2, 1, "ex.test", "/b", b"B",
-    );
+    test_insert(&a.cache, site_a, 0, 1, 1, "ex.test", "/page", b"A");
+    test_insert(&b.cache, site_a, 0, 1, 1, "ex.test", "/page", b"A");
+    test_insert(&b.cache, site_a, 0, 1, 1, "ex.test", "/other", b"O");
+    test_insert(&b.cache, site_b, 1, 2, 1, "ex.test", "/b", b"B");
 
     assert!(a.publish_local_purge(CachePurgeOp::Url {
         site_id: site_a,
@@ -119,9 +107,7 @@ fn two_node_url_purge() {
         path: "/page".into(),
         query: String::new(),
     }));
-    assert!(!test_has(
-        &a.cache, site_a, 0, 1, 1, "ex.test", "/page"
-    ));
+    assert!(!test_has(&a.cache, site_a, 0, 1, 1, "ex.test", "/page"));
 
     let ev = recv_timeout(&b.coord, Duration::from_millis(200))
         .unwrap()
@@ -130,12 +116,8 @@ fn two_node_url_purge() {
     let op = invalidation_event_to_purge_op(&ev).unwrap();
     assert!(b.port.purge(op).ok);
 
-    assert!(!test_has(
-        &b.cache, site_a, 0, 1, 1, "ex.test", "/page"
-    ));
-    assert!(test_has(
-        &b.cache, site_a, 0, 1, 1, "ex.test", "/other"
-    ));
+    assert!(!test_has(&b.cache, site_a, 0, 1, 1, "ex.test", "/page"));
+    assert!(test_has(&b.cache, site_a, 0, 1, 1, "ex.test", "/other"));
     assert!(test_has(&b.cache, site_b, 1, 2, 1, "ex.test", "/b"));
 }
 
@@ -159,7 +141,11 @@ fn two_node_site_purge() {
         .unwrap()
         .unwrap();
     let ev = b.coord.accept_received(ev, true).unwrap().unwrap();
-    assert!(b.port.purge(invalidation_event_to_purge_op(&ev).unwrap()).ok);
+    assert!(
+        b.port
+            .purge(invalidation_event_to_purge_op(&ev).unwrap())
+            .ok
+    );
 
     assert!(!test_has(&b.cache, site_a, 0, 1, 1, "ex.test", "/a1"));
     assert!(!test_has(&b.cache, site_a, 0, 1, 1, "ex.test", "/a2"));
@@ -191,7 +177,11 @@ fn two_node_generation_monotonic() {
         .unwrap()
         .unwrap();
     let ev = b.coord.accept_received(ev, true).unwrap().unwrap();
-    assert!(b.port.purge(invalidation_event_to_purge_op(&ev).unwrap()).ok);
+    assert!(
+        b.port
+            .purge(invalidation_event_to_purge_op(&ev).unwrap())
+            .ok
+    );
     assert!(!test_has(&b.cache, site, 0, 1, 1, "ex.test", "/g"));
 
     // Rollback rejected.
@@ -231,7 +221,11 @@ fn duplicate_and_self_delivery() {
         .unwrap()
         .unwrap();
     let apply = b.coord.accept_received(first, true).unwrap().unwrap();
-    assert!(b.port.purge(invalidation_event_to_purge_op(&apply).unwrap()).ok);
+    assert!(
+        b.port
+            .purge(invalidation_event_to_purge_op(&apply).unwrap())
+            .ok
+    );
 
     // Duplicate to B.
     b.coord.inject_for_tests(ev.clone()).unwrap();
@@ -240,12 +234,13 @@ fn duplicate_and_self_delivery() {
     assert!(l2_invalidation_duplicate_total() >= 1);
 
     // Self-delivery ignored when ignore_self.
-    a.coord.inject_for_tests(InvalidationEvent {
-        source_node_id: "a".into(),
-        event_id: 99,
-        ..ev
-    })
-    .unwrap();
+    a.coord
+        .inject_for_tests(InvalidationEvent {
+            source_node_id: "a".into(),
+            event_id: 99,
+            ..ev
+        })
+        .unwrap();
     let self_ev = a.coord.try_recv().unwrap().unwrap();
     assert!(a.coord.accept_received(self_ev, true).unwrap().is_none());
 }
@@ -331,7 +326,11 @@ fn queue_overflow_triggers_reconciliation() {
     assert!(r.is_err());
     assert!(l2_subscriber_overflow_total() >= 1);
     // Uncertainty reconciliation advanced generation.
-    assert!(b.coord.get_generation(site).unwrap() >= 1 || !a.coord.take_uncertain_sites().is_empty() || l2_subscriber_overflow_total() >= 1);
+    assert!(
+        b.coord.get_generation(site).unwrap() >= 1
+            || !a.coord.take_uncertain_sites().is_empty()
+            || l2_subscriber_overflow_total() >= 1
+    );
 }
 
 #[test]

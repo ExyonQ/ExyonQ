@@ -153,7 +153,12 @@ pub fn classify_reload_diff(
 ) -> ToolResult {
     let pre = reload_precheck(path);
     if !pre.ok {
-        return finish_reload_tool(pre.diags, CliExit::DiagnosticError, OutputFormat::Human, None);
+        return finish_reload_tool(
+            pre.diags,
+            CliExit::DiagnosticError,
+            OutputFormat::Human,
+            None,
+        );
     }
     let candidate_fp = pre.candidate_plan_fingerprint.clone().unwrap_or_default();
     let mut entries = Vec::new();
@@ -192,7 +197,8 @@ pub fn classify_reload_diff(
                 entries.push(DiffEntry {
                     kind: "tls".into(),
                     class: ChangeClass::SupportedGenerationReload,
-                    detail: "TLS material change supported via generation reload when paths valid".into(),
+                    detail: "TLS material change supported via generation reload when paths valid"
+                        .into(),
                 });
             }
         }
@@ -251,11 +257,16 @@ pub fn reload_check(path: &Path, format: OutputFormat) -> ToolResult {
     } else {
         CliExit::DiagnosticError
     };
-    finish_reload_tool(pre.diags, exit, format, if pre.ok {
-        Some("reload --check OK (no publish)\n".into())
-    } else {
-        None
-    })
+    finish_reload_tool(
+        pre.diags,
+        exit,
+        format,
+        if pre.ok {
+            Some("reload --check OK (no publish)\n".into())
+        } else {
+            None
+        },
+    )
 }
 
 fn finish_reload_tool(
@@ -269,16 +280,24 @@ fn finish_reload_tool(
         .map(|mut d| {
             d.message = sanitize_control_chars(&exyonq_config_ir::redact_secrets(&d.message));
             if let Some(v) = d.received.take() {
-                d.received = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(&v)));
+                d.received = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(
+                    &v,
+                )));
             }
             if let Some(v) = d.expected.take() {
-                d.expected = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(&v)));
+                d.expected = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(
+                    &v,
+                )));
             }
             if let Some(v) = d.cause.take() {
-                d.cause = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(&v)));
+                d.cause = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(
+                    &v,
+                )));
             }
             if let Some(v) = d.suggestion.take() {
-                d.suggestion = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(&v)));
+                d.suggestion = Some(sanitize_control_chars(&exyonq_config_ir::redact_secrets(
+                    &v,
+                )));
             }
             if let Some(v) = d.field.take() {
                 d.field = Some(sanitize_control_chars(&v));

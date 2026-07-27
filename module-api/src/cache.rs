@@ -202,7 +202,9 @@ pub fn fpc_canonicalize_path(path: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FpcQueryDecision {
     /// Use this canonical query string in the cache key (often empty).
-    Eligible { canonical: String },
+    Eligible {
+        canonical: String,
+    },
     Bypass(BypassReason),
 }
 
@@ -244,13 +246,7 @@ pub fn fpc_query_decision(raw: &str, functional_allowlist: &[&str]) -> FpcQueryD
     functional.sort_by(|a, b| a.0.cmp(&b.0));
     let canonical = functional
         .into_iter()
-        .map(|(k, v)| {
-            if v.is_empty() {
-                k
-            } else {
-                format!("{k}={v}")
-            }
-        })
+        .map(|(k, v)| if v.is_empty() { k } else { format!("{k}={v}") })
         .collect::<Vec<_>>()
         .join("&");
     FpcQueryDecision::Eligible { canonical }
@@ -362,8 +358,15 @@ pub fn fpc_request_bypass(
     request_headers: &[(String, String)],
     safe_cookie_allowlist: &[&str],
 ) -> Option<BypassReason> {
-    fpc_request_evaluate(method, path, query, request_headers, safe_cookie_allowlist, &[])
-        .err()
+    fpc_request_evaluate(
+        method,
+        path,
+        query,
+        request_headers,
+        safe_cookie_allowlist,
+        &[],
+    )
+    .err()
 }
 
 fn query_has_name(query_lower: &str, name: &str) -> bool {
@@ -655,9 +658,7 @@ pub fn fpc_assess_store(
     Ok(ttl)
 }
 
-fn fpc_response_headers_block_store(
-    headers: &[(String, String)],
-) -> Option<FpcStoreReject> {
+fn fpc_response_headers_block_store(headers: &[(String, String)]) -> Option<FpcStoreReject> {
     if header_present_ignore_case(headers, "content-range") {
         return Some(FpcStoreReject::ContentRange);
     }
@@ -865,10 +866,7 @@ mod tests {
             fpc_path_query_bypass("/wp-login.php", ""),
             Some(BypassReason::WpLogin)
         );
-        assert_eq!(
-            fpc_path_query_bypass("/blog/", ""),
-            None
-        );
+        assert_eq!(fpc_path_query_bypass("/blog/", ""), None);
     }
 
     #[test]
@@ -932,10 +930,7 @@ mod tests {
 
     #[test]
     fn fpc_path_encoding_bypass_and_query_policy() {
-        assert_eq!(
-            fpc_canonicalize_path("/wp-admin/%2e%2e/x"),
-            None
-        );
+        assert_eq!(fpc_canonicalize_path("/wp-admin/%2e%2e/x"), None);
         assert_eq!(
             fpc_path_query_bypass("/%2fwp-admin/", ""),
             Some(BypassReason::UnsafePath)

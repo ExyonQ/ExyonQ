@@ -36,13 +36,13 @@ use std::path::Path;
 
 pub const IMPORTER_NAME: &str = "nginx";
 
-pub use report::{
-    CompatEntry, CompatStatus, CompatStatus as NginxCompatStatus, CompatibilityReport,
-    MigrationSummary,
-};
 pub use product::{
     redact_product_report, taxonomy_of, ImportTaxonomy, ProductImportReport, IMPORTER_VERSION,
     TARGET_IR_VERSION,
+};
+pub use report::{
+    CompatEntry, CompatStatus, CompatStatus as NginxCompatStatus, CompatibilityReport,
+    MigrationSummary,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

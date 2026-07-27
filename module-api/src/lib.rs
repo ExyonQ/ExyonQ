@@ -75,9 +75,7 @@ pub use cache_coordination::{
     UrlTarget, COORDINATION_PROTOCOL_VERSION, DEFAULT_DEDUP_CAPACITY, DEFAULT_DEDUP_TTL_MS,
     DEFAULT_MAX_EVENT_BYTES, DEFAULT_MAX_PENDING_EVENTS, MAX_NODE_ID_BYTES, MAX_URL_FIELD_BYTES,
 };
-pub use cache_purge::{
-    CachePurgeOp, CachePurgeOutcome, CachePurgePort, CachePurgeSocketConfig,
-};
+pub use cache_purge::{CachePurgeOp, CachePurgeOutcome, CachePurgePort, CachePurgeSocketConfig};
 pub use cross_cutting_pipeline::{
     CompiledPipelineFlags, FROZEN_PIPELINE_AROUND_CORE_ORDER, PIPELINE_STAGE_CORE_DISPATCH,
     PIPELINE_STAGE_REQUEST_FILTERS, PIPELINE_STAGE_RESPONSE_FILTERS,

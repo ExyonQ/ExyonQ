@@ -96,10 +96,7 @@ fn sample_url_event(node: &str, site: u64, path: &str, eid: u128, gen: u64) -> I
     }
 }
 
-fn wait_recv(
-    sub: &RedisCoordinationProvider,
-    timeout: Duration,
-) -> Option<InvalidationEvent> {
+fn wait_recv(sub: &RedisCoordinationProvider, timeout: Duration) -> Option<InvalidationEvent> {
     let start = Instant::now();
     while start.elapsed() < timeout {
         if let Ok(Some(ev)) = sub.try_recv() {
@@ -217,7 +214,7 @@ fn redis_missed_event_reconciliation() {
     assert_eq!(a.advance_generation(11, 10).unwrap(), 10);
     let b = open(&ns, "node-b", &[11]);
     b.start_subscriber().unwrap(); // triggers reconcile
-    // Drain synthetic generation event
+                                   // Drain synthetic generation event
     let mut saw = false;
     for _ in 0..50 {
         if let Ok(Some(ev)) = b.try_recv() {
@@ -357,12 +354,9 @@ fn redis_queue_backpressure_marks_reconcile() {
     let mut cfg = base_cfg(&unique_ns("q"), "node-b", &[1]);
     cfg.max_pending_events = 1;
     let a = open(&cfg.namespace, "node-a", &[1]);
-    let b = RedisCoordinationProvider::connect(
-        cfg.clone(),
-        RedisCoordSecrets::default(),
-        test_keys(),
-    )
-    .unwrap();
+    let b =
+        RedisCoordinationProvider::connect(cfg.clone(), RedisCoordSecrets::default(), test_keys())
+            .unwrap();
     b.start_subscriber().unwrap();
     // Flood more events than queue depth; overflow should not panic/deadlock.
     for i in 0..8 {

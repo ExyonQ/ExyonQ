@@ -190,40 +190,58 @@ pub fn validate_invalidation_event(
     max_event_bytes: usize,
 ) -> Result<(), CoordinationError> {
     if event.protocol_version != COORDINATION_PROTOCOL_VERSION {
-        return Err(CoordinationError::new(CoordinationRejectReason::UnknownVersion));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::UnknownVersion,
+        ));
     }
     if event.site_id == 0 {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidScope));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidScope,
+        ));
     }
     if event.source_node_id.is_empty() || event.source_node_id.len() > MAX_NODE_ID_BYTES {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidTarget,
+        ));
     }
     if event.source_node_id.bytes().any(|b| b == 0) {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidTarget,
+        ));
     }
     match event.operation {
         InvalidationOperation::PurgeUrl => {
             let Some(url) = event.url.as_ref() else {
-                return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+                return Err(CoordinationError::new(
+                    CoordinationRejectReason::InvalidTarget,
+                ));
             };
             validate_url_target(url)?;
         }
         InvalidationOperation::PurgeSite => {
             if event.url.is_some() {
-                return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+                return Err(CoordinationError::new(
+                    CoordinationRejectReason::InvalidTarget,
+                ));
             }
         }
         InvalidationOperation::PurgeGeneration => {
             if event.url.is_some() {
-                return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+                return Err(CoordinationError::new(
+                    CoordinationRejectReason::InvalidTarget,
+                ));
             }
             if event.generation == 0 {
-                return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+                return Err(CoordinationError::new(
+                    CoordinationRejectReason::InvalidTarget,
+                ));
             }
         }
     }
     if estimate_event_bytes(event) > max_event_bytes {
-        return Err(CoordinationError::new(CoordinationRejectReason::OversizedEvent));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::OversizedEvent,
+        ));
     }
     Ok(())
 }
@@ -236,11 +254,15 @@ fn validate_url_target(url: &UrlTarget) -> Result<(), CoordinationError> {
         (url.query.as_str(), true),
     ] {
         if !name_ok || field.len() > MAX_URL_FIELD_BYTES || field.bytes().any(|b| b == 0) {
-            return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+            return Err(CoordinationError::new(
+                CoordinationRejectReason::InvalidTarget,
+            ));
         }
     }
     if url.scheme != "http" && url.scheme != "https" {
-        return Err(CoordinationError::new(CoordinationRejectReason::InvalidTarget));
+        return Err(CoordinationError::new(
+            CoordinationRejectReason::InvalidTarget,
+        ));
     }
     Ok(())
 }
@@ -254,7 +276,9 @@ fn estimate_event_bytes(event: &InvalidationEvent) -> usize {
 }
 
 /// Map a validated event to [`CachePurgeOp`] for local L1 apply (reuse WC3 path).
-pub fn invalidation_event_to_purge_op(event: &InvalidationEvent) -> Result<CachePurgeOp, CoordinationError> {
+pub fn invalidation_event_to_purge_op(
+    event: &InvalidationEvent,
+) -> Result<CachePurgeOp, CoordinationError> {
     validate_invalidation_event(event, DEFAULT_MAX_EVENT_BYTES)?;
     Ok(match event.operation {
         InvalidationOperation::PurgeUrl => {

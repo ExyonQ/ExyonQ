@@ -147,10 +147,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp_name = format!(
-        ".exyonq-format-{}.tmp",
-        nanos
-    );
+    let tmp_name = format!(".exyonq-format-{}.tmp", nanos);
     let tmp_path = parent.join(tmp_name);
     {
         let mut f = fs::File::create(&tmp_path)?;
