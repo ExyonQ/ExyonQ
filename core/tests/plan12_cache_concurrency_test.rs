@@ -1,10 +1,7 @@
 //! Plan 12 v0 tranche 2 — cache concurrency + singleflight.
 
 use bytes::Bytes;
-use exyonq_cache::{
-    build_cache_key, set_singleflight_follower_hook_for_tests, CacheKeyParts, NamespaceMetrics,
-    ResponseCache, Singleflight,
-};
+use exyonq_cache::{build_cache_key, CacheKeyParts, NamespaceMetrics, ResponseCache, Singleflight};
 use exyonq_cache::{
     cache_hits_total, cache_insertions_total, cache_singleflight_followers_total,
     cache_singleflight_leaders_total, reset_metrics_for_tests,
@@ -20,21 +17,6 @@ use tokio::sync::Barrier as AsyncBarrier;
 
 /// Global cache metrics are process-wide; serialize this suite under parallel `cargo test`.
 static CACHE_CONCURRENCY_SUITE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-struct SingleflightFollowerHookGuard;
-
-impl SingleflightFollowerHookGuard {
-    fn install(hook: Arc<dyn Fn() + Send + Sync>) -> Self {
-        set_singleflight_follower_hook_for_tests(Some(hook));
-        Self
-    }
-}
-
-impl Drop for SingleflightFollowerHookGuard {
-    fn drop(&mut self) {
-        set_singleflight_follower_hook_for_tests(None);
-    }
-}
 
 fn test_policy() -> CompiledCachePolicy {
     CompiledCachePolicy {
@@ -136,84 +118,65 @@ async fn singleflight_deduplicates_concurrent_misses() {
     let key = test_key("/once");
     let policy = test_policy();
     let loads = Arc::new(AtomicUsize::new(0));
-    let barrier = Arc::new(AsyncBarrier::new(32));
+    const N: usize = 32;
+    let barrier = Arc::new(AsyncBarrier::new(N));
+    let required_followers = (N as u64) - 1;
 
-    struct LeaderLoadGate {
-        required_followers: usize,
-        followers_joined: AtomicUsize,
-        cv: std::sync::Condvar,
-        mutex: std::sync::Mutex<()>,
-    }
-
-    impl LeaderLoadGate {
-        fn new(required_followers: usize) -> Self {
-            Self {
-                required_followers,
-                followers_joined: AtomicUsize::new(0),
-                cv: std::sync::Condvar::new(),
-                mutex: std::sync::Mutex::new(()),
-            }
+    // Do not use the debug-only follower hook + blocking Condvar: that deadlocks
+    // forever under `--release` (hook compiled out). Wait asynchronously on the
+    // always-on follower metric so the leader yields while followers join.
+    let scenario = async {
+        let mut handles = Vec::with_capacity(N);
+        for _ in 0..N {
+            let cache = Arc::clone(&cache);
+            let singleflight = Arc::clone(&singleflight);
+            let key = key.clone();
+            let policy = policy.clone();
+            let loads = Arc::clone(&loads);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let response = serve_static_with_cache(
+                    &cache,
+                    &singleflight,
+                    key,
+                    0,
+                    1,
+                    &Method::GET,
+                    &policy,
+                    move || async move {
+                        loads.fetch_add(1, Ordering::SeqCst);
+                        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                        while cache_singleflight_followers_total() < required_followers {
+                            assert!(
+                                tokio::time::Instant::now() < deadline,
+                                "timed out waiting for {required_followers} singleflight followers (saw {})",
+                                cache_singleflight_followers_total()
+                            );
+                            tokio::task::yield_now().await;
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                        ok_load(b"once")
+                    },
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.expect("body");
+                assert_eq!(body.to_bytes().as_ref(), b"once");
+            }));
         }
-
-        fn on_follower_join(&self) {
-            let joined = self.followers_joined.fetch_add(1, Ordering::SeqCst) + 1;
-            if joined >= self.required_followers {
-                self.cv.notify_one();
-            }
+        for handle in handles {
+            handle.await.expect("join");
         }
+    };
 
-        fn leader_wait_for_followers(&self) {
-            let mut guard = self.mutex.lock().expect("gate mutex");
-            while self.followers_joined.load(Ordering::SeqCst) < self.required_followers {
-                guard = self.cv.wait(guard).expect("gate condvar must not poison");
-            }
-        }
-    }
-
-    let load_gate = Arc::new(LeaderLoadGate::new(31));
-    let hook_gate = Arc::clone(&load_gate);
-    let _hook_guard = SingleflightFollowerHookGuard::install(Arc::new(move || {
-        hook_gate.on_follower_join();
-    }));
-
-    let mut handles = Vec::new();
-    for _ in 0..32 {
-        let cache = Arc::clone(&cache);
-        let singleflight = Arc::clone(&singleflight);
-        let key = key.clone();
-        let policy = policy.clone();
-        let loads = Arc::clone(&loads);
-        let barrier = Arc::clone(&barrier);
-        let load_gate = Arc::clone(&load_gate);
-        handles.push(tokio::spawn(async move {
-            barrier.wait().await;
-            let response = serve_static_with_cache(
-                &cache,
-                &singleflight,
-                key,
-                0,
-                1,
-                &Method::GET,
-                &policy,
-                move || async move {
-                    load_gate.leader_wait_for_followers();
-                    loads.fetch_add(1, Ordering::SeqCst);
-                    ok_load(b"once")
-                },
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = response.into_body().collect().await.expect("body");
-            assert_eq!(body.to_bytes().as_ref(), b"once");
-        }));
-    }
-    for handle in handles {
-        handle.await.expect("join");
-    }
+    tokio::time::timeout(Duration::from_secs(10), scenario)
+        .await
+        .expect("singleflight concurrency test timed out");
 
     assert_eq!(loads.load(Ordering::SeqCst), 1);
     assert_eq!(cache_singleflight_leaders_total(), 1);
-    assert_eq!(cache_singleflight_followers_total(), 31);
+    assert_eq!(cache_singleflight_followers_total(), required_followers);
     assert_eq!(cache_insertions_total(), 1);
     assert!(cache.metrics_match_store());
 }
