@@ -1,14 +1,31 @@
-# Keep Docker build context small for benchmarks/docker/Dockerfile.exyonq
-# (context is repo root). Only paths COPY'd by that Dockerfile need to be present.
+# Docker build context for repo-root builds.
+# Primary consumer: packaging/docker/Dockerfile (production)
+# Secondary: benchmarks/docker/Dockerfile.exyonq
 
+# VCS / local IDE / release staging
 .git
 .cursor
+.exyonq-local
+.idea
+.vscode
 .github
-graphify-out
+**/.DS_Store
+**/*.swp
+**/*~
+
+# Build outputs
 target
 **/target
+dist
 
-# Huge local evidence / tools — never needed in product image build
+# Docs / research / fuzz (not required by production image COPY list)
+docs
+study
+fuzz
+integrations
+graphify-out
+
+# Heavy benchmark evidence (keep only paths needed by bench Dockerfiles)
 benchmarks/results
 benchmarks/results-dev
 benchmarks/tools
@@ -25,14 +42,6 @@ benchmarks/baselines
 benchmarks/pingora-reference
 benchmarks/scripts
 benchmarks/modern-rivals
-docs
-study
-fuzz
-dist
-packaging
-integrations
-sbom.cdx.json
-*.md
 !benchmarks/docker/**
 !benchmarks/configs/**
 !benchmarks/scenarios/fixtures/**
@@ -40,7 +49,14 @@ sbom.cdx.json
 !benchmarks/exyonq-bench/**
 !benchmarks/mock-upstream/**
 
-# IDE / OS junk
-**/.DS_Store
-**/*.swp
-**/*~
+# Never ship local release packets / stamps / secrets into context
+**/p14v040/**
+**/*-stamps/**
+**/stamps/**
+logs
+**/*.pem
+**/*passphrase*
+**/*-private*
+**/.env
+**/.env.*
+inventories
