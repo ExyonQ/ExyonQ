@@ -269,13 +269,13 @@ mod native {
         assert!(cert.is_file() && key.is_file(), "tls fixtures missing");
 
         let listen = ephemeral_udp_addr();
-        let settings = Http3Settings {
+        let settings = Http3Settings::legacy(
             listen,
-            tls: TlsSettings {
+            TlsSettings {
                 cert_path: cert.clone(),
                 key_path: key,
             },
-        };
+        );
         let dispatch = Arc::new(StaticDispatch {
             status: 200,
             body: b"ok",
@@ -317,13 +317,13 @@ mod native {
         let ops = LifecycleState::new();
         let (cert, key) = tls_fixture_paths();
         let listen = ephemeral_udp_addr();
-        let settings = Http3Settings {
+        let settings = Http3Settings::legacy(
             listen,
-            tls: TlsSettings {
+            TlsSettings {
                 cert_path: cert.clone(),
                 key_path: key,
             },
-        };
+        );
         let dispatch = Arc::new(StaticDispatch {
             status: 200,
             body: b"ok",
@@ -382,13 +382,13 @@ mod native {
 
         let (cert, key) = tls_fixture_paths();
         let listen = ephemeral_udp_addr();
-        let settings = Http3Settings {
+        let settings = Http3Settings::legacy(
             listen,
-            tls: TlsSettings {
+            TlsSettings {
                 cert_path: cert.clone(),
                 key_path: key,
             },
-        };
+        );
         let lifecycle = Arc::new(CoreHttp3Lifecycle::new(Arc::clone(&ops)));
         tokio::spawn(exyonq_mod_http3::serve(settings, dispatch, lifecycle));
 
