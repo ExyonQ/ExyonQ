@@ -34,8 +34,12 @@ pass "client_http3_$CLIENT_IMAGE"
 TMP="$(mktemp -d)"
 trap '[[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
-CERT="$ROOT/benchmarks/scenarios/fixtures/tls/cert.pem"
-KEY="$ROOT/benchmarks/scenarios/fixtures/tls/key.pem"
+# Ephemeral TLS (EXYONQ-SEC-PRIVATE-MATERIAL-ZERO)
+# shellcheck source=scripts/smoke/lib-p13a-tls.sh
+source "$ROOT/scripts/smoke/lib-p13a-tls.sh"
+ensure_ephemeral_tls
+CERT="$CERT_PEM"
+KEY="$KEY_PEM"
 [[ -f "$CERT" && -f "$KEY" ]] || fail "tls fixtures missing"
 
 pick_port() {

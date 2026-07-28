@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Scan a tree for private-key material (P14SIGN Phase 3).
-# TLS fixture tests/fixtures/tls/key.pem is allowlisted.
+# Scan a tree for private-key material (EXYONQ-SEC-PRIVATE-MATERIAL-ZERO).
+# No TLS fixture allowlist — private PEM under tests/fixtures is forbidden.
 set -euo pipefail
 LC_ALL=C
 export LC_ALL
@@ -14,7 +14,7 @@ usage() {
 Usage:
   scan-private-keys.sh --root DIR
 
-Exit 0 if no private keys found (TLS fixture allowlisted).
+Exit 0 if no private keys found.
 Exit non-zero if private key material is detected.
 Does not print key contents.
 EOF
@@ -31,5 +31,11 @@ done
 
 p14sign_require_arg --root "$ROOT"
 [[ -d "$ROOT" ]] || p14sign_die "root not a directory: $ROOT"
-p14sign_scan_path_for_private_keys "$ROOT"
-echo "PRIVATE_KEY_SCAN=PASS" >&2
+# Prefer dedicated rule script when present (same fail-closed semantics).
+ZERO="$SCRIPT_DIR/../test-tls/exyonq-sec-private-material-zero.sh"
+if [[ -x "$ZERO" ]]; then
+  bash "$ZERO" --root "$ROOT"
+else
+  p14sign_scan_path_for_private_keys "$ROOT"
+  echo "PRIVATE_KEY_SCAN=PASS" >&2
+fi

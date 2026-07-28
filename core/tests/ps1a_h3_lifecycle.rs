@@ -134,11 +134,50 @@ mod native {
         }
     }
 
-    fn tls_fixture_paths() -> (PathBuf, PathBuf) {
+    struct EphemeralTls {
+        cert: PathBuf,
+        key: PathBuf,
+        dir: PathBuf,
+    }
+
+    impl Drop for EphemeralTls {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Generate ephemeral localhost TLS material via the canonical shared script.
+    fn ephemeral_tls() -> EphemeralTls {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let cert = root.join("tests/fixtures/tls/cert.pem");
-        let key = root.join("tests/fixtures/tls/key.pem");
-        (cert, key)
+        let script = root.join("scripts/test-tls/generate-ephemeral-tls.sh");
+        let out = std::process::Command::new("bash")
+            .arg(&script)
+            .arg("--print-paths")
+            .output()
+            .expect("run generate-ephemeral-tls.sh");
+        assert!(
+            out.status.success(),
+            "ephemeral TLS generation failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut dir = None;
+        let mut cert = None;
+        let mut key = None;
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("DIR=") {
+                dir = Some(PathBuf::from(v));
+            } else if let Some(v) = line.strip_prefix("CERT=") {
+                cert = Some(PathBuf::from(v));
+            } else if let Some(v) = line.strip_prefix("KEY=") {
+                key = Some(PathBuf::from(v));
+            }
+        }
+        EphemeralTls {
+            cert: cert.expect("CERT="),
+            key: key.expect("KEY="),
+            dir: dir.expect("DIR="),
+        }
     }
 
     fn ephemeral_udp_addr() -> SocketAddr {
@@ -265,15 +304,15 @@ mod native {
     async fn native_quic_connection_single_enter_multi_request() {
         ensure_rustls_provider();
         let ops = LifecycleState::new();
-        let (cert, key) = tls_fixture_paths();
-        assert!(cert.is_file() && key.is_file(), "tls fixtures missing");
+        let tls = ephemeral_tls();
+        assert!(tls.cert.is_file() && tls.key.is_file(), "ephemeral tls missing");
 
         let listen = ephemeral_udp_addr();
         let settings = Http3Settings::legacy(
             listen,
             TlsSettings {
-                cert_path: cert.clone(),
-                key_path: key,
+                cert_path: tls.cert.clone(),
+                key_path: tls.key.clone(),
             },
         );
         let dispatch = Arc::new(StaticDispatch {
@@ -285,7 +324,7 @@ mod native {
 
         sleep(Duration::from_millis(500)).await;
 
-        let client_ep = quinn_client_endpoint(&cert);
+        let client_ep = quinn_client_endpoint(&tls.cert);
         let quic_conn = client_ep
             .connect(listen, "localhost")
             .expect("connect")
@@ -315,13 +354,13 @@ mod native {
     async fn native_drain_rejects_second_connection() {
         ensure_rustls_provider();
         let ops = LifecycleState::new();
-        let (cert, key) = tls_fixture_paths();
+        let tls = ephemeral_tls();
         let listen = ephemeral_udp_addr();
         let settings = Http3Settings::legacy(
             listen,
             TlsSettings {
-                cert_path: cert.clone(),
-                key_path: key,
+                cert_path: tls.cert.clone(),
+                key_path: tls.key.clone(),
             },
         );
         let dispatch = Arc::new(StaticDispatch {
@@ -333,7 +372,7 @@ mod native {
 
         sleep(Duration::from_millis(500)).await;
 
-        let client_ep = quinn_client_endpoint(&cert);
+        let client_ep = quinn_client_endpoint(&tls.cert);
         let first = client_ep
             .connect(listen, "localhost")
             .expect("connect")
@@ -380,13 +419,13 @@ mod native {
         let shared = exyonq_core::reload::wrap_state(state);
         let dispatch = Arc::new(CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops)));
 
-        let (cert, key) = tls_fixture_paths();
+        let tls = ephemeral_tls();
         let listen = ephemeral_udp_addr();
         let settings = Http3Settings::legacy(
             listen,
             TlsSettings {
-                cert_path: cert.clone(),
-                key_path: key,
+                cert_path: tls.cert.clone(),
+                key_path: tls.key.clone(),
             },
         );
         let lifecycle = Arc::new(CoreHttp3Lifecycle::new(Arc::clone(&ops)));
@@ -394,7 +433,7 @@ mod native {
 
         sleep(Duration::from_millis(500)).await;
 
-        let client_ep = quinn_client_endpoint(&cert);
+        let client_ep = quinn_client_endpoint(&tls.cert);
         let quic_conn = client_ep
             .connect(listen, "localhost")
             .expect("connect")

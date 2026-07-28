@@ -1,4 +1,4 @@
-# Shared helpers for P1.3a TLS/H2 live smokes.
+# Shared TLS smoke/soak/bench helpers (ephemeral material only).
 # shellcheck shell=bash
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -6,12 +6,31 @@ cd "$ROOT"
 
 EXYONQ_BIN="${EXYONQ_BIN:-$ROOT/target/debug/exyonq}"
 EXYONQCTL_BIN="${EXYONQCTL_BIN:-$ROOT/target/debug/exyonqctl}"
-TLS_FIXTURE_DIR="$ROOT/benchmarks/scenarios/fixtures/tls"
-CERT_PEM="$TLS_FIXTURE_DIR/cert.pem"
-KEY_PEM="$TLS_FIXTURE_DIR/key.pem"
+GEN_TLS="$ROOT/scripts/test-tls/generate-ephemeral-tls.sh"
+
+# Populated by ensure_ephemeral_tls
+EXYONQ_TLS_DIR="${EXYONQ_TLS_DIR:-}"
+CERT_PEM="${CERT_PEM:-}"
+KEY_PEM="${KEY_PEM:-}"
 
 pick_port() {
   python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
+}
+
+ensure_ephemeral_tls() {
+  [[ -x "$GEN_TLS" || -f "$GEN_TLS" ]] || { echo "FAIL: missing $GEN_TLS"; return 1; }
+  if [[ -n "${EXYONQ_TLS_DIR:-}" && -f "${EXYONQ_TLS_KEY:-}" && -f "${EXYONQ_TLS_CERT:-}" ]]; then
+    CERT_PEM="$EXYONQ_TLS_CERT"
+    KEY_PEM="$EXYONQ_TLS_KEY"
+    return 0
+  fi
+  # shellcheck disable=SC1090
+  eval "$(bash "$GEN_TLS")"
+  CERT_PEM="$EXYONQ_TLS_CERT"
+  KEY_PEM="$EXYONQ_TLS_KEY"
+  # Best-effort cleanup on shell exit
+  # shellcheck disable=SC2064
+  trap "bash '$GEN_TLS' --cleanup '$EXYONQ_TLS_DIR' >/dev/null 2>&1 || true" EXIT
 }
 
 ensure_bins() {
@@ -41,9 +60,9 @@ wait_listen() {
 write_tls_config() {
   local cfg="$1"
   local port="$2"
-  # Prefer paths relative to repo ROOT (server cwd); fall back to absolute.
-  local cert="${3:-benchmarks/scenarios/fixtures/tls/cert.pem}"
-  local key="${4:-benchmarks/scenarios/fixtures/tls/key.pem}"
+  ensure_ephemeral_tls
+  local cert="${3:-$CERT_PEM}"
+  local key="${4:-$KEY_PEM}"
   cat >"$cfg" <<EOF
 config_version = 1
 

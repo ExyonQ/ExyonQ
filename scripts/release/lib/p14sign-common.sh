@@ -176,17 +176,7 @@ p14sign_require_cosign() {
   printf '%s\n' "$bin"
 }
 
-# TLS fixture allowlist (not release signing material).
-p14sign_tls_fixture_allowlisted() {
-  local p="$1"
-  case "$p" in
-    */tests/fixtures/tls/key.pem|tests/fixtures/tls/key.pem|*/benchmarks/scenarios/fixtures/tls/key.pem|benchmarks/scenarios/fixtures/tls/key.pem)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
+# EXYONQ-SEC-PRIVATE-MATERIAL-ZERO: no allowlist for private PEM/OpenSSH material.
 p14sign_scan_path_for_private_keys() {
   # Args: root_dir. Prints offending paths on stderr; returns 1 if any found.
   local root="$1"
@@ -194,14 +184,16 @@ p14sign_scan_path_for_private_keys() {
   local f
   [[ -d "$root" ]] || p14sign_die "scan root not a directory: $root"
   while IFS= read -r -d '' f; do
-    if p14sign_tls_fixture_allowlisted "$f"; then
-      continue
-    fi
+    case "$f" in
+      */.git/*|*/target/*) continue ;;
+    esac
     if p14sign_looks_private_key "$f"; then
       echo "ERROR: private key material found: $f" >&2
       found=1
     fi
-  done < <(find "$root" -type f -print0 2>/dev/null)
+  done < <(find "$root" \
+    \( -path '*/.git/*' -o -path '*/target/*' -o -path '*/node_modules/*' -o -path '*/.exyonq-local/*' \) -prune \
+    -o -type f -print0 2>/dev/null)
   [[ "$found" == "0" ]]
 }
 

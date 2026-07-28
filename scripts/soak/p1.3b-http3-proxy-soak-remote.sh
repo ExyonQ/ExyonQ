@@ -81,7 +81,7 @@ date -u
 EXYONQ_BIN="${EXYONQ_BIN:-$WORKSPACE/target/release/exyonq}"
 EXYONQCTL_BIN="${EXYONQCTL_BIN:-$WORKSPACE/target/release/exyonqctl}"
 UPSTREAM_PY="$WORKSPACE/scripts/soak/lib/p13a-upstream.py"
-TLS_SRC="$WORKSPACE/benchmarks/scenarios/fixtures/tls"
+TLS_SRC="$(bash "$WORKSPACE/scripts/test-tls/generate-ephemeral-tls.sh" --print-paths | awk -F= '/^DIR=/{print $2; exit}')"
 LIVE_CERT="$RUNTIME_DIR/live-cert.pem"
 LIVE_KEY="$RUNTIME_DIR/live-key.pem"
 CFG="$RUNTIME_DIR/exyonq.toml"
