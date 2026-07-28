@@ -305,7 +305,10 @@ mod native {
         ensure_rustls_provider();
         let ops = LifecycleState::new();
         let tls = ephemeral_tls();
-        assert!(tls.cert.is_file() && tls.key.is_file(), "ephemeral tls missing");
+        assert!(
+            tls.cert.is_file() && tls.key.is_file(),
+            "ephemeral tls missing"
+        );
 
         let listen = ephemeral_udp_addr();
         let settings = Http3Settings::legacy(
