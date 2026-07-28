@@ -37,7 +37,7 @@ pub(crate) fn bind_tuned_std(addr: SocketAddr) -> io::Result<TcpListener> {
             return Err(io::Error::last_os_error());
         }
     }
-    socket.set_nodelay(true)?;
+    socket.set_tcp_nodelay(true)?;
     socket.bind(&addr.into())?;
     socket.listen(4096)?;
     let listener: TcpListener = socket.into();
