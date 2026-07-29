@@ -29,8 +29,28 @@ pub const CONFIG_RELOAD_DEBOUNCE_MS: u64 = 300;
 pub fn is_relevant_event(kind: EventKind) -> bool {
     matches!(
         kind,
-        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Any
+        EventKind::Modify(_)
+            | EventKind::Create(_)
+            | EventKind::Remove(_)
+            | EventKind::Any
     )
+}
+
+/// Only act on events that name the watched config path (or a same-dir rename peer).
+///
+/// The watcher observes the parent directory (needed for atomic replace via rename).
+/// Without this filter, unrelated `/tmp` traffic would request continuous reloads.
+pub fn event_targets_config(event: &notify::Event, config_path: &Path) -> bool {
+    let Some(cfg_name) = config_path.file_name() else {
+        return event.paths.iter().any(|p| p == config_path);
+    };
+    let cfg_parent = config_path.parent();
+    event.paths.iter().any(|p| {
+        if p == config_path {
+            return true;
+        }
+        p.file_name() == Some(cfg_name) && p.parent() == cfg_parent
+    })
 }
 
 pub(crate) async fn run_debounced_reload_loop(
@@ -82,10 +102,11 @@ pub fn spawn_config_watcher(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| config_path.clone());
+        let watched = config_path.clone();
         let mut watcher = match RecommendedWatcher::new(
             move |res: notify::Result<notify::Event>| {
                 if let Ok(event) = res {
-                    if is_relevant_event(event.kind) {
+                    if is_relevant_event(event.kind) && event_targets_config(&event, &watched) {
                         let _ = tx.send(());
                     }
                 }

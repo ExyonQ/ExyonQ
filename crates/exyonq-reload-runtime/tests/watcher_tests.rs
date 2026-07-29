@@ -29,9 +29,32 @@ fn relevant_event_filter() {
     assert!(config_watcher::is_relevant_event(EventKind::Create(
         notify::event::CreateKind::Any
     )));
+    assert!(config_watcher::is_relevant_event(EventKind::Remove(
+        notify::event::RemoveKind::Any
+    )));
     assert!(!config_watcher::is_relevant_event(EventKind::Access(
         notify::event::AccessKind::Read
     )));
+}
+
+#[test]
+fn event_targets_config_filters_unrelated_paths() {
+    use std::path::PathBuf;
+    let cfg = PathBuf::from("/tmp/exyonq-cfg.toml");
+    let hit = notify::Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any,
+        )),
+        paths: vec![cfg.clone()],
+        attrs: Default::default(),
+    };
+    let miss = notify::Event {
+        kind: EventKind::Create(notify::event::CreateKind::Any),
+        paths: vec![PathBuf::from("/tmp/unrelated.sock")],
+        attrs: Default::default(),
+    };
+    assert!(config_watcher::event_targets_config(&hit, &cfg));
+    assert!(!config_watcher::event_targets_config(&miss, &cfg));
 }
 
 #[tokio::test]
