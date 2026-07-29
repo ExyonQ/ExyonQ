@@ -1,10 +1,19 @@
 //! Embed honest release metadata for `exyonq --version`.
 //! No builder paths or secrets — only product/target/profile/revision/artifact class.
 
+#[path = "build_support.rs"]
+mod build_support;
+
 use std::process::Command;
 
 fn main() {
-    let revision = git_revision().unwrap_or_else(|| "unknown".to_string());
+    let revision = match build_support::resolve_source_revision(git_rev_parse_head()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("cargo:rustc-env=EXYONQ_SOURCE_REVISION={revision}");
 
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
@@ -13,8 +22,6 @@ fn main() {
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=EXYONQ_PROFILE={profile}");
 
-    // Optional candidate artifact identity (WS4). Defaults to CARGO_PKG_VERSION so
-    // non-candidate builds do not invent an -rc identity. Never a second Cargo SoT.
     let artifact = std::env::var("EXYONQ_ARTIFACT_VERSION").unwrap_or_else(|_| {
         std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".to_string())
     });
@@ -24,14 +31,11 @@ fn main() {
     println!("cargo:rerun-if-changed=../../.git/refs/heads");
     println!("cargo:rerun-if-env-changed=EXYONQ_SOURCE_REVISION");
     println!("cargo:rerun-if-env-changed=EXYONQ_ARTIFACT_VERSION");
+    println!("cargo:rerun-if-env-changed=EXYONQ_OFFICIAL_RELEASE");
+    println!("cargo:rerun-if-env-changed=EXYONQ_REQUIRE_SOURCE_REVISION");
 }
 
-fn git_revision() -> Option<String> {
-    if let Ok(forced) = std::env::var("EXYONQ_SOURCE_REVISION") {
-        if !forced.is_empty() {
-            return Some(forced);
-        }
-    }
+fn git_rev_parse_head() -> Option<String> {
     let out = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .output()

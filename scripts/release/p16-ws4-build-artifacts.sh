@@ -84,6 +84,7 @@ export PATH="${HOME}/.cargo/bin:/usr/local/cargo/bin:${PATH}"
 source ~/.cargo/env 2>/dev/null || true
 
 export EXYONQ_SOURCE_REVISION="$HEAD"
+export EXYONQ_OFFICIAL_RELEASE="${EXYONQ_OFFICIAL_RELEASE:-1}"
 export EXYONQ_ARTIFACT_VERSION="$TARGET_RC_VERSION"
 
 ws6_log "WS4 build arch=$ARCH target=$TARGET source=$SOURCE_VERSION rc=$TARGET_RC_VERSION head=$HEAD12"

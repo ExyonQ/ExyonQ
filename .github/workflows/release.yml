@@ -382,6 +382,12 @@ jobs:
           context: .
           file: packaging/docker/Dockerfile
           push: true
+          # P14V042: inject tag commit into binary + OCI label; fail closed without real SHA.
+          # Do not copy .git into the build context (.dockerignore remains authoritative).
+          build-args: |
+            EXYONQ_VERSION=${{ steps.ver.outputs.version }}
+            EXYONQ_GIT_REVISION=${{ github.sha }}
+            EXYONQ_OFFICIAL_RELEASE=1
           # P14SIGN: digest is the release identity; do not publish :latest or legacy :v0.3 aliases.
           tags: |
             ghcr.io/exyonq/exyonq:${{ steps.ver.outputs.version }}

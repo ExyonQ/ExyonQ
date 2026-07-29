@@ -70,7 +70,16 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && FEATURES+=("$line")
 done < <(ws6_cargo_build_features || true)
 
-ws6_log "building exyonq + exyonqctl target=$TARGET profile=$PROFILE locked=yes"
+# P14V042: inject the exact source SHA into CLI build scripts (no in-container git).
+# Official packaging builds fail closed if revision is missing or not a 40-hex SHA.
+export EXYONQ_SOURCE_REVISION="$HEAD"
+export EXYONQ_OFFICIAL_RELEASE="${EXYONQ_OFFICIAL_RELEASE:-1}"
+if [[ ! "$EXYONQ_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "ERROR: EXYONQ_SOURCE_REVISION must be 40 lowercase hex (got '${EXYONQ_SOURCE_REVISION}')" >&2
+  exit 1
+fi
+
+ws6_log "building exyonq + exyonqctl target=$TARGET profile=$PROFILE locked=yes source_revision=$EXYONQ_SOURCE_REVISION official=$EXYONQ_OFFICIAL_RELEASE"
 cargo build -p exyonq -p exyonqctl --"$PROFILE" --locked --target "$TARGET" "${FEATURES[@]}"
 
 BIN_ROOT="$WORKSPACE/target/$TARGET/$PROFILE"

@@ -41,7 +41,7 @@ P14V042_BASE_HEAD =
 
 P14V042_BRANCH = release/p14v042
 P14V042_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v042-scope
-P14V042_HEAD = (moves with implementation commits)
+P14V042_HEAD = (updated after each commit; Phase0=18bcd7f)
 
 P14V042_AMBIENT_LAB = /Volumes/Lexar/Cursor/exyonq-lab
 P14V042_V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
@@ -104,7 +104,7 @@ Known baseline defect (pre-fix): OCI `exyonq --version` can report `source_revis
 ## Phase status (rolling)
 
 ```text
-P14V042_SOURCE_REVISION_STATUS = IN_PROGRESS
+P14V042_SOURCE_REVISION_STATUS = FIXED_AND_RELEASE_GATED  # Netcup unit+contract PASS; OCI dual-arch pending
 P14V042_HONESTY_STATUS = PENDING
 P14V042_RUSTLS_PEMFILE_STATUS = PENDING
 P14V042_SERDE_JSON_STATUS = PENDING
@@ -125,7 +125,8 @@ P14V042_OCI_GATE = PENDING
 
 ```text
 P14V042_COMMITS =
-  (phase 0 ledger commit lands first; implementation commits follow in mandatory order)
+  18bcd7fb0880486f41d417f20cef9786a26888d6  chore(p14v042): establish execution baseline
+  (pending)  fix(release): propagate and gate source revision
 ```
 
 ---

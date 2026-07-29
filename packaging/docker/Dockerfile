@@ -5,13 +5,40 @@
 # in the build context — generate via scripts/legal/generate-release-compliance-artifacts.sh
 #
 # Bases are multi-arch OCI index digests (linux/amd64 + linux/arm64).
-# Revision is injected at build time (do not hard-code a prior freeze SHA).
+# Revision is injected at build time from the host (do not copy .git; do not hard-code a freeze SHA).
+#
+# Contract (P14V042):
+#   DEVELOPMENT_BUILD_WITHOUT_REVISION = ALLOWED_BUT_MARKED_UNKNOWN
+#   OFFICIAL_RELEASE_BUILD_WITHOUT_REVISION = FAIL_CLOSED
+# Pass EXYONQ_GIT_REVISION=<40-hex> and EXYONQ_OFFICIAL_RELEASE=1 for official images.
 
 ARG EXYONQ_VERSION=0.4.1
 ARG EXYONQ_GIT_REVISION=unknown
+ARG EXYONQ_OFFICIAL_RELEASE=0
 
 FROM rust:1.93-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31 AS builder
+ARG EXYONQ_GIT_REVISION=unknown
+ARG EXYONQ_OFFICIAL_RELEASE=0
+# Map OCI label arg into the cargo build-script env (same SHA for amd64/arm64).
+ENV EXYONQ_SOURCE_REVISION=${EXYONQ_GIT_REVISION}
+ENV EXYONQ_OFFICIAL_RELEASE=${EXYONQ_OFFICIAL_RELEASE}
 WORKDIR /app
+# Fail closed before compile when building an official release image without a real SHA.
+RUN set -eu; \
+    rev="${EXYONQ_SOURCE_REVISION}"; \
+    off="${EXYONQ_OFFICIAL_RELEASE}"; \
+    case "${off}" in \
+      1|true|TRUE|yes|YES) \
+        if [ -z "${rev}" ] || [ "${rev}" = "unknown" ]; then \
+          echo "ERROR: official OCI build requires EXYONQ_GIT_REVISION=<40-hex> (got '${rev}')" >&2; \
+          exit 1; \
+        fi; \
+        echo "${rev}" | grep -Eq '^[0-9a-f]{40}$' || { \
+          echo "ERROR: EXYONQ_GIT_REVISION must be 40 lowercase hex (got '${rev}')" >&2; \
+          exit 1; \
+        }; \
+        ;; \
+    esac
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY core ./core
 COPY config ./config

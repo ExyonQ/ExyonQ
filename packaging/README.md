@@ -68,10 +68,23 @@ See [ADR-024](../docs/adr/024-license-compliance-third-party-notices.md).
 ## Docker (linux amd64 + arm64)
 
 ```bash
+# Dev / local iteration — unknown revision allowed when EXYONQ_OFFICIAL_RELEASE=0.
 bash scripts/legal/generate-release-compliance-artifacts.sh
+REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  -t exyonq/exyonq:latest .
+  --build-arg EXYONQ_VERSION=0.4.1 \
+  --build-arg "EXYONQ_GIT_REVISION=${REV}" \
+  --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
+  -t exyonq/exyonq:local .
+
+# Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
+docker buildx build -f packaging/docker/Dockerfile \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg EXYONQ_VERSION=0.4.2 \
+  --build-arg "EXYONQ_GIT_REVISION=${REV}" \
+  --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
+  -t ghcr.io/exyonq/exyonq:0.4.2 .
 ```
 
 ## CI
