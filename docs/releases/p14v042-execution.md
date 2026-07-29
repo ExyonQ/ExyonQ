@@ -41,7 +41,7 @@ P14V042_BASE_HEAD =
 
 P14V042_BRANCH = release/p14v042
 P14V042_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v042-scope
-P14V042_HEAD = c592a6a8385d5ca5f4429d0cddc040cbf09b5bff
+P14V042_HEAD = 634b849ac8dc57f99eecbb902b192016479dec43
 
 P14V042_AMBIENT_LAB = /Volumes/Lexar/Cursor/exyonq-lab
 P14V042_V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
@@ -125,10 +125,15 @@ P14V042_OCI_GATE = PASS
 
 ```text
 P14V042_COMMITS =
-  18bcd7fb0880486f41d417f20cef9786a26888d6  chore(p14v042): establish execution baseline
-  c592a6a8385d5ca5f4429d0cddc040cbf09b5bff  fix(release): propagate and gate source revision
-  (pending)  docs(release): correct live v0.4.1 publication status
-```
+  634b849 chore(version): finalize 0.4.2 metadata
+  56b59e2 docs(release): record v0.4.2 dependency decisions
+  00684ba deps(redis): migrate maintained line and remove socket2 0.5
+  1edb81f deps(serde-json): update to 1.0.151
+  87acd43 security(tls): replace rustls-pemfile parsing
+  5e319ea docs(release): correct live v0.4.1 publication status
+  c592a6a fix(release): propagate and gate source revision
+  18bcd7f chore(p14v042): establish execution baseline
+
 
 ---
 
