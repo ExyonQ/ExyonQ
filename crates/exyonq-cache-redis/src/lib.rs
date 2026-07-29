@@ -44,4 +44,4 @@ pub const REDIS_TRANSPORT: &str = "STREAMS";
 
 /// Client identity for docs / containment.
 pub const REDIS_CLIENT: &str = "redis";
-pub const REDIS_CLIENT_VERSION: &str = "0.27.6";
+pub const REDIS_CLIENT_VERSION: &str = "0.32.7";
