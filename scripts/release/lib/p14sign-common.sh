@@ -61,7 +61,7 @@ p14sign_assert_version_policy() {
   if [[ "$test_fixture" == "1" ]]; then
     p14sign_fixture_version "$version" || p14sign_die "with --test-fixture only approved fixture versions are allowed (got $version)"
   else
-    [[ "$version" == "0.4.0" || "$version" == "0.4.1" ]] || p14sign_die "without --test-fixture only versions 0.4.0 or 0.4.1 are allowed on this line (got $version)"
+    [[ "$version" == "0.4.0" || "$version" == "0.4.1" || "$version" == "0.4.2" ]] || p14sign_die "without --test-fixture only versions 0.4.0, 0.4.1, or 0.4.2 are allowed on this line (got $version)"
   fi
 }
 

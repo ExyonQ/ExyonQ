@@ -25,11 +25,38 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- **`0.4.2`** is in development (`P14V042` — private correctness and security maintenance).
-- **`0.4.1`** was published privately (`tag v0.4.1`, private GitHub Release, private GHCR `:0.4.1`). Public opening and `latest` remain unauthorized.
+- Follow-up after private **`0.4.2`** (this line). Publication/signing remain owner-gated.
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
+
+## [0.4.2] — private correctness and security maintenance (not published)
+
+```text
+P14V042_RELEASE_EXECUTED = NO
+PUBLICATION_STATUS = FORBIDDEN
+PUBLIC_OPENING = NO
+LATEST_CHANGED = NO
+BASE_HEAD = 25dcb4e9b323bbb2163c5f28f600175bfe725295
+```
+
+### Changed
+
+- OCI/WS6 source revision injection + official fail-closed gate (`unknown` forbidden for official builds).
+- Living docs honesty: `v0.4.1` privately published; `v0.4.2` this line.
+- TLS PEM parsing via `rustls-pki-types`; remove direct `rustls-pemfile` / RUSTSEC-2025-0134 ignore.
+- `serde_json` 1.0.150 → 1.0.151.
+- `redis` 0.27.6 → 0.32.7; eliminate transitive `socket2` 0.5.x from the lock.
+
+### Security
+
+- `EXYONQ-SEC-PRIVATE-MATERIAL-ZERO` remains fail-closed.
+- Official release builds require canonical 40-hex `EXYONQ_SOURCE_REVISION` (dev may still mark `unknown`).
+
+### Limitations (honest)
+
+- No tag, GitHub Release, GHCR push, `latest` change, or signing in this phase until separate owner close.
+- Docker Desktop / Mac results are `LOCAL_ITERATION_ONLY` / `NOT_LINUX_EVIDENCE`.
 
 ## [0.4.1] — privately published
 
