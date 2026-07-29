@@ -17,7 +17,7 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT40 = re.compile(r"^[0-9a-f]{40}$")
 LEGACY = re.compile(r"^0\.(1|2|3)([.-]|$)")
 FIXTURE_VERSIONS = frozenset({"0.0.0-p14sign-fixture", "0.4.0-test.p14sign5"})
-ALLOWED_PROD = "0.4.0"
+ALLOWED_PROD = frozenset({"0.4.0", "0.4.1"})
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -61,7 +61,7 @@ def assert_version(version: str, test_fixture: bool) -> None:
         if version not in FIXTURE_VERSIONS:
             die(f"with --test-fixture only approved fixture versions allowed (got {version})")
     else:
-        if version != ALLOWED_PROD:
+        if version not in ALLOWED_PROD:
             die(f"without --test-fixture only {ALLOWED_PROD} allowed (got {version})")
 
 
