@@ -171,13 +171,7 @@ mod tests {
         let cert = dir.join("cert.pem");
         let key = dir.join("key.pem");
         let status = Command::new("openssl")
-            .args([
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-            ])
+            .args(["req", "-x509", "-newkey", "rsa:2048", "-keyout"])
             .arg(&key)
             .arg("-out")
             .arg(&cert)
@@ -251,11 +245,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let truncated = dir.path().join("trunc.pem");
         // Missing END marker must fail closed.
-        std::fs::write(
-            &truncated,
-            b"-----BEGIN CERTIFICATE-----\nMIIB\n",
-        )
-        .unwrap();
+        std::fs::write(&truncated, b"-----BEGIN CERTIFICATE-----\nMIIB\n").unwrap();
         assert!(load_certs(&truncated).is_err());
     }
 
