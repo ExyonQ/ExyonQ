@@ -41,7 +41,7 @@ P14V042_BASE_HEAD =
 
 P14V042_BRANCH = release/p14v042
 P14V042_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v042-scope
-P14V042_HEAD = (updated after each commit; Phase0=18bcd7f)
+P14V042_HEAD = c592a6a8385d5ca5f4429d0cddc040cbf09b5bff
 
 P14V042_AMBIENT_LAB = /Volumes/Lexar/Cursor/exyonq-lab
 P14V042_V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
@@ -104,8 +104,8 @@ Known baseline defect (pre-fix): OCI `exyonq --version` can report `source_revis
 ## Phase status (rolling)
 
 ```text
-P14V042_SOURCE_REVISION_STATUS = FIXED_AND_RELEASE_GATED  # Netcup unit+contract PASS; OCI dual-arch pending
-P14V042_HONESTY_STATUS = PENDING
+P14V042_SOURCE_REVISION_STATUS = FIXED_AND_RELEASE_GATED
+P14V042_HONESTY_STATUS = IN_PROGRESS
 P14V042_RUSTLS_PEMFILE_STATUS = PENDING
 P14V042_SERDE_JSON_STATUS = PENDING
 P14V042_REDIS_SOCKET2_STATUS = PENDING
@@ -126,7 +126,8 @@ P14V042_OCI_GATE = PENDING
 ```text
 P14V042_COMMITS =
   18bcd7fb0880486f41d417f20cef9786a26888d6  chore(p14v042): establish execution baseline
-  (pending)  fix(release): propagate and gate source revision
+  c592a6a8385d5ca5f4429d0cddc040cbf09b5bff  fix(release): propagate and gate source revision
+  (pending)  docs(release): correct live v0.4.1 publication status
 ```
 
 ---
@@ -134,3 +135,22 @@ P14V042_COMMITS =
 ## Stop rule
 
 When `P14V042_RELEASE_READY = YES`, stop. Do not push, tag, sign, GHCR-push, or publish without a separate owner authorization.
+
+
+## Phase 1 — Source revision
+
+```text
+P14V042_SOURCE_REVISION_GATE = PASS
+P14V042_SOURCE_REVISION_CONTRACT = PASS
+P14V042_NETCUP_UNIT = PASS
+P14V042_ORACLE_UNIT = PASS
+P14V042_OCI_AMD64_SMOKE = PASS
+P14V042_SOURCE_REVISION_AMD64 = 25dcb4e9b323bbb2163c5f28f600175bfe725295  # injection proof SHA used on Netcup OCI
+P14V042_OCI_ARM64_SMOKE = PENDING
+P14V042_SOURCE_REVISION_ARM64 = PENDING
+
+DEVELOPMENT_BUILD_WITHOUT_REVISION = ALLOWED_BUT_MARKED_UNKNOWN
+OFFICIAL_RELEASE_BUILD_WITHOUT_REVISION = FAIL_CLOSED
+DOCKERIGNORE_GIT_REMAINS = YES
+NO_GIT_IN_OCI_CONTEXT = YES
+```

@@ -10,7 +10,9 @@ P14CLEAN_GITHUB_INITIAL_VERSION = v0.4.0
 P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
-PUBLICATION_STATUS = FORBIDDEN
+PUBLICATION_STATUS = PRIVATE_ONLY
+PUBLIC_OPENING = NOT_AUTHORIZED
+LATEST_CHANGED = NO
 ```
 
 This repository is a **clean source tree**. Legacy tags from the previous GitHub repository
@@ -23,16 +25,21 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- Next candidate after private maturation of **`0.4.1`** (this line). Publication/signing remain owner-gated.
+- **`0.4.2`** is in development (`P14V042` — private correctness and security maintenance).
+- **`0.4.1`** was published privately (`tag v0.4.1`, private GitHub Release, private GHCR `:0.4.1`). Public opening and `latest` remain unauthorized.
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
 
-## [0.4.1] — private maturation (not published)
+## [0.4.1] — privately published
 
 ```text
-P14V041_RELEASE_EXECUTED = NO
-PUBLICATION_STATUS = FORBIDDEN
+P14V041_RELEASE_EXECUTED = YES
+P14V041_PUBLICATION_STATUS = PRIVATE_V041_RELEASE_COMPLETE
+PUBLIC_OPENING = NO
+LATEST_CHANGED = NO
+TAG = v0.4.1
+FREEZE_HEAD = 43805eb04a79babfbe443e2db4ca0d5b6658c80c
 BASE = d326b02b4ebc3b8dd7a8a3dbe7deeab5251d4910 (v0.4.0 freeze)
 ```
 
@@ -49,13 +56,13 @@ BASE = d326b02b4ebc3b8dd7a8a3dbe7deeab5251d4910 (v0.4.0 freeze)
 ### Security
 
 - `EXYONQ-SEC-PRIVATE-MATERIAL-ZERO` remains fail-closed; ephemeral TLS only.
-- `cargo audit` / `cargo deny` advisories gates run per dependency commit; pre-existing `RUSTSEC-2025-0134` (rustls-pemfile unmaintained) unchanged.
+- `cargo audit` / `cargo deny` advisories gates run per dependency commit; pre-existing `RUSTSEC-2025-0134` (rustls-pemfile unmaintained) unchanged at freeze.
 - Notify 8 removes unmaintained `instant` from the lock graph.
 
 ### Limitations (honest)
 
-- Dual-arch Linux (Netcup amd64 / Oracle arm64) functional + performance gates must pass before `P14V041_RELEASE_READY = YES`.
-- No tag, GitHub Release, GHCR push, `latest` change, or signing in this phase.
+- Private publication only — no public opening, no `latest` mutation.
+- Known follow-up for `0.4.2`: OCI builds that omit an injected source revision embed `source_revision=unknown` (fixed under `P14V042`).
 - Docker Desktop / Mac results are `LOCAL_ITERATION_ONLY` / `NOT_LINUX_EVIDENCE`.
 
 ---
