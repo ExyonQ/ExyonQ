@@ -30,7 +30,7 @@ Owner decision: `APPROVED_WITH_MANDATORY_DEPENDENCY_COMPLETION`
 P14V041_BASE_HEAD = d326b02b4ebc3b8dd7a8a3dbe7deeab5251d4910
 P14V041_BRANCH = release/p14v041
 P14V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
-P14V041_HEAD = 3bd1133079ade7a11b4abec2836d216039d94333
+P14V041_HEAD = b7475e4a6cf437ad5114418d5a1232cde8d58733
 P14V041_WORKTREE_CLEAN = YES
 P14V041_AMBIENT_LAB_DIRT_IMPORTED = NO
 P14V041_PREHISTCLEAN_HISTORY_IMPORTED = NO
@@ -129,8 +129,9 @@ P14V041_PERFORMANCE_GATE = PASS_AFTER_INVESTIGATION
   RSS: Netcup baseline warmup 16212 KB → head 15200 KB; Oracle 13336 → 12520 KB
   Conclusion: no durable >3% median product regression under interleaved A/B
 
-P14V041_OCI_SMOKE_GATE = PENDING_OR_IN_PROGRESS
-  Local docker build on Netcup without push (see evidence when complete)
+P14V041_OCI_SMOKE_GATE = PASS
+  Netcup amd64 docker build (no push) tag exyonq-p14v041-oci-smoke:local
+  --build-arg EXYONQ_VERSION=0.4.1; image inspect + `exyonq --help` OK
 
 P14V041_RELEASE_READY = YES
 P14V041_RELEASE_EXECUTED = NO
@@ -163,6 +164,7 @@ oracle: /home/ubuntu/exyonq-p14v041/.exyonq-local/p14v041-evidence/
 | 12 | `db97915` | docs(release): changelog, dependency decisions and honest limitations |
 | 13 | `217f981` | chore(version): finalize 0.4.1 metadata |
 | 14 | `3bd1133` | fix(reload): filter config watcher events to the config path |
+| 15 | `b7475e4` | chore(p14v041): refresh 0.4.1 lock metadata, OCI defaults, and ledger |
 
 ---
 
