@@ -1,0 +1,135 @@
+# P14V042 — ExyonQ v0.4.2 Private Correctness and Security Maintenance
+
+```text
+DOCUMENT = docs/releases/p14v042-execution.md
+PHASE = IMPLEMENTATION_OPEN
+P14V042_STATUS = IN_PROGRESS
+
+P14V042_SCOPE_AUDIT_DECISION =
+  ACCEPTED_WITH_EXECUTION_ORDER_AND_REDIS_GUARDRAILS
+P14V042_AUDIT_STATUS = COMPLETE_PROPOSAL
+P14V042_IMPLEMENTATION_READY = YES
+P14V042_IMPLEMENTATION_AUTHORIZED = YES
+P14V042_IMPLEMENTATION_OPENED = YES
+
+P14V042_RELEASE_AUTHORIZED = NO
+P14V042_PUBLICATION_AUTHORIZED = NO
+P14V042_RELEASE_READY = NO
+P14V042_RELEASE_EXECUTED = NO
+
+PUSH = NO
+TAG = NO
+RELEASE = NO
+GHCR_PUSH = NO
+LATEST_CHANGED = NO
+VISIBILITY_CHANGED = NO
+HISTORY_REWRITE = NO
+FORCE_PUSH = NO
+SIGNING = NO
+```
+
+Scope basis: `docs/releases/p14v042-scope-audit.md`  
+Kind: `PRIVATE_CORRECTNESS_SECURITY_MAINTENANCE_RELEASE`
+
+---
+
+## Identity
+
+```text
+P14V042_BASE_HEAD =
+  25dcb4e9b323bbb2163c5f28f600175bfe725295
+
+P14V042_BRANCH = release/p14v042
+P14V042_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v042-scope
+P14V042_HEAD = (moves with implementation commits)
+
+P14V042_AMBIENT_LAB = /Volumes/Lexar/Cursor/exyonq-lab
+P14V042_V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
+P14V042_GITHUB_STAGING = /Volumes/Lexar/Cursor/exyonq-github
+```
+
+Ambient lab / v0.4.1 worktree / github staging: **not modified** by P14V042 implementation.
+
+---
+
+## Scope (approved)
+
+```text
+P14V042_SCOPE =
+  SOURCE_PROVENANCE_CORRECTNESS
+  + RELEASE_HONESTY
+  + RUSTLS_PEMFILE_REMOVAL
+  + SERDE_JSON_UPDATE
+  + REDIS_SOCKET2_MIGRATION_ASSESSMENT
+  + ADMITTED_DEPENDENCY_MAINTENANCE
+  + SECURITY_AND_REGRESSION_GATES
+```
+
+No broad new features. Public opening / `latest` not authorized.
+
+Contract for source revision:
+
+```text
+DEVELOPMENT_BUILD_WITHOUT_REVISION = ALLOWED_BUT_MARKED_UNKNOWN
+OFFICIAL_RELEASE_BUILD_WITHOUT_REVISION = FAIL_CLOSED
+```
+
+---
+
+## Phase 0 — Implementation freeze / baseline
+
+```text
+P14V042_BASELINE_GATE = PASS
+P14V042_BASELINE_HEAD = 25dcb4e9b323bbb2163c5f28f600175bfe725295
+P14V042_BASELINE_TREE_CLEAN = YES
+P14V042_BASELINE_WORKSPACE_VERSION = 0.4.1
+P14V042_BASELINE_LOCK_SHA256 =
+  94e30509d7be33f66c86f8282805f9a5125b42e6be80fb96135d1e7e0bc7458a
+P14V042_BASELINE_AT = 2026-07-29T16:28:55Z
+P14V042_BASELINE_HOST = Netcup amd64
+P14V042_BASELINE_FMT = PASS
+P14V042_BASELINE_CHECK = PASS
+P14V042_BASELINE_TEST = PASS
+P14V042_BASELINE_AUDIT = PASS
+P14V042_BASELINE_DENY = PASS
+P14V042_BASELINE_PRIVATE_MATERIAL_ZERO = PASS
+```
+
+Evidence: Netcup `/root/exyonq-p14v042-evidence/phase0/` and local `.exyonq-local/p14v042-evidence/phase0/`.
+
+Known baseline defect (pre-fix): OCI `exyonq --version` can report `source_revision=unknown` when build context excludes `.git` and the Dockerfile does not inject `EXYONQ_SOURCE_REVISION` into `cargo build`.
+
+---
+
+## Phase status (rolling)
+
+```text
+P14V042_SOURCE_REVISION_STATUS = IN_PROGRESS
+P14V042_HONESTY_STATUS = PENDING
+P14V042_RUSTLS_PEMFILE_STATUS = PENDING
+P14V042_SERDE_JSON_STATUS = PENDING
+P14V042_REDIS_SOCKET2_STATUS = PENDING
+P14V042_DEPENDENCY_STATUS = PENDING
+
+P14V042_BUILD_GATE = PENDING
+P14V042_TEST_GATE = PENDING
+P14V042_SECURITY_GATE = PENDING
+P14V042_NETCUP_GATE = PENDING
+P14V042_ORACLE_GATE = PENDING
+P14V042_OCI_GATE = PENDING
+```
+
+---
+
+## Commits
+
+```text
+P14V042_COMMITS =
+  (phase 0 ledger commit lands first; implementation commits follow in mandatory order)
+```
+
+---
+
+## Stop rule
+
+When `P14V042_RELEASE_READY = YES`, stop. Do not push, tag, sign, GHCR-push, or publish without a separate owner authorization.
