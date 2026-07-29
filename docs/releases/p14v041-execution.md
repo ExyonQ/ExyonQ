@@ -2,178 +2,146 @@
 
 ```text
 DOCUMENT = docs/releases/p14v041-execution.md
-PHASE = EXECUTION
+PHASE = CLOSE_COMPLETE
+P14V041_STATUS = COMPLETE
+P14V041_CLOSE_STATUS = COMPLETE
+P14V041_PUBLICATION_STATUS = PRIVATE_V041_RELEASE_COMPLETE
+
 P14V041_SCOPE_APPROVED = YES
 P14V041_IMPLEMENTATION_PHASE_OPENED = YES
-P14V041_RELEASE_AUTHORIZED = NO
-P14V041_PUBLICATION_AUTHORIZED = NO
-PUBLICATION_STATUS = FORBIDDEN
-PUSH = NO
-TAG = NO
-RELEASE = NO
-GHCR_PUSH = NO
+P14V041_RELEASE_AUTHORIZED = YES
+P14V041_PRIVATE_PUBLICATION_AUTHORIZED = YES
+P14V041_PUBLIC_OPENING = NO
+
+PUSH = SOURCE_AND_SIGNED_TAG_DONE
+TAG = v0.4.1
+RELEASE = CREATED_PRIVATE
+GHCR_PUSH = VERSIONED_0_4_1_ONLY
 LATEST_CHANGED = NO
 VISIBILITY_CHANGED = NO
 HISTORY_REWRITE = NO
 FORCE_PUSH = NO
-SIGNING = NO
 ```
 
 Scope basis: `docs/releases/p14v041-scope-audit.md`  
-Owner decision: `APPROVED_WITH_MANDATORY_DEPENDENCY_COMPLETION`
+Owner decisions: `APPROVED_WITH_MANDATORY_DEPENDENCY_COMPLETION` → `P14V041_CLOSE_AUTHORIZED` + `P14V041_PRIVATE_PUBLICATION_AUTHORIZED`
 
 ---
 
 ## Identity
 
 ```text
-P14V041_BASE_HEAD = d326b02b4ebc3b8dd7a8a3dbe7deeab5251d4910
+P14V041_BASE_HEAD =
+  d326b02b4ebc3b8dd7a8a3dbe7deeab5251d4910
+
+P14V041_RELEASE_HEAD =
+  43805eb04a79babfbe443e2db4ca0d5b6658c80c
+
+P14V041_FREEZE_AMENDMENT =
+  owner EXPECTED_HEAD f335360 amended by publication-gate defects
+  (rustfmt whitespace + release-manifest product version allowlist 0.4.1)
+  → 94f29a9 → 43805eb; remote main FF only
+
 P14V041_BRANCH = release/p14v041
 P14V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
-P14V041_HEAD = 7ebe51177bfa427c2a5dd4ee901f203e646e0f77
-P14V041_RELEASE_READY_MARKER = 7f549959139e76d11809f5b1244628cb75ecd4c0
-P14V041_WORKTREE_CLEAN = YES
+P14V041_TAG = v0.4.1
 P14V041_AMBIENT_LAB_DIRT_IMPORTED = NO
 P14V041_PREHISTCLEAN_HISTORY_IMPORTED = NO
 ```
 
-Ambient lab (untouched):
+Ambient lab (untouched during close):
 
 ```text
 AMBIENT_PATH = /Volumes/Lexar/Cursor/exyonq-lab
 AMBIENT_BRANCH = perf/p8o-finite-sse-batch
-AMBIENT_HEAD = 9dad9587c94f3732c1c3f8bc8153ac3b26f6e0bc
-AMBIENT_BACKUP_BRANCH = backup/p14v041-ambient-lab-9dad958
-AMBIENT_INVENTORY = .exyonq-local/inventories/p14v041-phase0-ambient-20260728T202745Z
 ```
 
 ---
 
-## Phase 0 — B1/B2
+## Publication verdicts
 
 ```text
-P14V041_B1_STATUS = RESOLVED_VIA_CLEAN_WORKTREE
-P14V041_B2_STATUS = RESOLVED_VIA_ISOLATION_AMBIENT_PRESERVED
-P14V041_AMBIENT_DIRT_PRESERVED = YES
-P14V041_CLEAN_WORKTREE_CREATED = YES
+P14V041_TAG_SIGNATURE = PASS
+P14V041_TAG_SIGNER_FINGERPRINT =
+  SHA256:U2Mnxtmcl1Xz7dw6lyMaLciwsBM/V/vmmDyU4iljz1c
+
+P14V041_CHECKSUM_SIGNATURE = PASS
+P14V041_COSIGN_PUBLIC_KEY_HASH =
+  83931e3916b5d50b571fbc4926f7eef6ed1031b23f62ef17c1bf2780b6031562
+P14V041_OFFLINE_NO_TLOG = YES
+
+P14V041_GHCR_IMAGE = ghcr.io/exyonq/exyonq:0.4.1
+P14V041_OCI_AMD64_DIGEST =
+  sha256:82bcb6c2106d57f569a857ace58d24f9bcaa4106afa8bffc6160cdf028ea9ae5
+P14V041_OCI_ARM64_DIGEST =
+  sha256:3ff40949956809558010b15d52a698be9215699b142c232c0037324f44c75e4f
+P14V041_OCI_INDEX_DIGEST =
+  sha256:ac0d74f1a49c9c99b0b093e8d4eff8db72b775a6cc20bce59fa0646f496d33f5
+P14V041_OCI_DUAL_ARCH = PASS
+P14V041_OCI_NETCUP_DIGEST_SMOKE = PASS
+P14V041_OCI_ORACLE_DIGEST_SMOKE = PASS
+P14V041_OCI_SIGNATURE = PASS
+
+P14V041_GITHUB_RELEASE = CREATED_PRIVATE
+P14V041_RELEASE_URL = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.1
+P14V041_RELEASE_ASSET_VERIFY = PASS
+P14V041_RELEASE_CHECKSUM_VERIFY = PASS
+P14V041_REMOTE_TAG_SIGNATURE = PASS
+
+P14V041_GHCR_VISIBILITY = PRIVATE
+P14V041_GITHUB_VISIBILITY = PRIVATE
+
+P14V041_LATEST =
+  PREEXISTING_UNRELATED_PRESERVED
+P14V041_LATEST_DIGEST =
+  sha256:6f451ea6434f42d3e008e38adeee9025ebe9cd45734a46f736e98e4696a6759e
+P14V041_LATEST_CREATED = NO
+P14V041_LATEST_UPDATED = NO
+P14V041_LATEST_DELETED = NO
+
+P14V041_HISTORY_REWRITE = NO
+P14V041_FORCE_PUSH = NO
+P14V041_PUBLIC_OPENING = NO
+P14V041_BACKUP_KEY_ACCESS = NO
 ```
 
 ---
 
-## Dependency status
+## Implementation gates (pre-close)
 
 ```text
-P14V041_ANYHOW_STATUS = UPDATED
-  ANYHOW = 1.0.103 → 1.0.104
-
-P14V041_SERDE_STATUS = UPDATED
-  SERDE = 1.0.228 → 1.0.229
-  SERDE_DERIVE = 1.0.228 → 1.0.229
-  SERDE_CORE = 1.0.229
-  SERDE_JSON = LEFT_AT_1.0.150 (no advisory/coupling)
-
-P14V041_BYTES_STATUS = UPDATED
-  BYTES = 1.12.0 → 1.12.1
-
-P14V041_SOCKET2_STATUS = UPDATED_DIRECT_USAGE_TO_0_6
-  SOCKET2_0_6_LINE = 0.6.4 → 0.6.5
-  PLATFORM_LINUX_DIRECT = 0.5.10 → 0.6.x (set_nodelay → set_tcp_nodelay)
-  DBEX-006_DIRECT_PRODUCT_DUAL_VERSION = RESOLVED
-  DBEX-006_TRANSITIVE_THIRD_PARTY_DUPLICATION = REMAINS (socket2 0.5.10 via redis only)
-
-P14V041_NOTIFY_STATUS = UPDATED
-  NOTIFY = 7.0.0 → 8.2.0 (no 9.0.0-rc)
-  FOLLOW_ON_FIX = path-filter on config watcher (reload thrash when watching /tmp parent)
-
-P14V041_ACTIONS_CACHE_STATUS = UPDATED_SHA_PINNED
-  actions/cache = v6.1.0 @ 55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-
-P14V041_ACTIONS_SETUP_GO_STATUS = UPDATED_SHA_PINNED
-  actions/setup-go = v7.0.0 @ b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-
-P14V041_ACTIONS_FLOATING_REFS_CURRENT = (pre) ALL floating
-P14V041_ACTIONS_FLOATING_REFS_FINAL = NONE
-P14V041_ACTIONS_SHA_PIN_GATE = PASS
-
 P14V041_DEPENDENCY_COMPLETION_GATE = PASS
-```
-
----
-
-## Gates
-
-```text
-P14V041_BUILD_GATE = PASS
-P14V041_TEST_GATE = PASS
-P14V041_SECURITY_GATE = PASS
-  cargo audit = 1 allowed warning (RUSTSEC-2025-0134 rustls-pemfile unmaintained)
-  cargo deny advisories = ok
-  EXYONQ-SEC-PRIVATE-MATERIAL-ZERO = PASS
-  ephemeral TLS + scanner selftest = PASS
-
+P14V041_ACTIONS_SHA_PIN_GATE = PASS
 P14V041_NETCUP_GATE = PASS
-  k0 epoll/sendfile PASS=22 FAIL=0
-  kd3 proxy PASS=12 FAIL=0
-  fastcgi --lib 61 passed
-
 P14V041_ORACLE_GATE = PASS
-  k0 epoll/sendfile PASS=22 FAIL=0
-  kd3 proxy PASS=12 FAIL=0
-  fastcgi --lib 61 passed
-
-P14V041_PERFORMANCE_GATE = PASS_AFTER_INVESTIGATION
-  Baseline = d326b02; HEAD = 3bd1133; loadgen = rewrk 0.3.1; c=100 d=15s t=4
-  Netcup amd64 sequential: static median Req/Sec +0.77%; proxy −4.86% (high variance)
-  Netcup proxy interleaved A/B (5 rounds): +0.08% → prior proxy delta NOT reproducible
-  Oracle arm64 sequential: static −6.32%; proxy +0.02%
-  Oracle static interleaved A/B (5 rounds): +2.53% → prior static delta NOT reproducible
-  RSS: Netcup baseline warmup 16212 KB → head 15200 KB; Oracle 13336 → 12520 KB
-  Conclusion: no durable >3% median product regression under interleaved A/B
-
-P14V041_OCI_SMOKE_GATE = PASS
-  Netcup amd64 docker build (no push) tag exyonq-p14v041-oci-smoke:local
-  --build-arg EXYONQ_VERSION=0.4.1; image inspect + `exyonq --help` OK
-
+P14V041_PERFORMANCE_GATE = PASS
 P14V041_RELEASE_READY = YES
-P14V041_RELEASE_EXECUTED = NO
 ```
 
-Remote evidence trees (not published):
+Dependency highlights:
 
-```text
-netcup: /root/exyonq-p14v041/.exyonq-local/p14v041-evidence/
-oracle: /home/ubuntu/exyonq-p14v041/.exyonq-local/p14v041-evidence/
-```
+- anyhow 1.0.104; serde 1.0.229; bytes 1.12.1
+- socket2 direct line 0.6.5 (+ platform-linux 0.5→0.6); transitive 0.5.10 via redis remains
+- notify 8.2.0 + config watcher path-filter fix
+- Actions SHA-pinned
 
 ---
 
-## Commit log
+## Close commit chain (publication)
 
-| # | Commit | Subject |
-|---|--------|---------|
-| 1 | `af04416` | chore(p14v041): establish clean 0.4.0-derived execution base |
-| 2 | `4cff95b` | chore(fmt): wrap ephemeral TLS assert for rustfmt gate |
-| 3 | `cecf966` | deps(anyhow): update to 1.0.104 |
-| 4 | `970cc70` | deps(serde): update serde family to 1.0.229 |
-| 5 | `8093e86` | deps(bytes): update to 1.12.1 |
-| 6 | `06c4006` | deps(socket2): update 0.6 line to 0.6.5 |
-| 7 | `715014e` | deps(socket2): migrate platform-linux direct usage 0.5 → 0.6 |
-| 8 | `b214223` | deps(notify): update 7.0.0 → 8.2.0 |
-| 9 | `2376193` | ci(cache): update actions/cache to v6.1.0 and SHA-pin |
-| 10 | `ef3cbcd` | ci(setup-go): update actions/setup-go to v7.0.0 and SHA-pin |
-| 11 | `f9910c6` | ci(actions): SHA-pin remaining admitted active Actions |
-| 12 | `db97915` | docs(release): changelog, dependency decisions and honest limitations |
-| 13 | `217f981` | chore(version): finalize 0.4.1 metadata |
-| 14 | `3bd1133` | fix(reload): filter config watcher events to the config path |
-| 15 | `b7475e4` | chore(p14v041): refresh 0.4.1 lock metadata, OCI defaults, and ledger |
-| 16 | `7f54995` | docs(release): mark P14V041 RELEASE_READY with OCI smoke PASS |
+| Commit | Subject |
+|--------|---------|
+| `f335360` | (pre-amend tip referenced by owner EXPECTED_HEAD) |
+| `94f29a9` | chore(fmt): rustfmt config_watcher |
+| `43805eb` | fix(release): allow product version 0.4.1 in manifest policy |
+
+Tag `v0.4.1` points at `43805eb` (annotated SSH-signed).
 
 ---
 
 ## Notes
 
-- Product work only in `release/p14v041` worktree; ambient `perf/p8o-finite-sse-batch` dirt preserved.
-- No global `cargo update`. Lockfile deltas are commit-scoped.
-- Correctness fix authorized by notify Linux validation: config watcher path filter (parent-dir watch required for atomic rename).
-- Stop here for separate owner authorize of private close / publication.
-- `PUBLICATION_STATUS = FORBIDDEN` until a later explicit authorize.
+- Product/publication work executed only in `release/p14v041` worktree; ambient dirt preserved.
+- Official signing (tag SSH, Cosign blob, Cosign OCI) performed manually in Terminal.app; Cursor verified with public material only.
+- No `latest` mutation; repository and GHCR remain private.
+- This ledger update may land as a post-tag documentation commit on `main` and does not move `v0.4.1`.
