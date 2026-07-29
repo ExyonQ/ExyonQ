@@ -7,7 +7,7 @@
 # Bases are multi-arch OCI index digests (linux/amd64 + linux/arm64).
 # Revision is injected at build time (do not hard-code a prior freeze SHA).
 
-ARG EXYONQ_VERSION=0.4.0
+ARG EXYONQ_VERSION=0.4.1
 ARG EXYONQ_GIT_REVISION=unknown
 
 FROM rust:1.93-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31 AS builder
