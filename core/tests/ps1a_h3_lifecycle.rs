@@ -93,7 +93,7 @@ mod native {
     use http::Request;
     use quinn::{ClientConfig, Endpoint, VarInt};
     use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::CertificateDer;
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -188,7 +188,6 @@ mod native {
     }
 
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
     use rustls::DigitallySignedStruct;
     use rustls::SignatureScheme;
 
