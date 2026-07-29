@@ -8,7 +8,6 @@ license.workspace = true
 [dependencies]
 exyonq-module-api = { path = "../../module-api" }
 rustls.workspace = true
-rustls-pemfile.workspace = true
 tokio-rustls.workspace = true
 tracing.workspace = true
 

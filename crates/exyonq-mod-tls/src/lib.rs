@@ -16,11 +16,11 @@
 //! TLS runtime — certificate load, rustls `ServerConfig`, hot-swappable acceptor (KD4.5).
 
 use exyonq_module_api::tls_runtime::TlsListenerBinding;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::ServerSessionMemoryCache;
 use rustls::ServerConfig;
-use std::fs::File;
-use std::io::{self, BufReader};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio_rustls::TlsAcceptor;
@@ -141,30 +141,58 @@ pub fn load_rustls_config(
 }
 
 fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    rustls_pemfile::certs(&mut reader)
+    CertificateDer::pem_file_iter(path)
+        .map_err(pem_io_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+        .map_err(pem_io_error)
 }
 
 fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    if let Some(key) = rustls_pemfile::pkcs8_private_keys(&mut reader).next() {
-        return key
-            .map(PrivateKeyDer::Pkcs8)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err));
+    // Contract: PKCS#8 only (same as prior rustls-pemfile::pkcs8_private_keys).
+    // Do not widen to PKCS#1/SEC1 without an explicit product contract change.
+    let key = PrivatePkcs8KeyDer::from_pem_file(path).map_err(pem_io_error)?;
+    Ok(PrivateKeyDer::from(key))
+}
+
+fn pem_io_error(err: rustls::pki_types::pem::Error) -> io::Error {
+    match err {
+        rustls::pki_types::pem::Error::Io(io_err) => io_err,
+        other => io::Error::new(io::ErrorKind::InvalidData, other),
     }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidData,
-        "no PKCS8 private key found",
-    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
+    fn write_ephemeral_pkcs8_pair(dir: &Path) -> (PathBuf, PathBuf) {
+        install_rustls_provider();
+        let cert = dir.join("cert.pem");
+        let key = dir.join("key.pem");
+        let status = Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+            ])
+            .arg(&key)
+            .arg("-out")
+            .arg(&cert)
+            .args([
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=exyonq-p14v042-tls-test",
+            ])
+            .status()
+            .expect("openssl available for ephemeral TLS fixtures");
+        assert!(status.success(), "openssl ephemeral cert generation failed");
+        (cert, key)
+    }
 
     #[test]
     fn rejects_missing_private_key() {
@@ -189,6 +217,65 @@ mod tests {
             "unexpected error kind: {:?}",
             err.kind()
         );
+    }
+
+    #[test]
+    fn loads_ephemeral_pkcs8_cert_and_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_ephemeral_pkcs8_pair(dir.path());
+        let cfg = load_rustls_config(
+            &TlsSettings {
+                cert_path: cert,
+                key_path: key,
+            },
+            &[b"h2", b"http/1.1"],
+            None,
+        )
+        .expect("valid PKCS#8 pair must load");
+        assert_eq!(cfg.alpn_protocols, [b"h2".to_vec(), b"http/1.1".to_vec()]);
+    }
+
+    #[test]
+    fn rejects_empty_key_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, _) = write_ephemeral_pkcs8_pair(dir.path());
+        let empty_key = dir.path().join("empty-key.pem");
+        std::fs::write(&empty_key, b"").unwrap();
+        let err = load_private_key(&empty_key).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let _ = load_certs(&cert).expect("cert still readable");
+    }
+
+    #[test]
+    fn rejects_truncated_pem() {
+        let dir = tempfile::tempdir().unwrap();
+        let truncated = dir.path().join("trunc.pem");
+        // Missing END marker must fail closed.
+        std::fs::write(
+            &truncated,
+            b"-----BEGIN CERTIFICATE-----\nMIIB\n",
+        )
+        .unwrap();
+        assert!(load_certs(&truncated).is_err());
+    }
+
+    #[test]
+    fn rejects_pkcs1_rsa_private_key_without_contract_widening() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, pkcs8_key) = write_ephemeral_pkcs8_pair(dir.path());
+        let pkcs1 = dir.path().join("pkcs1.pem");
+        let status = Command::new("openssl")
+            .args(["rsa", "-in"])
+            .arg(&pkcs8_key)
+            .args(["-traditional", "-out"])
+            .arg(&pkcs1)
+            .status()
+            .expect("openssl rsa");
+        assert!(status.success());
+        let err = load_private_key(&pkcs1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        // Cert chain still loads independently.
+        assert!(!load_certs(&cert).unwrap().is_empty());
     }
 
     #[test]

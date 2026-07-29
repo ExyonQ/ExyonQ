@@ -92,8 +92,8 @@ mod native {
     use h3_quinn::Connection as H3QuinnConnection;
     use http::Request;
     use quinn::{ClientConfig, Endpoint, VarInt};
-    use rustls_pemfile::certs;
-    use std::io::BufReader;
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::CertificateDer;
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -198,10 +198,7 @@ mod native {
     impl TrustFixtureCert {
         fn from_pem_path(path: &PathBuf) -> Self {
             let pem = std::fs::read(path).expect("read fixture cert");
-            let der = certs(&mut BufReader::new(pem.as_slice()))
-                .next()
-                .expect("fixture cert present")
-                .expect("fixture cert der");
+            let der = CertificateDer::from_pem_slice(&pem).expect("fixture cert der");
             Self(der.as_ref().to_vec())
         }
     }
