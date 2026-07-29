@@ -41,7 +41,8 @@ P14V042_BASE_HEAD =
 
 P14V042_BRANCH = release/p14v042
 P14V042_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v042-scope
-P14V042_HEAD = 634b849ac8dc57f99eecbb902b192016479dec43
+P14V042_HEAD = cb9bdf81ac1ab98e9c37b329e17b3a34feed9f65
+P14V042_VERSION_FINALIZE_COMMIT = 634b849ac8dc57f99eecbb902b192016479dec43
 
 P14V042_AMBIENT_LAB = /Volumes/Lexar/Cursor/exyonq-lab
 P14V042_V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
