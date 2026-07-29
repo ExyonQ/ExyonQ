@@ -1,91 +1,95 @@
 # Security Policy
 
+ExyonQ is currently a **private maturation** project. This policy describes
+supported release lines and how to report security issues without public
+disclosure of sensitive details.
+
 ## Supported versions
 
-| Version   | Supported |
-|-----------|-----------|
-| 0.3.x     | Yes       |
-| < 0.3     | No        |
+Only the current private tip receives security fixes under this policy:
 
-## Current audit
+| Version | Supported |
+|---------|-----------|
+| 0.4.2   | Yes       |
+| 0.4.1   | No        |
+| 0.4.0   | No        |
+| < 0.4.0 | No        |
 
-Structured review for the latest release: [`docs/security/audit-v0.3.2.1.md`](docs/security/audit-v0.3.2.1.md).
+Any release line older than `0.4.0` is **not** supported for security fixes.
+
+## Project status
+
+- The GitHub repository and GHCR package are **private**.
+- Public opening is **not** authorized by this policy.
+- The mutable container tag `latest` is **not** part of the supported release
+  contract for security response.
 
 ## Reporting a vulnerability
 
-Email security reports to the maintainers (see repository contacts). Do not open public issues for exploitable vulnerabilities.
+Send undisclosed or sensitive security reports **exclusively** by email to:
 
-Include:
+**security@exyonq.org**
 
-- Affected version and commit
-- Reproduction steps or proof-of-concept
-- Impact assessment
+Recommended subject line:
 
-We aim to acknowledge reports within 72 hours.
+```text
+[SECURITY] ExyonQ vulnerability report
+```
 
-## Scope
+**Do not open public GitHub Issues** for undisclosed vulnerabilities, or for
+reports that include exploit details, credentials, or private material.
 
-In scope: ExyonQ core HTTP parser, static file resolver, reverse proxy, config reload, TLS termination, HTTP/3 QUIC, control socket (`exyonqctl`), official modules (metrics, compression, ratelimit).
+GitHub Private Vulnerability Reporting is **not** claimed as available for this
+repository at this time. If it is enabled after a future public opening, this
+policy may be updated to list it as a primary or complementary channel without
+necessarily removing email reporting.
 
-Out of scope: third-party benchmark containers, rival server configurations, compatibility importers except when they emit unsafe native config.
+### What to include (when possible)
 
-### In-scope surfaces (0.1+)
+- ExyonQ version (for example `0.4.2`)
+- Git commit SHA and/or `source_revision` from `exyonq --version`
+- Operating system and architecture
+- Relevant configuration (sanitized; no secrets)
+- Impact description
+- Minimal reproduction steps
+- A safe proof of concept (no destructive payloads against third parties)
+- Logs with credentials and personal data removed
+- Whether the issue has already been disclosed elsewhere
 
-| Surface | Location |
-|---------|----------|
-| HTTP/1 raw + hyper | `core/src/server/` |
-| Static files | `core/src/static_files/` |
-| Reverse proxy | `core/src/proxy/` |
-| Hot reload | `core/src/reload/` |
-| Control plane | `core/src/control/`, `cli/exyonqctl/` |
-| TLS / HTTP/2 | `core/src/tls/` |
-| HTTP/3 | `core/src/http3/` |
-| Discovery | `core/src/discovery/` |
-| Modules | `modules/*` |
-| WASM plugin host | `wasm/exyonq-wasm-host/` |
+### Do not include or attach
 
-## Release security gate
+- Private keys or PEM/OpenSSH private blocks
+- Passphrases
+- Tokens
+- Passwords
+- Cookies or session material
+- Personal data unrelated to the defect
+- Infrastructure credentials
+- Third-party material without authorization
 
-Each tag `vX.Y.Z` requires:
+This aligns with repository policy **EXYONQ-SEC-PRIVATE-MATERIAL-ZERO**:
+private-key-formatted material must not be committed, packaged, or published,
+including in security reports and fixtures.
 
-1. Green CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-2. Green security workflow ([`.github/workflows/security.yml`](.github/workflows/security.yml))
-3. Audit artifact [`docs/security/audit-vX.Y.Z.md`](docs/security/audit-template.md) with no open **Blockers**
-4. Nightly fuzz/Miri monitored ([`.github/workflows/security-nightly.yml`](.github/workflows/security-nightly.yml))
+## Acknowledgement
 
-Local pre-tag check: `cargo xtask security pre-release --version X.Y.Z`
+We will acknowledge valid security reports as soon as reasonably possible and
+coordinate remediation and disclosure directly with the reporter.
 
-Checklist: [`docs/security/release-checklist.md`](docs/security/release-checklist.md)
+## Scope (informative)
 
-## Blocking criteria
+In scope when evaluating reports: ExyonQ HTTP parsing and serving paths,
+static file resolution, reverse proxy, config reload, TLS termination,
+HTTP/3 QUIC (when enabled), control socket (`exyonqctl`), and official modules
+(metrics, compression, ratelimit, WASM host surfaces that ship with the
+product).
 
-| Severity | Release policy |
-|----------|----------------|
-| Critical / High | **Block** — must fix before tag |
-| Medium | Fix **or** documented waiver in version audit |
-| Low | Backlog OK with linked issue |
+Out of scope: third-party benchmark containers, rival server configurations,
+and compatibility importers except when they emit unsafe native config.
 
-## Hardening baseline
+## Release security gate (maintainers)
 
-- Request header size capped (`MAX_HEADER` / `MAX_HEADER_CAP` = 8192 bytes)
-- Header read timeout: `EXYONQ_READ_TIMEOUT_MS` (default 30000 ms) on static wire loop
-- Path traversal blocked via canonical root checks
-- Hop-by-hop headers stripped on proxy
-- Duplicate / conflicting length headers rejected before proxy forward
-- `.htaccess` never parsed at runtime (offline migration only)
-
-## Trusted configuration
-
-These environment variables are **trusted** (same privilege as the process). Compromise allows config or upstream redirection:
-
-- `EXYONQ_CONFIG` — config file path for serve/reload
-- `EXYONQ_CONTROL_SOCKET` — Unix socket for `exyonqctl`
-- `EXYONQ_DISCOVERY_FILE`, `EXYONQ_DISCOVERY_K8S`, `EXYONQ_DISCOVERY_DOCKER` — discovery overlay paths
-
-Run ExyonQ with minimal env exposure in production.
-
-## Automated testing
-
-- Integration security tests: `cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security) or test(wasm_host)'`
-- Fuzz: `scripts/security-fuzz.sh` (see [`fuzz/`](fuzz/))
-- Dependency audit: `cargo audit`, `cargo deny check`
+Each tag `vX.Y.Z` is expected to satisfy the project’s security release
+checklist and related CI security workflows before publication. Historical
+audit documents under older version schemes are not current supported-version
+claims and are not linked from this live policy.
