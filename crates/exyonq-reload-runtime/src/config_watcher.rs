@@ -29,10 +29,7 @@ pub const CONFIG_RELOAD_DEBOUNCE_MS: u64 = 300;
 pub fn is_relevant_event(kind: EventKind) -> bool {
     matches!(
         kind,
-        EventKind::Modify(_)
-            | EventKind::Create(_)
-            | EventKind::Remove(_)
-            | EventKind::Any
+        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) | EventKind::Any
     )
 }
 
