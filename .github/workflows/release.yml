@@ -21,7 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (pin; preserves toolchain input contract)
         with:
           toolchain: 1.93.0
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Install cargo-deny
@@ -67,7 +67,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (pin; preserves toolchain input contract)
         with:
           toolchain: 1.93.0
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install cargo-about
         run: cargo install cargo-about --locked --features cli
       - name: Install cargo-cyclonedx
@@ -112,7 +112,7 @@ jobs:
         with:
           toolchain: 1.93.0
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Build binaries (unix)
         if: runner.os != 'Windows'
         # P1.5-WS6: --locked required for release artifacts.
