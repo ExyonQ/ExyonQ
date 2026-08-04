@@ -255,7 +255,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -450,7 +450,7 @@ mod tests {
 
         std::env::set_var(
             "EXYONQ_L2_EVENT_HMAC_ACTIVE_KEY_FILE",
-            &format!("/tmp/wc7d_missing_hmac_secret_{}", std::process::id()),
+            format!("/tmp/wc7d_missing_hmac_secret_{}", std::process::id()),
         );
         assert!(EventSigningKeys::from_env().is_err(), "UNREADABLE_KEY_FILE");
 

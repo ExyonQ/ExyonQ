@@ -174,6 +174,12 @@ pub struct OpaquePlanRegistry {
     plan: OnceLock<FullPlanFn>,
 }
 
+impl Default for OpaquePlanRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpaquePlanRegistry {
     pub const fn new() -> Self {
         Self {

@@ -97,21 +97,21 @@ async fn reload_rebinds_compiled_slots_without_reregistering_service() {
     let _guard = ProxyDispatchTestGuard::install(runtime.clone());
     bind_proxy_compiled_slots(
         1,
-        &[ProxyCompiledSlot {
-            cluster_id: 0,
-            upstream_name: "backend".into(),
-            target: "http://127.0.0.1:1".into(),
-            timeout: Duration::from_millis(100),
-        }],
+        &[ProxyCompiledSlot::legacy_single(
+            0,
+            "backend",
+            "http://127.0.0.1:1",
+            Duration::from_millis(100),
+        )],
     );
     bind_proxy_compiled_slots(
         2,
-        &[ProxyCompiledSlot {
-            cluster_id: 0,
-            upstream_name: "backend".into(),
-            target: "http://127.0.0.1:1".into(),
-            timeout: Duration::from_millis(200),
-        }],
+        &[ProxyCompiledSlot::legacy_single(
+            0,
+            "backend",
+            "http://127.0.0.1:1",
+            Duration::from_millis(200),
+        )],
     );
     let outcome = dispatch_proxy(build_proxy_dispatch_request(
         0,
@@ -140,12 +140,12 @@ async fn module_metrics_not_double_counted_on_adapter() {
         ProxyDispatchTestGuard::install(Arc::clone(&runtime) as Arc<dyn ProxyDispatchService>);
     bind_proxy_compiled_slots(
         1,
-        &[ProxyCompiledSlot {
-            cluster_id: 0,
-            upstream_name: "backend".into(),
-            target: "http://127.0.0.1:1".into(),
-            timeout: Duration::from_millis(50),
-        }],
+        &[ProxyCompiledSlot::legacy_single(
+            0,
+            "backend",
+            "http://127.0.0.1:1",
+            Duration::from_millis(50),
+        )],
     );
     let before = runtime.metrics();
     let outcome = dispatch_proxy(build_proxy_dispatch_request(

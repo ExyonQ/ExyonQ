@@ -29,19 +29,23 @@ use exyonq_core::lifecycle::LifecycleState;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
+/// Opaque failure for PS1C consumer scaffold smoke (not a stable product error contract).
+#[derive(Debug)]
+pub struct ScaffoldAdmitError;
+
 /// Consumer-side admission + planner + handoff bundle construction (PS1C seam smoke).
 pub fn consumer_admit_plan_and_bundle(
     ops: &Arc<LifecycleState>,
     head: &[u8],
-) -> Result<(WirePlanDecision, HyperHandoff), ()> {
-    let token = PlatformConnectionAdmission::try_admit(ops).map_err(|_| ())?;
+) -> Result<(WirePlanDecision, HyperHandoff), ScaffoldAdmitError> {
+    let token = PlatformConnectionAdmission::try_admit(ops).map_err(|_| ScaffoldAdmitError)?;
     let view = GenerationView::pinned(1, false, Some(0));
-    let decision = plan_wire_decision(&view, head).map_err(|_| ())?;
+    let decision = plan_wire_decision(&view, head).map_err(|_| ScaffoldAdmitError)?;
 
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|_| ())?;
-    let peer: SocketAddr = listener.local_addr().map_err(|_| ())?;
-    let stream = TcpStream::connect(peer).map_err(|_| ())?;
-    let (server, peer) = listener.accept().map_err(|_| ())?;
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|_| ScaffoldAdmitError)?;
+    let peer: SocketAddr = listener.local_addr().map_err(|_| ScaffoldAdmitError)?;
+    let stream = TcpStream::connect(peer).map_err(|_| ScaffoldAdmitError)?;
+    let (server, peer) = listener.accept().map_err(|_| ScaffoldAdmitError)?;
     drop(server);
 
     let handoff = HyperHandoff::new(

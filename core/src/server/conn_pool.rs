@@ -13,6 +13,7 @@ pub(crate) struct SyncBenchCache {
 }
 
 impl SyncBenchCache {
+    #[allow(dead_code)] // composition helper; admit paths construct fields directly today
     pub(crate) fn from_state(state: &crate::server::state::ServerState) -> Self {
         Self {
             site_static_slot: state.site_static_slot,

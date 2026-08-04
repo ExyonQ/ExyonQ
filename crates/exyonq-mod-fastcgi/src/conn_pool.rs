@@ -326,11 +326,10 @@ impl ConnPool {
                 state.open += 1;
                 drop(state);
 
-                let connect_t = budget.connect_budget().map_err(|e| {
+                let connect_t = budget.connect_budget().inspect_err(|_| {
                     let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     state.open = state.open.saturating_sub(1);
                     self.avail.notify_one();
-                    e
                 })?;
 
                 // Bounded reconnect backoff — prevents connect storm after FPM restart.
@@ -515,6 +514,10 @@ impl ConnPoolSet {
 
     pub fn len(&self) -> usize {
         self.pools.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pools.is_empty()
     }
 }
 

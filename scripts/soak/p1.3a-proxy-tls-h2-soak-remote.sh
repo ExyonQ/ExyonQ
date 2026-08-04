@@ -831,10 +831,10 @@ record "H2_SETTINGS_BOUNDED" "PASS" "product-tranche-inherited"
 # ========== Phase 7: log redaction ==========
 echo "=== Phase 7 log redaction ==="
 : >"$RESULT_DIR/exyonq-logs-after-sensitive.txt"
-curl -sk --http1.1 --max-time 10 -H "Authorization: Bearer secret-token-p13a-redact" \
+curl -sk --http1.1 --max-time 10 -H "Authorization: Bearer <REDACTED>" \
   -H "Cookie: session=SECRETCOOKIEVALUE" \
   "${BASE}/api/echo?token=supersecretquery" >/dev/null || true
-curl -sk --http2 --max-time 10 -H "Authorization: Bearer secret-token-p13a-redact" \
+curl -sk --http2 --max-time 10 -H "Authorization: Bearer <REDACTED>" \
   "${BASE}/api/echo?token=supersecretquery" >/dev/null || true
 # Force a TLS error path
 printf 'bad' >"$LIVE_CERT" 2>/dev/null || true
@@ -844,7 +844,7 @@ sleep 0.5
 # Capture recent server log (RUST_LOG=error — secrets should not appear)
 tail -c 200000 "$SRV_LOG" >"$RESULT_DIR/exyonq-logs-after-sensitive.txt" 2>/dev/null || true
 REDACT_FAIL=0
-if grep -E 'SuperSecret|SECRETCOOKIEVALUE|secret-token-p13a-redact|supersecretquery|BEGIN PRIVATE KEY' \
+if grep -E 'SuperSecret|SECRETCOOKIEVALUE|<REDACTED>|supersecretquery|BEGIN PRIVATE KEY' \
   "$RESULT_DIR/exyonq-logs-after-sensitive.txt" >/dev/null 2>&1; then
   REDACT_FAIL=1
 fi

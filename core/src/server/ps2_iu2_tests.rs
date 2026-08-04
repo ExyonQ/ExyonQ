@@ -155,7 +155,7 @@ fn ps2_iu2_workers_survive_idle_header_read_timeout() {
 
 #[test]
 fn ps2_iu2_non_transient_listener_error_still_fatal() {
-    let err = io::Error::new(io::ErrorKind::Other, "listener infrastructure failure");
+    let err = io::Error::other("listener infrastructure failure");
     assert!(!crate::server::io::is_connection_level_io_error(&err));
 }
 

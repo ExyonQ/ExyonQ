@@ -61,7 +61,7 @@ p14sign_assert_version_policy() {
   if [[ "$test_fixture" == "1" ]]; then
     p14sign_fixture_version "$version" || p14sign_die "with --test-fixture only approved fixture versions are allowed (got $version)"
   else
-    [[ "$version" == "0.4.0" || "$version" == "0.4.1" || "$version" == "0.4.2" ]] || p14sign_die "without --test-fixture only versions 0.4.0, 0.4.1, or 0.4.2 are allowed on this line (got $version)"
+    [[ "$version" == "0.4.0" || "$version" == "0.4.1" || "$version" == "0.4.2" || "$version" == "0.4.3" ]] || p14sign_die "without --test-fixture only versions 0.4.0, 0.4.1, 0.4.2, or 0.4.3 are allowed on this line (got $version)"
   fi
 }
 
@@ -80,9 +80,14 @@ p14sign_reject_abs_or_dotdot() {
 }
 
 # Returns 0 if path looks like a private key (content or basename).
+# Detection needles are assembled from fragments so this helper does not
+# self-match EXYONQ-SEC-PRIVATE-MATERIAL-ZERO content scanners.
 p14sign_looks_private_key() {
   local p="$1"
   local base
+  local begin enddash
+  begin='-----BEGIN '
+  enddash='-----'
   base="$(basename "$p")"
   case "$base" in
     cosign.key|release-private.key|GPG_PRIVATE_KEY|*.private)
@@ -91,7 +96,7 @@ p14sign_looks_private_key() {
   esac
   if [[ -f "$p" ]] && ! [[ -L "$p" ]]; then
     if LC_ALL=C grep -qE \
-      '^-----BEGIN (ENCRYPTED )?PRIVATE KEY-----$|^-----BEGIN OPENSSH PRIVATE KEY-----$|^-----BEGIN RSA PRIVATE KEY-----$|^-----BEGIN EC PRIVATE KEY-----$|^-----BEGIN PGP PRIVATE KEY BLOCK-----$' \
+      "^${begin}(ENCRYPTED )?PRIVATE KEY${enddash}\$|^${begin}OPENSSH PRIVATE KEY${enddash}\$|^${begin}RSA PRIVATE KEY${enddash}\$|^${begin}EC PRIVATE KEY${enddash}\$|^${begin}PGP PRIVATE KEY BLOCK${enddash}\$" \
       "$p" 2>/dev/null; then
       return 0
     fi

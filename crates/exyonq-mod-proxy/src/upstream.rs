@@ -13,17 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Compiled upstream metadata (no connection pool, no runtime cache).
+//! Compiled upstream metadata (no connection pool, no response-body cache).
 
 use crate::errors::ProxyConfigError;
 use exyonq_module_api::proxy_dispatch::ProxyCompiledSlot;
 use http::Uri;
 use std::time::Duration;
 
-/// Bench hot-path paths eligible for in-target micro-cache (legacy bench debt — KD3.1 metadata only).
-pub const BENCH_API_CACHE_PATHS: &[&str] = &["/api/", "/api/health"];
-
-/// Small response threshold for bench api_cache store (bytes).
+/// Declared Content-Length threshold (bytes) for optional single-response
+/// materialization vs streaming. This is **not** a cross-request response cache.
 pub const BENCH_SMALL_UPSTREAM_BODY: usize = 16 * 1024;
 
 /// Immutable upstream descriptor parsed from config (maps to [`ProxyCompiledSlot`] at compile time).
@@ -57,12 +55,12 @@ impl UpstreamDescriptor {
     }
 
     pub fn to_compiled_slot(&self) -> ProxyCompiledSlot {
-        ProxyCompiledSlot {
-            cluster_id: self.cluster_id,
-            upstream_name: self.upstream_name.clone(),
-            target: self.target.clone(),
-            timeout: self.timeout,
-        }
+        ProxyCompiledSlot::legacy_single(
+            self.cluster_id,
+            self.upstream_name.clone(),
+            self.target.clone(),
+            self.timeout,
+        )
     }
 
     pub fn parsed_base_uri(&self) -> Result<Uri, ProxyConfigError> {

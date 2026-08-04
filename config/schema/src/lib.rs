@@ -121,11 +121,57 @@ pub fn ir_json_schema() -> serde_json::Value {
             },
             "upstream": {
                 "type": "object",
-                "required": ["name", "target"],
+                "required": ["name"],
                 "properties": {
-                    "name": { "type": "string" },
+                    "name": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._-]+$"
+                    },
                     "target": { "type": "string", "pattern": "^http://" },
+                    "endpoints": {
+                        "type": "array",
+                        "maxItems": 256,
+                        "items": {
+                            "type": "object",
+                            "required": ["address", "port"],
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "maxLength": 128,
+                                    "pattern": "^[A-Za-z0-9._-]+$"
+                                },
+                                "address": { "type": "string" },
+                                "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                                "weight": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 4294967295u64
+                                },
+                                "priority": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 4294967295u64
+                                },
+                                "admin_state": {
+                                    "type": "string",
+                                    "enum": ["enabled", "disabled", "drain_requested"]
+                                }
+                            }
+                        }
+                    },
+                    "selection_policy": {
+                        "type": "string",
+                        "enum": ["weighted_round_robin"]
+                    },
+                    "failover_policy": {
+                        "type": "string",
+                        "enum": ["priority_bands", "none"]
+                    },
                     "timeout_ms": { "type": "integer", "minimum": 1 }
+                },
+                "not": {
+                    "required": ["target", "endpoints"]
                 }
             },
             "modules": {
@@ -255,7 +301,19 @@ fn render_toml(
     for upstream in config.upstreams.values() {
         out.push_str("[[upstream]]\n");
         out.push_str(&format!("name = {:?}\n", upstream.name));
-        out.push_str(&format!("target = {:?}\n", upstream.target));
+        // SERIALIZATION_POLICY: prefer legacy `target` for single-endpoint round-trip sugar.
+        if upstream.endpoint_set.len() <= 1 && !upstream.target.is_empty() {
+            out.push_str(&format!("target = {:?}\n", upstream.target));
+        } else {
+            for ep in upstream.endpoint_set.endpoints() {
+                out.push_str("[[upstream.endpoints]]\n");
+                out.push_str(&format!("id = {:?}\n", ep.endpoint_id.as_str()));
+                out.push_str(&format!("address = {:?}\n", ep.address.as_host_str()));
+                out.push_str(&format!("port = {}\n", ep.port));
+                out.push_str(&format!("weight = {}\n", ep.weight));
+                out.push_str(&format!("priority = {}\n", ep.priority));
+            }
+        }
         out.push_str(&format!("timeout_ms = {}\n\n", upstream.timeout_ms));
     }
     Ok(out)

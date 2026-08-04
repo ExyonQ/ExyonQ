@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Pre-push: private-path index check + private-material tree scan (FAIL_CLOSED).
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+bash "$ROOT/scripts/verify-no-private-paths.sh"
+exec bash "$ROOT/scripts/security/scan-private-material.sh" --git-tree --repo "$ROOT"

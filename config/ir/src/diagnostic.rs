@@ -463,10 +463,8 @@ pub fn suggest_typo(received: &str, catalog: &[&str]) -> Option<String> {
     let mut best: Option<(&str, usize)> = None;
     for &cand in catalog {
         let d = edit_distance(received, cand);
-        if d > 0 && d <= 2 {
-            if best.map_or(true, |(_, bd)| d < bd) {
-                best = Some((cand, d));
-            }
+        if d > 0 && d <= 2 && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((cand, d));
         }
     }
     best.map(|(c, _)| format!("replace `{received}` with `{c}`"))

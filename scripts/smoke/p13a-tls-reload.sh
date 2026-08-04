@@ -6,6 +6,9 @@ source "$(cd "$(dirname "$0")" && pwd)/lib-p13a-tls.sh"
 
 ensure_bins
 [[ -x "$EXYONQCTL_BIN" ]] || { echo "FAIL missing exyonqctl"; exit 1; }
+# Populate CERT_PEM/KEY_PEM before copying into LIVE_* (write_tls_config also
+# ensures TLS, but the reload harness needs material earlier for LIVE copies).
+ensure_ephemeral_tls
 
 TMP="$(mktemp -d)"
 trap '[[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null || true; rm -rf "$TMP"' EXIT

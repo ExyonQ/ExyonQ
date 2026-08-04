@@ -50,7 +50,7 @@ pub fn lint(path: &Path, opts: &CheckOptions) -> ToolResult {
         Ok(_) => {}
         Err(early) => {
             if let Some(d) = early {
-                diags.push(d);
+                diags.push(*d);
             }
         }
     }
@@ -65,7 +65,7 @@ pub fn test_config(path: &Path, opts: &CheckOptions) -> ToolResult {
         Ok(c) => c,
         Err(early) => {
             if let Some(d) = early {
-                diags.push(d);
+                diags.push(*d);
             }
             enforce_diag_cap(&mut diags);
             return finish_check(diags, opts, false);
@@ -93,27 +93,27 @@ pub fn test_config(path: &Path, opts: &CheckOptions) -> ToolResult {
 fn load_for_check(
     path: &Path,
     diags: &mut Vec<Diagnostic>,
-) -> Result<exyonq_config_ir::AppConfig, Option<Diagnostic>> {
+) -> Result<exyonq_config_ir::AppConfig, Option<Box<Diagnostic>>> {
     if !path.exists() {
-        return Err(Some(Diagnostic::error(
+        return Err(Some(Box::new(Diagnostic::error(
             DiagnosticCode::IrValidationError,
             format!("path not found: {}", path.display()),
-        )));
+        ))));
     }
     let meta = std::fs::metadata(path).map_err(|e| {
-        Some(Diagnostic::error(
+        Some(Box::new(Diagnostic::error(
             DiagnosticCode::IrValidationError,
             format!("stat {}: {e}", path.display()),
-        ))
+        )))
     })?;
     if meta.len() > MAX_FILE_BYTES {
-        return Err(Some(Diagnostic::error(
+        return Err(Some(Box::new(Diagnostic::error(
             DiagnosticCode::IrValidationError,
             format!(
                 "config file exceeds MAX_FILE_BYTES ({MAX_FILE_BYTES}): {}",
                 path.display()
             ),
-        )));
+        ))));
     }
 
     let ext = path
@@ -124,22 +124,26 @@ fn load_for_check(
 
     if ext == "exy" {
         let raw = std::fs::read_to_string(path).map_err(|e| {
-            Some(Diagnostic::error(
+            Some(Box::new(Diagnostic::error(
                 DiagnosticCode::SurfaceParseError,
                 format!("read {}: {e}", path.display()),
-            ))
+            )))
         })?;
         let toml = exyonq_config_surface::compile_serverfile(
             &raw,
             exyonq_config_surface::CompileOptions::default(),
         )
-        .map_err(|e| Some(e.to_diagnostic().with_source(path.display().to_string())))?;
+        .map_err(|e| {
+            Some(Box::new(
+                e.to_diagnostic().with_source(path.display().to_string()),
+            ))
+        })?;
         match exyonq_config_ir::AppConfig::parse_str(&toml) {
             Ok(c) => Ok(c),
             Err(e) => {
                 let mut d = e.to_diagnostic();
                 d.source = Some(path.display().to_string());
-                Err(Some(d))
+                Err(Some(Box::new(d)))
             }
         }
     } else {
@@ -160,9 +164,7 @@ fn finish_check(diags: Vec<Diagnostic>, opts: &CheckOptions, _compiled: bool) ->
     let diags: Vec<Diagnostic> = diags.into_iter().map(sanitize_diagnostic).collect();
     let has_error = diags.iter().any(|d| d.severity == Severity::Error);
     let has_warning = diags.iter().any(|d| d.severity == Severity::Warning);
-    let exit = if has_error {
-        CliExit::DiagnosticError
-    } else if opts.strict && has_warning {
+    let exit = if has_error || (opts.strict && has_warning) {
         CliExit::DiagnosticError
     } else {
         CliExit::Ok

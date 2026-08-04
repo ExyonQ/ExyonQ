@@ -3,8 +3,9 @@
 use exyonq_core::{
     bind_proxy_compiled_slots, build_proxy_dispatch_request,
     clear_global_proxy_dispatch_for_register_once_test, contract_service_registration_test_gate,
-    dispatch_proxy, execute_backend, proxy_outcome_to_hyper, register_proxy_dispatch_service,
-    Backend, ProxyDispatchTestGuard, ProxyMethod, ProxyRegisterError,
+    dispatch_proxy, execute_backend, proxy_metrics_assert_guard, proxy_outcome_to_hyper,
+    register_proxy_dispatch_service, Backend, ProxyDispatchTestGuard, ProxyMethod,
+    ProxyRegisterError,
 };
 use exyonq_metrics::{proxy_http_501_total, KernelShellMetrics};
 use exyonq_mod_proxy::{take_streaming, ProxyRuntime};
@@ -113,12 +114,12 @@ fn install_runtime_with_upstream(upstream: &str) -> (Arc<ProxyRuntime>, ProxyDis
         ProxyDispatchTestGuard::install(Arc::clone(&runtime) as Arc<dyn ProxyDispatchService>);
     bind_proxy_compiled_slots(
         1,
-        &[ProxyCompiledSlot {
-            cluster_id: 0,
-            upstream_name: "backend".into(),
-            target: upstream.into(),
-            timeout: Duration::from_millis(500),
-        }],
+        &[ProxyCompiledSlot::legacy_single(
+            0,
+            "backend",
+            upstream,
+            Duration::from_millis(500),
+        )],
     );
     (runtime, guard)
 }
@@ -142,6 +143,8 @@ async fn proxy_without_service_returns_not_registered() {
 
 #[tokio::test]
 async fn execute_backend_proxy_without_service_returns_501() {
+    // Process-wide PROXY_HTTP_501 — serialize with other 501-delta asserts (KD3 / R2E).
+    let _metrics_gate = proxy_metrics_assert_guard().await;
     let _obs = KernelObservationTestGuard::install(Arc::new(KernelShellMetrics));
     let _guard = ProxyDispatchTestGuard::force_absent();
     let before = proxy_http_501_total();
@@ -298,6 +301,8 @@ async fn post_body_preserved() {
 
 #[tokio::test]
 async fn registered_service_does_not_increment_core_501() {
+    // Process-wide PROXY_HTTP_501 — serialize with other 501-delta asserts (KD3 / R2E).
+    let _metrics_gate = proxy_metrics_assert_guard().await;
     let (upstream, _h) = spawn_echo_upstream().await;
     let (_, _guard) = install_runtime_with_upstream(&upstream);
     let before = proxy_http_501_total();

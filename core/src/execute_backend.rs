@@ -128,6 +128,15 @@ pub async fn fcgi_metrics_assert_guard() -> tokio::sync::MutexGuard<'static, ()>
     FCGI_METRICS_ASSERT_GATE.lock().await
 }
 
+/// Serializes integration tests that snapshot/increment process-wide `proxy_http_501_total`.
+static PROXY_METRICS_ASSERT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Hold for the full test body (including `.await`) when asserting proxy HTTP 501 counter deltas.
+#[doc(hidden)]
+pub async fn proxy_metrics_assert_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    PROXY_METRICS_ASSERT_GATE.lock().await
+}
+
 /// Test-only global slot reset — **only** for register-once tests under
 /// [`contract_service_registration_test_gate`]; production has no reset API.
 #[doc(hidden)]

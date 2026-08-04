@@ -51,7 +51,7 @@ pub fn reload_precheck(path: &Path) -> ReloadPrecheck {
     let cfg = match load_app_for_reload(path) {
         Ok(c) => c,
         Err(d) => {
-            diags.push(d);
+            diags.push(*d);
             return ReloadPrecheck {
                 ok: false,
                 candidate_ir_fingerprint: None,
@@ -93,7 +93,7 @@ pub fn reload_precheck(path: &Path) -> ReloadPrecheck {
     }
 }
 
-fn load_app_for_reload(path: &Path) -> Result<AppConfig, Diagnostic> {
+fn load_app_for_reload(path: &Path) -> Result<AppConfig, Box<Diagnostic>> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -101,10 +101,10 @@ fn load_app_for_reload(path: &Path) -> Result<AppConfig, Diagnostic> {
         .to_ascii_lowercase();
     if ext == "exy" {
         let raw = std::fs::read_to_string(path).map_err(|e| {
-            Diagnostic::error(
+            Box::new(Diagnostic::error(
                 DiagnosticCode::ReloadParseRejected,
                 format!("read {}: {e}", path.display()),
-            )
+            ))
         })?;
         let toml = exyonq_config_surface::compile_serverfile(
             &raw,
@@ -113,7 +113,7 @@ fn load_app_for_reload(path: &Path) -> Result<AppConfig, Diagnostic> {
         .map_err(|e| {
             let mut d = e.to_diagnostic();
             d.code = DiagnosticCode::ReloadParseRejected;
-            d
+            Box::new(d)
         })?;
         AppConfig::parse_str(&toml).map_err(|e| {
             let mut d = e.to_diagnostic();
@@ -123,7 +123,7 @@ fn load_app_for_reload(path: &Path) -> Result<AppConfig, Diagnostic> {
             } else {
                 d.code = DiagnosticCode::ReloadParseRejected;
             }
-            d
+            Box::new(d)
         })
     } else {
         load_with_includes(path).map_err(|e| {
@@ -140,7 +140,7 @@ fn load_app_for_reload(path: &Path) -> Result<AppConfig, Diagnostic> {
                     d.code = DiagnosticCode::ReloadParseRejected;
                 }
             }
-            d
+            Box::new(d)
         })
     }
 }

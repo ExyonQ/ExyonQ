@@ -23,7 +23,9 @@ use crate::kernel::epoll_attach::{
     EpollAttachDecision, EpollAttachRejectReason, EpollConnectionAttachment, EpollKeepaliveTransfer,
 };
 use crate::server::accepted_connection::AcceptedConnection;
-use crate::server::connection_errors::{ConnectionServeOutcome, CorePolicyError};
+use crate::server::connection_errors::ConnectionServeOutcome;
+#[cfg(not(target_os = "linux"))]
+use crate::server::connection_errors::CorePolicyError;
 
 #[cfg(target_os = "linux")]
 use crate::kernel::epoll_attach::EpollHyperCapability;
@@ -208,7 +210,7 @@ impl PlatformConnectionEntry {
 mod tests {
     use super::*;
     use crate::server::accepted_connection::TransportKind;
-    use crate::server::connection_errors::ConnectionError;
+    use crate::server::connection_errors::{ConnectionError, CorePolicyError};
     use std::net::TcpListener;
     use std::net::TcpStream;
 

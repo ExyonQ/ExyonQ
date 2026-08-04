@@ -235,10 +235,55 @@ fn canonical_upstream(upstream: &UpstreamConfig) -> serde_json::Value {
         "name".into(),
         serde_json::Value::String(upstream.name.clone()),
     );
-    map.insert(
-        "target".into(),
-        serde_json::Value::String(normalize_upstream_target(&upstream.target)),
-    );
+    // SERIALIZATION_POLICY: single-endpoint keeps legacy canonical shape (name/target/timeout_ms)
+    // so existing configs retain fingerprint stability. Multi/empty use endpoints[].
+    if upstream.endpoint_set.len() == 1 {
+        map.insert(
+            "target".into(),
+            serde_json::Value::String(normalize_upstream_target(&upstream.target)),
+        );
+    } else {
+        let endpoints: Vec<serde_json::Value> = upstream
+            .endpoint_set
+            .endpoints()
+            .iter()
+            .map(|ep| {
+                let mut e = serde_json::Map::new();
+                e.insert(
+                    "endpoint_id".into(),
+                    serde_json::Value::String(ep.endpoint_id.as_str().to_string()),
+                );
+                e.insert(
+                    "address".into(),
+                    serde_json::Value::String(ep.address.as_host_str()),
+                );
+                e.insert("port".into(), serde_json::Value::Number(ep.port.into()));
+                e.insert("weight".into(), serde_json::Value::Number(ep.weight.into()));
+                e.insert(
+                    "priority".into(),
+                    serde_json::Value::Number(ep.priority.into()),
+                );
+                e.insert(
+                    "admin_state".into(),
+                    serde_json::Value::String(format!("{:?}", ep.admin_state).to_ascii_lowercase()),
+                );
+                serde_json::Value::Object(e)
+            })
+            .collect();
+        map.insert("endpoints".into(), serde_json::Value::Array(endpoints));
+        map.insert(
+            "selection_policy".into(),
+            serde_json::Value::String(
+                format!("{:?}", upstream.selection_policy).to_ascii_lowercase(),
+            ),
+        );
+        map.insert(
+            "failover_policy".into(),
+            serde_json::Value::String(
+                format!("{:?}", upstream.failover_policy).to_ascii_lowercase(),
+            ),
+        );
+    }
     map.insert(
         "timeout_ms".into(),
         serde_json::Value::Number(upstream.timeout_ms.into()),

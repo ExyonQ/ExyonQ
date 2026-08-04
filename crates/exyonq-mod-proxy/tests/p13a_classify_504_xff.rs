@@ -39,12 +39,12 @@ async fn xff_uses_remote_addr_not_inbound_header() {
 
     rt.bind_compiled_slots(
         1,
-        &[ProxyCompiledSlot {
-            cluster_id: 0,
-            upstream_name: "u".into(),
-            target: format!("http://127.0.0.1:{port}"),
-            timeout: Duration::from_secs(2),
-        }],
+        &[ProxyCompiledSlot::legacy_single(
+            0,
+            "u",
+            format!("http://127.0.0.1:{port}"),
+            Duration::from_secs(2),
+        )],
     );
 
     let outcome = rt
@@ -104,12 +104,12 @@ async fn post_xff_uses_remote_addr_not_inbound_header() {
 
     rt.bind_compiled_slots(
         1,
-        &[ProxyCompiledSlot {
-            cluster_id: 0,
-            upstream_name: "u".into(),
-            target: format!("http://127.0.0.1:{port}"),
-            timeout: Duration::from_secs(2),
-        }],
+        &[ProxyCompiledSlot::legacy_single(
+            0,
+            "u",
+            format!("http://127.0.0.1:{port}"),
+            Duration::from_secs(2),
+        )],
     );
 
     let outcome = rt

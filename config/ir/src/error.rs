@@ -111,6 +111,27 @@ pub enum ConfigError {
     #[error("invalid upstream target (http only in v1): {value}")]
     InvalidUpstreamTarget { value: String },
 
+    #[error("upstream `{upstream}`: ambiguous configuration — both `target` and `endpoints` set")]
+    AmbiguousUpstreamTargetAndEndpoints { upstream: String },
+
+    #[error("invalid {kind}: {detail}")]
+    InvalidEndpointIdentity { kind: &'static str, detail: String },
+
+    #[error("invalid endpoint address `{value}`: {detail}")]
+    InvalidEndpointAddress { value: String, detail: String },
+
+    #[error("invalid endpoint port: {port}")]
+    InvalidEndpointPort { port: u16 },
+
+    #[error("duplicate endpoint_id `{endpoint_id}` in endpoint set")]
+    DuplicateEndpointId { endpoint_id: String },
+
+    #[error("endpoint set exceeds provisional limit {limit} (found {found})")]
+    EndpointSetLimitExceeded { limit: usize, found: usize },
+
+    #[error("too many backends: {found} exceeds provisional limit {limit}")]
+    BackendLimitExceeded { limit: usize, found: usize },
+
     #[error("include file not found: {path}")]
     IncludeNotFound { path: PathBuf },
 

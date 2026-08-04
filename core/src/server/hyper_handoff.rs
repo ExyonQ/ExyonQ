@@ -198,7 +198,7 @@ mod tests {
             &shared,
             proxy,
             &ops,
-            &rt.handle(),
+            rt.handle(),
         )
         .expect("spawn");
         assert_eq!(xff_before.to_str().unwrap(), peer.ip().to_string());

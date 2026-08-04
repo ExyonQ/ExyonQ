@@ -57,6 +57,7 @@ impl fmt::Display for ConnectionError {
 
 /// Worker / listener / epoll / ring infrastructure failures (WORKER_FATAL).
 #[derive(Debug)]
+#[allow(dead_code)] // taxonomy reserved for worker-fatal mapping
 pub(crate) enum WorkerMechanismError {
     Io(io::Error),
 }

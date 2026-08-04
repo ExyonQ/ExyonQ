@@ -16,8 +16,9 @@
 //! PS3A-F3 I3 — private core connection policy executor.
 //!
 //! Contains SharedServerState / ProxyClient; workers deliver [`AcceptedConnection`] only.
-
-#![cfg(target_os = "linux")]
+//!
+//! Module is gated `cfg(target_os = "linux")` at `server/mod.rs` — do not duplicate inner
+//! `#![cfg(...)]` (clippy `duplicated_attributes` under `-D warnings`).
 
 use crate::kernel::errors::DrainRejected;
 use crate::kernel::{GenerationView, HyperHandoff, PlatformConnectionAdmission};
@@ -234,6 +235,8 @@ impl CoreConnectionExecutor {
     }
 
     /// PS3A-PM3-F1: Hyper handoff from opaque attachment scalars (no SyncBenchCache at kernel).
+    // TECH_DEBT_HANDLER_ARITY = DEFERRED_POST_V043 (Linux epoll handoff boundary; R2D).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn_hyper_admitted_pinned(
         &self,
         stream: TcpStream,
@@ -258,6 +261,7 @@ impl CoreConnectionExecutor {
     }
 
     /// Best-effort drain-reject write (accept_batch / keepalive cold path).
+    #[allow(dead_code)] // reserved for accept_batch / keepalive cold paths
     pub(crate) fn write_drain_rejected(stream: &mut TcpStream) {
         write_drain_boundary(stream, b"");
     }
@@ -361,7 +365,7 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         let (stream, peer, client) = {
             let client = std::thread::spawn(move || {
-                let mut s = TcpStream::connect(addr).expect("connect");
+                let s = TcpStream::connect(addr).expect("connect");
                 let _ = s.shutdown(std::net::Shutdown::Write);
                 s
             });

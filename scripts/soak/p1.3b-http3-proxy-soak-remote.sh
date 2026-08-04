@@ -682,7 +682,7 @@ restart_exyonq_clean 5000
 
 # Q — log redaction spot-check
 echo "=== Gate Q log redaction ==="
-SECRET='Authorization: Bearer FAKESECRET_u1v2w3x4y5z6a7b8c9d0'
+SECRET='Authorization: Bearer <REDACTED>'
 h3_curl --max-time 10 -H "$SECRET" -H 'Cookie: session=redact-me-cookie-xyz' \
   "${H3_BASE}/api/health" >/dev/null 2>&1 || true
 # Induce a TLS/error path with garbage (best-effort)

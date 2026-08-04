@@ -120,7 +120,7 @@ mod native {
     impl Http3DispatchService for StaticDispatch {
         async fn dispatch(
             &self,
-            _req: Request<()>,
+            _req: Request<Bytes>,
             _peer_ip: &str,
         ) -> Result<Http3MaterializedResponse, Http3DispatchError> {
             Ok(Http3MaterializedResponse {
@@ -385,16 +385,13 @@ mod native {
         let second = client_ep.connect(listen, "localhost");
         if let Ok(connecting) = second {
             let result = tokio::time::timeout(Duration::from_secs(3), connecting).await;
-            match result {
-                Ok(Ok(conn)) => {
-                    drop(conn);
-                    assert_eq!(
-                        ops.active_connections(),
-                        1,
-                        "drain must not admit second conn"
-                    );
-                }
-                Ok(Err(_)) | Err(_) => {}
+            if let Ok(Ok(conn)) = result {
+                drop(conn);
+                assert_eq!(
+                    ops.active_connections(),
+                    1,
+                    "drain must not admit second conn"
+                );
             }
         }
         sleep(Duration::from_millis(100)).await;

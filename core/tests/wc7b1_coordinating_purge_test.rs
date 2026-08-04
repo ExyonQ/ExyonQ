@@ -33,7 +33,7 @@ fn local_purge_ok_when_publish_fails() {
         "n1",
         true,
     );
-    test_insert(&cache, site, 0, 1, 1, "ex.test", "/p", b"p");
+    test_insert(&cache, site, 0, 1, 1, ("ex.test", "/p"), b"p");
     let out = wrap.purge(CachePurgeOp::Url {
         site_id: site,
         scheme: "http".into(),
@@ -49,10 +49,12 @@ fn local_purge_ok_when_publish_fails() {
 #[test]
 fn publish_reaches_peer_subscriber() {
     reset_metrics_for_tests();
-    let mut cfg = DistributedCacheCoordConfig::default();
-    cfg.enabled = true;
-    cfg.invalidation_enabled = true;
-    cfg.max_pending_events = 16;
+    let cfg = DistributedCacheCoordConfig {
+        enabled: true,
+        invalidation_enabled: true,
+        max_pending_events: 16,
+        ..Default::default()
+    };
     let hub = LocalCoordinationHub::new(cfg);
     let site = 7u64;
     let cache_a = Arc::new(ResponseCache::with_limits(32, 1024 * 1024));
@@ -60,7 +62,7 @@ fn publish_reaches_peer_subscriber() {
     let pub_node = hub.open_node("a");
     let sub_node = hub.open_node("b");
     sub_node.start_subscriber().unwrap();
-    test_insert(&cache_b, site, 0, 1, 1, "ex.test", "/z", b"z");
+    test_insert(&cache_b, site, 0, 1, 1, ("ex.test", "/z"), b"z");
 
     let wrap = CoordinatingCachePurgePort::new(
         Arc::new(DirectL1PurgePort::new(Arc::clone(&cache_a), site)),
@@ -68,7 +70,7 @@ fn publish_reaches_peer_subscriber() {
         "a",
         true,
     );
-    test_insert(&cache_a, site, 0, 1, 1, "ex.test", "/z", b"z");
+    test_insert(&cache_a, site, 0, 1, 1, ("ex.test", "/z"), b"z");
     assert!(
         wrap.purge(CachePurgeOp::Url {
             site_id: site,

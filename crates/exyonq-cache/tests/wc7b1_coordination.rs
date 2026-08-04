@@ -95,10 +95,10 @@ fn two_node_url_purge() {
     let a = Node::open(&hub, "node-a", site_a, vec![site_a, site_b]);
     let b = Node::open(&hub, "node-b", site_a, vec![site_a, site_b]);
 
-    test_insert(&a.cache, site_a, 0, 1, 1, "ex.test", "/page", b"A");
-    test_insert(&b.cache, site_a, 0, 1, 1, "ex.test", "/page", b"A");
-    test_insert(&b.cache, site_a, 0, 1, 1, "ex.test", "/other", b"O");
-    test_insert(&b.cache, site_b, 1, 2, 1, "ex.test", "/b", b"B");
+    test_insert(&a.cache, site_a, 0, 1, 1, ("ex.test", "/page"), b"A");
+    test_insert(&b.cache, site_a, 0, 1, 1, ("ex.test", "/page"), b"A");
+    test_insert(&b.cache, site_a, 0, 1, 1, ("ex.test", "/other"), b"O");
+    test_insert(&b.cache, site_b, 1, 2, 1, ("ex.test", "/b"), b"B");
 
     assert!(a.publish_local_purge(CachePurgeOp::Url {
         site_id: site_a,
@@ -131,10 +131,10 @@ fn two_node_site_purge() {
     let a = Node::open(&hub, "a", site_a, vec![site_a, site_b]);
     let b = Node::open(&hub, "b", site_a, vec![site_a, site_b]);
 
-    test_insert(&a.cache, site_a, 0, 1, 1, "ex.test", "/a1", b"1");
-    test_insert(&b.cache, site_a, 0, 1, 1, "ex.test", "/a1", b"1");
-    test_insert(&b.cache, site_a, 0, 1, 1, "ex.test", "/a2", b"2");
-    test_insert(&b.cache, site_b, 1, 2, 1, "ex.test", "/b1", b"b");
+    test_insert(&a.cache, site_a, 0, 1, 1, ("ex.test", "/a1"), b"1");
+    test_insert(&b.cache, site_a, 0, 1, 1, ("ex.test", "/a1"), b"1");
+    test_insert(&b.cache, site_a, 0, 1, 1, ("ex.test", "/a2"), b"2");
+    test_insert(&b.cache, site_b, 1, 2, 1, ("ex.test", "/b1"), b"b");
 
     assert!(a.publish_local_purge(CachePurgeOp::Site { site_id: site_a }));
     let ev = recv_timeout(&b.coord, Duration::from_millis(200))
@@ -161,8 +161,8 @@ fn two_node_generation_monotonic() {
     let a = Node::open(&hub, "a", site, vec![site]);
     let b = Node::open(&hub, "b", site, vec![site]);
 
-    test_insert(&a.cache, site, 0, 1, 1, "ex.test", "/g", b"g1");
-    test_insert(&b.cache, site, 0, 1, 1, "ex.test", "/g", b"g1");
+    test_insert(&a.cache, site, 0, 1, 1, ("ex.test", "/g"), b"g1");
+    test_insert(&b.cache, site, 0, 1, 1, ("ex.test", "/g"), b"g1");
 
     assert_eq!(a.coord.advance_generation(site, 1).unwrap(), 1);
     assert_eq!(a.coord.advance_generation(site, 2).unwrap(), 2);
@@ -199,7 +199,7 @@ fn duplicate_and_self_delivery() {
     let site = 5;
     let a = Node::open(&hub, "a", site, vec![site]);
     let b = Node::open(&hub, "b", site, vec![site]);
-    test_insert(&b.cache, site, 0, 1, 1, "ex.test", "/d", b"d");
+    test_insert(&b.cache, site, 0, 1, 1, ("ex.test", "/d"), b"d");
 
     let ev = InvalidationEvent {
         protocol_version: COORDINATION_PROTOCOL_VERSION,
@@ -284,7 +284,7 @@ fn provider_failure_fail_open() {
     let hub = LocalCoordinationHub::new(enabled_cfg());
     let site = 3;
     let a = Node::open(&hub, "a", site, vec![site]);
-    test_insert(&a.cache, site, 0, 1, 1, "ex.test", "/x", b"x");
+    test_insert(&a.cache, site, 0, 1, 1, ("ex.test", "/x"), b"x");
     hub.set_publish_unavailable(true);
     assert!(a.publish_local_purge(CachePurgeOp::Url {
         site_id: site,

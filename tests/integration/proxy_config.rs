@@ -53,7 +53,14 @@ async fn proxies_to_configured_upstream() {
 
     let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/minimal.toml");
     let mut config = AppConfig::from_file(&config_path).expect("config");
-    config.upstreams.get_mut("backend").unwrap().target = format!("http://{upstream_addr}");
+    let u = config.upstreams.get_mut("backend").unwrap();
+    u.set_endpoint_set(
+        exyonq_config_ir::EndpointSet::from_endpoints(vec![
+            exyonq_config_ir::endpoint_from_http_target(&format!("http://{upstream_addr}"))
+                .unwrap(),
+        ])
+        .unwrap(),
+    );
 
     let listen = {
         let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();

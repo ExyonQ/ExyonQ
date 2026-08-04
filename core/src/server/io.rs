@@ -392,7 +392,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     mod linux_blocking_read {
         use super::*;
-        use std::io::{Read, Write};
+        use std::io::Write;
         use std::net::{TcpListener, TcpStream};
         use std::thread;
         use std::time::Duration;

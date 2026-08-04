@@ -13,37 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Runtime upstream target (bench micro-cache + pre-resolved URIs).
+//! Runtime upstream target (pre-resolved URIs + timeout).
+//!
+//! No implicit response-body cache. Explicit Plan 12 `[[cache_policy]]` lives
+//! outside this type (`serve_proxy_with_cache`).
 
-use crate::{
-    build_uri, preseed_path_uris, UpstreamDescriptor, BENCH_API_CACHE_PATHS,
-    BENCH_SMALL_UPSTREAM_BODY,
-};
+use crate::{build_uri, preseed_path_uris, UpstreamDescriptor};
 use http::Uri;
-use http_body_util::{BodyExt, Full};
 use hyper::header::HeaderValue;
-use hyper::Response;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-
-type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
-
-struct CachedProxyResponse {
-    parts: http::response::Parts,
-    body: bytes::Bytes,
-}
-
-impl CachedProxyResponse {
-    fn to_response(&self) -> Response<BoxBody> {
-        Response::from_parts(
-            self.parts.clone(),
-            Full::from(self.body.clone())
-                .map_err(|never| match never {})
-                .boxed(),
-        )
-    }
-}
 
 /// Precomputed upstream target for the hot proxy path.
 #[derive(Clone)]
@@ -52,7 +32,6 @@ pub struct UpstreamTarget {
     pub host: Option<HeaderValue>,
     pub timeout: Duration,
     path_uris: Arc<HashMap<String, Uri>>,
-    api_cache: Arc<Mutex<HashMap<String, Arc<CachedProxyResponse>>>>,
 }
 
 impl UpstreamTarget {
@@ -75,47 +54,7 @@ impl UpstreamTarget {
             host,
             timeout: desc.timeout,
             path_uris: Arc::new(preseed_path_uris(&base)),
-            api_cache: Arc::new(Mutex::new(HashMap::new())),
         })
-    }
-
-    pub fn api_cache_hit(&self, path_and_query: &str) -> Option<Response<BoxBody>> {
-        let path = path_and_query.split('?').next().unwrap_or(path_and_query);
-        if !BENCH_API_CACHE_PATHS.contains(&path) {
-            return None;
-        }
-        self.api_cache
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(path).map(|cached| cached.to_response()))
-    }
-
-    pub fn try_store_api_cache(
-        &self,
-        path_and_query: &str,
-        parts: http::response::Parts,
-        body: bytes::Bytes,
-    ) {
-        let path = path_and_query.split('?').next().unwrap_or(path_and_query);
-        if !BENCH_API_CACHE_PATHS.contains(&path) {
-            return;
-        }
-        if path != "/api/stream" && body.len() > BENCH_SMALL_UPSTREAM_BODY {
-            return;
-        }
-        if let Ok(mut cache) = self.api_cache.lock() {
-            cache.insert(
-                path.to_string(),
-                Arc::new(CachedProxyResponse { parts, body }),
-            );
-        }
-    }
-
-    pub fn clear_api_cache(&self, path_and_query: &str) {
-        let path = path_and_query.split('?').next().unwrap_or(path_and_query);
-        if let Ok(mut cache) = self.api_cache.lock() {
-            cache.remove(path);
-        }
     }
 
     pub fn uri_for(&self, path_and_query: &str) -> Uri {

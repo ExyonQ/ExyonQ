@@ -293,6 +293,12 @@ pub fn invoke_i32_with_fuel(wat: &str, export: &str, fuel: u64) -> Result<i32> {
     let module = Module::new(&engine, wasm_bytes)?;
     let mut store = Store::new(&engine, ());
     store.set_fuel(fuel)?;
+    // `create_engine` enables epoch interruption. Wasmtime's default deadline is 0
+    // (already elapsed), so every call traps immediately unless a future deadline is
+    // set. Fuel-only helpers must arm a deadline so fuel remains the limiter; epoch
+    // traps also match `is_fuel_interrupt_trap` ("interrupt") and would otherwise
+    // report false `FuelExhausted` (see invoke_latency / noop with large fuel).
+    store.set_epoch_deadline(u64::MAX / 4);
     let instance = Linker::new(&engine).instantiate(&mut store, &module)?;
     let func = instance.get_typed_func::<(), i32>(&mut store, export)?;
     match func.call(&mut store, ()) {
@@ -549,7 +555,9 @@ fn is_fuel_interrupt_trap(err: &wasmtime::Error) -> bool {
 }
 
 fn is_fuel_error(err: &wasmtime::Error) -> bool {
-    let s = err.to_string().to_ascii_lowercase();
+    // Prefer `{err:#}` so Wasmtime cause-chain text ("wasm trap: all fuel consumed…")
+    // is visible; `to_string()` often only shows the outer backtrace header.
+    let s = format!("{err:#}").to_ascii_lowercase();
     s.contains("fuel") || s.contains("out of fuel") || s.contains("all fuel")
 }
 
@@ -660,6 +668,13 @@ mod tests {
         )
     "#;
 
+    const NOOP_WAT: &str = r#"
+        (module
+          (func (export "run") (result i32)
+            i32.const 42)
+        )
+    "#;
+
     #[test]
     fn engine_enables_fuel_and_pooling() {
         let engine = engine_for_tests().expect("engine");
@@ -672,7 +687,16 @@ mod tests {
     fn fuel_trap_on_infinite_loop() {
         let err = invoke_i32_with_fuel(INFINITE_LOOP_WAT, "run", 10_000)
             .expect_err("fuel should exhaust");
-        assert!(matches!(err, WasmHostError::FuelExhausted));
+        assert!(
+            matches!(err, WasmHostError::FuelExhausted),
+            "expected FuelExhausted, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn noop_invoke_succeeds_with_fuel_budget() {
+        let v = invoke_i32_with_fuel(NOOP_WAT, "run", 1_000_000).expect("noop invoke");
+        assert_eq!(v, 42);
     }
 
     #[test]

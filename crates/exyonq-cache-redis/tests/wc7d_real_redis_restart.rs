@@ -393,7 +393,7 @@ fn wc7d_redis_data_loss_local_generation_never_rolls_back() {
         a.get_generation(1).unwrap() >= local_a,
         "local generation must never roll back after Redis data loss"
     );
-    assert!(a.advance_generation(1, local_a + 1).unwrap() >= local_a + 1);
-    assert!(a.get_generation(1).unwrap() >= local_a + 1);
+    assert!(a.advance_generation(1, local_a + 1).unwrap() > local_a);
+    assert!(a.get_generation(1).unwrap() > local_a);
     b.stop();
 }

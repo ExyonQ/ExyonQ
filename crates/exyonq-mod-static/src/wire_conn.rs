@@ -456,7 +456,6 @@ fn serve_blocking_sendfile_zero(
     stream: &mut std::net::TcpStream,
     mut pending: &[u8],
 ) -> Result<()> {
-    use std::io::Read;
     use std::os::unix::io::AsRawFd;
 
     let in_fd = asset.file.as_raw_fd();
@@ -516,8 +515,6 @@ fn serve_blocking_one_k_zero(
     stream: &mut std::net::TcpStream,
     mut pending: &[u8],
 ) -> Result<()> {
-    use std::io::Read;
-
     let mut buf = [0u8; 512];
     let mut len = pending.len().min(buf.len());
     buf[..len].copy_from_slice(&pending[..len]);
@@ -567,8 +564,6 @@ fn serve_blocking_route_zero(
     stream: &mut std::net::TcpStream,
     mut pending: &[u8],
 ) -> Result<()> {
-    use std::io::Read;
-
     let mut buf = [0u8; 512];
     let mut len = pending.len().min(buf.len());
     buf[..len].copy_from_slice(&pending[..len]);
@@ -641,8 +636,6 @@ fn ensure_headers_blocking(
     buf: &mut [u8; 512],
     mut carry: Bytes,
 ) -> Result<Bytes> {
-    use std::io::Read;
-
     loop {
         if headers_complete(&carry) {
             return Ok(carry);

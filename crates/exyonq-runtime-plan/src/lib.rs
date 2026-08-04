@@ -29,6 +29,7 @@ pub use router::RouteIndex;
 pub use routing::RouteDecision;
 pub use runtime_plan::{
     compile_fcgi_pool_slots, compile_full_page_cache, compile_htaccess_site_bindings,
-    compile_runtime_plan, compile_runtime_plan_from_ir, stable_fpc_site_id, CompiledFcgiPool,
-    CompiledFullPageCache, HtaccessSiteBinding, RuntimePlan, RuntimeSnapshot, SnapshotFingerprint,
+    compile_runtime_plan, compile_runtime_plan_from_ir, stable_fpc_site_id, CompiledCluster,
+    CompiledEndpoint, CompiledFcgiPool, CompiledFullPageCache, EndpointExecutionStatus,
+    HtaccessSiteBinding, RuntimePlan, RuntimeSnapshot, SnapshotFingerprint,
 };

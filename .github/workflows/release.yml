@@ -56,6 +56,8 @@ jobs:
         run: cargo deny check advisories bans sources
       - name: security tests
         run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security)' --test-threads=1
+      - name: private-material-zero
+        run: bash scripts/security/scan-private-material.sh --git-tree --repo .
       - name: verify release audit
         run: bash scripts/verify-release-audit.sh "${{ steps.ver.outputs.version }}"
 

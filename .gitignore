@@ -10,7 +10,19 @@ rust-project.json
 .cargo/config.toml.local
 
 # --- Always exclude from this clean publication tree ---
-/docs/
+# Ignore local/noncanonical docs content, but force-track canonical
+# governance and security SoT subtrees (and historical release notes).
+/docs/*
+!/docs/security/
+!/docs/security/**
+!/docs/governance/
+!/docs/governance/**
+!/docs/releases/
+!/docs/releases/**
+!/docs/adr/
+!/docs/adr/**
+!/docs/architecture/
+!/docs/architecture/**
 /benchmarks/
 /results/
 /raw/

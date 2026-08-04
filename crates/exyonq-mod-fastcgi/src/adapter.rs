@@ -272,7 +272,7 @@ impl FcgiModuleExecutor {
                 m
             };
             let resolved = resolve_pool_endpoints(
-                &[slot.name.clone()],
+                std::slice::from_ref(&slot.name),
                 &address_by_name,
                 &transport_by_name,
                 None,
@@ -432,8 +432,10 @@ pub fn is_tcp_pool_address(address: &str) -> bool {
 }
 
 /// Resolve `host:port` once at pool construction (no per-request DNS).
-pub fn parse_tcp_pool_address(address: &str) -> Result<std::net::SocketAddr, ()> {
-    address.parse().map_err(|_| ())
+pub fn parse_tcp_pool_address(
+    address: &str,
+) -> Result<std::net::SocketAddr, std::net::AddrParseError> {
+    address.parse()
 }
 
 /// Resolve `pool_id` → [`PoolEndpoint`] (Unix or TCP) from config.
@@ -451,7 +453,7 @@ pub fn resolve_pool_endpoints(
             .map(|s| s.as_str())
             .unwrap_or("auto");
 
-        let address = configured.or_else(|| if pool_id == 0 { env_socket } else { None });
+        let address = configured.or(if pool_id == 0 { env_socket } else { None });
         let Some(address) = address else {
             continue;
         };

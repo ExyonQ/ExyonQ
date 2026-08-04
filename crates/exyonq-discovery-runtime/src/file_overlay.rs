@@ -74,7 +74,6 @@ impl DiscoveryConfigOverlayService for FileDiscoveryRuntime {
 mod tests {
     use super::*;
     use exyonq_config_ir::AppConfig;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn minimal_config() -> AppConfig {

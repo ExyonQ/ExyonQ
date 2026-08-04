@@ -63,6 +63,7 @@ max_ttl_seconds = 300
     (reload::wrap_state(state), site_a, site_b)
 }
 
+#[allow(clippy::too_many_arguments)] // test helper
 fn insert(
     cache: &ResponseCache,
     site_id: u64,

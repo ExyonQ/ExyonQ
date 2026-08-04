@@ -564,12 +564,12 @@ mod tests {
         pin_runtime(Arc::clone(&rt));
         rt.bind_compiled_slots(
             1,
-            &[ProxyCompiledSlot {
-                cluster_id: 0,
-                upstream_name: "backend".into(),
-                target: "http://127.0.0.1:9000".into(),
-                timeout: Duration::from_millis(500),
-            }],
+            &[ProxyCompiledSlot::legacy_single(
+                0,
+                "backend",
+                "http://127.0.0.1:9000",
+                Duration::from_millis(500),
+            )],
         );
         rt
     }
@@ -611,12 +611,12 @@ mod tests {
         assert_eq!(rt.cluster_generation(), 1);
         rt.bind_compiled_slots(
             2,
-            &[ProxyCompiledSlot {
-                cluster_id: 0,
-                upstream_name: "backend".into(),
-                target: "http://127.0.0.1:9001".into(),
-                timeout: Duration::from_millis(500),
-            }],
+            &[ProxyCompiledSlot::legacy_single(
+                0,
+                "backend",
+                "http://127.0.0.1:9001",
+                Duration::from_millis(500),
+            )],
         );
         assert_eq!(rt.cluster_generation(), 2);
     }

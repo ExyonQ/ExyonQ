@@ -84,6 +84,8 @@ pub use contract_service_registry::contract_service_registration_test_gate;
 pub use contract_service_registry::fcgi_service_registration_test_gate;
 #[doc(hidden)]
 pub use execute_backend::fcgi_metrics_assert_guard;
+#[doc(hidden)]
+pub use execute_backend::proxy_metrics_assert_guard;
 pub use execute_backend::{
     bind_proxy_compiled_slots, bind_static_compiled_slots, build_fcgi_dispatch_request,
     build_proxy_dispatch_request, build_static_dispatch_request,

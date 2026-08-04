@@ -335,7 +335,7 @@ done
 pass "MULTIPLEX_$ok"
 
 h3 -H 'Connection: keep-alive' -H 'Proxy-Connection: keep-alive' -H 'TE: trailers' \
-  -H 'X-Forwarded-For: 1.2.3.4' -H 'Authorization: Bearer secret-token' \
+  -H 'X-Forwarded-For: 1.2.3.4' -H 'Authorization: Bearer <REDACTED>' \
   "${H3_URL}/api/hdr" >/dev/null || true
 [[ -f "$UP_STATE/last_req" ]] || fail "missing upstream last_req capture"
 lr="$(tr '[:upper:]' '[:lower:]' <"$UP_STATE/last_req")"

@@ -23,7 +23,11 @@ use tokio::time::timeout;
 #[cfg(unix)]
 static CONTROL_SOCKET_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Serializes `spawn_server` while control-socket integration tests run with process env set.
+/// Serializes tests that mutate process-wide proxy/static compiled slots or spawn servers.
+///
+/// `ServerState::new` / `run_on` call `bind_proxy_compiled_slots` on the composition-root
+/// `ProxyRuntime`. Parallel tests that bind empty or alternate upstreams (e.g. static.toml)
+/// otherwise clobber SECINT-001's live upstream → connect miss → 502.
 #[cfg(unix)]
 static SPAWN_SERVER_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -178,7 +182,14 @@ async fn security_rejects_duplicate_content_length() {
 
     let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/minimal.toml");
     let mut config = AppConfig::from_file(&config_path).expect("config");
-    config.upstreams.get_mut("backend").unwrap().target = format!("http://{upstream_addr}");
+    let u = config.upstreams.get_mut("backend").unwrap();
+    u.set_endpoint_set(
+        exyonq_config_ir::EndpointSet::from_endpoints(vec![
+            exyonq_config_ir::endpoint_from_http_target(&format!("http://{upstream_addr}"))
+                .unwrap(),
+        ])
+        .unwrap(),
+    );
 
     let listen = spawn_server(config).await;
 
@@ -258,6 +269,8 @@ fn security_discovery_invalid_json_ignored() {
 
 #[tokio::test]
 async fn security_http3_rejects_post() {
+    #[cfg(unix)]
+    let _spawn_gate = SPAWN_SERVER_GATE.lock().await;
     bootstrap::ensure_integration_modules();
     let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/static.toml");
     let mut config = AppConfig::from_file(&config_path).expect("config");
@@ -603,8 +616,10 @@ async fn security_secint003_post_drain_keepalive_product_rejects() {
 /// accept task with a bounded join timeout.
 ///
 /// Product H3 GET/HEAD/POST use process-wide Hyper pools from
-/// `ensure_integration_modules`. On Unix this test takes `SPAWN_SERVER_GATE` so
-/// it does not overlap control-plane spawn storms (connect-timeout → 502).
+/// `ensure_integration_modules`. On Unix this test takes `SPAWN_SERVER_GATE` for
+/// the full duration so concurrent `ServerState::new` (empty proxy slots from
+/// static.toml) cannot clobber the live upstream binding (→ 502), and so it
+/// does not overlap control-plane spawn storms (connect-timeout → 502).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn security_secint001_h3_proxy_get_with_upstream() {
     #[cfg(unix)]
@@ -719,7 +734,14 @@ async fn security_secint001_h3_proxy_get_with_upstream() {
 
     let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/minimal.toml");
     let mut config = AppConfig::from_file(&config_path).expect("minimal.toml");
-    config.upstreams.get_mut("backend").unwrap().target = format!("http://{upstream_addr}");
+    let u = config.upstreams.get_mut("backend").unwrap();
+    u.set_endpoint_set(
+        exyonq_config_ir::EndpointSet::from_endpoints(vec![
+            exyonq_config_ir::endpoint_from_http_target(&format!("http://{upstream_addr}"))
+                .unwrap(),
+        ])
+        .unwrap(),
+    );
 
     let proxy_client = build_incoming_client();
     let state = ServerState::new(config, proxy_client.clone())
@@ -779,6 +801,8 @@ async fn security_secint001_h3_proxy_get_with_upstream() {
 
 #[tokio::test]
 async fn security_reload_invalid_config_keeps_snapshot() {
+    #[cfg(unix)]
+    let _spawn_gate = SPAWN_SERVER_GATE.lock().await;
     bootstrap::ensure_integration_modules();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");

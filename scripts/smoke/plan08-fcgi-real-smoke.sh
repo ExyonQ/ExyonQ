@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# NON_AUTHORITATIVE_DIAGNOSTIC_ONLY / NOT_GATE_CLOSING under EXYONQ_NO_SMOKE_POLICY.
+# Depth class (audit 2026-08-02) recorded in .exyonq-local/tmp/no-smoke-audit-20260802/REPORT.md.
+# Do not use this script alone to close capability / release / benchmark admission.
 # Plan 08 PR5-B operational closure — Linux real PHP-FPM smoke (not CI, not benchmark).
 set -euo pipefail
 

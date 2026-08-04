@@ -17,6 +17,10 @@
 
 mod canonical;
 mod diagnostic;
+mod endpoint_set;
+#[cfg(test)]
+#[path = "endpoint_set_property_tests.rs"]
+mod endpoint_set_property_tests;
 mod error;
 mod full_page_cache;
 mod modules;
@@ -28,6 +32,12 @@ pub use diagnostic::{
     offset_to_position, redact_secrets, render_human, sort_diagnostics, span_from_byte_range,
     suggest_typo, Diagnostic, DiagnosticCode, DiagnosticDocument, Position, Severity, SourceSpan,
     SpanQuality, ROOT_FIELD_CATALOG, SERVER_FIELD_CATALOG,
+};
+pub use endpoint_set::{
+    deterministic_endpoint_id, endpoint_from_discovery_hostport, endpoint_from_http_target,
+    endpoint_from_raw, AdminEndpointState, Endpoint, EndpointAddress, EndpointFailoverPolicy,
+    EndpointId, EndpointSelectionPolicy, EndpointSet, RawEndpointConfig, UserBackendId,
+    MAX_BACKENDS_PROVISIONAL, MAX_ENDPOINTS_PER_BACKEND_PROVISIONAL, MAX_ID_LENGTH_PROVISIONAL,
 };
 pub use error::ConfigError;
 pub use full_page_cache::{
@@ -313,12 +323,160 @@ fn default_redirect_status() -> u16 {
     302
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Upstream / logical backend IR (K8S-P2A EndpointSet foundation).
+///
+/// Legacy `target` sugar remains for TOML compatibility. After normalize,
+/// [`Self::endpoint_set`] is authoritative; [`Self::target`] holds the sole
+/// executable URI when `len == 1`, else empty (empty set or multi deferred).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamConfig {
     pub name: String,
+    /// Sole executable http URI when endpoint set has exactly one endpoint.
     pub target: String,
-    #[serde(default = "default_upstream_timeout_ms")]
+    pub endpoint_set: EndpointSet,
+    pub selection_policy: EndpointSelectionPolicy,
+    pub failover_policy: EndpointFailoverPolicy,
     pub timeout_ms: u64,
+}
+
+impl UpstreamConfig {
+    /// Construct from legacy single-target fields (tests / programmatic builders).
+    pub fn legacy(name: impl Into<String>, target: impl Into<String>, timeout_ms: u64) -> Self {
+        let name = name.into();
+        let target = target.into();
+        Self::try_from_parts(
+            name,
+            Some(target),
+            Vec::new(),
+            EndpointSelectionPolicy::default(),
+            EndpointFailoverPolicy::default(),
+            timeout_ms,
+        )
+        .expect("valid legacy upstream")
+    }
+
+    pub fn try_from_parts(
+        name: String,
+        target: Option<String>,
+        raw_endpoints: Vec<RawEndpointConfig>,
+        selection_policy: EndpointSelectionPolicy,
+        failover_policy: EndpointFailoverPolicy,
+        timeout_ms: u64,
+    ) -> Result<Self, ConfigError> {
+        let target_trimmed = target
+            .as_ref()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        let has_target = target_trimmed.is_some();
+        let has_endpoints = !raw_endpoints.is_empty();
+        if has_target && has_endpoints {
+            return Err(ConfigError::AmbiguousUpstreamTargetAndEndpoints { upstream: name });
+        }
+        if raw_endpoints.len() > MAX_ENDPOINTS_PER_BACKEND_PROVISIONAL {
+            return Err(ConfigError::EndpointSetLimitExceeded {
+                limit: MAX_ENDPOINTS_PER_BACKEND_PROVISIONAL,
+                found: raw_endpoints.len(),
+            });
+        }
+        let endpoint_set = if let Some(t) = target_trimmed {
+            let ep = endpoint_from_http_target(&t)?;
+            EndpointSet::from_endpoints(vec![ep])?
+        } else if has_endpoints {
+            let mut eps = Vec::with_capacity(raw_endpoints.len());
+            for raw in raw_endpoints {
+                eps.push(endpoint_from_raw(raw)?);
+            }
+            EndpointSet::from_endpoints(eps)?
+        } else {
+            EndpointSet::empty()
+        };
+        let target = endpoint_set.sole_http_uri().unwrap_or_default();
+        let _user_id = UserBackendId::new(&name)?;
+        Ok(Self {
+            name,
+            target,
+            endpoint_set,
+            selection_policy,
+            failover_policy,
+            timeout_ms,
+        })
+    }
+
+    /// Replace endpoint set from discovery/overlay (full set; no silent truncation).
+    pub fn set_endpoint_set(&mut self, endpoint_set: EndpointSet) {
+        self.target = endpoint_set.sole_http_uri().unwrap_or_default();
+        self.endpoint_set = endpoint_set;
+    }
+
+    pub fn user_backend_id(&self) -> Result<UserBackendId, ConfigError> {
+        UserBackendId::new(&self.name)
+    }
+
+    /// Productive single-endpoint execution is ready when exactly one endpoint
+    /// is eligible (`Enabled` + `weight > 0`). Configured set size may be larger
+    /// (OPEN-002); full set is retained without silent truncation.
+    pub fn single_endpoint_executable(&self) -> bool {
+        self.eligible_endpoint_count() == 1
+    }
+
+    /// Productive multi-endpoint WRR is ready when two or more endpoints are eligible.
+    pub fn multi_endpoint_ready(&self) -> bool {
+        self.eligible_endpoint_count() > 1
+    }
+
+    fn eligible_endpoint_count(&self) -> usize {
+        self.endpoint_set
+            .endpoints()
+            .iter()
+            .filter(|ep| matches!(ep.admin_state, AdminEndpointState::Enabled) && ep.weight > 0)
+            .count()
+    }
+
+    /// Backward-compatible alias — historically meant "present but deferred".
+    #[deprecated(note = "use multi_endpoint_ready")]
+    pub fn multi_endpoint_deferred(&self) -> bool {
+        self.multi_endpoint_ready()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawUpstreamConfig {
+    name: String,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    endpoints: Vec<RawEndpointConfig>,
+    #[serde(default)]
+    selection_policy: EndpointSelectionPolicy,
+    #[serde(default)]
+    failover_policy: EndpointFailoverPolicy,
+    #[serde(default = "default_upstream_timeout_ms")]
+    timeout_ms: u64,
+}
+
+impl TryFrom<RawUpstreamConfig> for UpstreamConfig {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawUpstreamConfig) -> Result<Self, Self::Error> {
+        Self::try_from_parts(
+            raw.name,
+            raw.target,
+            raw.endpoints,
+            raw.selection_policy,
+            raw.failover_policy,
+            raw.timeout_ms,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for UpstreamConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawUpstreamConfig::deserialize(deserializer)?;
+        Self::try_from(raw).map_err(serde::de::Error::custom)
+    }
 }
 
 fn default_upstream_timeout_ms() -> u64 {
@@ -439,6 +597,12 @@ impl AppConfig {
                 });
             }
         }
+        if upstreams.len() > MAX_BACKENDS_PROVISIONAL {
+            return Err(ConfigError::BackendLimitExceeded {
+                limit: MAX_BACKENDS_PROVISIONAL,
+                found: upstreams.len(),
+            });
+        }
 
         let mut pools_fcgi = HashMap::new();
         for pool in raw.fcgi_pool {
@@ -507,7 +671,12 @@ impl AppConfig {
         }
 
         for upstream in upstreams.values() {
-            validate_upstream_target(&upstream.target)?;
+            // Empty target is valid: empty EndpointSet or multi-endpoint deferred (P2A).
+            if !upstream.target.is_empty() {
+                validate_upstream_target(&upstream.target)?;
+            }
+            // Endpoint set already validated in UpstreamConfig::try_from_parts.
+            let _ = upstream.user_backend_id()?;
         }
 
         for pool in pools_fcgi.values() {
@@ -757,9 +926,7 @@ fn validate_distributed_cache(cfg: &DistributedCacheConfig) -> Result<(), Config
                     .into(),
             ));
         }
-        if (!cfg.security.previous_key_file.is_empty())
-            != (!cfg.security.previous_key_id.is_empty())
-        {
+        if cfg.security.previous_key_file.is_empty() != cfg.security.previous_key_id.is_empty() {
             return Err(ConfigError::Parse(
                 "full_page_cache.distributed_cache.security previous_key_id and previous_key_file must be set together"
                     .into(),

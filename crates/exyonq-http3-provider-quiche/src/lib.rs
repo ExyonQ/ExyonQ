@@ -24,6 +24,7 @@ use exyonq_http3_provider_api::{Http3ProviderConfig, Http3ProviderListen};
 use exyonq_module_api::http3_runtime::{
     Http3ConnectionLifecycle, Http3DispatchService, Http3MaterializedResponse,
 };
+use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
 use http::{Method, Request, Uri};
 use quiche::h3::NameValue;
 use ring::rand::*;
@@ -90,9 +91,15 @@ struct PartialResponse {
     written: usize,
 }
 
+struct PendingRequest {
+    req: Request<()>,
+    body: Vec<u8>,
+}
+
 struct Client<L> {
     conn: quiche::Connection,
     http3_conn: Option<quiche::h3::Connection>,
+    pending_requests: HashMap<u64, PendingRequest>,
     partial_responses: HashMap<u64, PartialResponse>,
     /// Held for connection lifetime (PS1A-H3 / P13F admission).
     _lease: Option<L>,
@@ -272,6 +279,7 @@ where
                 let client = Client {
                     conn,
                     http3_conn: None,
+                    pending_requests: HashMap::new(),
                     partial_responses: HashMap::new(),
                     _lease: None,
                     peer: from,
@@ -332,25 +340,40 @@ where
                 loop {
                     match http3_conn.poll(&mut client.conn) {
                         Ok((stream_id, quiche::h3::Event::Headers { list, .. })) => {
-                            let peer = client.peer;
                             handle_request(
                                 &mut client.conn,
                                 http3_conn,
                                 stream_id,
                                 &list,
+                                drain_cap,
+                                &mut client.pending_requests,
                                 &mut client.partial_responses,
-                                &dispatch,
-                                &handle,
-                                &peer,
                             );
                         }
                         Ok((stream_id, quiche::h3::Event::Data)) => {
-                            // Ignore leftover request body (Read already shut down on Headers).
-                            let _ = stream_id;
+                            handle_request_data(
+                                &mut client.conn,
+                                http3_conn,
+                                stream_id,
+                                drain_cap,
+                                &mut client.pending_requests,
+                                &mut client.partial_responses,
+                            );
                         }
-                        Ok((_, quiche::h3::Event::Finished))
-                        | Ok((_, quiche::h3::Event::Reset { .. }))
-                        | Ok((_, quiche::h3::Event::PriorityUpdate))
+                        Ok((stream_id, quiche::h3::Event::Finished)) => {
+                            finish_request(
+                                &mut client.conn,
+                                http3_conn,
+                                stream_id,
+                                &mut client.pending_requests,
+                                &mut client.partial_responses,
+                                (&dispatch, &handle, &client.peer),
+                            );
+                        }
+                        Ok((stream_id, quiche::h3::Event::Reset { .. })) => {
+                            client.pending_requests.remove(&stream_id);
+                        }
+                        Ok((_, quiche::h3::Event::PriorityUpdate))
                         | Ok((_, quiche::h3::Event::GoAway)) => {}
                         Err(quiche::h3::Error::Done) => break,
                         Err(e) => {
@@ -387,19 +410,34 @@ where
     }
 }
 
-// Request-body bound: on Headers we `stream_shutdown(Read)` (official quiche
-// http3-server pattern). `request_body_drain_cap_bytes` remains the shared
-// config invariant (logged at listen); live byte-cap drain lands before default-on.
+// Request-body bound: DATA is collected before dispatch. The cap is the existing
+// provider drain cap, never exceeding the shared proxy body cap.
+
+fn request_body_cap(drain_cap: usize) -> usize {
+    drain_cap.min(PROXY_MAX_REQUEST_BODY_BYTES)
+}
+
+fn content_length(req: &Request<()>) -> Option<usize> {
+    req.headers()
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+}
+
+fn accept_request_chunk(current_len: usize, chunk_len: usize, max_bytes: usize) -> Option<usize> {
+    current_len
+        .checked_add(chunk_len)
+        .filter(|total| *total <= max_bytes)
+}
 
 fn handle_request(
     conn: &mut quiche::Connection,
     http3_conn: &mut quiche::h3::Connection,
     stream_id: u64,
     headers: &[quiche::h3::Header],
+    drain_cap: usize,
+    pending_requests: &mut HashMap<u64, PendingRequest>,
     partial_responses: &mut HashMap<u64, PartialResponse>,
-    dispatch: &Arc<dyn Http3DispatchService>,
-    handle: &tokio::runtime::Handle,
-    peer: &net::SocketAddr,
 ) {
     let req = match headers_to_request(headers) {
         Ok(r) => r,
@@ -409,10 +447,106 @@ fn handle_request(
         }
     };
 
-    // Official quiche http3-server pattern: stop reading the request stream so
-    // remaining body is ignored and Data events are not generated (P13F-equivalent).
-    let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0);
+    let max_bytes = request_body_cap(drain_cap);
+    if content_length(&req).is_some_and(|len| len > max_bytes) {
+        let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0);
+        send_materialized_response(
+            conn,
+            http3_conn,
+            stream_id,
+            payload_too_large_response(),
+            partial_responses,
+        );
+        return;
+    }
 
+    pending_requests.insert(
+        stream_id,
+        PendingRequest {
+            req,
+            body: Vec::new(),
+        },
+    );
+}
+
+fn handle_request_data(
+    conn: &mut quiche::Connection,
+    http3_conn: &mut quiche::h3::Connection,
+    stream_id: u64,
+    drain_cap: usize,
+    pending_requests: &mut HashMap<u64, PendingRequest>,
+    partial_responses: &mut HashMap<u64, PartialResponse>,
+) {
+    let Some(pending) = pending_requests.get_mut(&stream_id) else {
+        let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0);
+        return;
+    };
+
+    let max_bytes = request_body_cap(drain_cap);
+    let mut chunk = [0u8; 8192];
+    loop {
+        match http3_conn.recv_body(conn, stream_id, &mut chunk) {
+            Ok(read) => {
+                if read == 0 {
+                    break;
+                }
+                if accept_request_chunk(pending.body.len(), read, max_bytes).is_none() {
+                    pending_requests.remove(&stream_id);
+                    let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0);
+                    send_materialized_response(
+                        conn,
+                        http3_conn,
+                        stream_id,
+                        payload_too_large_response(),
+                        partial_responses,
+                    );
+                    return;
+                }
+                pending.body.extend_from_slice(&chunk[..read]);
+            }
+            Err(quiche::h3::Error::Done) => break,
+            Err(e) => {
+                pending_requests.remove(&stream_id);
+                let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0);
+                DIAG.h3_poll_errors.fetch_add(1, Ordering::Relaxed);
+                warn!(?e, "request body read failed");
+                send_materialized_response(
+                    conn,
+                    http3_conn,
+                    stream_id,
+                    bad_request_response(),
+                    partial_responses,
+                );
+                return;
+            }
+        }
+    }
+}
+
+fn finish_request(
+    conn: &mut quiche::Connection,
+    http3_conn: &mut quiche::h3::Connection,
+    stream_id: u64,
+    pending_requests: &mut HashMap<u64, PendingRequest>,
+    partial_responses: &mut HashMap<u64, PartialResponse>,
+    runtime: (
+        &Arc<dyn Http3DispatchService>,
+        &tokio::runtime::Handle,
+        &net::SocketAddr,
+    ),
+) {
+    let Some(pending) = pending_requests.remove(&stream_id) else {
+        return;
+    };
+    let (parts, _) = pending.req.into_parts();
+    let mut req = Request::from_parts(parts, Bytes::from(pending.body));
+    let len = req.body().len().to_string();
+    if let Ok(value) = http::HeaderValue::from_str(&len) {
+        req.headers_mut()
+            .insert(http::header::CONTENT_LENGTH, value);
+    }
+
+    let (dispatch, handle, peer) = runtime;
     let peer_ip = peer.ip().to_string();
     let materialized = match handle.block_on(dispatch.dispatch(req, &peer_ip)) {
         Ok(r) => r,
@@ -427,6 +561,16 @@ fn handle_request(
         }
     };
 
+    send_materialized_response(conn, http3_conn, stream_id, materialized, partial_responses);
+}
+
+fn send_materialized_response(
+    conn: &mut quiche::Connection,
+    http3_conn: &mut quiche::h3::Connection,
+    stream_id: u64,
+    materialized: Http3MaterializedResponse,
+    partial_responses: &mut HashMap<u64, PartialResponse>,
+) {
     let (hdrs, body) = materialized_to_h3(materialized);
     match http3_conn.send_response(conn, stream_id, &hdrs, false) {
         Ok(()) => {}
@@ -468,6 +612,22 @@ fn handle_request(
         );
     } else {
         DIAG.clean_finish.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn payload_too_large_response() -> Http3MaterializedResponse {
+    Http3MaterializedResponse {
+        status: 413,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: Bytes::from_static(b"payload too large"),
+    }
+}
+
+fn bad_request_response() -> Http3MaterializedResponse {
+    Http3MaterializedResponse {
+        status: 400,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: Bytes::from_static(b"bad request"),
     }
 }
 

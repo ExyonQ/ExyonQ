@@ -76,19 +76,21 @@ impl Http3Settings {
 
 /// Compiled provider ids available in this binary (facade-local registry).
 pub fn available_providers() -> Vec<&'static str> {
-    let mut out = Vec::new();
-    #[cfg(feature = "http3-provider-quinn-legacy")]
-    out.push("quinn-legacy");
-    #[cfg(feature = "http3-provider-s2n")]
-    out.push("s2n");
-    #[cfg(feature = "http3-provider-quiche")]
-    out.push("quiche");
-    out
+    [
+        #[cfg(feature = "http3-provider-quinn-legacy")]
+        "quinn-legacy",
+        #[cfg(feature = "http3-provider-s2n")]
+        "s2n",
+        #[cfg(feature = "http3-provider-quiche")]
+        "quiche",
+    ]
+    .into_iter()
+    .collect()
 }
 
 #[cfg(not(feature = "http3-provider-quinn-legacy"))]
 fn provider_compiled(id: &str) -> bool {
-    available_providers().iter().any(|p| *p == id)
+    available_providers().contains(&id)
 }
 
 /// Resolve product/legacy provider for this build + settings.
@@ -159,37 +161,37 @@ where
         "quinn-legacy" => {
             #[cfg(feature = "http3-provider-quinn-legacy")]
             {
-                return quinn_provider::serve(settings, dispatch, lifecycle).await;
+                quinn_provider::serve(settings, dispatch, lifecycle).await
             }
             #[cfg(not(feature = "http3-provider-quinn-legacy"))]
             {
-                return Err(anyhow::Error::msg(
+                Err(anyhow::Error::msg(
                     "http3 provider quinn-legacy not in this build",
-                ));
+                ))
             }
         }
         "s2n" => {
             #[cfg(feature = "http3-provider-s2n")]
             {
                 let config = provider_config(Http3ProviderId::S2n, &settings)?;
-                return exyonq_http3_provider_s2n::serve(config, dispatch, lifecycle).await;
+                exyonq_http3_provider_s2n::serve(config, dispatch, lifecycle).await
             }
             #[cfg(not(feature = "http3-provider-s2n"))]
             {
-                return Err(anyhow::Error::msg("http3 provider s2n not in this build"));
+                Err(anyhow::Error::msg("http3 provider s2n not in this build"))
             }
         }
         "quiche" => {
             #[cfg(feature = "http3-provider-quiche")]
             {
                 let config = provider_config(Http3ProviderId::Quiche, &settings)?;
-                return exyonq_http3_provider_quiche::serve(config, dispatch, lifecycle).await;
+                exyonq_http3_provider_quiche::serve(config, dispatch, lifecycle).await
             }
             #[cfg(not(feature = "http3-provider-quiche"))]
             {
-                return Err(anyhow::Error::msg(
+                Err(anyhow::Error::msg(
                     "http3 provider quiche not in this build",
-                ));
+                ))
             }
         }
         other => Err(anyhow::Error::msg(format!(

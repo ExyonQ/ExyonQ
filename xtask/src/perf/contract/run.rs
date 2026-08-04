@@ -109,15 +109,15 @@ pub fn contract_command(repo_root: &Path, args: ContractArgs) -> anyhow::Result<
             print_report(
                 &baseline,
                 &outcome.lines,
-                outcome.mode.as_deref(),
-                outcome.collection_status.as_deref(),
+                outcome.mode,
+                outcome.collection_status,
             );
             if let Some(path) = args.json_output.as_ref() {
                 let report = build_compare_report_with_mode(
                     &baseline,
                     outcome.lines.clone(),
-                    outcome.mode.as_deref(),
-                    outcome.collection_status.as_deref(),
+                    outcome.mode,
+                    outcome.collection_status,
                 );
                 let json = serde_json::to_string_pretty(&report)?;
                 std::fs::write(path, format!("{json}\n"))?;

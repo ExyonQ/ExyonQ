@@ -309,9 +309,7 @@ impl RedisCoordinationProvider {
         event: InvalidationEvent,
         ignore_self: bool,
     ) -> Result<Option<InvalidationEvent>, CoordinationError> {
-        if let Err(e) = validate_invalidation_event(&event, self.shared.cfg.max_event_bytes) {
-            return Err(e);
-        }
+        validate_invalidation_event(&event, self.shared.cfg.max_event_bytes)?;
         if ignore_self && event.source_node_id == self.node_id {
             return Ok(None);
         }
@@ -429,9 +427,8 @@ impl InvalidationPublisher for RedisCoordinationProvider {
             &self.shared.keys,
             self.shared.cfg.max_event_bytes,
         )
-        .map_err(|e| {
+        .inspect_err(|_| {
             metrics::note_publish_fail();
-            e
         })?;
         let stream = self.shared.cfg.stream_key();
         let maxlen = StreamMaxlen::Approx(self.shared.cfg.stream_maxlen);

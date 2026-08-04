@@ -241,12 +241,12 @@ fn assert_product_invariants(profile: ProductProfile, cfg: &AppConfig) -> Result
             "product profile must not emit cache_policy".into(),
         ));
     }
-    if matches!(profile, ProductProfile::Static) {
-        if !cfg.upstreams.is_empty() || !cfg.pools_fcgi.is_empty() {
-            return Err(ConfigError::Parse(
-                "static profile must not emit upstream or fcgi_pool".into(),
-            ));
-        }
+    if matches!(profile, ProductProfile::Static)
+        && (!cfg.upstreams.is_empty() || !cfg.pools_fcgi.is_empty())
+    {
+        return Err(ConfigError::Parse(
+            "static profile must not emit upstream or fcgi_pool".into(),
+        ));
     }
     if matches!(profile, ProductProfile::Proxy) && !cfg.pools_fcgi.is_empty() {
         return Err(ConfigError::Parse(
@@ -264,8 +264,10 @@ mod tests {
     fn all_profiles_expand_and_validate() {
         let inputs = ProductProfileInputs::default();
         for p in ProductProfile::all() {
-            let a = expand_product_profile(*p, &inputs).expect(p.as_str());
-            let b = expand_product_profile(*p, &inputs).expect(p.as_str());
+            let a = expand_product_profile(*p, &inputs)
+                .unwrap_or_else(|e| panic!("{}: {e}", p.as_str()));
+            let b = expand_product_profile(*p, &inputs)
+                .unwrap_or_else(|e| panic!("{}: {e}", p.as_str()));
             assert_eq!(a, b, "idempotent {}", p.as_str());
             let again = AppConfig::parse_str(&render_product_profile_toml(*p, &inputs)).unwrap();
             assert_eq!(a, again);

@@ -25,8 +25,42 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- Follow-up after private **`0.4.2`** (this line). Publication/signing remain owner-gated.
+- Follow-up after private **`0.4.3`** (this line). Publication/signing remain owner-gated.
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
+
+---
+
+## [0.4.3] — private release candidate (not published)
+
+```text
+PUBLICATION_STATUS = FORBIDDEN
+PUBLIC_OPENING = NO
+LATEST_CHANGED = NO
+PRODUCTION_SIGNING_EXECUTED = NO
+```
+
+### Changed
+
+- Workspace product version **0.4.2 → 0.4.3** (Cargo/CLI/`--version`/packaging identity).
+- Release tooling allowlists accept **0.4.3** while retaining supported 0.4.0–0.4.2 identities.
+- Integrity corrections (Changeset A/B): remove implicit benchmark API response cache and retire `EXYONQ_BENCH_CACHE_HEADERS` response-header injection.
+- HTTP/3 POST body collected before proxy dispatch (correctness).
+- Productive endpoint-set IR + weighted endpoint selection (WRR); OPEN-002 eligible==1 Multi→Single collapse.
+- Authoritative NO-SMOKE real E2E suite and Basic Product Completeness qualification path.
+- R3 fixed-rate P4 dual-arch competitive result: **PARITY** (evidence-backed; not a superiority claim).
+- Governance: security/governance SoT, integrity triad, PMZ scanner/hooks, release-audit infra, RUSTSEC-2026-0222 waiver register for Wasmtime **45.0.2** (`VULNERABILITY_FIXED=NO`, revisit v0.4.4).
+
+### Security
+
+- `docs/security/audit-v0.4.3.md` freeze-track audit executed (release evidence; does not authorize tag/sign/publish).
+- RUSTSEC-2026-0222 remains **unfixed** and **waived for v0.4.3 only** (Wasmtime 45.0.2).
+
+### Limitations (honest)
+
+- No Kubernetes controller, Helm, or CRD support claimed.
+- No full Apache htaccess compatibility claim.
+- No open-loop benchmark superiority claim.
+- Tag, GitHub Release, GHCR push, `latest`, and production signing remain owner-gated.
 
 ---
 

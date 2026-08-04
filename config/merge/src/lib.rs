@@ -28,9 +28,9 @@ pub const MAX_INCLUDE_DEPTH: usize = 32;
 pub const MAX_INCLUDE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 use exyonq_config_ir::{
-    AppConfig, CachePolicyConfig, ConfigError, FcgiPoolConfig, FullPageCacheConfig, Http3Config,
-    RawConfigInput, RouteConfig, ServerConfig, UpstreamConfig, CONFIG_VERSION_V2,
-    DEFAULT_UPSTREAM_TIMEOUT_MS,
+    endpoint_from_discovery_hostport, endpoint_from_http_target, AppConfig, CachePolicyConfig,
+    ConfigError, EndpointSet, FcgiPoolConfig, FullPageCacheConfig, Http3Config, RawConfigInput,
+    RouteConfig, ServerConfig, UpstreamConfig, CONFIG_VERSION_V2, DEFAULT_UPSTREAM_TIMEOUT_MS,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -194,19 +194,39 @@ impl DiscoveryOverlay {
     }
 }
 
-/// Apply discovery overlay per merge-spec (upstream target override).
+/// Apply discovery overlay per merge-spec (upstream target / endpoint-set override).
+///
+/// `SILENT_ENDPOINT_TRUNCATION = NO`: cluster overlays keep the full EndpointSet.
 pub fn apply_discovery(config: &AppConfig, overlay: &DiscoveryOverlay) -> AppConfig {
     let mut next = config.clone();
     for (name, target) in &overlay.upstreams {
         if let Some(upstream) = next.upstreams.get_mut(name) {
-            upstream.target = target.clone();
+            if let Ok(ep) = endpoint_from_http_target(target) {
+                if let Ok(set) = EndpointSet::from_endpoints(vec![ep]) {
+                    upstream.set_endpoint_set(set);
+                }
+            }
         }
     }
     for (name, cluster) in &overlay.clusters {
-        if let Some(endpoint) = cluster.endpoints.first() {
-            if let Some(upstream) = next.upstreams.get_mut(name) {
-                upstream.target = format!("http://{endpoint}");
+        if let Some(upstream) = next.upstreams.get_mut(name) {
+            let mut endpoints = Vec::with_capacity(cluster.endpoints.len());
+            let mut ok = true;
+            for endpoint in &cluster.endpoints {
+                match endpoint_from_discovery_hostport(endpoint) {
+                    Ok(ep) => endpoints.push(ep),
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
             }
+            if ok {
+                if let Ok(set) = EndpointSet::from_endpoints(endpoints) {
+                    upstream.set_endpoint_set(set);
+                }
+            }
+            // If parse fails, leave upstream unchanged (fail-open overlay policy retained).
         }
     }
     next
@@ -321,5 +341,122 @@ target = "http://127.0.0.1:9000"
             load_with_includes(&dir.path().join("main.toml")).unwrap_err(),
             ConfigError::IncludeConflict { .. }
         ));
+    }
+
+    #[test]
+    fn discovery_cluster_keeps_full_endpoint_set() {
+        let config: AppConfig = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+"#
+        .parse()
+        .unwrap();
+        let overlay = DiscoveryOverlay {
+            upstreams: Default::default(),
+            clusters: [(
+                "backend".into(),
+                DiscoveryCluster {
+                    endpoints: vec!["10.0.0.1:8080".into(), "10.0.0.2:8080".into()],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let next = apply_discovery(&config, &overlay);
+        let up = next.upstreams.get("backend").unwrap();
+        assert_eq!(up.endpoint_set.len(), 2, "must not truncate to first()");
+        assert!(up.multi_endpoint_ready());
+        assert!(up.target.is_empty());
+    }
+
+    #[test]
+    fn discovery_multi_endpoint_normalization_is_deterministic() {
+        let config: AppConfig = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+"#
+        .parse()
+        .unwrap();
+        let overlay_a = DiscoveryOverlay {
+            upstreams: Default::default(),
+            clusters: [(
+                "backend".into(),
+                DiscoveryCluster {
+                    endpoints: vec![
+                        "10.0.0.3:8080".into(),
+                        "10.0.0.1:8080".into(),
+                        "10.0.0.2:8080".into(),
+                    ],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let overlay_b = DiscoveryOverlay {
+            upstreams: Default::default(),
+            clusters: [(
+                "backend".into(),
+                DiscoveryCluster {
+                    endpoints: vec![
+                        "10.0.0.1:8080".into(),
+                        "10.0.0.2:8080".into(),
+                        "10.0.0.3:8080".into(),
+                    ],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let a = apply_discovery(&config, &overlay_a);
+        let b = apply_discovery(&config, &overlay_b);
+        let ea = a.upstreams["backend"].endpoint_set.endpoints();
+        let eb = b.upstreams["backend"].endpoint_set.endpoints();
+        assert_eq!(ea.len(), 3);
+        assert_eq!(ea, eb, "ordering after normalize must be deterministic");
+    }
+
+    #[test]
+    fn ambiguous_target_and_endpoints_rejected() {
+        let err = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+[[upstream.endpoints]]
+address = "10.0.0.1"
+port = 8080
+"#
+        .parse::<AppConfig>()
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ambiguous") || msg.contains("Ambiguous"),
+            "unexpected err: {msg}"
+        );
     }
 }

@@ -4,7 +4,7 @@ ExyonQ is a modular reverse proxy written in Rust.
 
 This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark suites, methodology docs, and evidence packs are intentionally not included.
 
-Current product version: **0.4.2** (private correctness/security maintenance; not published until owner close). Public opening and mutation of `latest` are not authorized. Legacy `v0.3.3` tags are not reused.
+Current product version: **0.4.3** (private correctness/security maintenance; not published until owner close). Public opening and mutation of `latest` are not authorized. Legacy `v0.3.3` tags are not reused.
 
 ## Build
 

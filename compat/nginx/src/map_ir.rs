@@ -473,11 +473,11 @@ fn map_proxy(
             };
             upstreams.insert(
                 name.clone(),
-                UpstreamConfig {
-                    name: name.clone(),
-                    target: http_target,
-                    timeout_ms: exyonq_config_ir::DEFAULT_UPSTREAM_TIMEOUT_MS,
-                },
+                UpstreamConfig::legacy(
+                    name.clone(),
+                    http_target,
+                    exyonq_config_ir::DEFAULT_UPSTREAM_TIMEOUT_MS,
+                ),
             );
             name
         }

@@ -18,7 +18,7 @@ mod common;
 
 use common::{stub_port, TestReloadRuntime};
 use exyonq_module_api::reload_runtime::ReloadRuntimeService;
-use exyonq_reload_runtime::config_watcher::{self, CONFIG_RELOAD_DEBOUNCE_MS};
+use exyonq_reload_runtime::config_watcher;
 use notify::EventKind;
 
 #[test]
@@ -78,7 +78,7 @@ async fn watcher_debounced_reload_requests_port() {
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(
-        CONFIG_RELOAD_DEBOUNCE_MS + 400,
+        config_watcher::CONFIG_RELOAD_DEBOUNCE_MS + 400,
     ))
     .await;
 

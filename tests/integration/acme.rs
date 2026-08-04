@@ -44,11 +44,7 @@ fn redirect_config() -> AppConfig {
         }],
         upstreams: HashMap::from([(
             "backend".into(),
-            UpstreamConfig {
-                name: "backend".into(),
-                target: "http://127.0.0.1:9000".into(),
-                timeout_ms: 5000,
-            },
+            UpstreamConfig::legacy("backend", "http://127.0.0.1:9000", 5000),
         )]),
         pools_fcgi: HashMap::new(),
         cache_policies: HashMap::new(),

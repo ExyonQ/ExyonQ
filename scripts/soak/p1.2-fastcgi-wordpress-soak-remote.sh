@@ -483,7 +483,7 @@ echo "=== log redaction ==="
 compose logs --no-color --tail=400 exyonq-wp 2>"$RESULT_DIR/exyonq-logs-raw.txt" | tee "$RESULT_DIR/exyonq-logs-raw.txt" >/dev/null || true
 # Generate sensitive traffic
 curl -sS -o /dev/null --max-time 15 -H "Host: plan10a.local" \
-  -H "Authorization: Bearer secret-token-p12-redact" \
+  -H "Authorization: Bearer <REDACTED>" \
   -H "Cookie: wordpress_logged_in=SECRETCOOKIEVALUE" \
   "${EXYONQ_UDS_URL}/?token=supersecretquery" || true
 curl -sS -o /dev/null --max-time 15 -H "Host: plan10a.local" \
@@ -493,7 +493,7 @@ curl -sS -o /dev/null --max-time 15 -H "Host: plan10a.local" \
 sleep 1
 compose logs --no-color --tail=200 exyonq-wp >"$RESULT_DIR/exyonq-logs-after-sensitive.txt" 2>&1 || true
 REDACT_FAIL=0
-if grep -E 'SuperSecretPass123|SECRETCOOKIEVALUE|secret-token-p12-redact|supersecretquery' \
+if grep -E 'SuperSecretPass123|SECRETCOOKIEVALUE|<REDACTED>|supersecretquery' \
   "$RESULT_DIR/exyonq-logs-after-sensitive.txt" >/dev/null 2>&1; then
   REDACT_FAIL=1
 fi

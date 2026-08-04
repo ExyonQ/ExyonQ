@@ -546,6 +546,10 @@ async fn handle_core_request_with_body(
     text_response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
 }
 
+// TECH_DEBT_HANDLER_ARITY = DEFERRED_POST_V043
+// Pre-existing dispatch boundary arity; structural packing deferred beyond v0.4.3.
+// Behavioral refactor avoided during release qualification (OD-1).
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_core(
     state: &ServerState,
     _proxy_client: &ProxyClient,
@@ -1583,6 +1587,10 @@ async fn proxy_dispatch_maybe_cached(
     .await
 }
 
+// TECH_DEBT_HANDLER_ARITY = DEFERRED_POST_V043
+// Pre-existing proxy dispatch boundary arity; structural packing deferred beyond v0.4.3.
+// Behavioral refactor avoided during release qualification (OD-1).
+#[allow(clippy::too_many_arguments)]
 async fn proxy_contract_target(
     state: &ServerState,
     route_idx: usize,
@@ -2019,11 +2027,7 @@ mod tests {
         let mut upstreams = HashMap::new();
         upstreams.insert(
             "backend".into(),
-            crate::config::UpstreamConfig {
-                name: "backend".into(),
-                target: "http://127.0.0.1:9000".into(),
-                timeout_ms: 5000,
-            },
+            crate::config::UpstreamConfig::legacy("backend", "http://127.0.0.1:9000", 5000),
         );
         let config = AppConfig {
             config_version: 1,

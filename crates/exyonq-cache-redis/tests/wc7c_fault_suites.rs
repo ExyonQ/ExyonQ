@@ -110,7 +110,8 @@ fn wc7c_redis_restart_repeat_5x_soft() {
         // Soft "restart": stop and start subscriber again
         b.stop();
         b.start_subscriber().unwrap();
-        assert!(b.reconcile_known_sites().is_ok() || true);
+        // Soft restart: reconcile failure is non-fatal here.
+        let _ = b.reconcile_known_sites();
         b.stop();
     }
 }

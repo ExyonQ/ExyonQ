@@ -142,16 +142,18 @@ impl CachePurgePort for DirectL1PurgePort {
 }
 
 /// Insert a simple GET identity entry for tests.
+///
+/// `host_path` is `(host, path)` so the helper stays under Clippy's argument budget.
 pub fn test_insert(
     cache: &ResponseCache,
     site_id: u64,
     route_idx: usize,
     backend_id: u32,
     gen: u64,
-    host: &str,
-    path: &str,
+    host_path: (&str, &str),
     body: &'static [u8],
 ) {
+    let (host, path) = host_path;
     let key = build_storage_cache_key(CacheKeyParts {
         site_id,
         namespace: 4,

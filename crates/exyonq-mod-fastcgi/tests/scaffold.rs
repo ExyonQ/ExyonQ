@@ -29,23 +29,26 @@ fn src_has_no_transport_symbols_outside_wire_module() {
         }
         let content = fs::read_to_string(&path).expect("read src");
         // P15-WS1-FCGI-002: precise tokens — avoid false positives on disconnect()/reconnect().
-        let forbidden_checks: &[(&str, &dyn Fn(&str) -> bool)] = &[
-            ("TcpStream", &|c| c.contains("TcpStream")),
-            ("UnixStream", &|c| c.contains("UnixStream")),
-            ("tokio::net", &|c| c.contains("tokio::net")),
-            ("std::net", &|c| c.contains("std::net")),
-            ("unsafe", &|c| c.contains("unsafe")),
-            ("connect(", &|c| {
-                c.contains(".connect(") || c.contains("::connect(") || c.contains("fn connect(")
-            }),
-        ];
-        for (label, pred) in forbidden_checks {
+        for label in [
+            "TcpStream",
+            "UnixStream",
+            "tokio::net",
+            "std::net",
+            "unsafe",
+        ] {
             assert!(
-                !pred(&content),
+                !content.contains(label),
                 "{} must not reference `{label}`",
                 path.display()
             );
         }
+        assert!(
+            !(content.contains(".connect(")
+                || content.contains("::connect(")
+                || content.contains("fn connect(")),
+            "{} must not reference `connect(`",
+            path.display()
+        );
     }
 }
 

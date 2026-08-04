@@ -23,8 +23,9 @@ use exyonq_http3_provider_api::Http3ProviderConfig;
 use exyonq_module_api::http3_runtime::{
     Http3ConnectionLifecycle, Http3DispatchService, Http3MaterializedResponse,
 };
+use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
 use h3::error::Code;
-use http::{Response, StatusCode};
+use http::{Request, Response, StatusCode};
 use s2n_quic::provider::limits::Limits;
 use s2n_quic::Server;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -154,6 +155,20 @@ where
         let Ok((req, mut stream)) = resolver.resolve_request().await else {
             continue;
         };
+        let req = match collect_request_body(req, &mut stream, drain_cap).await {
+            Ok(req) => req,
+            Err(RequestBodyReadError::TooLarge) => {
+                let response = payload_too_large_response();
+                let _ = write_h3_response(&mut stream, response, drain_cap).await;
+                continue;
+            }
+            Err(RequestBodyReadError::Body) => {
+                DIAG.dispatch_errors.fetch_add(1, Ordering::Relaxed);
+                let response = bad_request_response();
+                let _ = write_h3_response(&mut stream, response, drain_cap).await;
+                continue;
+            }
+        };
         match dispatch.dispatch(req, &peer_ip).await {
             Ok(response) => {
                 if let Err(err) = write_h3_response(&mut stream, response, drain_cap).await {
@@ -182,6 +197,80 @@ where
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestBodyReadError {
+    Body,
+    TooLarge,
+}
+
+fn request_body_cap(drain_cap: usize) -> usize {
+    drain_cap.min(PROXY_MAX_REQUEST_BODY_BYTES)
+}
+
+fn content_length(req: &Request<()>) -> Option<usize> {
+    req.headers()
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+}
+
+fn accept_request_chunk(current_len: usize, chunk_len: usize, max_bytes: usize) -> Option<usize> {
+    current_len
+        .checked_add(chunk_len)
+        .filter(|total| *total <= max_bytes)
+}
+
+async fn collect_request_body<S>(
+    req: Request<()>,
+    stream: &mut h3::server::RequestStream<S, Bytes>,
+    drain_cap: usize,
+) -> Result<Request<Bytes>, RequestBodyReadError>
+where
+    S: h3::quic::BidiStream<Bytes>,
+{
+    let max_bytes = request_body_cap(drain_cap);
+    if content_length(&req).is_some_and(|len| len > max_bytes) {
+        stream.stop_sending(Code::H3_NO_ERROR);
+        return Err(RequestBodyReadError::TooLarge);
+    }
+
+    let mut buf = Vec::new();
+    loop {
+        match stream.recv_data().await {
+            Ok(Some(mut chunk)) => {
+                let chunk_len = chunk.remaining();
+                if chunk_len == 0 {
+                    continue;
+                }
+                if accept_request_chunk(buf.len(), chunk_len, max_bytes).is_none() {
+                    drop(buf);
+                    stream.stop_sending(Code::H3_NO_ERROR);
+                    return Err(RequestBodyReadError::TooLarge);
+                }
+                while chunk.has_remaining() {
+                    let bytes = chunk.chunk();
+                    buf.extend_from_slice(bytes);
+                    chunk.advance(bytes.len());
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                stream.stop_sending(Code::H3_NO_ERROR);
+                return Err(RequestBodyReadError::Body);
+            }
+        }
+    }
+    let _ = stream.recv_trailers().await;
+    let (parts, _) = req.into_parts();
+    let mut req = Request::from_parts(parts, Bytes::from(buf));
+    let len = req.body().len().to_string();
+    if let Ok(value) = http::HeaderValue::from_str(&len) {
+        req.headers_mut()
+            .insert(http::header::CONTENT_LENGTH, value);
+    }
+    Ok(req)
+}
+
 async fn drain_request_recv<S>(stream: &mut h3::server::RequestStream<S, Bytes>, drain_cap: usize)
 where
     S: h3::quic::BidiStream<Bytes>,
@@ -204,6 +293,28 @@ where
         }
     }
     let _ = stream.recv_trailers().await;
+}
+
+fn payload_too_large_response() -> Http3MaterializedResponse {
+    Http3MaterializedResponse {
+        status: StatusCode::PAYLOAD_TOO_LARGE.as_u16(),
+        headers: vec![(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        )],
+        body: Bytes::from_static(b"payload too large"),
+    }
+}
+
+fn bad_request_response() -> Http3MaterializedResponse {
+    Http3MaterializedResponse {
+        status: StatusCode::BAD_REQUEST.as_u16(),
+        headers: vec![(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        )],
+        body: Bytes::from_static(b"bad request"),
+    }
 }
 
 async fn write_h3_response<S>(

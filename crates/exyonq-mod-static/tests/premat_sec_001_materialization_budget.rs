@@ -69,7 +69,7 @@ fn early_reject_metadata_over_budget_reads_zero_body_bytes() {
 #[test]
 fn exact_limit_succeeds() {
     let mut f = NamedTempFile::new().unwrap();
-    f.write_all(&vec![1u8; 64]).unwrap();
+    f.write_all(&[1u8; 64]).unwrap();
     f.flush().unwrap();
     let (bytes, _) = read_file_bytes_with_budget(f.path(), Some(64)).expect("ok");
     assert_eq!(bytes.len(), 64);
@@ -78,7 +78,7 @@ fn exact_limit_succeeds() {
 #[test]
 fn limit_minus_one_succeeds() {
     let mut f = NamedTempFile::new().unwrap();
-    f.write_all(&vec![1u8; 63]).unwrap();
+    f.write_all(&[1u8; 63]).unwrap();
     f.flush().unwrap();
     let (bytes, _) = read_file_bytes_with_budget(f.path(), Some(64)).expect("ok");
     assert_eq!(bytes.len(), 63);
@@ -87,7 +87,7 @@ fn limit_minus_one_succeeds() {
 #[test]
 fn limit_plus_one_budget_exceeded() {
     let mut f = NamedTempFile::new().unwrap();
-    f.write_all(&vec![1u8; 65]).unwrap();
+    f.write_all(&[1u8; 65]).unwrap();
     f.flush().unwrap();
     let err = read_file_bytes_with_budget(f.path(), Some(64)).unwrap_err();
     assert!(matches!(err, StaticError::BudgetExceeded));
@@ -117,7 +117,7 @@ fn bounded_reader_stops_without_full_drain() {
 #[test]
 fn budget_exceeded_error_is_distinct_and_header_constant_stable() {
     let mut f = NamedTempFile::new().unwrap();
-    f.write_all(&vec![1u8; 200]).unwrap();
+    f.write_all(&[1u8; 200]).unwrap();
     f.flush().unwrap();
     match read_file_bytes_with_budget(f.path(), Some(16)) {
         Err(StaticError::BudgetExceeded) => {}

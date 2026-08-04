@@ -63,8 +63,36 @@ pub struct CompiledRouteTable {
 /// Resolved upstream cluster metadata (compile-time only — no runtime client).
 #[derive(Clone)]
 pub struct CompiledCluster {
+    /// Sole executable URI when `endpoint_execution` is SingleEndpointReady; else empty.
     pub target_uri: String,
     pub timeout_ms: u64,
+    /// User backend id (= upstream name). Distinct from dense plan BackendId.
+    pub user_backend_id: String,
+    pub endpoints: Box<[CompiledEndpoint]>,
+    pub selection_policy: exyonq_config_ir::EndpointSelectionPolicy,
+    pub failover_policy: exyonq_config_ir::EndpointFailoverPolicy,
+    pub endpoint_execution: EndpointExecutionStatus,
+}
+
+/// Compiled endpoint (desired config only).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompiledEndpoint {
+    pub endpoint_id: String,
+    pub address: String,
+    pub port: u16,
+    pub weight: u32,
+    pub priority: u32,
+    pub admin_enabled: bool,
+    pub http_uri: String,
+}
+
+/// Execution gate for proxy product path (P2A foundation + P2B productive multi).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndpointExecutionStatus {
+    SingleEndpointReady,
+    EmptyUnavailable,
+    /// Multi-endpoint retained; productive WRR+bands authorized (P2B).
+    MultiEndpointReady,
 }
 
 /// Active filter hooks materialized from module IR.
@@ -464,22 +492,100 @@ fn compile_proxy_compiled_slots(
             .upstreams
             .get(&name)
             .ok_or_else(|| anyhow::anyhow!("upstream {name}: missing from config"))?;
-        upstream
-            .target
-            .parse::<http::Uri>()
-            .map_err(|err| anyhow::anyhow!("upstream {name}: {err}"))?;
+        let compiled_endpoints: Box<[CompiledEndpoint]> = upstream
+            .endpoint_set
+            .endpoints()
+            .iter()
+            .map(|ep| CompiledEndpoint {
+                endpoint_id: ep.endpoint_id.as_str().to_string(),
+                address: ep.address.as_host_str(),
+                port: ep.port,
+                weight: ep.weight,
+                priority: ep.priority,
+                admin_enabled: matches!(
+                    ep.admin_state,
+                    exyonq_config_ir::AdminEndpointState::Enabled
+                ),
+                http_uri: ep.to_http_uri_string(),
+            })
+            .collect();
+        let eligible = compiled_endpoints
+            .iter()
+            .filter(|e| e.admin_enabled && e.weight > 0)
+            .count();
+        // OPEN-002: Single vs Multi is gated on *eligible* count, not configured
+        // set size. configured>=2 with eligible==1 must be SingleEndpointReady
+        // (full endpoints[] retained — SILENT_ENDPOINT_TRUNCATION=NO).
+        // Preferred-band size 1 with eligible>=2 remains MultiEndpointReady
+        // (PriorityBands failover must not collapse).
+        let endpoint_execution = if compiled_endpoints.is_empty() || eligible == 0 {
+            EndpointExecutionStatus::EmptyUnavailable
+        } else if eligible == 1 {
+            EndpointExecutionStatus::SingleEndpointReady
+        } else {
+            EndpointExecutionStatus::MultiEndpointReady
+        };
+        let target_uri = match endpoint_execution {
+            EndpointExecutionStatus::SingleEndpointReady => compiled_endpoints
+                .iter()
+                .find(|e| e.admin_enabled && e.weight > 0)
+                .map(|e| e.http_uri.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        if matches!(
+            endpoint_execution,
+            EndpointExecutionStatus::SingleEndpointReady
+        ) {
+            target_uri
+                .parse::<http::Uri>()
+                .map_err(|err| anyhow::anyhow!("upstream {name}: {err}"))?;
+        }
+        // SILENT_ENDPOINT_TRUNCATION = NO: always retain full endpoint list in the plan.
+        let slot_endpoints: Box<[exyonq_module_api::proxy_dispatch::ProxyCompiledEndpoint]> =
+            compiled_endpoints
+                .iter()
+                .map(
+                    |ep| exyonq_module_api::proxy_dispatch::ProxyCompiledEndpoint {
+                        endpoint_id: ep.endpoint_id.clone(),
+                        http_uri: ep.http_uri.clone(),
+                        weight: ep.weight,
+                        priority: ep.priority,
+                        admin_enabled: ep.admin_enabled,
+                    },
+                )
+                .collect();
         clusters.insert(
             name.clone(),
             CompiledCluster {
-                target_uri: upstream.target.clone(),
+                target_uri: target_uri.clone(),
                 timeout_ms: upstream.timeout_ms,
+                user_backend_id: name.clone(),
+                endpoints: compiled_endpoints,
+                selection_policy: upstream.selection_policy,
+                failover_policy: upstream.failover_policy,
+                endpoint_execution,
             },
         );
         slots.push(ProxyCompiledSlot {
             cluster_id: cluster_id as u32,
             upstream_name: name,
-            target: upstream.target.clone(),
+            target: target_uri,
             timeout: Duration::from_millis(upstream.timeout_ms),
+            single_endpoint_executable: matches!(
+                endpoint_execution,
+                EndpointExecutionStatus::SingleEndpointReady
+            ),
+            multi_endpoint_executable: matches!(
+                endpoint_execution,
+                EndpointExecutionStatus::MultiEndpointReady
+            ),
+            endpoint_count: upstream.endpoint_set.len() as u32,
+            failover_priority_bands: matches!(
+                upstream.failover_policy,
+                exyonq_config_ir::EndpointFailoverPolicy::PriorityBands
+            ),
+            endpoints: slot_endpoints,
         });
     }
     Ok(slots.into_boxed_slice())
@@ -602,19 +708,11 @@ mod tests {
         let mut upstreams = HashMap::new();
         upstreams.insert(
             "zebra".into(),
-            UpstreamConfig {
-                name: "zebra".into(),
-                target: "http://127.0.0.1:1".into(),
-                timeout_ms: 1000,
-            },
+            UpstreamConfig::legacy("zebra", "http://127.0.0.1:1", 1000),
         );
         upstreams.insert(
             "alpha".into(),
-            UpstreamConfig {
-                name: "alpha".into(),
-                target: "http://127.0.0.1:2".into(),
-                timeout_ms: 1000,
-            },
+            UpstreamConfig::legacy("alpha", "http://127.0.0.1:2", 1000),
         );
         let mut api = route("api", "/api");
         api.upstream = Some("alpha".into());
@@ -655,5 +753,258 @@ mod tests {
             snap.proxy_compiled_slot(0).unwrap().target,
             snap.clusters.get("alpha").unwrap().target_uri
         );
+    }
+
+    #[test]
+    fn dense_backend_id_is_snapshot_local_not_persistent_identity() {
+        // USER_TO_DENSE_BACKEND_MAPPING = DETERMINISTIC_WITHIN_SNAPSHOT
+        // DENSE_BACKEND_ID_STABILITY_ACROSS_GENERATIONS = NOT_GUARANTEED_UNLESS_EXPLICITLY_PROVEN
+        let one = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "stable_name"
+[[upstream]]
+name = "stable_name"
+target = "http://127.0.0.1:9000"
+"#;
+        let two = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "stable_name"
+[[upstream]]
+name = "aaa_first"
+target = "http://127.0.0.1:9001"
+[[upstream]]
+name = "stable_name"
+target = "http://127.0.0.1:9000"
+"#;
+        let snap1 = compile_config(one.parse().unwrap());
+        let snap2 = compile_config(two.parse().unwrap());
+        assert_eq!(
+            snap1.proxy_compiled_slot(0).unwrap().upstream_name,
+            "stable_name"
+        );
+        assert_eq!(
+            snap2.proxy_compiled_slot(0).unwrap().upstream_name,
+            "aaa_first"
+        );
+        assert_eq!(
+            snap2.proxy_compiled_slot(1).unwrap().upstream_name,
+            "stable_name"
+        );
+        let id1 = snap1
+            .proxy_compiled_slots
+            .iter()
+            .find(|s| s.upstream_name == "stable_name")
+            .unwrap()
+            .cluster_id;
+        let id2 = snap2
+            .proxy_compiled_slots
+            .iter()
+            .find(|s| s.upstream_name == "stable_name")
+            .unwrap()
+            .cluster_id;
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn multi_endpoint_retained_without_truncation_and_execution_ready() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+timeout_ms = 1000
+[[upstream.endpoints]]
+address = "10.0.0.1"
+port = 8080
+weight = 1
+priority = 0
+[[upstream.endpoints]]
+address = "10.0.0.2"
+port = 8080
+weight = 2
+priority = 0
+"#;
+        let config: AppConfig = toml.parse().expect("parse");
+        assert_eq!(config.upstreams["backend"].endpoint_set.len(), 2);
+        assert!(config.upstreams["backend"].multi_endpoint_ready());
+        assert!(!config.upstreams["backend"].single_endpoint_executable());
+        let snap = compile_config(config);
+        let cluster = snap.clusters.get("backend").expect("cluster");
+        assert_eq!(cluster.endpoints.len(), 2);
+        assert_eq!(
+            cluster.endpoint_execution,
+            EndpointExecutionStatus::MultiEndpointReady
+        );
+        assert!(cluster.target_uri.is_empty());
+        let slot = snap.proxy_compiled_slot(0).unwrap();
+        assert!(!slot.single_endpoint_executable);
+        assert!(slot.multi_endpoint_executable);
+        assert_eq!(slot.endpoint_count, 2);
+        assert!(slot.target.is_empty());
+        assert_eq!(slot.endpoints.len(), 2);
+    }
+
+    #[test]
+    fn open002_configured_multi_one_eligible_compiles_single() {
+        // configured>=2, eligible==1 (weight=0) → SingleEndpointReady; full set retained.
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+timeout_ms = 1000
+[[upstream.endpoints]]
+address = "10.0.0.1"
+port = 8080
+weight = 1
+priority = 0
+[[upstream.endpoints]]
+address = "10.0.0.2"
+port = 8080
+weight = 0
+priority = 0
+"#;
+        let config: AppConfig = toml.parse().expect("parse");
+        assert_eq!(config.upstreams["backend"].endpoint_set.len(), 2);
+        assert!(config.upstreams["backend"].single_endpoint_executable());
+        assert!(!config.upstreams["backend"].multi_endpoint_ready());
+        let snap = compile_config(config);
+        let cluster = snap.clusters.get("backend").expect("cluster");
+        assert_eq!(cluster.endpoints.len(), 2);
+        assert_eq!(
+            cluster.endpoint_execution,
+            EndpointExecutionStatus::SingleEndpointReady
+        );
+        assert_eq!(cluster.target_uri, "http://10.0.0.1:8080");
+        let slot = snap.proxy_compiled_slot(0).unwrap();
+        assert!(slot.single_endpoint_executable);
+        assert!(!slot.multi_endpoint_executable);
+        assert_eq!(slot.endpoint_count, 2);
+        assert_eq!(slot.endpoints.len(), 2);
+        assert_eq!(slot.target, "http://10.0.0.1:8080");
+    }
+
+    #[test]
+    fn open002_preferred_band_size_one_with_eligible_gt1_stays_multi() {
+        // Preferred band has one endpoint; lower-preference band still eligible → Multi.
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+timeout_ms = 1000
+[[upstream.endpoints]]
+address = "10.0.0.1"
+port = 8080
+weight = 1
+priority = 0
+[[upstream.endpoints]]
+address = "10.0.0.2"
+port = 8080
+weight = 1
+priority = 10
+"#;
+        let config: AppConfig = toml.parse().expect("parse");
+        assert!(config.upstreams["backend"].multi_endpoint_ready());
+        let snap = compile_config(config);
+        let cluster = snap.clusters.get("backend").expect("cluster");
+        assert_eq!(
+            cluster.endpoint_execution,
+            EndpointExecutionStatus::MultiEndpointReady
+        );
+        assert!(cluster.target_uri.is_empty());
+    }
+
+    #[test]
+    fn empty_endpoint_set_compiles_as_unavailable() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+timeout_ms = 1000
+"#;
+        let config: AppConfig = toml.parse().expect("parse");
+        assert!(config.upstreams["backend"].endpoint_set.is_empty());
+        let snap = compile_config(config);
+        let cluster = snap.clusters.get("backend").unwrap();
+        assert_eq!(
+            cluster.endpoint_execution,
+            EndpointExecutionStatus::EmptyUnavailable
+        );
+        assert!(cluster.endpoints.is_empty());
+    }
+
+    #[test]
+    fn route_to_empty_backend_is_unavailable_without_global_config_rejection() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api", "static"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "empty_backend"
+[[route]]
+name = "static"
+match = { path = "/" }
+root = "/var/www"
+[[upstream]]
+name = "empty_backend"
+timeout_ms = 1000
+"#;
+        let config: AppConfig = toml.parse().expect("config remains valid with empty set");
+        assert_eq!(config.routes.len(), 2);
+        let snap = compile_config(config);
+        assert!(snap.clusters.contains_key("empty_backend"));
+        assert_eq!(
+            snap.clusters["empty_backend"].endpoint_execution,
+            EndpointExecutionStatus::EmptyUnavailable
+        );
+        // Snapshot compiles; empty backend is unavailable, not a global config reject.
+        assert!(
+            !snap
+                .proxy_compiled_slot(0)
+                .unwrap()
+                .single_endpoint_executable
+        );
+        assert!(snap.proxy_compiled_slot(0).unwrap().target.is_empty());
     }
 }

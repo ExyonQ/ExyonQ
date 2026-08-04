@@ -315,3 +315,9 @@ fn plan10b_cache_headers_flag_defaults_off() {
     std::env::remove_var("EXYONQ_BENCH_CACHE_HEADERS");
     assert!(!plan10b_cache_headers_enabled());
 }
+
+#[test]
+fn plan10b_cache_headers_retired_always_disabled() {
+    // Integrity phase 1: env-gated header injection removed; flag is permanently off.
+    assert!(!plan10b_cache_headers_enabled());
+}

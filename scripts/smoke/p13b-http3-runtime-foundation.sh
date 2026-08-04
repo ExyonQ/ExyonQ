@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# NON_AUTHORITATIVE_DIAGNOSTIC_ONLY / NOT_GATE_CLOSING under EXYONQ_NO_SMOKE_POLICY.
+# Depth class (audit 2026-08-02) recorded in .exyonq-local/tmp/no-smoke-audit-20260802/REPORT.md.
+# Do not use this script alone to close capability / release / benchmark admission.
 # P1.3b-C1 — HTTP/3 runtime foundation smoke (real client when available).
 # NOT a soak. NOT P13. Classification: P13B_RUNTIME_FOUNDATION = E2E_CHECKPOINT.
 set -euo pipefail

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# NON_AUTHORITATIVE_DIAGNOSTIC_ONLY / NOT_GATE_CLOSING under EXYONQ_NO_SMOKE_POLICY.
+# Depth class (audit 2026-08-02) recorded in .exyonq-local/tmp/no-smoke-audit-20260802/REPORT.md.
+# Do not use this script alone to close capability / release / benchmark admission.
 # P1.3a — ALPN negotiation (openssl s_client -alpn h2,http/1.1).
 set -euo pipefail
 # shellcheck source=lib-p13a-tls.sh

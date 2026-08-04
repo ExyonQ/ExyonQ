@@ -52,6 +52,17 @@ use std::time::Duration;
 /// Maximum request body bytes accepted for proxy forward (aligned with core security limits).
 pub const PROXY_MAX_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
 
+/// Compiled endpoint row carried on [`ProxyCompiledSlot`] for P2B selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyCompiledEndpoint {
+    pub endpoint_id: String,
+    pub http_uri: String,
+    pub weight: u32,
+    pub priority: u32,
+    /// Desired admin eligibility (`Enabled` only). Drain/Disabled ⇒ false.
+    pub admin_enabled: bool,
+}
+
 /// Compiled proxy cluster metadata in snapshot (slot-only in core after KD3.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyCompiledSlot {
@@ -59,8 +70,49 @@ pub struct ProxyCompiledSlot {
     /// Config upstream name (compile-time identity).
     pub upstream_name: String,
     /// Base target URI string from config (module resolves at runtime).
+    /// Populated for single-endpoint executable clusters; multi uses `endpoints`.
     pub target: String,
     pub timeout: Duration,
+    /// True when exactly one eligible endpoint is productively executable.
+    pub single_endpoint_executable: bool,
+    /// True when N≥2 endpoints are retained and productive WRR selection is authorized (P2B).
+    pub multi_endpoint_executable: bool,
+    /// Full endpoint count retained in plan (no silent truncation).
+    pub endpoint_count: u32,
+    /// When true, use priority bands; when false, single WRR band over all eligible.
+    pub failover_priority_bands: bool,
+    /// Full desired endpoint set (may include ineligible rows for generation identity).
+    pub endpoints: Box<[ProxyCompiledEndpoint]>,
+}
+
+impl ProxyCompiledSlot {
+    /// Test/helper constructor for legacy single-target slots.
+    pub fn legacy_single(
+        cluster_id: u32,
+        upstream_name: impl Into<String>,
+        target: impl Into<String>,
+        timeout: Duration,
+    ) -> Self {
+        let target = target.into();
+        let upstream_name = upstream_name.into();
+        Self {
+            cluster_id,
+            upstream_name,
+            target: target.clone(),
+            timeout,
+            single_endpoint_executable: true,
+            multi_endpoint_executable: false,
+            endpoint_count: 1,
+            failover_priority_bands: true,
+            endpoints: Box::new([ProxyCompiledEndpoint {
+                endpoint_id: "legacy".into(),
+                http_uri: target,
+                weight: 1,
+                priority: 0,
+                admin_enabled: true,
+            }]),
+        }
+    }
 }
 
 /// Opaque module-owned streaming bridge id (Hyper `Incoming`, wire pump, or tunnel).

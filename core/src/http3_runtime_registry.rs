@@ -169,7 +169,7 @@ impl CoreHttp3Dispatcher {
 impl Http3DispatchService for CoreHttp3Dispatcher {
     async fn dispatch(
         &self,
-        req: Request<()>,
+        req: Request<Bytes>,
         peer_ip: &str,
     ) -> Result<Http3MaterializedResponse, Http3DispatchError> {
         let state = read_state(&self.shared);
@@ -289,11 +289,17 @@ pub fn spawn_http3_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use exyonq_module_api::proxy_dispatch::{
+        ProxyDispatchOutcome, ProxyDispatchRequest, ProxyDispatchService,
+        ProxyMaterializedResponse, ProxyMetricsSnapshot,
+    };
     use http_body_util::{BodyExt, Full};
     use hyper::StatusCode;
     use std::collections::VecDeque;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use std::task::{Context, Poll};
 
     fn full_response(status: StatusCode, body: Bytes) -> Response<BoxBody> {
@@ -345,6 +351,27 @@ mod tests {
             pending: chunks.into(),
         }
         .boxed()
+    }
+
+    #[derive(Default)]
+    struct CapturingProxy {
+        seen: Mutex<Vec<ProxyDispatchRequest>>,
+    }
+
+    #[async_trait]
+    impl ProxyDispatchService for CapturingProxy {
+        async fn dispatch(&self, request: ProxyDispatchRequest) -> ProxyDispatchOutcome {
+            self.seen.lock().expect("proxy requests").push(request);
+            ProxyDispatchOutcome::Materialized(ProxyMaterializedResponse {
+                status: 200,
+                headers: vec![("content-type".to_string(), "text/plain".to_string())],
+                body: b"proxied".to_vec(),
+            })
+        }
+
+        fn metrics(&self) -> ProxyMetricsSnapshot {
+            ProxyMetricsSnapshot::default()
+        }
     }
 
     #[test]
@@ -577,7 +604,7 @@ mod tests {
         let shared = crate::reload::wrap_state(state);
         let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
         assert_eq!(ops.active_connections(), 0);
-        let req = Request::get("/health").body(()).unwrap();
+        let req = Request::get("/health").body(Bytes::new()).unwrap();
         let resp = dispatcher
             .dispatch(req, "127.0.0.1")
             .await
@@ -627,9 +654,47 @@ mod tests {
         let shared = crate::reload::wrap_state(state);
         let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
         assert_eq!(ops.active_connections(), 0);
-        let req = Request::get("/health").body(()).unwrap();
+        let req = Request::get("/health").body(Bytes::new()).unwrap();
         let _ = dispatcher.dispatch(req, "127.0.0.1").await;
         assert_eq!(ops.active_connections(), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_post_bytes_reach_proxy_contract_body() {
+        let ops = LifecycleState::new();
+        let raw = include_str!("../../tests/fixtures/minimal.toml");
+        let config: crate::config::AppConfig = raw.parse().expect("config");
+        let proxy = exyonq_mod_proxy::build_incoming_client();
+        let state = crate::server::state::ServerState::new(config, proxy.clone())
+            .await
+            .expect("state");
+        let shared = crate::reload::wrap_state(state);
+        let capture = Arc::new(CapturingProxy::default());
+        let service: Arc<dyn ProxyDispatchService> = capture.clone();
+        let _guard = crate::execute_backend::ProxyDispatchTestGuard::install(service);
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/users")
+            .header(http::header::CONTENT_LENGTH, "11")
+            .body(Bytes::from_static(b"hello proxy"))
+            .unwrap();
+        let resp = dispatcher
+            .dispatch(req, "127.0.0.1")
+            .await
+            .expect("dispatch");
+
+        assert_eq!(resp.status, 200);
+        let seen = capture.seen.lock().expect("proxy requests");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].body.as_deref(), Some(&b"hello proxy"[..]));
+        let content_length = seen[0]
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .map(|(_, value)| value.as_str());
+        assert_eq!(content_length, Some("11"));
     }
 
     #[test]

@@ -97,7 +97,40 @@ jobs:
       - name: security integration tests
         run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security) or test(wasm_host)' --test-threads=1
 
+  private-material:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: private-material-zero (git tree)
+        run: bash scripts/security/scan-private-material.sh --git-tree --repo .
+      - name: private-material-zero selftest
+        run: bash scripts/security/scan-private-material.sh --selftest
+
+  integrity-gates:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: project-integrity selftest + tree
+        run: |
+          bash scripts/gates/project-integrity-gate.sh --selftest
+          bash scripts/gates/project-integrity-gate.sh --tree .
+      - name: benchmark-integrity selftest + tree
+        run: |
+          bash scripts/gates/benchmark-integrity-gate.sh --selftest
+          bash scripts/gates/benchmark-integrity-gate.sh --tree .
+      - name: data-provenance selftest
+        run: bash scripts/gates/data-provenance-gate.sh --selftest
+      - name: release-audit infra selftest
+        run: |
+          bash scripts/verify-release-audit.sh --dry-run-infra
+          bash scripts/verify-release-audit.sh --selftest
+      - name: waiver register
+        run: bash scripts/gates/waiver-expiry-gate.sh --check
+
   functional-smoke:
+
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:

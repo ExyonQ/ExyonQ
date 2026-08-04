@@ -26,6 +26,7 @@ pub mod hyper_forward;
 pub mod kernel_hooks;
 pub mod proxy_cache;
 pub mod runtime;
+pub mod selector;
 pub mod spike;
 pub mod sse;
 pub mod upstream;
@@ -61,7 +62,7 @@ pub use hyper_client::{
 };
 pub use hyper_forward::{
     bad_gateway, bad_request, forward_get_streaming, gateway_timeout, response_is_event_stream,
-    take_streaming, take_websocket, ProxyHyperMetrics,
+    service_unavailable, take_streaming, take_websocket, ProxyHyperMetrics,
 };
 pub use kernel_hooks::install_kernel_hooks;
 pub use proxy_cache::{
@@ -70,12 +71,15 @@ pub use proxy_cache::{
 pub use runtime::{
     forward_websocket_by_cluster, global_hyper_metrics, load_get_for_cache_by_cluster, ProxyRuntime,
 };
+pub use selector::{
+    endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, SelectionOutcome,
+};
 pub use spike::run_spike_proxy;
 pub use sse::{
     content_type_is_event_stream, path_is_sse_stream, upstream_timeout_for_path, SSE_STREAM_PATHS,
     SSE_STREAM_TIMEOUT,
 };
-pub use upstream::{UpstreamDescriptor, BENCH_API_CACHE_PATHS, BENCH_SMALL_UPSTREAM_BODY};
+pub use upstream::{UpstreamDescriptor, BENCH_SMALL_UPSTREAM_BODY};
 pub use upstream_target::UpstreamTarget;
 pub use uri::{build_uri, preseed_path_uris, PRESEED_PROXY_PATHS};
 pub use websocket::{forward_websocket, is_websocket_upgrade};

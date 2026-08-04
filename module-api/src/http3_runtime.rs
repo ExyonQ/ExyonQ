@@ -56,7 +56,7 @@ pub trait Http3ConnectionLifecycle: Send + Sync {
 pub trait Http3DispatchService: Send + Sync {
     async fn dispatch(
         &self,
-        req: http::Request<()>,
+        req: http::Request<Bytes>,
         peer_ip: &str,
     ) -> Result<Http3MaterializedResponse, Http3DispatchError>;
 }

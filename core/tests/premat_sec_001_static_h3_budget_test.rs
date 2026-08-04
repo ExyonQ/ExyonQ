@@ -60,7 +60,7 @@ fn h1_builder_defaults_budget_none() {
 
 #[tokio::test]
 async fn budget_none_serves_body_over_tiny_limit() {
-    let (_dir, _guard) = register_runtime_with_file(&vec![0u8; 128]);
+    let (_dir, _guard) = register_runtime_with_file(&[0u8; 128]);
     let outcome = execute_backend(
         &Backend::Static { root_slot: 0 },
         None,
@@ -80,7 +80,7 @@ async fn budget_none_serves_body_over_tiny_limit() {
 
 #[tokio::test]
 async fn budget_some_rejects_oversize_with_private_marker() {
-    let (_dir, _guard) = register_runtime_with_file(&vec![0u8; 128]);
+    let (_dir, _guard) = register_runtime_with_file(&[0u8; 128]);
     let outcome = execute_backend(
         &Backend::Static { root_slot: 0 },
         None,
@@ -106,7 +106,7 @@ async fn budget_some_rejects_oversize_with_private_marker() {
 
 #[tokio::test]
 async fn budget_some_allows_exact_limit() {
-    let (_dir, _guard) = register_runtime_with_file(&vec![1u8; 64]);
+    let (_dir, _guard) = register_runtime_with_file(&[1u8; 64]);
     let outcome = execute_backend(
         &Backend::Static { root_slot: 0 },
         None,

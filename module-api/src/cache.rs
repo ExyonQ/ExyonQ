@@ -144,9 +144,7 @@ pub fn fpc_cookie_bypass(
     request_headers: &[(String, String)],
     safe_allowlist: &[&str],
 ) -> Option<BypassReason> {
-    let Some(raw) = aggregate_cookie_headers(request_headers) else {
-        return None;
-    };
+    let raw = aggregate_cookie_headers(request_headers)?;
     let names = cookie_header_names(&raw);
     if names.is_empty() {
         return None;

@@ -523,11 +523,7 @@ mod tests {
         let mut upstreams = HashMap::new();
         upstreams.insert(
             "backend".into(),
-            UpstreamConfig {
-                name: "backend".into(),
-                target: "http://127.0.0.1:9000".into(),
-                timeout_ms: 5000,
-            },
+            UpstreamConfig::legacy("backend", "http://127.0.0.1:9000", 5000),
         );
         AppConfig {
             config_version: 1,
@@ -948,11 +944,7 @@ mod ws_tunnel_tests {
         let mut upstreams = HashMap::new();
         upstreams.insert(
             "backend".into(),
-            UpstreamConfig {
-                name: "backend".into(),
-                target: format!("http://127.0.0.1:{upstream_port}"),
-                timeout_ms: 5000,
-            },
+            UpstreamConfig::legacy("backend", format!("http://127.0.0.1:{upstream_port}"), 5000),
         );
         AppConfig {
             config_version: 1,

@@ -20,8 +20,7 @@ use crate::hyper_client::{get_empty_body_client, ProxyClient};
 use crate::upstream_target::UpstreamTarget;
 use crate::{
     content_type_is_event_stream, path_is_sse_stream, request_headers_safe_for_proxy,
-    strip_hop_by_hop_headers, upstream_timeout_for_path, BENCH_API_CACHE_PATHS,
-    BENCH_SMALL_UPSTREAM_BODY,
+    strip_hop_by_hop_headers, upstream_timeout_for_path, BENCH_SMALL_UPSTREAM_BODY,
 };
 use exyonq_module_api::proxy_dispatch::{
     ProxyDispatchOutcome, ProxyMaterializedResponse, ProxyMethod, ProxyStreamHandle,
@@ -82,6 +81,18 @@ pub fn bad_gateway() -> Response<BoxBody> {
                 .boxed(),
         )
         .expect("valid 502 response")
+}
+
+/// No eligible upstream endpoint (empty set / all disabled / unbound cluster).
+pub fn service_unavailable() -> Response<BoxBody> {
+    Response::builder()
+        .status(503)
+        .body(
+            Full::<bytes::Bytes>::from(bytes::Bytes::new())
+                .map_err(|never| match never {})
+                .boxed(),
+        )
+        .expect("valid 503 response")
 }
 
 pub fn gateway_timeout() -> Response<BoxBody> {
@@ -192,13 +203,6 @@ async fn forward_empty_body(
     x_forwarded_proto: Option<&HeaderValue>,
     metrics: &ProxyHyperMetrics,
 ) -> Response<BoxBody> {
-    if method == Method::GET {
-        if let Some(response) = upstream.api_cache_hit(path_and_query) {
-            return response;
-        }
-    }
-
-    let is_get = method == Method::GET;
     let is_head = method == Method::HEAD;
     let mut builder = Request::builder()
         .method(method)
@@ -244,18 +248,15 @@ async fn forward_empty_body(
                 .get(hyper::header::CONTENT_LENGTH)
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<usize>().ok());
-            let path_only = path_and_query.split('?').next().unwrap_or(path_and_query);
-            let force_cache = BENCH_API_CACHE_PATHS.contains(&path_only);
 
-            if force_cache || content_length.is_some_and(|len| len <= BENCH_SMALL_UPSTREAM_BODY) {
+            // Materialize small declared bodies for this response only — never store
+            // across requests (Plan 12 explicit cache_policy is a separate path).
+            if content_length.is_some_and(|len| len <= BENCH_SMALL_UPSTREAM_BODY) {
                 let body = body
                     .collect()
                     .await
                     .map(|collected| collected.to_bytes())
                     .unwrap_or_default();
-                if is_get {
-                    upstream.try_store_api_cache(path_and_query, parts.clone(), body.clone());
-                }
                 Response::from_parts(
                     parts,
                     Full::from(body).map_err(|never| match never {}).boxed(),
@@ -266,7 +267,6 @@ async fn forward_empty_body(
         }
         Ok(Err(err)) => {
             warn!(%err, "upstream error");
-            upstream.clear_api_cache(path_and_query);
             note_502(metrics);
             bad_gateway()
         }
@@ -275,7 +275,6 @@ async fn forward_empty_body(
                 timeout_ms = upstream.timeout.as_millis(),
                 "upstream timeout"
             );
-            upstream.clear_api_cache(path_and_query);
             note_504(metrics);
             gateway_timeout()
         }
@@ -298,10 +297,6 @@ pub async fn forward_get_streaming_with_proto(
     x_forwarded_proto: Option<&HeaderValue>,
     metrics: &ProxyHyperMetrics,
 ) -> Response<BoxBody> {
-    if let Some(response) = upstream.api_cache_hit(path_and_query) {
-        return response;
-    }
-
     let mut builder = Request::builder()
         .method(Method::GET)
         .uri(upstream.uri_for(path_and_query));
@@ -337,7 +332,6 @@ pub async fn forward_get_streaming_with_proto(
         }
         Ok(Err(err)) => {
             warn!(%err, "upstream error");
-            upstream.clear_api_cache(path_and_query);
             note_502(metrics);
             bad_gateway()
         }
@@ -346,7 +340,6 @@ pub async fn forward_get_streaming_with_proto(
                 timeout_ms = upstream.timeout.as_millis(),
                 "upstream timeout"
             );
-            upstream.clear_api_cache(path_and_query);
             note_504(metrics);
             gateway_timeout()
         }
@@ -381,10 +374,6 @@ pub async fn forward_request(
         .map(|pq| pq.as_str())
         .unwrap_or("/")
         .to_string();
-
-    if let Some(response) = upstream.api_cache_hit(&path_and_query) {
-        return response;
-    }
 
     *req.uri_mut() = upstream.uri_for(&path_and_query);
 
@@ -422,7 +411,6 @@ pub async fn forward_request(
                     .await
                     .map(|collected| collected.to_bytes())
                     .unwrap_or_default();
-                upstream.try_store_api_cache(&path_and_query, parts.clone(), body.clone());
                 Response::from_parts(
                     parts,
                     Full::from(body).map_err(|never| match never {}).boxed(),
@@ -433,7 +421,6 @@ pub async fn forward_request(
         }
         Ok(Err(err)) => {
             warn!(%err, "upstream error");
-            upstream.clear_api_cache(&path_and_query);
             note_502(metrics);
             bad_gateway()
         }
@@ -442,7 +429,6 @@ pub async fn forward_request(
                 timeout_ms = upstream.timeout.as_millis(),
                 "upstream timeout"
             );
-            upstream.clear_api_cache(&path_and_query);
             note_504(metrics);
             gateway_timeout()
         }

@@ -196,11 +196,11 @@ pub fn map_http_upstreams(
         }
         out.insert(
             name.clone(),
-            UpstreamConfig {
-                name: name.clone(),
+            UpstreamConfig::legacy(
+                name.clone(),
                 target,
-                timeout_ms: exyonq_config_ir::DEFAULT_UPSTREAM_TIMEOUT_MS,
-            },
+                exyonq_config_ir::DEFAULT_UPSTREAM_TIMEOUT_MS,
+            ),
         );
     }
     report.summary.http_upstreams_generated = out.len();

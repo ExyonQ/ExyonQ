@@ -73,7 +73,7 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.2 \
+  --build-arg EXYONQ_VERSION=0.4.3 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
@@ -81,10 +81,10 @@ docker buildx build -f packaging/docker/Dockerfile \
 # Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.2 \
+  --build-arg EXYONQ_VERSION=0.4.3 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t ghcr.io/exyonq/exyonq:0.4.2 .
+  -t ghcr.io/exyonq/exyonq:0.4.3 .
 ```
 
 ## CI

@@ -352,7 +352,7 @@ impl InvalidationPublisher for LocalCoordinationProvider {
                 }
             }
         }
-        for site in overflow_sites {
+        if let Some(&site) = overflow_sites.first() {
             self.mark_uncertain(site);
             note_l2_invalidation_publish_failure(CoordinationRejectReason::QueueFull.as_str());
             return Err(CoordinationError::new(CoordinationRejectReason::QueueFull));

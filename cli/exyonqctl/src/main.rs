@@ -26,7 +26,7 @@ use exyonq_config_cli::{
 use exyonq_config_ir::redact_secrets;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// Honest product version metadata (P1.5-WS6). Control binary uses the system
@@ -495,10 +495,12 @@ fn run_config(command: ConfigCommand) -> ExitCode {
             input,
             output,
             report,
-            dry_run,
-            write,
-            check,
-            strict,
+            MigrateNginxMode {
+                dry_run,
+                write,
+                check,
+                strict,
+            },
             format,
             config_format,
         ),
@@ -537,13 +539,8 @@ fn run_config_reload(
     // Live structural reload: PATH must be the daemon-bound config (honesty).
     // Control plane reloads the process-bound path only; PATH is the operator
     // candidate that must match EXYONQ_CONFIG (or refuse).
-    let daemon = std::env::var("EXYONQ_CONFIG")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| {
-            // Legacy top-level `exyonqctl reload --config` also required this env.
-            None
-        });
+    // Legacy top-level `exyonqctl reload --config` also required this env.
+    let daemon = std::env::var("EXYONQ_CONFIG").ok().map(PathBuf::from);
     let Some(daemon_path) = daemon else {
         eprintln!(
             "exyonqctl config reload: set EXYONQ_CONFIG to the daemon-bound config path \
@@ -689,14 +686,18 @@ fn map_fmt(f: DiagFormat) -> ConfigOut {
     }
 }
 
-fn run_migrate_nginx(
-    input: PathBuf,
-    output: Option<PathBuf>,
-    report_path: Option<PathBuf>,
+struct MigrateNginxMode {
     dry_run: bool,
     write: bool,
     check: bool,
     strict: bool,
+}
+
+fn run_migrate_nginx(
+    input: PathBuf,
+    output: Option<PathBuf>,
+    report_path: Option<PathBuf>,
+    mode: MigrateNginxMode,
     format: DiagFormat,
     config_format: CliOutputFormat,
 ) -> ExitCode {
@@ -709,8 +710,8 @@ fn run_migrate_nginx(
     }
 
     let options = MigrateOptions {
-        dry_run,
-        strict,
+        dry_run: mode.dry_run,
+        strict: mode.strict,
         format: match config_format {
             CliOutputFormat::Toml => OutputFormat::Toml,
             CliOutputFormat::Json => OutputFormat::Json,
@@ -763,7 +764,7 @@ fn run_migrate_nginx(
     };
 
     let mut compile_result = "NOT_RUN".to_string();
-    if check {
+    if mode.check {
         match exyonq_config_ir::AppConfig::parse_str(&ir_toml) {
             Ok(cfg) => match exyonq_runtime_plan::compile_runtime_plan_from_ir(0, cfg) {
                 Ok(plan) => {
@@ -808,8 +809,8 @@ fn run_migrate_nginx(
         &compile_result,
     ));
 
-    let will_write = write && output.is_some() && !dry_run;
-    if write && dry_run {
+    let will_write = mode.write && output.is_some() && !mode.dry_run;
+    if mode.write && mode.dry_run {
         eprintln!("exyonqctl config migrate-nginx: --write ignored because --dry-run is set");
     }
     if will_write {
@@ -822,7 +823,7 @@ fn run_migrate_nginx(
                 return ExitCode::from(2);
             }
         }
-    } else if !check {
+    } else if !mode.check {
         // Preview IR on stdout (redact nothing in TOML structure beyond secret patterns in strings).
         println!("{}", redact_secrets(&migrate_out.config));
     }
@@ -836,7 +837,7 @@ fn run_migrate_nginx(
         product.taxonomy.rejected,
         product.taxonomy.invalid_source
     );
-    ExitCode::from(product.exit_code(strict) as u8)
+    ExitCode::from(product.exit_code(mode.strict) as u8)
 }
 
 fn emit_product_report(
@@ -888,7 +889,7 @@ fn run_htaccess(command: HtaccessCommand) -> ExitCode {
 }
 
 fn htaccess_compile_report(
-    document_root: &PathBuf,
+    document_root: &Path,
     site: &str,
     format: DiagFormat,
     _dry_run: bool,
@@ -922,7 +923,7 @@ fn htaccess_compile_report(
 fn format_htaccess_compile(
     report: &exyonq_mod_htaccess::CompileReport,
     site: &str,
-    root: &PathBuf,
+    root: &Path,
     format: DiagFormat,
 ) -> String {
     match format {
@@ -956,7 +957,7 @@ fn format_htaccess_compile(
     }
 }
 
-fn htaccess_explain(path: &PathBuf, format: DiagFormat) -> ExitCode {
+fn htaccess_explain(path: &Path, format: DiagFormat) -> ExitCode {
     if !path.is_file() {
         eprintln!("EXY-HTACCESS-0001: file not found: {}", path.display());
         return ExitCode::from(2);
@@ -1136,7 +1137,7 @@ fn run_purge(command: PurgeCommand, socket: Option<PathBuf>, token: Option<Strin
     }
 }
 
-fn invoke_purge(socket_path: &PathBuf, command: &str) -> std::io::Result<PurgeResponse> {
+fn invoke_purge(socket_path: &Path, command: &str) -> std::io::Result<PurgeResponse> {
     let mut stream = std::os::unix::net::UnixStream::connect(socket_path)?;
     stream.write_all(command.as_bytes())?;
     let mut line = String::new();
@@ -1197,7 +1198,7 @@ fn run_control(command: &str, socket: Option<PathBuf>, format: ControlOutFormat)
     }
 }
 
-fn invoke_control(socket_path: &PathBuf, command: &str) -> std::io::Result<ControlResponse> {
+fn invoke_control(socket_path: &Path, command: &str) -> std::io::Result<ControlResponse> {
     let mut stream = std::os::unix::net::UnixStream::connect(socket_path)?;
     stream.write_all(command.as_bytes())?;
     let mut line = String::new();

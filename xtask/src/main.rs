@@ -194,6 +194,16 @@ fn ci() -> anyhow::Result<()> {
         "bash",
         &["scripts/verify-no-private-paths.sh"],
     )?;
+    run_in(
+        root.clone(),
+        "bash",
+        &[
+            "scripts/security/scan-private-material.sh",
+            "--git-tree",
+            "--repo",
+            ".",
+        ],
+    )?;
     run("cargo", &["fmt", "--all", "--", "--check"])?;
     run(
         "cargo",
