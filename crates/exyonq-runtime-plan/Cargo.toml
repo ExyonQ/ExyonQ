@@ -1,0 +1,23 @@
+[package]
+name = "exyonq-runtime-plan"
+description = "ExyonQ runtime plan: compile config IR into immutable lookup structures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+http.workspace = true
+matchit = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+exyonq-config-ir.workspace = true
+exyonq-config-merge.workspace = true
+exyonq-module-api.workspace = true
+exyonq-module-pipeline.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+

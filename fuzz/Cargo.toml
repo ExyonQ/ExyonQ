@@ -1,0 +1,52 @@
+[package]
+name = "exyonq-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[[bin]]
+name = "header_end"
+path = "fuzz_targets/header_end.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "static_request_line"
+path = "fuzz_targets/static_request_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_parse"
+path = "fuzz_targets/config_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "path_resolve"
+path = "fuzz_targets/path_resolve.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fcgi_record"
+path = "fuzz_targets/fcgi_record.rs"
+test = false
+doc = false
+bench = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+exyonq-core = { path = "../core", default-features = false, features = ["http3-provider-s2n"] }
+exyonq-config-ir = { path = "../config/ir" }
+exyonq-mod-fastcgi = { path = "../crates/exyonq-mod-fastcgi" }

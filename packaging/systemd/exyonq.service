@@ -1,0 +1,58 @@
+[Unit]
+Description=ExyonQ reverse proxy and static file server
+Documentation=https://github.com/ExyonQ/ExyonQ
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exyonq
+Group=exyonq
+Environment=EXYONQ_CONFIG=/etc/exyonq/config.toml
+Environment=EXYONQ_CONTROL_SOCKET=/run/exyonq/control.sock
+# Validate IR before start (fail closed on bad config).
+ExecStartPre=/usr/bin/exyonq validate -c ${EXYONQ_CONFIG}
+ExecStart=/usr/bin/exyonq serve -c ${EXYONQ_CONFIG}
+ExecReload=/usr/bin/exyonqctl reload --config ${EXYONQ_CONFIG} --socket ${EXYONQ_CONTROL_SOCKET}
+# Process-level SIGTERM is the graceful stop path (P1.5-WS5).
+KillSignal=SIGTERM
+TimeoutStartSec=60
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+RuntimeDirectory=exyonq
+RuntimeDirectoryMode=0750
+StateDirectory=exyonq
+StateDirectoryMode=0750
+LogsDirectory=exyonq
+LogsDirectoryMode=0750
+# sd_notify is not implemented on the daemon — do not set NotifyAccess/Type=notify.
+
+# --- Hardening (compatible defaults) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/exyonq /var/log/exyonq /run/exyonq
+# Config is read-only at runtime; upgrades use config|noreplace packaging.
+ReadOnlyPaths=/etc/exyonq
+
+# --- Documented exclusions (P1.5-WS6) ---
+# MemoryDenyWriteExecute=true — EXCLUDED: may conflict with future WASM/JIT
+#   host paths; re-evaluate when wasm-host is product-wired.
+# CapabilityBoundingSet= — EXCLUDED empty set: binding privileged ports (<1024)
+#   requires CAP_NET_BIND_SERVICE; operators binding high ports only may tighten.
+# AmbientCapabilities=CAP_NET_BIND_SERVICE — EXCLUDED by default: enable explicitly
+#   when listening on privileged ports as non-root.
+# ProtectKernelLogs / SystemCallFilter — EXCLUDED: not validated on dual-arch
+#   product evidence hosts in WS6; deferred.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[package]
+name = "exyonqctl"
+description = "ExyonQ control CLI (reload, status)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "exyonqctl"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+exyonq-compat-nginx.workspace = true
+exyonq-config-cli.workspace = true
+exyonq-config-ir.workspace = true
+# workspace.dependencies.exyonq-core has default-features=false; select product H3 default (s2n).
+exyonq-core = { workspace = true, features = ["http3-provider-s2n"] }
+exyonq-mod-htaccess.workspace = true
+exyonq-runtime-plan.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

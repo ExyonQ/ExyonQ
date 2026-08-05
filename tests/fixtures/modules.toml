@@ -1,0 +1,33 @@
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site", "api"]
+
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "tests/fixtures/www"
+index = "index.html"
+
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+
+[modules.metrics]
+enabled = true
+path = "/metrics"
+
+[modules.compression]
+enabled = true
+min_bytes = 32
+
+[modules.ratelimit]
+enabled = true
+requests_per_second = 2
+burst = 2

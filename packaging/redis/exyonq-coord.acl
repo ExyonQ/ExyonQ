@@ -1,0 +1,18 @@
+# ExyonQ Redis coordination ACL (production profile)
+#
+# Placeholder password — replace at deploy time. Never commit real secrets.
+# Key pattern matches default namespace prefix `exyonq:fpc:*`.
+#
+# Allowed: stream consume/publish, GET/SET for generation keys, EVAL of the
+# fixed ADVANCE_GENERATION Lua (SCRIPTING), PING.
+# Denied: FLUSH*, KEYS, MONITOR, CONFIG, MODULE, DEBUG, SHUTDOWN, arbitrary admin.
+
+user default off
+
+user exyonq-coord on >REPLACE_WITH_STRONG_PASSWORD ~exyonq:fpc:* &* \
+  +ping +info +select \
+  +get +set \
+  +@stream \
+  +eval +evalsha +script|exists +script|load \
+  -@dangerous -flushall -flushdb -keys -monitor -config -shutdown -module -debug \
+  -@admin

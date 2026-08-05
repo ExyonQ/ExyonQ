@@ -1,0 +1,119 @@
+[workspace]
+resolver = "2"
+members = [
+  "core",
+  "config/ir",
+  "config/merge",
+  "config/surface",
+  "config/schema",
+  "config/cli",
+  "addon-api",
+  "addon-sdk",
+  "module-api",
+  "modules/metrics",
+  "modules/compression",
+  "modules/ratelimit",
+  "modules/acme",
+  "compat/common",
+  "compat/nginx",
+  "cli/exyonq",
+  "cli/exyonqctl",
+  "cli/exyonq-compat",
+  "xtask",
+  "tests/integration",
+  "wasm/exyonq-wasm-host",
+  "crates/exyonq-mod-fastcgi",
+  "crates/exyonq-mod-htaccess",
+  "crates/exyonq-mod-static",
+  "crates/exyonq-mod-proxy",
+  "crates/exyonq-mod-tls",
+  "crates/exyonq-mod-http3",
+  "crates/exyonq-http3-provider-api",
+  "crates/exyonq-http3-provider-s2n",
+  "crates/exyonq-http3-provider-quiche",
+  "crates/exyonq-cache",
+  "crates/exyonq-cache-redis",
+  "crates/exyonq-runtime-plan",
+  "crates/exyonq-module-pipeline",
+  "crates/exyonq-ops-runtime",
+  "crates/exyonq-discovery-runtime",
+  "crates/exyonq-reload-runtime",
+  "crates/exyonq-platform-boundary-spike-kernel",
+  "crates/exyonq-platform-boundary-spike-harness",
+  "crates/exyonq-kernel-contract-consumer",
+  "crates/exyonq-platform-linux",
+]
+
+[workspace.package]
+version = "0.4.3"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/ExyonQ/ExyonQ"
+
+[workspace.dependencies]
+anyhow = "1"
+chrono = "0.4"
+async-trait = "0.1"
+bytes = "1"
+memmap2 = "0.9.11"
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1", "http2", "client"] }
+hyper-util = { version = "0.1", features = ["server-auto", "client-legacy", "tokio", "http1", "http2"] }
+notify = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+semver = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "ring"] }
+wasmtime = { version = "=45.0.2", default-features = false, features = ["cranelift", "pooling-allocator", "runtime"] }
+dashmap = "6"
+
+exyonq-core = { path = "core", default-features = false }
+exyonq-platform-linux = { path = "crates/exyonq-platform-linux", default-features = false }
+exyonq-wasm-host = { path = "wasm/exyonq-wasm-host" }
+exyonq-config-ir = { path = "config/ir" }
+exyonq-config-merge = { path = "config/merge" }
+exyonq-config-surface = { path = "config/surface" }
+exyonq-config-schema = { path = "config/schema" }
+exyonq-config-cli = { path = "config/cli" }
+exyonq-addon-api = { path = "addon-api" }
+exyonq-addon-sdk = { path = "addon-sdk" }
+exyonq-module-api = { path = "module-api" }
+exyonq-metrics = { path = "modules/metrics" }
+exyonq-compression = { path = "modules/compression" }
+exyonq-ratelimit = { path = "modules/ratelimit" }
+exyonq-acme = { path = "modules/acme" }
+exyonq-compat-common = { path = "compat/common" }
+exyonq-compat-nginx = { path = "compat/nginx" }
+exyonq-mod-fastcgi = { path = "crates/exyonq-mod-fastcgi" }
+exyonq-mod-htaccess = { path = "crates/exyonq-mod-htaccess" }
+exyonq-mod-static = { path = "crates/exyonq-mod-static" }
+exyonq-mod-proxy = { path = "crates/exyonq-mod-proxy" }
+exyonq-mod-tls = { path = "crates/exyonq-mod-tls" }
+exyonq-mod-http3 = { path = "crates/exyonq-mod-http3", default-features = false }
+exyonq-cache = { path = "crates/exyonq-cache" }
+exyonq-cache-redis = { path = "crates/exyonq-cache-redis" }
+exyonq-runtime-plan = { path = "crates/exyonq-runtime-plan" }
+exyonq-module-pipeline = { path = "crates/exyonq-module-pipeline" }
+exyonq-ops-runtime = { path = "crates/exyonq-ops-runtime" }
+exyonq-discovery-runtime = { path = "crates/exyonq-discovery-runtime" }
+exyonq-reload-runtime = { path = "crates/exyonq-reload-runtime" }
+arc-swap = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.release-spike-nolto]
+inherits = "release"
+lto = false
+codegen-units = 16

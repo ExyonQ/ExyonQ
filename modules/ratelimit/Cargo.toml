@@ -1,0 +1,16 @@
+[package]
+name = "exyonq-ratelimit"
+description = "Token-bucket rate limit module (Fase 2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+exyonq-addon-sdk.workspace = true
+exyonq-module-api.workspace = true
+http.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

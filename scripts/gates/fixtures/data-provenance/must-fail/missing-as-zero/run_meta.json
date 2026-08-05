@@ -1,0 +1,10 @@
+{
+  "run_id": "bad-zero",
+  "timestamp": "2026-07-31T00:00:00Z",
+  "source_commit": "abc",
+  "host_identity": "host-a",
+  "architecture": "amd64",
+  "tool_identity": "wrk2",
+  "configuration_identity": "cfg1",
+  "official": false
+}

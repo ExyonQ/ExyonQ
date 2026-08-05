@@ -1,0 +1,39 @@
+# ProductProfile = wordpress
+# = php base + static assets + front controller via htaccess overlay
+# FULL_HTACCESS_COMPATIBILITY = NO
+# WORDPRESS_CACHE = OFF
+config_version = 2
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["wp-includes", "wp-content", "wordpress"]
+
+[[route]]
+name = "wp-includes"
+match = { path = "/wp-includes" }
+root = "/var/www/html/wp-includes"
+
+[[route]]
+name = "wp-content"
+match = { path = "/wp-content" }
+root = "/var/www/html/wp-content"
+
+[[route]]
+name = "wordpress"
+match = { path = "/" }
+fastcgi = "php"
+htaccess = "overlay"
+
+[[fcgi_pool]]
+name = "php"
+address = "/run/php/php-fpm.sock"
+transport = "unix"
+document_root = "/var/www/html"
+max_concurrency = 16
+max_connections = 16
+idle_timeout_ms = 30000
+total_timeout_ms = 30000
+checkout_timeout_ms = 5000
+
+[full_page_cache]
+enabled = false

@@ -1,0 +1,3 @@
+Results reconstructed from partial logs — VALUE_TYPE must not be MEASURED without review.
+
+REQUIRES_OWNER_REVIEW

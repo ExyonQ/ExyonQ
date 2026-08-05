@@ -1,0 +1,39 @@
+[package]
+name = "exyonq-mod-proxy"
+description = "KD3 reverse-proxy module — Hyper runtime, header policy, URI helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+test-utils = ["exyonq-module-api/test-utils"]
+# P8O3 diagnostic-only SSE/proxy attribution. Compile-out when off. Not for release.
+p8-app-attribution = []
+# P8T STEP_3 diagnostic: finite TE single-buffer writer. Compile-out when off.
+p8-transport-diag = []
+# P8T-FIX A/B: restore pre-fix 16 KiB body batching (not per-frame flush).
+p8t-fix-baseline = []
+# P8TP EXPERIMENT_2: TE frame via write_vectored (no contiguous assemble).
+p8tp-vectored = []
+# P8TP: apply TCP_CORK around progressive response when peer fd + hooks present.
+p8tp-platform-cork = []
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+sha1 = "0.10"
+base64 = "0.22"
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+exyonq-cache = { workspace = true }
+exyonq-module-api = { path = "../../module-api" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

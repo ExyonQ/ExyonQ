@@ -1,0 +1,13 @@
+[package]
+name = "exyonq-platform-boundary-spike-kernel"
+description = "PS0A/PS0B experimental — kernel-side wire planner slice (NOT production architecture)"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bytes = { workspace = true }

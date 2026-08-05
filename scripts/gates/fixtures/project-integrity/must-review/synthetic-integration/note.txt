@@ -1,0 +1,3 @@
+Synthetic fixtures used in an integration test harness — owner review for REAL_WORLD_EVIDENCE claims.
+
+REQUIRES_OWNER_REVIEW

@@ -1,0 +1,11 @@
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "tests/fixtures/www"
+index = "index.html"

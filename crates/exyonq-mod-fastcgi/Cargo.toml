@@ -1,0 +1,27 @@
+[package]
+name = "exyonq-mod-fastcgi"
+description = "Plan 08 FastCGI module — PR3-A in-memory record parser (no wire I/O)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+exyonq-cache = { workspace = true }
+exyonq-module-api = { path = "../../module-api" }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
+tracing.workspace = true
+
+[features]
+core-bridge = []
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+socket2 = "0.6"
+
+[dev-dependencies]
+tempfile = "3"

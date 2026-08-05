@@ -1,0 +1,8 @@
+[package]
+name = "exyonq-http3-provider-api"
+description = "Provider-neutral HTTP/3 transport settings (P13P) — no Quinn/quiche types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

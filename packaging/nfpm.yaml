@@ -1,0 +1,53 @@
+# nfpm — build .deb and .rpm from release binaries
+# Usage: nfpm pkg --config packaging/nfpm.yaml --packager deb --target dist/exyonq_0.3.1_amd64.deb
+name: exyonq
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: web
+priority: optional
+maintainer: Antonio Cantallops Alba <security@exyonq.org>
+description: Modular reverse proxy and static file server in Rust
+homepage: https://exyonq.org
+license: Apache-2.0
+vendor: ExyonQ
+contents:
+  - src: LICENSE
+    dst: /usr/share/licenses/exyonq/LICENSE
+  - src: NOTICE
+    dst: /usr/share/licenses/exyonq/NOTICE
+  - src: THIRD_PARTY_NOTICES.md
+    dst: /usr/share/doc/exyonq/THIRD_PARTY_NOTICES.md
+  - src: sbom.cdx.json
+    dst: /usr/share/doc/exyonq/sbom.cdx.json
+  - src: dist/exyonq
+    dst: /usr/bin/exyonq
+  - src: dist/exyonqctl
+    dst: /usr/bin/exyonqctl
+  # exyonq-compat: DEFERRED from WS6 minimum tarball evidence; still shipped in
+  # nfpm packages for operator migration until a later packaging matrix decision.
+  - src: dist/exyonq-compat
+    dst: /usr/bin/exyonq-compat
+  - src: packaging/config/config.toml.example
+    dst: /etc/exyonq/config.toml
+    type: config|noreplace
+  - src: packaging/systemd/exyonq.service
+    dst: /usr/lib/systemd/system/exyonq.service
+  - src: packaging/tmpfiles.d/exyonq.conf
+    dst: /usr/lib/tmpfiles.d/exyonq.conf
+  - src: packaging/logrotate.d/exyonq
+    dst: /etc/logrotate.d/exyonq
+scripts:
+  postinstall: packaging/scripts/postinst.sh
+  postremove: packaging/scripts/postrm.sh
+overrides:
+  deb:
+    depends:
+      - ca-certificates
+      - systemd
+    recommends:
+      - curl
+  rpm:
+    depends:
+      - ca-certificates
+      - systemd

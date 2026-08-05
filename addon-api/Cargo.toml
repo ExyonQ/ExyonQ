@@ -1,0 +1,10 @@
+[package]
+name = "exyonq-addon-api"
+description = "ExyonQ addon API 1.x — stable manifest, handshake, and hook contract"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+semver = "1"
+thiserror.workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "r3-p4-mock"
+description = "R3 P4 deterministic HTTP mock upstream (benchmark infrastructure only)"
+version = "0.4.3"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "r3-p4-mock"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Standalone bench-infra package (not a product workspace member).
+[workspace]

@@ -1,0 +1,20 @@
+[package]
+name = "exyonq-acme"
+description = "ACME v2 certificate automation (HTTP-01) for ExyonQ"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+exyonq-config-ir = { workspace = true }
+exyonq-module-api = { path = "../../module-api" }
+instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "ring"] }
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

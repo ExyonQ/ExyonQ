@@ -1,0 +1,5 @@
+:8080 {
+    route /api {
+        proxy backend 9000
+    }
+}

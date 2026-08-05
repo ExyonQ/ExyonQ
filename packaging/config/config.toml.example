@@ -1,0 +1,30 @@
+# ExyonQ example configuration — /etc/exyonq/config.toml
+config_version = 1
+
+[logging]
+format = "text"  # or "json"
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["site", "api"]
+
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "/var/www/exyonq"
+index = "index.html"
+
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+timeout_ms = 30000
+
+[modules.metrics]
+enabled = true
+metrics_path = "/metrics"
+health_path = "/health"
