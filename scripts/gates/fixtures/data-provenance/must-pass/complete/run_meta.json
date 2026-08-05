@@ -1,0 +1,12 @@
+{
+  "run_id": "good-run-1",
+  "timestamp": "2026-07-31T12:00:00Z",
+  "source_commit": "deadbeef",
+  "host_identity": "netcup-amd64",
+  "architecture": "amd64",
+  "tool_identity": "wrk2-4.2.0",
+  "configuration_identity": "sha256:cfg",
+  "fixture_hash": "sha256:fix",
+  "official": false,
+  "value_type": "MEASURED"
+}

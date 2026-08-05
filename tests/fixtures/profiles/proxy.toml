@@ -1,0 +1,19 @@
+# ProductProfile = proxy
+# PRODUCT_INHERITED: X-Forwarded-For = do not trust inbound (P1.3a)
+# PRODUCT_INHERITED: ONE_SAFE_RETRY = GET/HEAD only (P1.3a)
+# No H2/H3 upstream claim.
+config_version = 2
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["app"]
+
+[[route]]
+name = "app"
+match = { path = "/" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+timeout_ms = 30000

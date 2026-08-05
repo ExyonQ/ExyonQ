@@ -1,0 +1,15 @@
+[package]
+name = "exyonq-config-surface"
+description = "ExyonQ Serverfile surface language parser and lowering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-config-ir = { path = "../ir" }
+exyonq-config-merge = { path = "../merge" }
+exyonq-config-schema = { path = "../schema" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

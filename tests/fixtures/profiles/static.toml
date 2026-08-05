@@ -1,0 +1,13 @@
+# ProductProfile = static
+# INTERNAL deploy presets Dev|Edge|Lb are NOT applied here.
+config_version = 2
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www/html"
+index = "index.html"

@@ -1,0 +1,19 @@
+[package]
+name = "exyonq-metrics"
+description = "Prometheus metrics module (Fase 2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+exyonq-addon-sdk.workspace = true
+exyonq-module-api.workspace = true
+exyonq-mod-htaccess.workspace = true
+exyonq-mod-fastcgi.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

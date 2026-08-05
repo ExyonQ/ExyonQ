@@ -1,0 +1,62 @@
+# Docker build context for repo-root builds.
+# Primary consumer: packaging/docker/Dockerfile (production)
+# Secondary: benchmarks/docker/Dockerfile.exyonq
+
+# VCS / local IDE / release staging
+.git
+.cursor
+.exyonq-local
+.idea
+.vscode
+.github
+**/.DS_Store
+**/*.swp
+**/*~
+
+# Build outputs
+target
+**/target
+dist
+
+# Docs / research / fuzz (not required by production image COPY list)
+docs
+study
+fuzz
+integrations
+graphify-out
+
+# Heavy benchmark evidence (keep only paths needed by bench Dockerfiles)
+benchmarks/results
+benchmarks/results-dev
+benchmarks/tools
+benchmarks/rivals-cache
+benchmarks/reports
+benchmarks/p1-anton
+benchmarks/p1.7
+benchmarks/p1.7-r
+benchmarks/p1.7-rr
+benchmarks/plan10a
+benchmarks/plan10b
+benchmarks/performance-contract
+benchmarks/baselines
+benchmarks/pingora-reference
+benchmarks/scripts
+benchmarks/modern-rivals
+!benchmarks/docker/**
+!benchmarks/configs/**
+!benchmarks/scenarios/fixtures/**
+!benchmarks/scenarios/payloads/**
+!benchmarks/exyonq-bench/**
+!benchmarks/mock-upstream/**
+
+# Never ship local release packets / stamps / secrets into context
+**/p14v040/**
+**/*-stamps/**
+**/stamps/**
+logs
+**/*.pem
+**/*passphrase*
+**/*-private*
+**/.env
+**/.env.*
+inventories

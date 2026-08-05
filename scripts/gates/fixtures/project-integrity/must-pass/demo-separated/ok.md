@@ -1,0 +1,2 @@
+DEMO_ONLY NOT_REAL_DATA NOT_PRODUCTION_EVIDENCE NOT_FOR_DECISION
+This directory holds demo screenshots only.

@@ -1,0 +1,18 @@
+[package]
+name = "exyonq-cache"
+description = "KD4.1 — neutral response cache store, singleflight, and serve orchestration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+test-utils = []
+
+[dependencies]
+bytes.workspace = true
+exyonq-module-api = { path = "../../module-api" }
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,15 @@
+[package]
+name = "exyonq-mod-tls"
+description = "TLS termination runtime — certificates, rustls config, handshake (KD4.5)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-module-api = { path = "../../module-api" }
+rustls.workspace = true
+tokio-rustls.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

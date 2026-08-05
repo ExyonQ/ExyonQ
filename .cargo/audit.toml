@@ -1,0 +1,8 @@
+# cargo-audit project config (paired with deny.toml [advisories].ignore).
+
+[advisories]
+# R2D OD-2 / OPTION_B: temporary v0.4.3 waiver — NOT a fix. Expiry: v0.4.4 dependency review.
+# Cross-Engine Store mixing is not reachable under current WasmPlugin one-Engine ownership.
+ignore = [
+  "RUSTSEC-2026-0222",
+]

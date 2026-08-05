@@ -1,0 +1,20 @@
+[package]
+name = "exyonq-reload-runtime"
+description = "ExyonQ reload watcher and OS signal runtime (KD4.14)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+exyonq-module-api = { path = "../../module-api" }
+notify.workspace = true
+tokio = { workspace = true, features = ["signal", "sync", "time", "rt", "macros"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tokio-util = { version = "0.7", features = ["rt"] }

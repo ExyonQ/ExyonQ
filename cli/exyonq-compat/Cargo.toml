@@ -1,0 +1,15 @@
+[package]
+name = "exyonq-compat-cli"
+description = "Offline migration CLI (Fase 4)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "exyonq-compat"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+exyonq-compat-nginx = { path = "../../compat/nginx" }

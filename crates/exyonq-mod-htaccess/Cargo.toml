@@ -1,0 +1,21 @@
+[package]
+name = "exyonq-mod-htaccess"
+description = "Plan 05B .htaccess offline parser, compiler, and watcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+arc-swap = "1"
+exyonq-module-api = { path = "../../module-api" }
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread", "time"] }

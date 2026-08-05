@@ -1,0 +1,16 @@
+[package]
+name = "exyonq-config-merge"
+description = "ExyonQ IR merge: includes, discovery overlays, profiles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-config-ir = { path = "../ir" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

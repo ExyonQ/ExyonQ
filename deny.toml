@@ -1,0 +1,36 @@
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+unmaintained = "workspace"
+# RUSTSEC-2025-0134 ignore removed after P14V042 rustls-pemfile → rustls-pki-types migration.
+# R2D OD-2 / OPTION_B: temporary v0.4.3 waiver — NOT a fix. Expiry: v0.4.4 dependency review.
+# Cross-Engine Store mixing is not reachable under current WasmPlugin one-Engine ownership.
+ignore = [
+  { id = "RUSTSEC-2026-0222", reason = "v0.4.3 temporary waiver: WasmPlugin owns one Engine; Store/Module from that Engine only; revisit Wasmtime >=46.0.2 in v0.4.4" },
+]
+
+# License allow-list — keep aligned with scripts/legal/about.toml `accepted`.
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "OpenSSL",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"

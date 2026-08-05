@@ -1,0 +1,63 @@
+[package]
+name = "exyonq-core"
+description = "ExyonQ core HTTP runtime: config, routing, static files, reverse proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+exyonq-addon-api = { workspace = true }
+exyonq-module-api = { path = "../module-api" }
+exyonq-cache = { workspace = true }
+exyonq-mod-proxy = { workspace = true }
+exyonq-mod-static = { workspace = true }
+exyonq-config-ir = { workspace = true }
+exyonq-runtime-plan = { workspace = true }
+exyonq-module-pipeline = { workspace = true }
+exyonq-mod-tls = { workspace = true }
+# Provider selected via [features]; workspace dep has default-features=false.
+exyonq-mod-http3 = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+sha1 = "0.10"
+base64 = "0.22"
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+exyonq-mod-static = { workspace = true, features = ["test-utils"] }
+exyonq-mod-proxy = { workspace = true }
+exyonq-mod-fastcgi = { workspace = true }
+exyonq-mod-htaccess = { workspace = true }
+exyonq-metrics = { workspace = true }
+exyonq-compat-nginx = { path = "../compat/nginx" }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
+rustls = { workspace = true }
+exyonq-mod-tls = { workspace = true }
+
+[features]
+# P13D Phase 6R: product default s2n; quiche optional; Quinn rollback-only.
+default = ["http3-provider-s2n"]
+http3-provider-quinn-legacy = ["exyonq-mod-http3/http3-provider-quinn-legacy"]
+http3-provider-s2n = ["exyonq-mod-http3/http3-provider-s2n"]
+http3-provider-quiche = ["exyonq-mod-http3/http3-provider-quiche"]
+test-utils = []
+p8-app-attribution = ["exyonq-mod-proxy/p8-app-attribution"]
+p8-transport-diag = ["exyonq-mod-proxy/p8-transport-diag"]
+p8t-fix-baseline = ["exyonq-mod-proxy/p8t-fix-baseline"]
+p8tp-vectored = ["exyonq-mod-proxy/p8tp-vectored"]
+p8tp-platform-cork = ["exyonq-mod-proxy/p8tp-platform-cork"]

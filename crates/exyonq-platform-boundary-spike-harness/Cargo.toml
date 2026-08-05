@@ -1,0 +1,39 @@
+[package]
+name = "exyonq-platform-boundary-spike-harness"
+description = "PS0A/PS0B experimental boundary measurement harness (NOT production)"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "boundary-spike-bench"
+path = "src/bin/boundary_spike_bench.rs"
+
+[[bin]]
+name = "boundary-spike-codegen-hint"
+path = "src/bin/boundary_spike_codegen_hint.rs"
+
+[[bin]]
+name = "boundary-spike-bench-m2"
+path = "src/bin/boundary_spike_bench_m2.rs"
+
+[[bin]]
+name = "boundary-spike-bench-x2"
+path = "src/bin/boundary_spike_bench_x2.rs"
+
+[[bin]]
+name = "boundary-spike-bench-f2"
+path = "src/bin/boundary_spike_bench_f2.rs"
+
+[[bin]]
+name = "boundary-spike-bench-n2"
+path = "src/bin/boundary_spike_bench_n2.rs"
+
+[[bin]]
+name = "boundary-spike-protector"
+path = "src/bin/boundary_spike_protector.rs"
+
+[dependencies]
+bytes = { workspace = true }
+exyonq-platform-boundary-spike-kernel = { path = "../exyonq-platform-boundary-spike-kernel" }

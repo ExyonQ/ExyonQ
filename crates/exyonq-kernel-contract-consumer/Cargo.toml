@@ -1,0 +1,16 @@
+[package]
+name = "exyonq-kernel-contract-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "PS1C compile-consumer gate: future platform crate depends on exyonq-core kernel seam only"
+
+[dependencies]
+bytes = { workspace = true }
+exyonq-core = { path = "../../core", default-features = false, features = ["http3-provider-s2n"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+exyonq-mod-static = { workspace = true }
+exyonq-mod-proxy = { workspace = true }

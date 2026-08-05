@@ -1,0 +1,14 @@
+config_version = 1
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["api"]
+
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"

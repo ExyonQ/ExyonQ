@@ -1,0 +1,82 @@
+# --- Rust / Cargo ---
+/target/
+**/target/
+/fuzz/target/
+**/*.rs.bk
+*.rlib
+*.rmeta
+.sccache/
+rust-project.json
+.cargo/config.toml.local
+
+# --- Always exclude from this clean publication tree ---
+# Ignore local/noncanonical docs content, but force-track canonical
+# governance and security SoT subtrees (and historical release notes).
+/docs/*
+!/docs/security/
+!/docs/security/**
+!/docs/governance/
+!/docs/governance/**
+!/docs/releases/
+!/docs/releases/**
+!/docs/adr/
+!/docs/adr/**
+!/docs/architecture/
+!/docs/architecture/**
+/benchmarks/
+/results/
+/raw/
+/artifacts/
+/tmp/
+/.temp/
+/.cache/
+/graphify-out/
+/dist/
+
+*.log
+*.env
+*.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.bundle
+*.tar
+*.tar.gz
+*.zip
+*.zst
+*.tgz
+*.profraw
+*.profdata
+*.html
+*.csv
+*.kd25-sync-manifest
+**/*.kd25-sync-manifest
+
+# --- IDE / OS ---
+.DS_Store
+.idea/
+.vscode/
+!.vscode/settings.example.json
+.cursor/
+.cursor-local/
+*.code-workspace
+
+# --- Secrets / signing private material ---
+cosign.key
+release-private.key
+**/id_rsa
+**/id_ed25519
+GPG_PRIVATE_KEY
+
+# --- Exceptions: public examples only (private PEM never excepted) ---
+!tests/**/*.html
+!**/*.env.example
+!packaging/**/*.env.example
+
+# Static TLS private keys are forbidden (EXYONQ-SEC-PRIVATE-MATERIAL-ZERO).
+# Use scripts/test-tls/generate-ephemeral-tls.sh at runtime.
+**/tests/fixtures/tls/key.pem
+**/tests/fixtures/tls/*.key
+**/benchmarks/**/tls/key.pem
+**/benchmarks/scenarios/fixtures/tls/key.pem

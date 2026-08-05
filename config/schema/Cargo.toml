@@ -1,0 +1,10 @@
+[package]
+name = "exyonq-config-schema"
+description = "ExyonQ config JSON Schema and migrators"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+exyonq-config-ir = { path = "../ir" }
+serde_json.workspace = true
