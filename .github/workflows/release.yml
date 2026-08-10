@@ -77,7 +77,7 @@ jobs:
       - name: Generate release compliance artifacts
         shell: bash
         run: bash scripts/legal/generate-release-compliance-artifacts.sh
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-compliance
           path: |
@@ -184,7 +184,7 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/exyonqctl.exe dist/exyonqctl.exe -ErrorAction SilentlyContinue
           Copy-Item LICENSE, NOTICE, THIRD_PARTY_NOTICES.md, sbom.cdx.json dist/
           Compress-Archive -Path dist/exyonq.exe, dist/LICENSE, dist/NOTICE, dist/THIRD_PARTY_NOTICES.md, dist/sbom.cdx.json -DestinationPath dist/${{ matrix.artifact }}.zip -Force
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -238,7 +238,7 @@ jobs:
           nfpm pkg --config packaging/nfpm.yaml --packager deb --target dist/
           nfpm pkg --config packaging/nfpm.yaml --packager rpm --target dist/
           ls -la dist/*.{deb,rpm}
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: exyonq-linux-packages
           path: |
@@ -336,7 +336,7 @@ jobs:
           echo "ROOT_SIGNED_OBJECT=SHA256SUMS.txt"
           echo "RELEASE_MANIFEST_INCLUDED_IN_SHA256SUMS=YES"
           echo "ARTIFACTS_INCLUDED_IN_SHA256SUMS=YES"
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: checksums
           path: |
