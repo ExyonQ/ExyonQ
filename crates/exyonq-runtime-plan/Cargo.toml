@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 http.workspace = true
-matchit = "0.8"
+matchit = "0.9"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
