@@ -732,4 +732,90 @@ mod tests {
         assert_eq!(read_str_from_guest(mem, 6, 5), Some("world"));
         assert_eq!(read_str_from_guest(mem, 100, 5), None);
     }
+
+    // -------------------------------------------------------------------------
+    // WASM-001: run_http_filter_chain fail-open en FuelExhausted
+    // -------------------------------------------------------------------------
+    // Bug: `Err(FuelExhausted) => continue` en run_http_filter_chain (L617-624)
+    // Un plugin malicioso o con bug que agota fuel simplemente se salta,
+    // permitiendo que la request pase sin filtrado → fail-open.
+    //
+    // Contrato correcto: FuelExhausted debe ser fail-CLOSED (Reject/Block),
+    // no Continue silencioso.
+
+    /// WASM-001 ROJO: PluginManager continúa (fail-open) cuando plugin agota fuel.
+    ///
+    /// Este test requiere montar PluginManager con un plugin WASM real que
+    /// agote fuel. La infraestructura actual de tests usa `invoke_i32_with_fuel`
+    /// que opera a nivel más bajo (no pasa por run_http_filter_chain).
+    ///
+    /// Para probar el path completo necesitamos:
+    /// 1. Compilar un plugin WASM con ABI `exyonq_on_request_headers` que haga loop infinito
+    /// 2. Cargarlo en WasmPluginManager
+    /// 3. Llamar run_http_filter_chain
+    /// 4. Verificar que NO devuelve Continue
+    ///
+    /// Hoy devuelve Continue (fail-open) → este test DEBE FALLAR.
+    #[test]
+    #[ignore = "WASM-001 gap: need plugin WASM con ABI exyonq_on_request_headers que agote fuel; \
+                run_http_filter_chain hace `continue` en FuelExhausted (lib.rs L617-624) — fail-open"]
+    fn run_http_filter_chain_must_not_continue_on_fuel_exhausted() {
+        // Contrato: cuando un plugin agota fuel, run_http_filter_chain
+        // DEBE devolver algo distinto de FilterAction::Continue (fail-closed).
+        //
+        // El código actual (L617-624) hace:
+        //   Err(WasmHostError::FuelExhausted) => {
+        //       self.total_fuel_exhausted.fetch_add(1, ...);
+        //       eprintln!("[wasm-host] Plugin '{}' exhausted fuel — skipping", ...);
+        //       continue;  // <-- BUG: fail-open
+        //   }
+        //
+        // Esto permite bypass de filtros de seguridad (rate limiting, WAF, etc).
+        //
+        // Para implementar este test necesitamos un plugin .wasm con la firma:
+        //   (func (export "exyonq_on_request_headers") (param i64 i32 i32 i32 i32) (result i32)
+        //     (loop $inf (br $inf)))  ; loop infinito para agotar fuel
+        //
+        // El mock sería crear el WASM en memoria, cargarlo con load_plugin,
+        // y verificar que run_http_filter_chain NO devuelve Continue.
+        //
+        // Por ahora documentamos el gap; el test real requiere fixture WASM.
+        let manager = WasmPluginManager::new();
+        let req = RequestView {
+            id: 1,
+            conn_id: 1,
+            method: "GET",
+            path: "/test",
+            host: "example.com",
+            remote_addr: "127.0.0.1",
+            remote_port: 12345,
+            headers: &[],
+            body: None,
+        };
+
+        let action = manager.run_http_filter_chain(&req);
+
+        // Sin plugins cargados, esto es Continue (correcto para cadena vacía)
+        // Con plugin que agota fuel, DEBERÍA ser Reject/CloseConnection, no Continue
+        assert!(
+            !matches!(action, FilterAction::Continue),
+            "WASM-001: run_http_filter_chain DEBE fallar cerrado (no Continue) \
+             cuando plugin agota fuel. Hoy hace `continue` silencioso (fail-open). \
+             Ver lib.rs L617-624: Err(FuelExhausted) => continue"
+        );
+    }
+
+    /// Verificación auxiliar: fuel_trap_on_infinite_loop confirma que
+    /// WasmHostError::FuelExhausted SÍ se genera para loops infinitos.
+    /// El problema está en cómo run_http_filter_chain MANEJA ese error.
+    #[test]
+    fn fuel_exhausted_error_is_generated_for_infinite_loop() {
+        // Este test es verde - confirma que el error se genera correctamente
+        let err = invoke_i32_with_fuel(INFINITE_LOOP_WAT, "run", 10_000)
+            .expect_err("debe agotar fuel");
+        assert!(
+            matches!(err, WasmHostError::FuelExhausted),
+            "WASM-001 baseline: FuelExhausted se genera para loop infinito"
+        );
+    }
 }

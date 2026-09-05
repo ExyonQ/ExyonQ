@@ -112,4 +112,81 @@ mod tests {
         assert!(is_hop_by_hop_header("Upgrade"));
         assert!(!is_hop_by_hop_header("content-type"));
     }
+
+    // -------------------------------------------------------------------------
+    // DP-H-WS-01: WebSocket path no elimina headers X-Forwarded-* spoofeados
+    // -------------------------------------------------------------------------
+    // Bug: `forward_websocket` solo usa `strip_hop_by_hop_headers`, pero
+    // X-Forwarded-For/Proto/Host y Forwarded NO son hop-by-hop según RFC 7230.
+    // POST sí hace strip + re-inject (ver p13a_classify_504_xff.rs).
+    // El path WS debe tener paridad: eliminar headers spoofeados antes de forward.
+
+    /// DP-H-WS-01 ROJO: strip_hop_by_hop_headers NO elimina X-Forwarded-*.
+    ///
+    /// Contrato anti-spoof (paridad con POST path): headers X-Forwarded-*
+    /// y Forwarded del cliente deben eliminarse antes de forward a upstream.
+    /// Hoy WS solo usa strip_hop_by_hop_headers que no toca estos headers.
+    ///
+    /// Este test DEBE FALLAR hasta que se agregue lógica de strip para WS.
+    #[test]
+    fn strip_hop_by_hop_does_not_remove_x_forwarded_headers_ws_gap() {
+        let mut headers = HeaderMap::new();
+        // Headers que un atacante puede spoofear
+        headers.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("9.9.9.9, 8.8.8.8"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-forwarded-proto"),
+            HeaderValue::from_static("https"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-forwarded-host"),
+            HeaderValue::from_static("evil.com"),
+        );
+        headers.insert(
+            HeaderName::from_static("forwarded"),
+            HeaderValue::from_static("for=9.9.9.9;proto=https"),
+        );
+        // También hop-by-hop reales para verificar que sí se eliminan
+        headers.insert(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("keep-alive"),
+        );
+        headers.insert(
+            HeaderName::from_static("upgrade"),
+            HeaderValue::from_static("websocket"),
+        );
+
+        // Aplicar strip_hop_by_hop_headers (lo único que hace WS path)
+        strip_hop_by_hop_headers(&mut headers);
+
+        // Verificar que hop-by-hop reales SÍ se eliminan (esto pasa)
+        assert!(
+            !headers.contains_key("connection"),
+            "connection debe eliminarse"
+        );
+        assert!(!headers.contains_key("upgrade"), "upgrade debe eliminarse");
+
+        // DP-H-WS-01: CONTRATO ANTI-SPOOF - estos headers NO deben quedar
+        // Hoy quedan porque strip_hop_by_hop no los toca → test ROJO
+        assert!(
+            !headers.contains_key("x-forwarded-for"),
+            "DP-H-WS-01: x-forwarded-for spoofeado NO debe pasar a upstream en WS path. \
+             Hoy strip_hop_by_hop_headers no lo elimina. \
+             Ver websocket.rs forward_websocket que solo usa strip_hop_by_hop."
+        );
+        assert!(
+            !headers.contains_key("x-forwarded-proto"),
+            "DP-H-WS-01: x-forwarded-proto spoofeado NO debe pasar a upstream en WS path"
+        );
+        assert!(
+            !headers.contains_key("x-forwarded-host"),
+            "DP-H-WS-01: x-forwarded-host spoofeado NO debe pasar a upstream en WS path"
+        );
+        assert!(
+            !headers.contains_key("forwarded"),
+            "DP-H-WS-01: forwarded spoofeado NO debe pasar a upstream en WS path"
+        );
+    }
 }

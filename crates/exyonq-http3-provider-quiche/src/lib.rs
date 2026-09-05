@@ -768,4 +768,83 @@ mod tests {
         let snap = diagnostics_snapshot();
         assert_eq!(snap.provider, "quiche");
     }
+
+    // -------------------------------------------------------------------------
+    // RUST-001: Token QUIC sin HMAC - mint_token / validate_token vulnerables
+    // -------------------------------------------------------------------------
+    // Bug: token = `b"quiche" || IP || dcid` SIN HMAC.
+    // Un atacante puede forjar tokens para cualquier IP conocida.
+
+    /// Helper: construye un token con la estructura actual (sin HMAC).
+    /// Simula lo que hace mint_token pero sin necesitar quiche::Header.
+    fn build_token_manually(ip: &SocketAddr, dcid: &[u8]) -> Vec<u8> {
+        let mut token = Vec::new();
+        token.extend_from_slice(b"quiche");
+        match ip.ip() {
+            std::net::IpAddr::V4(a) => token.extend_from_slice(&a.octets()),
+            std::net::IpAddr::V6(a) => token.extend_from_slice(&a.octets()),
+        }
+        token.extend_from_slice(dcid);
+        token
+    }
+
+    /// Baseline: token construido manualmente + validate con misma IP funciona.
+    /// Esto verifica que validate_token acepta tokens con estructura correcta.
+    #[test]
+    fn validate_token_accepts_same_ip_minted() {
+        let src: SocketAddr = "192.168.1.100:12345".parse().unwrap();
+        let dcid = [0xAA, 0xBB, 0xCC, 0xDD];
+        let token = build_token_manually(&src, &dcid);
+        let odcid = validate_token(&src, &token);
+        assert!(
+            odcid.is_some(),
+            "RUST-001 baseline: token válido para misma IP debe aceptarse"
+        );
+        // Verificar que devuelve el dcid correcto
+        assert_eq!(odcid.unwrap().as_ref(), &dcid);
+    }
+
+    /// RUST-001 ROJO: Token forjado a mano sin HMAC es aceptado.
+    ///
+    /// El atacante conoce la estructura: `b"quiche" + IP_bytes + dcid_arbitrario`.
+    /// Puede construir un token válido para CUALQUIER IP sin secreto.
+    /// Esto permite bypass de la validación Retry y posibles ataques de amplificación.
+    ///
+    /// Contrato correcto: validate_token DEBE rechazar tokens no firmados con HMAC.
+    /// Hoy acepta → este test DEBE FALLAR hasta que se agregue HMAC.
+    #[test]
+    fn validate_token_rejects_forged_token_without_mac() {
+        // Atacante forja token para IP víctima sin conocer ningún secreto
+        let victim_ip: SocketAddr = "203.0.113.50:9999".parse().unwrap();
+        let attacker_dcid = [0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
+
+        // Construcción manual del token (estructura actual sin HMAC)
+        let forged_token = build_token_manually(&victim_ip, &attacker_dcid);
+
+        // Validar desde la IP "víctima" (el atacante spoofea src o conoce la IP)
+        let result = validate_token(&victim_ip, &forged_token);
+
+        // CONTRATO CORRECTO: token forjado sin HMAC debe ser rechazado
+        // HOY: se acepta porque no hay verificación criptográfica
+        assert!(
+            result.is_none(),
+            "RUST-001: validate_token DEBE rechazar token forjado sin HMAC. \
+             Hoy acepta tokens construidos manualmente sin secreto. \
+             Ver mint_token/validate_token en lib.rs ~L718-742"
+        );
+    }
+
+    /// Verificación: IP diferente ya rechaza (verde esperado).
+    #[test]
+    fn validate_token_rejects_wrong_ip() {
+        let mint_src: SocketAddr = "10.0.0.1:1000".parse().unwrap();
+        let validate_src: SocketAddr = "10.0.0.2:1000".parse().unwrap();
+        let dcid = [0x01, 0x02, 0x03];
+        let token = build_token_manually(&mint_src, &dcid);
+        let result = validate_token(&validate_src, &token);
+        assert!(
+            result.is_none(),
+            "Token emitido para IP diferente debe rechazarse"
+        );
+    }
 }
