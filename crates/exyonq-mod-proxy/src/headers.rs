@@ -51,11 +51,21 @@ pub fn is_hop_by_hop_header(name: &str) -> bool {
 }
 
 /// Remove hop-by-hop headers from a mutable header map (response or request).
+/// Also removes intermediary identity headers (X-Forwarded-*, Forwarded, X-Real-IP)
+/// to prevent client header spoofing. The caller should re-inject trusted values
+/// after stripping.
 pub fn strip_hop_by_hop_headers(headers: &mut HeaderMap) {
     headers.remove(HeaderName::from_static("connection"));
     headers.remove(HeaderName::from_static("transfer-encoding"));
     headers.remove(HeaderName::from_static("upgrade"));
     headers.remove(HeaderName::from_static("proxy-connection"));
+    // DP-H-WS-01: Strip intermediary identity headers to prevent spoofing.
+    // Callers (WS, POST, etc.) should re-inject trusted XFF/XFP after strip.
+    headers.remove(HeaderName::from_static("x-forwarded-for"));
+    headers.remove(HeaderName::from_static("x-forwarded-proto"));
+    headers.remove(HeaderName::from_static("x-forwarded-host"));
+    headers.remove(HeaderName::from_static("forwarded"));
+    headers.remove(HeaderName::from_static("x-real-ip"));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

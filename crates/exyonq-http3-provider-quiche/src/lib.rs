@@ -242,7 +242,7 @@ where
                 let token = hdr.token.as_ref().unwrap();
 
                 if token.is_empty() {
-                    let new_token = mint_token(&hdr, &from);
+                    let new_token = mint_token(&hdr, &from, &conn_id_seed);
                     let len = quiche::retry(
                         &hdr.scid,
                         &hdr.dcid,
@@ -255,7 +255,7 @@ where
                     continue 'read;
                 }
 
-                let odcid = match validate_token(&from, token) {
+                let odcid = match validate_token(&from, token, &conn_id_seed) {
                     Some(v) => v,
                     None => continue 'read,
                 };
@@ -715,19 +715,31 @@ fn materialized_to_h3(m: Http3MaterializedResponse) -> (Vec<quiche::h3::Header>,
     (hdrs, body)
 }
 
-fn mint_token(hdr: &quiche::Header, src: &net::SocketAddr) -> Vec<u8> {
-    let mut token = Vec::new();
-    token.extend_from_slice(b"quiche");
+fn mint_token(hdr: &quiche::Header, src: &net::SocketAddr, hmac_key: &ring::hmac::Key) -> Vec<u8> {
+    let mut message = Vec::new();
     let addr = match src.ip() {
         std::net::IpAddr::V4(a) => a.octets().to_vec(),
         std::net::IpAddr::V6(a) => a.octets().to_vec(),
     };
+    message.extend_from_slice(&addr);
+    message.extend_from_slice(&hdr.dcid);
+
+    let tag = ring::hmac::sign(hmac_key, &message);
+    let tag_bytes = tag.as_ref();
+
+    let mut token = Vec::new();
+    token.extend_from_slice(b"quiche");
     token.extend_from_slice(&addr);
     token.extend_from_slice(&hdr.dcid);
+    token.extend_from_slice(tag_bytes);
     token
 }
 
-fn validate_token<'a>(src: &net::SocketAddr, token: &'a [u8]) -> Option<quiche::ConnectionId<'a>> {
+fn validate_token<'a>(
+    src: &net::SocketAddr,
+    token: &'a [u8],
+    hmac_key: &ring::hmac::Key,
+) -> Option<quiche::ConnectionId<'a>> {
     if token.len() < 6 || &token[..6] != b"quiche" {
         return None;
     }
@@ -739,7 +751,26 @@ fn validate_token<'a>(src: &net::SocketAddr, token: &'a [u8]) -> Option<quiche::
     if token.len() < addr.len() || &token[..addr.len()] != addr.as_slice() {
         return None;
     }
-    Some(quiche::ConnectionId::from_ref(&token[addr.len()..]))
+    let after_addr = &token[addr.len()..];
+
+    // HMAC-SHA256 tag is 32 bytes
+    const HMAC_TAG_LEN: usize = 32;
+    if after_addr.len() < HMAC_TAG_LEN {
+        return None;
+    }
+    let dcid_len = after_addr.len() - HMAC_TAG_LEN;
+    let dcid = &after_addr[..dcid_len];
+    let provided_tag = &after_addr[dcid_len..];
+
+    let mut message = Vec::new();
+    message.extend_from_slice(&addr);
+    message.extend_from_slice(dcid);
+
+    if ring::hmac::verify(hmac_key, &message, provided_tag).is_err() {
+        return None;
+    }
+
+    Some(quiche::ConnectionId::from_ref(dcid))
 }
 
 #[cfg(test)]
@@ -772,12 +803,14 @@ mod tests {
     // -------------------------------------------------------------------------
     // RUST-001: Token QUIC sin HMAC - mint_token / validate_token vulnerables
     // -------------------------------------------------------------------------
-    // Bug: token = `b"quiche" || IP || dcid` SIN HMAC.
-    // Un atacante puede forjar tokens para cualquier IP conocida.
 
-    /// Helper: construye un token con la estructura actual (sin HMAC).
-    /// Simula lo que hace mint_token pero sin necesitar quiche::Header.
-    fn build_token_manually(ip: &SocketAddr, dcid: &[u8]) -> Vec<u8> {
+    fn test_hmac_key() -> ring::hmac::Key {
+        ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"test-secret-key-for-unit-tests!!")
+    }
+
+    /// Helper: construye un token forjado SIN HMAC válido (old vulnerable format).
+    /// Simula lo que un atacante podría construct sin knowing the secret.
+    fn build_forged_token_without_hmac(ip: &SocketAddr, dcid: &[u8]) -> Vec<u8> {
         let mut token = Vec::new();
         token.extend_from_slice(b"quiche");
         match ip.ip() {
@@ -788,63 +821,106 @@ mod tests {
         token
     }
 
-    /// Baseline: token construido manualmente + validate con misma IP funciona.
-    /// Esto verifica que validate_token acepta tokens con estructura correcta.
+    /// Helper: construye un token HMAC-firmado válido usando mint_token internals.
+    fn build_valid_token(ip: &SocketAddr, dcid: &[u8], hmac_key: &ring::hmac::Key) -> Vec<u8> {
+        let mut message = Vec::new();
+        let addr = match ip.ip() {
+            std::net::IpAddr::V4(a) => a.octets().to_vec(),
+            std::net::IpAddr::V6(a) => a.octets().to_vec(),
+        };
+        message.extend_from_slice(&addr);
+        message.extend_from_slice(dcid);
+
+        let tag = ring::hmac::sign(hmac_key, &message);
+
+        let mut token = Vec::new();
+        token.extend_from_slice(b"quiche");
+        token.extend_from_slice(&addr);
+        token.extend_from_slice(dcid);
+        token.extend_from_slice(tag.as_ref());
+        token
+    }
+
+    /// Baseline: properly minted token + validate with same IP and key works.
     #[test]
     fn validate_token_accepts_same_ip_minted() {
+        let key = test_hmac_key();
         let src: SocketAddr = "192.168.1.100:12345".parse().unwrap();
         let dcid = [0xAA, 0xBB, 0xCC, 0xDD];
-        let token = build_token_manually(&src, &dcid);
-        let odcid = validate_token(&src, &token);
+        let token = build_valid_token(&src, &dcid, &key);
+        let odcid = validate_token(&src, &token, &key);
         assert!(
             odcid.is_some(),
-            "RUST-001 baseline: token válido para misma IP debe aceptarse"
+            "RUST-001 baseline: properly signed token for same IP must be accepted"
         );
-        // Verificar que devuelve el dcid correcto
         assert_eq!(odcid.unwrap().as_ref(), &dcid);
     }
 
-    /// RUST-001 ROJO: Token forjado a mano sin HMAC es aceptado.
+    /// RUST-001: Token forged without HMAC is now REJECTED.
     ///
-    /// El atacante conoce la estructura: `b"quiche" + IP_bytes + dcid_arbitrario`.
-    /// Puede construir un token válido para CUALQUIER IP sin secreto.
-    /// Esto permite bypass de la validación Retry y posibles ataques de amplificación.
-    ///
-    /// Contrato correcto: validate_token DEBE rechazar tokens no firmados con HMAC.
-    /// Hoy acepta → este test DEBE FALLAR hasta que se agregue HMAC.
+    /// An attacker who knows the structure `b"quiche" + IP_bytes + dcid` but not the
+    /// secret key cannot forge valid tokens.
     #[test]
     fn validate_token_rejects_forged_token_without_mac() {
-        // Atacante forja token para IP víctima sin conocer ningún secreto
+        let key = test_hmac_key();
         let victim_ip: SocketAddr = "203.0.113.50:9999".parse().unwrap();
         let attacker_dcid = [0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
 
-        // Construcción manual del token (estructura actual sin HMAC)
-        let forged_token = build_token_manually(&victim_ip, &attacker_dcid);
+        // Attacker constructs token without knowing the HMAC key
+        let forged_token = build_forged_token_without_hmac(&victim_ip, &attacker_dcid);
 
-        // Validar desde la IP "víctima" (el atacante spoofea src o conoce la IP)
-        let result = validate_token(&victim_ip, &forged_token);
+        // Validation must reject: no valid HMAC tag present
+        let result = validate_token(&victim_ip, &forged_token, &key);
 
-        // CONTRATO CORRECTO: token forjado sin HMAC debe ser rechazado
-        // HOY: se acepta porque no hay verificación criptográfica
         assert!(
             result.is_none(),
-            "RUST-001: validate_token DEBE rechazar token forjado sin HMAC. \
-             Hoy acepta tokens construidos manualmente sin secreto. \
-             Ver mint_token/validate_token en lib.rs ~L718-742"
+            "RUST-001: validate_token MUST reject token forged without HMAC."
         );
     }
 
-    /// Verificación: IP diferente ya rechaza (verde esperado).
+    /// Token for a different IP is rejected (IP binding check).
     #[test]
     fn validate_token_rejects_wrong_ip() {
+        let key = test_hmac_key();
         let mint_src: SocketAddr = "10.0.0.1:1000".parse().unwrap();
         let validate_src: SocketAddr = "10.0.0.2:1000".parse().unwrap();
         let dcid = [0x01, 0x02, 0x03];
-        let token = build_token_manually(&mint_src, &dcid);
-        let result = validate_token(&validate_src, &token);
+        let token = build_valid_token(&mint_src, &dcid, &key);
+        let result = validate_token(&validate_src, &token, &key);
         assert!(
             result.is_none(),
-            "Token emitido para IP diferente debe rechazarse"
+            "Token minted for different IP must be rejected"
+        );
+    }
+
+    /// Token with tampered HMAC is rejected.
+    #[test]
+    fn validate_token_rejects_tampered_hmac() {
+        let key = test_hmac_key();
+        let src: SocketAddr = "192.168.1.100:12345".parse().unwrap();
+        let dcid = [0xAA, 0xBB, 0xCC, 0xDD];
+        let mut token = build_valid_token(&src, &dcid, &key);
+        // Tamper with the last byte of the HMAC
+        if let Some(last) = token.last_mut() {
+            *last ^= 0xFF;
+        }
+        let result = validate_token(&src, &token, &key);
+        assert!(result.is_none(), "Token with tampered HMAC must be rejected");
+    }
+
+    /// Token validated with wrong key is rejected.
+    #[test]
+    fn validate_token_rejects_wrong_key() {
+        let mint_key = test_hmac_key();
+        let wrong_key =
+            ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"different-secret-key-attacker!");
+        let src: SocketAddr = "192.168.1.100:12345".parse().unwrap();
+        let dcid = [0xAA, 0xBB, 0xCC, 0xDD];
+        let token = build_valid_token(&src, &dcid, &mint_key);
+        let result = validate_token(&src, &token, &wrong_key);
+        assert!(
+            result.is_none(),
+            "Token validated with wrong key must be rejected"
         );
     }
 }

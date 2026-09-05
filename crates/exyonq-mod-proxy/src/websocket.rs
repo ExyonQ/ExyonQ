@@ -86,9 +86,21 @@ pub async fn forward_websocket(
     let mut upstream_builder = Request::builder()
         .method(req.method())
         .uri(upstream.uri_for(&path_and_query));
+    // DP-H-WS-01: Skip intermediary identity headers to prevent spoofing.
+    // Re-inject trusted x-forwarded-for below.
     for (name, value) in req.headers() {
+        let name_lower = name.as_str().to_ascii_lowercase();
+        if name_lower == "x-forwarded-for"
+            || name_lower == "x-forwarded-proto"
+            || name_lower == "x-forwarded-host"
+            || name_lower == "forwarded"
+            || name_lower == "x-real-ip"
+        {
+            continue;
+        }
         upstream_builder = upstream_builder.header(name, value);
     }
+    // Re-inject trusted x-forwarded-for from the proxy (peer IP).
     if let Some(value) = x_forwarded_for {
         upstream_builder = upstream_builder.header("x-forwarded-for", value);
     }
