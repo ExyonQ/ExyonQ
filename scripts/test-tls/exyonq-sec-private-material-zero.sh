@@ -53,6 +53,7 @@ run_scan() {
     \( -path '*/.git/*' \
        -o -path '*/target/*' \
        -o -path '*/node_modules/*' \
+       -o -path '*/.exyonq-local/*' \
        -o -path '*/benchmarks/tools/http3-loadgen/src/*' \
        -o -path '*/benchmarks/results/*' \
        -o -path '*/benchmarks/rivals-cache/*' \

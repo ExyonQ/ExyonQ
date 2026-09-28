@@ -1,0 +1,20 @@
+[package]
+name = "exyonq-cfd-control"
+description = "Competitive Frontier dataplane control helpers (launch/lifecycle/budget)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+exyonq-cfd-gen = { path = "../exyonq-cfd-gen" }
+exyonq-waf = { path = "../exyonq-waf" }
+exyonq-waf-api = { path = "../exyonq-waf-api" }
+thiserror.workspace = true
+
+[[bin]]
+name = "cfd-publish-routes"
+path = "src/bin/cfd-publish-routes.rs"
+
+[dev-dependencies]
+tempfile = "3"

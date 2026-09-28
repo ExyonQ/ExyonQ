@@ -28,15 +28,15 @@ function assert_true( bool $cond, string $msg ): void {
 }
 
 /**
- * Start mock WC3 purge socket via a child PHP process (no pcntl required).
+ * Start WC3 purge peer socket via a child PHP process (no pcntl required).
  *
  * @return resource|false
  */
-function start_mock_purge_server( string $sock_path, string $expected_token, bool $accept_auth = true, int $max_conns = 16 ) {
+function start_purge_peer_server( string $sock_path, string $expected_token, bool $accept_auth = true, int $max_conns = 16 ) {
 	if ( file_exists( $sock_path ) ) {
 		@unlink( $sock_path );
 	}
-	$script = __DIR__ . '/mock-purge-server.php';
+	$script = __DIR__ . '/purge-peer-server.php';
 	$php    = PHP_BINARY !== '' ? PHP_BINARY : 'php';
 	$auth   = $accept_auth ? '1' : '0';
 	$cmd    = array( $php, $script, $sock_path, $expected_token, $auth, (string) $max_conns );
@@ -48,7 +48,7 @@ function start_mock_purge_server( string $sock_path, string $expected_token, boo
 	);
 	$proc = proc_open( $cmd, $descriptors, $pipes, null, null );
 	if ( ! is_resource( $proc ) ) {
-		fwrite( STDERR, "cannot start mock server\n" );
+		fwrite( STDERR, "cannot start purge peer server\n" );
 		exit( 1 );
 	}
 	fclose( $pipes[0] );
@@ -63,13 +63,13 @@ function start_mock_purge_server( string $sock_path, string $expected_token, boo
 		}
 		usleep( 20000 );
 	}
-	fwrite( STDERR, "mock server socket not ready\n" );
+	fwrite( STDERR, "purge peer socket not ready\n" );
 	proc_terminate( $proc );
 	proc_close( $proc );
 	exit( 1 );
 }
 
-function stop_mock_purge_server( $proc ): void {
+function stop_purge_peer_server( $proc ): void {
 	if ( ! is_resource( $proc ) ) {
 		return;
 	}
@@ -106,8 +106,8 @@ assert_true( $bad['ok'] === false && ( $bad['error'] ?? '' ) === 'invalid_url', 
 $r = $client->purge_url( 'http', 'example.test', '/hello/' );
 assert_true( $r['ok'] === false && ( $r['error'] ?? '' ) === 'socket_missing', 'missing socket non-fatal' );
 
-// --- Mock socket: valid token ---
-$proc = start_mock_purge_server( $sock, $token, true );
+// --- Purge peer socket: valid token ---
+$proc = start_purge_peer_server( $sock, $token, true );
 $client = new ExyonQ_Cache_Client();
 $ok     = $client->purge_url( 'http', 'example.test', '/hello/' );
 assert_true( ! empty( $ok['ok'] ), 'valid token purge succeeds' );
@@ -136,15 +136,15 @@ $plugin->purge_urls( $many );
 $after = $plugin->client()->counters()['purge_fallback_site'] ?? 0;
 assert_true( $after > $before, 'fanout triggers site fallback counter' );
 
-stop_mock_purge_server( $proc );
+stop_purge_peer_server( $proc );
 @unlink( $sock );
 
 // --- Invalid token ---
-$proc = start_mock_purge_server( $sock, $token, false );
+$proc = start_purge_peer_server( $sock, $token, false );
 $client   = new ExyonQ_Cache_Client();
 $bad_auth = $client->purge_site();
 assert_true( $bad_auth['ok'] === false && ( $bad_auth['error'] ?? '' ) === 'unauthenticated', 'invalid token rejected' );
-stop_mock_purge_server( $proc );
+stop_purge_peer_server( $proc );
 @unlink( $sock );
 
 // Token secrecy: ensure last_result never contains token.
@@ -180,7 +180,7 @@ usleep( 50000 );
 $client = new ExyonQ_Cache_Client();
 $mal    = $client->purge_site();
 assert_true( $mal['ok'] === false && ( $mal['error'] ?? '' ) === 'malformed_response', 'malformed response rejected safely' );
-stop_mock_purge_server( $mproc );
+stop_purge_peer_server( $mproc );
 @unlink( $sock );
 @unlink( $mal_script );
 
@@ -212,7 +212,7 @@ usleep( 50000 );
 $client = new ExyonQ_Cache_Client();
 $over   = $client->purge_site();
 assert_true( $over['ok'] === false && ( $over['error'] ?? '' ) === 'response_too_large', 'oversized response rejected safely' );
-stop_mock_purge_server( $oproc );
+stop_purge_peer_server( $oproc );
 @unlink( $sock );
 @unlink( $over_script );
 

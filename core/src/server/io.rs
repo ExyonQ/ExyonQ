@@ -18,9 +18,13 @@
 use bytes::Bytes;
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+/// Process-lifetime cache for `EXYONQ_READ_TIMEOUT_MS` (0 = unset; else millis + 1).
+static HEADER_READ_TIMEOUT_MS_CACHE: AtomicU64 = AtomicU64::new(0);
 
 /// AsyncRead that serves a prefix before continuing on the inner stream.
 pub struct PrefixedStream<S> {
@@ -153,34 +157,109 @@ pub(crate) fn max_header_cap() -> usize {
     MAX_HEADER_CAP
 }
 
+/// True when `line` is an HTTP header field whose name equals `name_lower` (ASCII case-insensitive).
+/// Matches only the field name before `:`, so `X-Content-Length:` does not match `content-length`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn header_field_count(head: &[u8], needle: &[u8]) -> usize {
-    head.windows(needle.len())
-        .filter(|window| *window == needle)
-        .count()
+fn header_line_name_eq(line: &[u8], name_lower: &[u8]) -> bool {
+    let Some(colon) = line.iter().position(|&b| b == b':') else {
+        return false;
+    };
+    let mut name = &line[..colon];
+    while name.first() == Some(&b' ') || name.first() == Some(&b'\t') {
+        name = &name[1..];
+    }
+    while name.last() == Some(&b' ') || name.last() == Some(&b'\t') {
+        name = &name[..name.len() - 1];
+    }
+    name.len() == name_lower.len() && name.eq_ignore_ascii_case(name_lower)
+}
+
+/// Count header fields by exact name (case-insensitive) on a complete header block.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn header_field_name_count(head: &[u8], name_lower: &[u8]) -> usize {
+    let mut count = 0usize;
+    let mut start = 0usize;
+    // Skip request line.
+    if let Some(i) = head.windows(2).position(|w| w == b"\r\n") {
+        start = i + 2;
+    }
+    while start < head.len() {
+        if start + 1 < head.len() && head[start] == b'\r' && head[start + 1] == b'\n' {
+            break;
+        }
+        let rel = head[start..]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .unwrap_or(head.len() - start);
+        let line = &head[start..start + rel];
+        if header_line_name_eq(line, name_lower) {
+            count += 1;
+        }
+        start += rel + 2;
+    }
+    count
 }
 
 /// Reject ambiguous length/framing on a complete HTTP/1 header block (wire bytes).
 /// Call only after `find_header_end` — incomplete buffers are not validated here.
+///
+/// Wire path is fail-closed: Transfer-Encoding alone is rejected (no chunked drain on wire),
+/// duplicate Content-Length is rejected, and TE+CL is rejected. Matching is case-insensitive
+/// on field names and does not treat `X-Content-Length` as Content-Length.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn request_headers_safe_for_wire(head: &[u8]) -> bool {
-    if header_field_count(head, b"Content-Length:") > 1 {
+    let cl = header_field_name_count(head, b"content-length");
+    let te = header_field_name_count(head, b"transfer-encoding");
+    if cl > 1 {
         return false;
     }
-    if header_field_count(head, b"Transfer-Encoding:") >= 1
-        && header_field_count(head, b"Content-Length:") >= 1
-    {
+    if te >= 1 {
         return false;
     }
     true
 }
 
-pub(crate) fn header_read_timeout() -> Duration {
-    std::env::var("EXYONQ_READ_TIMEOUT_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
+/// Header-read timeout from `EXYONQ_READ_TIMEOUT_MS` (process-lifetime cache).
+///
+/// Unset / invalid → 30s. Mid-process env mutation is not observed —
+/// set the env before process start (or reset cache in tests).
+///
+/// This is the core-local observation. Platform and module paths maintain
+/// equivalent layer-local caches so lower layers do not reverse-import policy.
+pub fn header_read_timeout() -> Duration {
+    let cached = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed);
+    if cached != 0 {
+        return Duration::from_millis(cached - 1);
+    }
+    let d = parse_header_read_timeout_ms(std::env::var("EXYONQ_READ_TIMEOUT_MS").ok().as_deref());
+    let encoded = d.as_millis() as u64 + 1;
+    let _ = HEADER_READ_TIMEOUT_MS_CACHE.compare_exchange(
+        0,
+        encoded,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    let final_ms = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed) - 1;
+    Duration::from_millis(final_ms)
+}
+
+fn parse_header_read_timeout_ms(raw: Option<&str>) -> Duration {
+    raw.and_then(|s| s.parse::<u64>().ok())
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(30))
+}
+
+/// Test-only: clear process-lifetime cache (simulates a fresh process).
+/// Also clears static/proxy wire caches used on related request paths.
+///
+/// This cross-module reset seam is compiled only for unit tests or when the
+/// explicit `test-utils` feature is enabled by the integration-test crate.
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub fn reset_header_read_timeout_cache_for_tests() {
+    HEADER_READ_TIMEOUT_MS_CACHE.store(0, Ordering::Relaxed);
+    exyonq_mod_static::reset_header_read_timeout_cache_for_tests();
+    exyonq_mod_proxy::wire_io::reset_header_read_timeout_cache_for_tests();
 }
 
 /// `SO_RCVTIMEO` on a blocking socket read surfaces as `WouldBlock` / EAGAIN on Linux.
@@ -260,22 +339,7 @@ pub(crate) fn read_until_headers_blocking(
 
 #[cfg(target_os = "linux")]
 pub(crate) fn write_once_fd(fd: i32, buf: &[u8]) -> io::Result<()> {
-    const MSG_NOSIGNAL: i32 = 0x4000;
-    let written = unsafe {
-        libc::send(
-            fd,
-            buf.as_ptr() as *const libc::c_void,
-            buf.len(),
-            MSG_NOSIGNAL,
-        )
-    };
-    if written < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if written as usize != buf.len() {
-        return write_all_fd(fd, &buf[written as usize..]);
-    }
-    Ok(())
+    exyonq_linux_ffi::send_all_nosignal(fd, buf)
 }
 
 #[cfg(target_os = "linux")]
@@ -288,18 +352,8 @@ pub(crate) fn write_response_fd(fd: i32, buf: &[u8]) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn write_all_fd(fd: i32, mut buf: &[u8]) -> io::Result<()> {
-    while !buf.is_empty() {
-        let written = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
-        if written < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if written == 0 {
-            return Err(io::Error::new(io::ErrorKind::WriteZero, "write returned 0"));
-        }
-        buf = &buf[written as usize..];
-    }
-    Ok(())
+pub(crate) fn write_all_fd(fd: i32, buf: &[u8]) -> io::Result<()> {
+    exyonq_linux_ffi::write_all_fd(fd, buf)
 }
 
 #[cfg(test)]
@@ -378,15 +432,59 @@ mod tests {
     }
 
     #[test]
+    fn wire_safe_rejects_duplicate_content_length_lowercase() {
+        let head = b"GET / HTTP/1.1\r\nHost: x\r\ncontent-length: 0\r\ncontent-length: 1\r\n\r\n";
+        assert!(!request_headers_safe_for_wire(head));
+    }
+
+    #[test]
     fn wire_safe_rejects_transfer_encoding_with_content_length() {
         let head = b"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n";
         assert!(!request_headers_safe_for_wire(head));
     }
 
     #[test]
+    fn wire_safe_rejects_transfer_encoding_mixed_case_with_content_length() {
+        let head = b"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\ncontent-length: 0\r\n\r\n";
+        assert!(!request_headers_safe_for_wire(head));
+        let head2 = b"POST / HTTP/1.1\r\nHost: x\r\ntransfer-encoding: chunked\r\nContent-Length: 0\r\n\r\n";
+        assert!(!request_headers_safe_for_wire(head2));
+    }
+
+    #[test]
+    fn wire_safe_rejects_transfer_encoding_alone() {
+        let head = b"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n";
+        assert!(!request_headers_safe_for_wire(head));
+    }
+
+    #[test]
+    fn wire_safe_x_content_length_does_not_count_as_content_length() {
+        let head =
+            b"GET / HTTP/1.1\r\nHost: x\r\nX-Content-Length: 99\r\nContent-Length: 0\r\n\r\n";
+        assert!(request_headers_safe_for_wire(head));
+    }
+
+    #[test]
     fn wire_safe_accepts_typical_get() {
         let head = b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
         assert!(request_headers_safe_for_wire(head));
+    }
+
+    #[test]
+    fn parse_header_read_timeout_ms_semantics() {
+        assert_eq!(parse_header_read_timeout_ms(None), Duration::from_secs(30));
+        assert_eq!(
+            parse_header_read_timeout_ms(Some("bogus")),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            parse_header_read_timeout_ms(Some("100")),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            parse_header_read_timeout_ms(Some("0")),
+            Duration::from_millis(0)
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -406,7 +504,9 @@ mod tests {
         #[test]
         fn read_until_headers_blocking_times_out_as_empty() {
             let prev = std::env::var("EXYONQ_READ_TIMEOUT_MS").ok();
+            crate::server::reset_header_read_timeout_cache_for_tests();
             std::env::set_var("EXYONQ_READ_TIMEOUT_MS", "50");
+            crate::server::reset_header_read_timeout_cache_for_tests();
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
             let addr = listener.local_addr().expect("addr");
             let client = thread::spawn(move || {
@@ -425,6 +525,7 @@ mod tests {
                 Some(v) => std::env::set_var("EXYONQ_READ_TIMEOUT_MS", v),
                 None => std::env::remove_var("EXYONQ_READ_TIMEOUT_MS"),
             }
+            crate::server::reset_header_read_timeout_cache_for_tests();
         }
 
         #[test]

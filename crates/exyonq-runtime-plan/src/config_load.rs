@@ -20,20 +20,9 @@ use std::path::Path;
 
 pub use exyonq_config_merge::{apply_discovery, DiscoveryCluster, DiscoveryOverlay, Profile};
 
-/// Load config IR from disk for reload: v2 includes via `exyonq-config-merge`, else direct parse.
+/// Load config IR from disk for reload via include-aware merge (Cap047 LA-CAP047-002).
+///
+/// Same path as `exyonqctl config lint` / `exyonq serve` — no substring heuristic.
 pub fn load_config_for_reload(path: &Path) -> anyhow::Result<AppConfig> {
-    if looks_like_v2_include(path) {
-        exyonq_config_merge::load_with_includes(path).map_err(Into::into)
-    } else {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|err| anyhow::anyhow!("read config {}: {err}", path.display()))?;
-        AppConfig::parse_str(&raw).map_err(Into::into)
-    }
-}
-
-fn looks_like_v2_include(path: &Path) -> bool {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    raw.contains("include =") && raw.contains("config_version = 2")
+    exyonq_config_merge::load_with_includes(path).map_err(Into::into)
 }

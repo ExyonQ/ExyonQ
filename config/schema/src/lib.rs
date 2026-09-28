@@ -182,7 +182,11 @@ pub fn ir_json_schema() -> serde_json::Value {
                         "properties": {
                             "enabled": { "type": "boolean" },
                             "path": { "type": "string" },
-                            "health_path": { "type": "string" }
+                            "health_path": { "type": "string" },
+                            "scrape_bearer_token": {
+                                "type": "string",
+                                "description": "Required when metrics enabled and any server.listen is non-loopback (LA-CAP054-008)"
+                            }
                         }
                     },
                     "compression": {
@@ -223,6 +227,22 @@ pub fn ir_json_schema() -> serde_json::Value {
                                 "minimum": 0,
                                 "description": "0 disables preload; default 4096"
                             }
+                        }
+                    },
+                    "encoding_cache": {
+                        "type": "object",
+                        "description": "ADR-046 Cap067 static encoding cache (default off)",
+                        "properties": {
+                            "enabled": { "type": "boolean", "default": false },
+                            "cache_dir": {
+                                "type": "string",
+                                "default": "/var/cache/exyonq/static-encoding"
+                            },
+                            "level": { "type": "integer", "minimum": 0, "maximum": 11, "default": 6 },
+                            "min_bytes": { "type": "integer", "minimum": 0, "default": 300 },
+                            "max_bytes": { "type": "integer", "minimum": 1, "default": 10485760 },
+                            "gzip": { "type": "boolean", "default": true },
+                            "brotli": { "type": "boolean", "default": false }
                         }
                     }
                 }

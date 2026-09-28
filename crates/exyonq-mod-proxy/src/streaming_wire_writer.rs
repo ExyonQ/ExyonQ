@@ -13,137 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! P8T diagnostic StreamingWireWriter surface (mod-proxy local).
+//! P8T diagnostic finite TE single-buffer writer (mod-proxy local).
 //! Feature `p8-transport-diag` only. Not a public product API.
 //! No libc/socket2/nix. No SSE/OLS/bench knowledge.
+//!
+//! Prior `StreamingWireWriter` / `GenericAsyncWireWriter` trait surface was
+//! characterization-only and unused on the production diag path; removed to
+//! keep `--all-features` clippy clean without `allow(dead_code)`.
 
-use std::future::Future;
 use std::io;
-use std::pin::Pin;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FlushPolicy {
-    Immediate,
-    Deferred,
-    EndOfMessage,
-    MoreComing,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BackpressureState {
-    Ready,
-    WouldBlock,
-    Closed,
-}
-
-/// Transport-only writer. Call site owns HTTP framing bytes.
-pub(crate) trait StreamingWireWriter: Send + Unpin {
-    fn write_headers<'a>(
-        &'a mut self,
-        bytes: &'a [u8],
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
-
-    fn write_body_chunk<'a>(
-        &'a mut self,
-        bytes: &'a [u8],
-        flush_now: bool,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
-
-    fn write_body_end<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
-
-    fn flush_policy(&self) -> FlushPolicy;
-
-    fn shutdown<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
-
-    fn backpressure_state(&self) -> BackpressureState;
-}
-
-/// Generic Tokio AsyncWrite fallback — default product-compatible path.
-pub(crate) struct GenericAsyncWireWriter<'a, S> {
-    stream: &'a mut S,
-    policy: FlushPolicy,
-    bp: BackpressureState,
-}
-
-impl<'a, S: AsyncWrite + Unpin + Send> GenericAsyncWireWriter<'a, S> {
-    pub(crate) fn new(stream: &'a mut S) -> Self {
-        Self {
-            stream,
-            policy: FlushPolicy::Immediate,
-            bp: BackpressureState::Ready,
-        }
-    }
-}
-
-impl<'a, S: AsyncWrite + Unpin + Send> StreamingWireWriter for GenericAsyncWireWriter<'a, S> {
-    fn write_headers<'b>(
-        &'b mut self,
-        bytes: &'b [u8],
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'b>> {
-        Box::pin(async move {
-            match self.stream.write_all(bytes).await {
-                Ok(()) => {
-                    self.bp = BackpressureState::Ready;
-                    Ok(())
-                }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    self.bp = BackpressureState::WouldBlock;
-                    Err(err)
-                }
-                Err(err) => {
-                    self.bp = BackpressureState::Closed;
-                    Err(err)
-                }
-            }
-        })
-    }
-
-    fn write_body_chunk<'b>(
-        &'b mut self,
-        bytes: &'b [u8],
-        flush_now: bool,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'b>> {
-        Box::pin(async move {
-            self.stream.write_all(bytes).await?;
-            if flush_now {
-                self.stream.flush().await?;
-            }
-            self.bp = BackpressureState::Ready;
-            Ok(())
-        })
-    }
-
-    fn write_body_end<'b>(
-        &'b mut self,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'b>> {
-        Box::pin(async move {
-            self.stream.write_all(b"0\r\n\r\n").await?;
-            self.stream.flush().await?;
-            self.policy = FlushPolicy::EndOfMessage;
-            self.bp = BackpressureState::Ready;
-            Ok(())
-        })
-    }
-
-    fn flush_policy(&self) -> FlushPolicy {
-        self.policy
-    }
-
-    fn shutdown<'b>(&'b mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'b>> {
-        Box::pin(async move {
-            self.stream.shutdown().await?;
-            self.bp = BackpressureState::Closed;
-            Ok(())
-        })
-    }
-
-    fn backpressure_state(&self) -> BackpressureState {
-        self.bp
-    }
-}
 
 /// Finite-response diagnostic: one write_all for headers+TE frame+trailer.
 /// Wire bytes identical to multi-write TE path. Not progressive-safe.
@@ -185,19 +64,5 @@ mod tests {
         assert!(s.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(s.contains("\r\ndata: x\n\n\r\n"));
         assert!(s.ends_with("0\r\n\r\n"));
-    }
-
-    #[tokio::test]
-    async fn generic_writer_writes_headers() {
-        let mut buf = Vec::new();
-        {
-            let mut w = GenericAsyncWireWriter::new(&mut buf);
-            w.write_headers(b"HTTP/1.1 200 OK\r\n\r\n")
-                .await
-                .expect("headers");
-            assert_eq!(w.flush_policy(), FlushPolicy::Immediate);
-            assert_eq!(w.backpressure_state(), BackpressureState::Ready);
-        }
-        assert_eq!(&buf, b"HTTP/1.1 200 OK\r\n\r\n");
     }
 }

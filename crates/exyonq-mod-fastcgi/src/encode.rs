@@ -29,7 +29,7 @@ pub enum EncodeError {
     AggregateCapExceeded,
 }
 
-/// Decode-time failures for mock responder sequences.
+/// Decode-time failures for scripted responder sequences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
     EmptyResponse,
@@ -42,7 +42,7 @@ pub enum DecodeError {
     InvalidEndRequestStatus,
 }
 
-/// Decoded mock forward response (stdout + END_REQUEST fields).
+/// Decoded scripted forward response (stdout + END_REQUEST fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedResponse {
     pub stdout: Vec<u8>,
@@ -103,7 +103,7 @@ pub fn append_length(buf: &mut Vec<u8>, len: usize) -> Result<(), EncodeError> {
     Ok(())
 }
 
-/// `FCGI_BEGIN_REQUEST` for responder role (PHP-FPM); flags usually `0` or [`FCGI_KEEP_CONN`].
+/// `FCGI_BEGIN_REQUEST` for responder role (PHP-FPM); flags usually `0` or [`crate::FCGI_KEEP_CONN`].
 pub fn encode_begin_request_frame(request_id: u16) -> Result<Vec<u8>, EncodeError> {
     encode_begin_request_frame_with_flags(request_id, 0)
 }

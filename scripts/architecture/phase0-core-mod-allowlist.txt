@@ -1,0 +1,14 @@
+# Phase 0 temporary allowlist: core → official module crates (composition).
+# Remove entries as exyonq-server composition layer lands (target PR-7).
+# Format: path-prefix OR path-prefix:regex-subpattern
+# Lines starting with # are comments.
+
+core/src/modules/mod.rs
+core/src/server/mod.rs
+core/src/acme/mod.rs
+core/Cargo.toml
+crates/exyonq-mod-fastcgi/
+scripts/architecture/fixtures/plan08/
+core/src/execute_backend.rs
+core/src/fcgi_metrics.rs
+core/tests/plan08_pr1_test.rs

@@ -42,7 +42,7 @@ async fn unknown_length_small_body_is_streaming() {
 }
 
 #[tokio::test]
-async fn small_declared_exact_materializes() {
+async fn small_declared_exact_streams() {
     let response = Response::builder()
         .status(200)
         .header("content-length", "4")
@@ -50,13 +50,17 @@ async fn small_declared_exact_materializes() {
         .expect("response");
     let outcome = classify_hyper_response(response, "/api/data", ProxyMethod::Get).await;
     match outcome {
-        ProxyDispatchOutcome::Materialized(m) => assert_eq!(m.body, b"abcd"),
-        other => panic!("expected Materialized, got {other:?}"),
+        ProxyDispatchOutcome::Streaming { stream, .. } => {
+            let resp = take_streaming(stream).expect("handle");
+            let collected = resp.into_body().collect().await.expect("collect");
+            assert_eq!(&collected.to_bytes()[..], b"abcd");
+        }
+        other => panic!("expected Streaming, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn small_declared_boundary_at_threshold_materializes() {
+async fn small_declared_boundary_at_threshold_streams() {
     let body = vec![b'x'; BENCH_SMALL_UPSTREAM_BODY];
     let response = Response::builder()
         .status(200)
@@ -65,8 +69,12 @@ async fn small_declared_boundary_at_threshold_materializes() {
         .expect("response");
     let outcome = classify_hyper_response(response, "/api/data", ProxyMethod::Get).await;
     match outcome {
-        ProxyDispatchOutcome::Materialized(m) => assert_eq!(m.body, body),
-        other => panic!("expected Materialized, got {other:?}"),
+        ProxyDispatchOutcome::Streaming { stream, .. } => {
+            let resp = take_streaming(stream).expect("handle");
+            let collected = resp.into_body().collect().await.expect("collect");
+            assert_eq!(collected.to_bytes(), body);
+        }
+        other => panic!("expected Streaming, got {other:?}"),
     }
 }
 

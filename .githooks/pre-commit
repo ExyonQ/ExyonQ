@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Pre-commit: FAIL_CLOSED private-material scan on staged files.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+exec bash "$ROOT/scripts/security/scan-private-material.sh" --git-index --repo "$ROOT"

@@ -57,44 +57,6 @@ impl PrecookedResponse {
     }
 }
 
-/// HEAD response for octet-stream bench assets (Content-Length set, empty body).
-#[inline]
-pub fn octet_stream_head_response(body_len: usize) -> Response<BoxBody> {
-    let mut response = Response::new(
-        http_body_util::Empty::<Bytes>::new()
-            .map_err(|never| match never {})
-            .boxed(),
-    );
-    *response.status_mut() = StatusCode::OK;
-    let headers = response.headers_mut();
-    headers.insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    headers.insert(CONTENT_LENGTH, content_length_header(body_len));
-    response
-}
-
-/// P7 HEAD: shared headers for preloaded routeNNN.bin.
-#[inline]
-pub fn route_bin_head_response(body_len: usize) -> Response<BoxBody> {
-    octet_stream_head_response(body_len)
-}
-
-/// P7 hot path: shared headers for preloaded routeNNN.bin (512 B octet-stream).
-#[inline]
-pub fn route_bin_response(body: &Arc<Bytes>) -> Response<BoxBody> {
-    let mut response = Response::new(StaticBody::from_arc(Arc::clone(body)).boxed());
-    *response.status_mut() = StatusCode::OK;
-    let headers = response.headers_mut();
-    headers.insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    headers.insert(CONTENT_LENGTH, content_length_header(body.len()));
-    response
-}
-
 fn content_length_header(len: usize) -> HeaderValue {
     match len {
         512 => HeaderValue::from_static("512"),

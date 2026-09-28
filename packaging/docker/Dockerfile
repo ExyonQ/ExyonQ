@@ -12,11 +12,11 @@
 #   OFFICIAL_RELEASE_BUILD_WITHOUT_REVISION = FAIL_CLOSED
 # Pass EXYONQ_GIT_REVISION=<40-hex> and EXYONQ_OFFICIAL_RELEASE=1 for official images.
 
-ARG EXYONQ_VERSION=0.4.3
+ARG EXYONQ_VERSION=0.4.4
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 
-FROM rust:1.93-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31 AS builder
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 # Map OCI label arg into the cargo build-script env (same SHA for amd64/arm64).
@@ -52,7 +52,13 @@ COPY crates ./crates
 COPY wasm ./wasm
 COPY tests ./tests
 COPY xtask ./xtask
-RUN cargo build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli
+COPY third_party ./third_party
+COPY scripts/release/build-production.sh scripts/release/build-production.sh
+# Product OCI builds exclude the host-only benchmark orchestrator from their
+# container-local Cargo workspace; benchmark tooling is never shipped.
+RUN sed -i '\|  "benchmarks/exyonq-bench",|d' Cargo.toml
+RUN apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/*
+RUN bash scripts/release/build-production.sh
 
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime
 ARG EXYONQ_VERSION

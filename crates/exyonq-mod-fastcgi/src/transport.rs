@@ -13,24 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Inert and mockable transport trait surface — module-local until PR-7 composition.
+//! Transport trait surface — module-local until PR-7 composition.
 //!
-//! PR4-A: in-memory [`MockFpmTransport`] only; no socket backends, no live forwarding.
+//! Live sockets use [`crate::wire::WireTransport`] / [`crate::unix_transport::UnixFpmTransport`].
+//! [`InertTransport`] is fail-closed when no wire is bound. [`crate::ScriptedFpmTransport`] is an
+//! in-memory record peer for protocol unit tests only (not a product substitute).
 
 use crate::ParseError;
 
 /// Transport-level errors for the module seam (no live HTTP mapping in PR4-A).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportError {
-    /// Transport not wired — expected for PR3-A inert implementations.
-    NotImplemented,
+    /// Transport not wired — fail-closed for [`InertTransport`] (not used by production executor).
+    InertUnavailable,
     /// Encoded frame failed bounded record validation before submit.
     InvalidFrame(ParseError),
-    /// Responder frame encoding failed (mock internal).
+    /// Responder frame encoding failed (scripted peer internal).
     EncodeFailed,
-    /// Record type not expected in the current mock phase.
+    /// Record type not expected in the current scripted peer phase.
     UnexpectedRecordType { phase: &'static str, got: u8 },
-    /// `request_id` mismatch vs mock configuration.
+    /// `request_id` mismatch vs scripted peer configuration.
     WrongRequestId { expected: u16, got: u16 },
     /// PARAMS/STDIN stream not finished before response take.
     RequestIncomplete,
@@ -56,21 +58,21 @@ pub trait FastcgiRecordTransport {
     fn submit_frame(&self, frame: &[u8]) -> Result<(), TransportError>;
 }
 
-/// Default inert transport — always returns [`TransportError::NotImplemented`].
+/// Default inert transport — always returns [`TransportError::InertUnavailable`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct InertTransport;
 
 impl FastcgiRecordTransport for InertTransport {
     fn submit_frame(&self, _frame: &[u8]) -> Result<(), TransportError> {
-        Err(TransportError::NotImplemented)
+        Err(TransportError::InertUnavailable)
     }
 }
 
-/// Validates frames with the bounded record parser before accepting (test/mock helper).
+/// Validates frames with the bounded record parser before accepting (unit-test helper).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ValidatingMockTransport;
+pub struct ValidatingScriptedTransport;
 
-impl FastcgiRecordTransport for ValidatingMockTransport {
+impl FastcgiRecordTransport for ValidatingScriptedTransport {
     fn submit_frame(&self, frame: &[u8]) -> Result<(), TransportError> {
         crate::parse_record(frame)
             .map(|_| ())

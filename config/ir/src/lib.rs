@@ -23,9 +23,12 @@ mod endpoint_set;
 mod endpoint_set_property_tests;
 mod error;
 mod full_page_cache;
+mod logging;
 mod modules;
 mod registry;
 mod static_preload;
+mod upstream_health;
+mod waf;
 
 pub use canonical::{canonical_json, fingerprint, IrFingerprint};
 pub use diagnostic::{
@@ -44,12 +47,27 @@ pub use full_page_cache::{
     DistributedCacheConfig, DistributedCacheRedisConfig, DistributedCacheSecurityConfig,
     FullPageCacheConfig,
 };
+pub use logging::{
+    validate_logging, AccessLoggingConfig, AuditLoggingConfig, ConsoleLoggingConfig, ConsoleStream,
+    FileLoggingConfig, FileRotationConfig, JournaldLoggingConfig, LogFormat, LoggingConfig,
+    OtelLoggingConfig, OtlpProtocol, SyslogLoggingConfig,
+};
 pub use modules::{CompressionConfig, MetricsConfig, ModulesConfig, RateLimitConfig};
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
 pub use static_preload::{
-    StaticPreloadConfig, StaticSectionConfig, DEFAULT_PRELOAD_MAX_ENTRIES,
-    DEFAULT_PRELOAD_MAX_FILE_BYTES, DEFAULT_PRELOAD_TOTAL_BYTES, PRELOAD_MAX_ENTRIES_CEILING,
-    PRELOAD_MAX_FILE_BYTES_CEILING, PRELOAD_MAX_TOTAL_BYTES_CEILING,
+    StaticEncodingCacheConfig, StaticPreloadConfig, StaticSectionConfig,
+    DEFAULT_ENCODING_CACHE_DIR, DEFAULT_ENCODING_CACHE_LEVEL, DEFAULT_ENCODING_CACHE_MAX_BYTES,
+    DEFAULT_ENCODING_CACHE_MAX_ENTRIES, DEFAULT_ENCODING_CACHE_MAX_TOTAL_BYTES,
+    DEFAULT_ENCODING_CACHE_MIN_BYTES, DEFAULT_PRELOAD_MAX_ENTRIES, DEFAULT_PRELOAD_MAX_FILE_BYTES,
+    DEFAULT_PRELOAD_TOTAL_BYTES, ENCODING_CACHE_LEVEL_CEILING, ENCODING_CACHE_MAX_BYTES_CEILING,
+    ENCODING_CACHE_MAX_ENTRIES_CEILING, ENCODING_CACHE_MAX_TOTAL_BYTES_CEILING,
+    PRELOAD_MAX_ENTRIES_CEILING, PRELOAD_MAX_FILE_BYTES_CEILING, PRELOAD_MAX_TOTAL_BYTES_CEILING,
+};
+pub use upstream_health::UpstreamHealthCheckConfig;
+pub use waf::{
+    WafAbuseConfig, WafAbuseMode, WafBuiltinToggles, WafConfig, WafCustomRuleConfig,
+    WafDetectorModeIr, WafEngineIr, WafExclusionConfig, WafFailPolicyIr, WafIpFilterConfig,
+    WafModeIr, WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr, WafRulesetConfig,
 };
 
 use modules::ModulesConfig as RawModulesConfig;
@@ -62,6 +80,8 @@ use std::path::{Path, PathBuf};
 pub const CONFIG_VERSION_V1: u32 = 1;
 pub const CONFIG_VERSION_V2: u32 = 2;
 pub const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 30_000;
+/// Cap037: operator-facing ceiling; zero remains valid (immediate TimedOut).
+pub const MAX_UPSTREAM_TIMEOUT_MS: u64 = 86_400_000;
 
 /// Parsed and validated ExyonQ configuration IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,10 +100,15 @@ pub struct AppConfig {
     pub full_page_cache: FullPageCacheConfig,
     /// `[http3]` — provider-neutral HTTP/3 selection (P13D Phase 5).
     pub http3: Http3Config,
+    /// `[waf]` — native WAF engine, rulesets, exclusions, abuse seam.
+    pub waf: WafConfig,
+    /// `[logging]` — Cap061 production observability (RD-005).
+    pub logging: LoggingConfig,
 }
 
 /// Top-level `[http3]` IR (neutral; no provider crate types).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Http3Config {
     #[serde(default = "default_http3_enabled")]
     pub enabled: bool,
@@ -124,6 +149,7 @@ fn default_http3_drain_cap() -> u64 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub listen: String,
     #[serde(default)]
@@ -143,6 +169,7 @@ impl ServerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     pub cert: PathBuf,
     pub key: PathBuf,
@@ -152,6 +179,7 @@ pub struct TlsConfig {
 
 /// Automatic certificate management (ACME v2 / HTTP-01).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AcmeConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -189,6 +217,7 @@ impl ServerNames {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RouteConfig {
     pub name: String,
     pub r#match: RouteMatch,
@@ -209,6 +238,7 @@ pub struct RouteConfig {
 
 /// Plan 12 v0 — response cache policy (compile-time only).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CachePolicyConfig {
     pub name: String,
     #[serde(default = "default_cache_ttl_seconds")]
@@ -261,6 +291,7 @@ pub const MAX_FCGI_MAX_CONCURRENCY: u32 = 4096;
 
 /// Structural FastCGI pool declaration (compile-time only — no transport in PR1).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FcgiPoolConfig {
     pub name: String,
     pub address: String,
@@ -268,7 +299,13 @@ pub struct FcgiPoolConfig {
     pub document_root: Option<PathBuf>,
     #[serde(default = "default_fcgi_max_concurrency")]
     pub max_concurrency: u32,
-    /// Physical socket cap (busy + idle). Defaults to `max_concurrency` when absent.
+    /// Module-path (`exyonq-mod-fastcgi`) open-socket pool bound when set.
+    /// Defaults to `max_concurrency` when absent.
+    ///
+    /// **Not** the CFD project route `max_conn` contract: CFD requires `max_conn=1`
+    /// (ADR-042) because CFD FastCGI `execute_get` is serial per shard; CFD idle
+    /// retention beyond one socket is unsupported via published project config.
+    /// Do not treat this TOML field as a CFD concurrent backend-socket budget.
     #[serde(default)]
     pub max_connections: Option<u32>,
     /// Transport: `unix` or `tcp` (default unix).
@@ -306,6 +343,7 @@ fn default_fcgi_checkout_timeout_ms() -> u64 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RouteMatch {
     pub path: String,
     #[serde(default)]
@@ -313,6 +351,7 @@ pub struct RouteMatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RedirectConfig {
     #[serde(default = "default_redirect_status")]
     pub status: u16,
@@ -337,6 +376,10 @@ pub struct UpstreamConfig {
     pub selection_policy: EndpointSelectionPolicy,
     pub failover_policy: EndpointFailoverPolicy,
     pub timeout_ms: u64,
+    /// Cap021: connect-only retries (`hyper` Connect errors). Default 1; Cap021 v1 max 1.
+    pub max_connect_retries: u8,
+    /// Cap024: opt-in active HTTP health checks (default disabled).
+    pub health_check: UpstreamHealthCheckConfig,
 }
 
 impl UpstreamConfig {
@@ -351,10 +394,15 @@ impl UpstreamConfig {
             EndpointSelectionPolicy::default(),
             EndpointFailoverPolicy::default(),
             timeout_ms,
+            default_max_connect_retries(),
+            UpstreamHealthCheckConfig::default(),
         )
         .expect("valid legacy upstream")
     }
 
+    // Cap021 added max_connect_retries as an 8th parameter; keep the flat
+    // constructor for call-site stability (clippy 1.97 threshold is 7).
+    #[allow(clippy::too_many_arguments)]
     pub fn try_from_parts(
         name: String,
         target: Option<String>,
@@ -362,7 +410,22 @@ impl UpstreamConfig {
         selection_policy: EndpointSelectionPolicy,
         failover_policy: EndpointFailoverPolicy,
         timeout_ms: u64,
+        max_connect_retries: u8,
+        health_check: UpstreamHealthCheckConfig,
     ) -> Result<Self, ConfigError> {
+        // Cap021 v1: only 0..=1; larger Envoy-style budgets rejected until later admission.
+        if max_connect_retries > 1 {
+            return Err(ConfigError::Parse(format!(
+                "upstream `{name}`: max_connect_retries={max_connect_retries} exceeds Cap021 v1 max 1"
+            )));
+        }
+        // Cap037: bound timeout_ms so Instant+Duration cannot panic; 0 = immediate TimedOut.
+        if timeout_ms > MAX_UPSTREAM_TIMEOUT_MS {
+            return Err(ConfigError::Parse(format!(
+                "upstream `{name}`: timeout_ms={timeout_ms} exceeds max {MAX_UPSTREAM_TIMEOUT_MS}"
+            )));
+        }
+        health_check.validate(&name)?;
         let target_trimmed = target
             .as_ref()
             .map(|t| t.trim().to_string())
@@ -399,6 +462,8 @@ impl UpstreamConfig {
             selection_policy,
             failover_policy,
             timeout_ms,
+            max_connect_retries,
+            health_check,
         })
     }
 
@@ -440,6 +505,7 @@ impl UpstreamConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawUpstreamConfig {
     name: String,
     #[serde(default)]
@@ -452,6 +518,10 @@ struct RawUpstreamConfig {
     failover_policy: EndpointFailoverPolicy,
     #[serde(default = "default_upstream_timeout_ms")]
     timeout_ms: u64,
+    #[serde(default = "default_max_connect_retries")]
+    max_connect_retries: u8,
+    #[serde(default)]
+    health_check: UpstreamHealthCheckConfig,
 }
 
 impl TryFrom<RawUpstreamConfig> for UpstreamConfig {
@@ -465,6 +535,8 @@ impl TryFrom<RawUpstreamConfig> for UpstreamConfig {
             raw.selection_policy,
             raw.failover_policy,
             raw.timeout_ms,
+            raw.max_connect_retries,
+            raw.health_check,
         )
     }
 }
@@ -477,6 +549,10 @@ impl<'de> Deserialize<'de> for UpstreamConfig {
         let raw = RawUpstreamConfig::deserialize(deserializer)?;
         Self::try_from(raw).map_err(serde::de::Error::custom)
     }
+}
+
+fn default_max_connect_retries() -> u8 {
+    1
 }
 
 fn default_upstream_timeout_ms() -> u64 {
@@ -497,9 +573,12 @@ pub struct RawConfigInput {
     pub static_section: StaticSectionConfig,
     pub full_page_cache: FullPageCacheConfig,
     pub http3: Http3Config,
+    pub waf: WafConfig,
+    pub logging: LoggingConfig,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     config_version: u32,
     #[serde(default)]
@@ -522,6 +601,10 @@ struct RawConfig {
     full_page_cache: FullPageCacheConfig,
     #[serde(default)]
     http3: Http3Config,
+    #[serde(default)]
+    waf: WafConfig,
+    #[serde(default)]
+    logging: LoggingConfig,
 }
 
 impl std::str::FromStr for AppConfig {
@@ -560,6 +643,8 @@ impl AppConfig {
             static_section: raw.static_section,
             full_page_cache: raw.full_page_cache,
             http3: raw.http3,
+            waf: raw.waf,
+            logging: raw.logging,
         })
     }
 
@@ -656,6 +741,7 @@ impl AppConfig {
             }
             if let Some(redirect) = &route.redirect {
                 validate_redirect_status(redirect.status)?;
+                validate_redirect_location(&redirect.location)?;
             }
             if let Some(rewrite) = &route.rewrite {
                 validate_rewrite_target(rewrite)?;
@@ -690,8 +776,15 @@ impl AppConfig {
         }
 
         validate_static_preload(&raw.static_section.preload)?;
+        validate_static_encoding_cache(&raw.static_section.encoding_cache)?;
         validate_full_page_cache(&raw.full_page_cache)?;
         validate_http3_config(&raw.http3)?;
+        waf::validate_waf(&raw.waf)?;
+        validate_metrics_config(&raw.modules.metrics, &raw.server)?;
+        validate_ratelimit_config(&raw.modules.ratelimit)?;
+        if let Err(message) = validate_logging(&raw.logging) {
+            return Err(ConfigError::Parse(message));
+        }
 
         Ok(Self {
             config_version: expected,
@@ -705,6 +798,8 @@ impl AppConfig {
             static_section: raw.static_section,
             full_page_cache: raw.full_page_cache,
             http3: raw.http3,
+            waf: raw.waf,
+            logging: raw.logging,
         })
     }
 
@@ -728,6 +823,92 @@ impl AppConfig {
         }
         self
     }
+}
+
+fn validate_ratelimit_config(rl: &RateLimitConfig) -> Result<(), ConfigError> {
+    if !rl.enabled {
+        return Ok(());
+    }
+    if rl.requests_per_second == 0 {
+        return Err(ConfigError::Parse(
+            "modules.ratelimit.requests_per_second must be >= 1 when enabled".into(),
+        ));
+    }
+    if rl.burst == 0 {
+        return Err(ConfigError::Parse(
+            "modules.ratelimit.burst must be >= 1 when enabled".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn listen_is_loopback(listen: &str) -> bool {
+    listen
+        .parse::<SocketAddr>()
+        .map(|addr| addr.ip().is_loopback())
+        .unwrap_or(false)
+}
+
+/// True when any TCP or HTTP/3 data-plane bind is non-loopback (LA-CAP054-008).
+fn metrics_binds_public_listener(servers: &[ServerConfig]) -> bool {
+    servers.iter().any(|s| {
+        !listen_is_loopback(&s.listen)
+            || s.http3_listen
+                .as_deref()
+                .is_some_and(|h3| !listen_is_loopback(h3))
+    })
+}
+
+fn validate_metrics_config(
+    metrics: &MetricsConfig,
+    servers: &[ServerConfig],
+) -> Result<(), ConfigError> {
+    // Always validate paths so defaults stay coherent even when disabled.
+    let reserved = ["/health", "/live", "/ready"];
+    for (field, path) in [
+        ("path", metrics.path.as_str()),
+        ("health_path", metrics.health_path.as_str()),
+    ] {
+        if path.is_empty() || !path.starts_with('/') {
+            return Err(ConfigError::Parse(format!(
+                "modules.metrics.{field} must be an absolute path starting with '/'"
+            )));
+        }
+        if path.contains('?') {
+            return Err(ConfigError::Parse(format!(
+                "modules.metrics.{field} must not contain a query string"
+            )));
+        }
+        if reserved.contains(&path) {
+            return Err(ConfigError::Parse(format!(
+                "modules.metrics.{field}={path} collides with core liveness/readiness probe; use a distinct path (default health_path is /exyonq-metrics-health)"
+            )));
+        }
+    }
+    if metrics.path == metrics.health_path {
+        return Err(ConfigError::Parse(
+            "modules.metrics.path and modules.metrics.health_path must differ".into(),
+        ));
+    }
+    if let Some(token) = metrics.scrape_bearer_token.as_deref() {
+        if token.is_empty() {
+            return Err(ConfigError::Parse(
+                "modules.metrics.scrape_bearer_token must not be empty when set".into(),
+            ));
+        }
+    }
+    // LA-CAP054-008: fail closed — public (non-loopback) metrics scrape requires a bearer.
+    if metrics.enabled && metrics_binds_public_listener(servers) {
+        match metrics.scrape_bearer_token.as_deref() {
+            Some(t) if !t.is_empty() => {}
+            _ => {
+                return Err(ConfigError::Parse(
+                    "modules.metrics.scrape_bearer_token is required when metrics is enabled and any server.listen or server.http3_listen is non-loopback (LA-CAP054-008)".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
@@ -1010,13 +1191,37 @@ fn validate_redirect_status(status: u16) -> Result<(), ConfigError> {
     }
 }
 
-fn validate_rewrite_target(target: &str) -> Result<(), ConfigError> {
-    if target.starts_with('/') {
-        Ok(())
+/// Cap036: Location is an opaque configured redirect target (relative or absolute).
+/// Reject empty / control bytes (CRLF injection). Absolute `http(s)://` and
+/// scheme-relative `//` are intentionally allowed as administrator-configured destinations.
+fn validate_redirect_location(location: &str) -> Result<(), ConfigError> {
+    let invalid =
+        location.is_empty() || location.as_bytes().iter().any(|&b| b <= 0x20 || b == 0x7f);
+    if invalid {
+        Err(ConfigError::InvalidRedirectLocation {
+            value: location.to_string(),
+        })
     } else {
+        Ok(())
+    }
+}
+
+fn validate_rewrite_target(target: &str) -> Result<(), ConfigError> {
+    // Cap035: absolute path only — no scheme/authority, no query/fragment in replacement.
+    // `//…` is rejected so rewrite cannot become protocol-relative / host mutation.
+    // Reject SPACE and other bytes that cannot form a valid http::Uri path (LA-CAP035-001/002).
+    let invalid = !target.starts_with('/')
+        || target.starts_with("//")
+        || target.contains('?')
+        || target.contains('#')
+        || target.as_bytes().iter().any(|&b| b <= 0x20 || b == 0x7f)
+        || target.parse::<hyper::Uri>().is_err();
+    if invalid {
         Err(ConfigError::InvalidRewriteTarget {
             value: target.to_string(),
         })
+    } else {
+        Ok(())
     }
 }
 
@@ -1115,6 +1320,71 @@ fn validate_static_preload(preload: &StaticPreloadConfig) -> Result<(), ConfigEr
             message: format!(
                 "static.preload.max_total_bytes ({total}) must be >= max_file_bytes ({file})"
             ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_static_encoding_cache(cfg: &StaticEncodingCacheConfig) -> Result<(), ConfigError> {
+    if cfg.level > ENCODING_CACHE_LEVEL_CEILING {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: format!(
+                "static.encoding_cache.level must be 0..={ENCODING_CACHE_LEVEL_CEILING}, got {}",
+                cfg.level
+            ),
+        });
+    }
+    if cfg.max_bytes == 0 || cfg.max_bytes > ENCODING_CACHE_MAX_BYTES_CEILING {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: format!(
+                "static.encoding_cache.max_bytes must be 1..={ENCODING_CACHE_MAX_BYTES_CEILING}, got {}",
+                cfg.max_bytes
+            ),
+        });
+    }
+    if cfg.min_bytes > cfg.max_bytes {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: format!(
+                "static.encoding_cache.min_bytes ({}) must be <= max_bytes ({})",
+                cfg.min_bytes, cfg.max_bytes
+            ),
+        });
+    }
+    if cfg.max_entries == 0 || cfg.max_entries > ENCODING_CACHE_MAX_ENTRIES_CEILING {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: format!(
+                "static.encoding_cache.max_entries must be 1..={ENCODING_CACHE_MAX_ENTRIES_CEILING}, got {}",
+                cfg.max_entries
+            ),
+        });
+    }
+    if cfg.max_total_bytes == 0 || cfg.max_total_bytes > ENCODING_CACHE_MAX_TOTAL_BYTES_CEILING {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: format!(
+                "static.encoding_cache.max_total_bytes must be 1..={ENCODING_CACHE_MAX_TOTAL_BYTES_CEILING}, got {}",
+                cfg.max_total_bytes
+            ),
+        });
+    }
+    if cfg.cache_dir.as_os_str().is_empty() {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: "static.encoding_cache.cache_dir must not be empty".into(),
+        });
+    }
+    // Refuse relative `..` components so IR cannot point the managed cache outside
+    // an operator-intended tree via traversal tokens (absolute paths remain OK).
+    if cfg
+        .cache_dir
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: "static.encoding_cache.cache_dir must not contain '..'".into(),
+        });
+    }
+    if cfg.enabled && !cfg.gzip && !cfg.brotli {
+        return Err(ConfigError::InvalidStaticEncodingCache {
+            message: "static.encoding_cache.enabled requires gzip and/or brotli = true".into(),
         });
     }
     Ok(())
@@ -1397,6 +1667,68 @@ redirect = { status = 301, location = "/new" }
     }
 
     #[test]
+    fn rejects_redirect_location_with_crlf() {
+        let input = "config_version = 1\n\
+[[server]]\n\
+listen = \"127.0.0.1:8080\"\n\
+routes = [\"redir\"]\n\
+\n\
+[[route]]\n\
+name = \"redir\"\n\
+match = { path = \"/old\" }\n\
+redirect = { status = 302, location = \"/ok\\r\\nSet-Cookie: x=1\" }\n";
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidRedirectLocation { .. }));
+    }
+
+    #[test]
+    fn rejects_empty_redirect_location() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["redir"]
+
+[[route]]
+name = "redir"
+match = { path = "/old" }
+redirect = { status = 302, location = "" }
+"#;
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidRedirectLocation { .. }));
+    }
+
+    #[test]
+    fn accepts_absolute_and_scheme_relative_redirect_location() {
+        for loc in [
+            "https://example.com/out",
+            "http://example.com/out",
+            "//cdn.example/path",
+            "/rel?q=1",
+            "/rel#frag",
+        ] {
+            let input = format!(
+                r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["redir"]
+
+[[route]]
+name = "redir"
+match = {{ path = "/old" }}
+redirect = {{ status = 302, location = "{loc}" }}
+"#
+            );
+            input
+                .parse::<AppConfig>()
+                .unwrap_or_else(|e| panic!("location {loc:?} should parse: {e}"));
+        }
+    }
+
+    #[test]
     fn accepts_structural_fcgi_pool_and_fastcgi_route() {
         let input = r#"
 config_version = 1
@@ -1564,13 +1896,18 @@ fastcgi = "missing"
             .join("../../tests/fixtures/golden/ir-fingerprints.json");
         let raw = std::fs::read_to_string(&golden_path).expect("golden file");
         let map: HashMap<String, String> = serde_json::from_str(&raw).unwrap();
-        for (name, expected) in map {
+        let mut mismatches = Vec::new();
+        for (name, expected) in &map {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../tests/fixtures")
-                .join(&name);
+                .join(name);
             let config = AppConfig::from_file(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(fingerprint(&config).as_str(), expected, "{name}");
+            let got = fingerprint(&config);
+            if got.as_str() != expected {
+                mismatches.push(format!("{name} {}", got.as_str()));
+            }
         }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     #[test]
@@ -1850,6 +2187,170 @@ max_entries = 16
     }
 
     #[test]
+    fn static_encoding_cache_defaults_off() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+"#;
+        let config: AppConfig = input.parse().expect("defaults");
+        assert!(!config.static_section.encoding_cache.enabled);
+        assert!(config.static_section.encoding_cache.gzip);
+        assert!(!config.static_section.encoding_cache.brotli);
+        assert_eq!(
+            config.static_section.encoding_cache.level,
+            DEFAULT_ENCODING_CACHE_LEVEL
+        );
+        assert_eq!(
+            config.static_section.encoding_cache.min_bytes,
+            DEFAULT_ENCODING_CACHE_MIN_BYTES
+        );
+        assert_eq!(
+            config.static_section.encoding_cache.max_bytes,
+            DEFAULT_ENCODING_CACHE_MAX_BYTES
+        );
+        assert_eq!(
+            config.static_section.encoding_cache.max_entries,
+            DEFAULT_ENCODING_CACHE_MAX_ENTRIES
+        );
+        assert_eq!(
+            config.static_section.encoding_cache.max_total_bytes,
+            DEFAULT_ENCODING_CACHE_MAX_TOTAL_BYTES
+        );
+    }
+
+    #[test]
+    fn static_encoding_cache_enabled_accepted() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+
+[static.encoding_cache]
+enabled = true
+cache_dir = "/tmp/exyonq-static-encoding"
+level = 6
+gzip = true
+brotli = false
+"#;
+        let config: AppConfig = input.parse().expect("encoding_cache");
+        assert!(config.static_section.encoding_cache.enabled);
+        assert_eq!(
+            config.static_section.encoding_cache.cache_dir.as_os_str(),
+            "/tmp/exyonq-static-encoding"
+        );
+    }
+
+    #[test]
+    fn static_encoding_cache_enabled_without_codings_rejected() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+
+[static.encoding_cache]
+enabled = true
+gzip = false
+brotli = false
+"#;
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidStaticEncodingCache { .. }
+        ));
+    }
+
+    #[test]
+    fn logging_section_parses_and_defaults() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "/tmp"
+
+[logging]
+format = "json"
+level = "debug"
+
+[logging.file]
+enabled = true
+path = "/tmp/exyonq-test.log"
+
+[logging.file.rotation]
+enabled = true
+max_bytes = 1048576
+keep = 3
+"#;
+        let config: AppConfig = input.parse().expect("logging ir");
+        assert_eq!(config.logging.format, crate::LogFormat::Json);
+        assert_eq!(config.logging.level, "debug");
+        assert!(config.logging.file.enabled);
+        assert_eq!(
+            config.logging.file.path.as_deref(),
+            Some("/tmp/exyonq-test.log")
+        );
+        assert!(config.logging.file.rotation.enabled);
+        assert_eq!(config.logging.file.rotation.keep, 3);
+    }
+
+    #[test]
+    fn logging_unknown_field_rejected() {
+        let input = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "/tmp"
+[logging]
+format = "text"
+not_a_real_field = true
+"#;
+        assert!(input.parse::<AppConfig>().is_err());
+    }
+
+    #[test]
     fn distributed_cache_redis_rejects_userinfo_in_endpoint() {
         let input = r#"
 config_version = 1
@@ -2126,5 +2627,151 @@ root = "/tmp"
         let cfg: AppConfig = input.parse().unwrap();
         assert_eq!(cfg.http3.provider, None);
         assert!(cfg.http3.enabled);
+    }
+
+    #[test]
+    fn timeout_ms_ceiling_rejects_overflow() {
+        let err = UpstreamConfig::try_from_parts(
+            "u".into(),
+            Some("http://127.0.0.1:9".into()),
+            Vec::new(),
+            EndpointSelectionPolicy::default(),
+            EndpointFailoverPolicy::default(),
+            MAX_UPSTREAM_TIMEOUT_MS + 1,
+            1,
+            UpstreamHealthCheckConfig::default(),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("exceeds max"), "{msg}");
+    }
+
+    #[test]
+    fn timeout_ms_zero_and_max_ok() {
+        for ms in [0u64, MAX_UPSTREAM_TIMEOUT_MS] {
+            UpstreamConfig::try_from_parts(
+                "u".into(),
+                Some("http://127.0.0.1:9".into()),
+                Vec::new(),
+                EndpointSelectionPolicy::default(),
+                EndpointFailoverPolicy::default(),
+                ms,
+                1,
+                UpstreamHealthCheckConfig::default(),
+            )
+            .expect("bound ok");
+        }
+    }
+
+    /// LA-CAP047-001: unknown fields must fail closed on the serve/parse_str path
+    /// (not only on merge RawRoot).
+    #[test]
+    fn unknown_fields_rejected_on_parse_str() {
+        let base = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:1"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/api/" }
+upstream = "u"
+[[upstream]]
+name = "u"
+[[upstream.endpoints]]
+address = "127.0.0.1"
+port = 9
+"#;
+        let top = format!("totally_unknown_typo = true\n{base}");
+        let err = AppConfig::parse_str(&top).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field") || err.contains("totally_unknown_typo"),
+            "{err}"
+        );
+
+        let nested = base.replace("routes = [\"r\"]", "routes = [\"r\"]\nbogus_server_key = 1");
+        let err = AppConfig::parse_str(&nested).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field") || err.contains("bogus_server_key"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn la_cap054_008_metrics_non_loopback_requires_scrape_bearer() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/tmp"
+[modules.metrics]
+enabled = true
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(
+            err.contains("scrape_bearer_token") && err.contains("LA-CAP054-008"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn la_cap054_008_metrics_loopback_ok_without_scrape_bearer() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/tmp"
+[modules.metrics]
+enabled = true
+"#;
+        AppConfig::parse_str(toml).expect("loopback metrics without bearer");
+    }
+
+    #[test]
+    fn la_cap054_008_metrics_non_loopback_ok_with_scrape_bearer() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/tmp"
+[modules.metrics]
+enabled = true
+scrape_bearer_token = "phase1-la008-token"
+"#;
+        AppConfig::parse_str(toml).expect("non-loopback with bearer");
+    }
+
+    #[test]
+    fn la_cap054_008_metrics_public_http3_listen_requires_scrape_bearer() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+http3_listen = "0.0.0.0:8443"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/tmp"
+[modules.metrics]
+enabled = true
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(
+            err.contains("scrape_bearer_token") && err.contains("LA-CAP054-008"),
+            "{err}"
+        );
     }
 }

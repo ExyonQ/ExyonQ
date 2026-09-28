@@ -602,7 +602,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let resp = dispatcher
@@ -632,6 +632,55 @@ mod tests {
         assert_eq!(ops.active_connections(), 0);
     }
 
+    #[tokio::test]
+    async fn dispatch_during_drain_preserves_live_health_rejects_product() {
+        // Cap040 / LA-CAP040-P2-002: probe-before-drain on H3 streams.
+        let ops = LifecycleState::new();
+        let raw = include_str!("../../tests/fixtures/minimal.toml");
+        let config: crate::config::AppConfig = raw.parse().expect("config");
+        let proxy = exyonq_mod_proxy::build_incoming_client();
+        let state = crate::server::state::ServerState::new(config, proxy.clone())
+            .await
+            .expect("state");
+        let shared = crate::reload::wrap_state(state);
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
+        ops.start_drain();
+
+        let live = dispatcher
+            .dispatch(
+                Request::get("/live").body(Bytes::new()).unwrap(),
+                "127.0.0.1",
+            )
+            .await
+            .expect("live");
+        assert_eq!(live.status, 200);
+
+        let health = dispatcher
+            .dispatch(
+                Request::get("/health").body(Bytes::new()).unwrap(),
+                "127.0.0.1",
+            )
+            .await
+            .expect("health");
+        assert_eq!(health.status, 200);
+
+        let ready = dispatcher
+            .dispatch(
+                Request::get("/ready").body(Bytes::new()).unwrap(),
+                "127.0.0.1",
+            )
+            .await
+            .expect("ready");
+        assert_eq!(ready.status, 503);
+
+        let product = dispatcher
+            .dispatch(Request::get("/").body(Bytes::new()).unwrap(), "127.0.0.1")
+            .await
+            .expect("product");
+        assert_eq!(product.status, 503);
+        assert_eq!(product.body.as_ref(), b"draining");
+    }
+
     #[test]
     fn h3_lease_move_does_not_double_decrement() {
         let ops = LifecycleState::new();
@@ -652,7 +701,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let _ = dispatcher.dispatch(req, "127.0.0.1").await;
@@ -672,7 +721,7 @@ mod tests {
         let capture = Arc::new(CapturingProxy::default());
         let service: Arc<dyn ProxyDispatchService> = capture.clone();
         let _guard = crate::execute_backend::ProxyDispatchTestGuard::install(service);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
 
         let req = Request::builder()
             .method("POST")

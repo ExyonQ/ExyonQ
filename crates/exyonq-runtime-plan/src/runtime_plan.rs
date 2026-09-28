@@ -285,6 +285,32 @@ impl RuntimeSnapshot {
         !self.module_state.is_empty()
     }
 
+    /// Modules that always require Hyper Service / CrossCuttingPipeline at connection
+    /// pin time (no request headers yet). Compression is **not** included — it uses the
+    /// Cap067 early AE gate (`compression_requires_hyper_for_request_head`).
+    pub fn hyper_required_for_modules(&self) -> bool {
+        false
+    }
+
+    /// `[modules.compression] enabled` in the compiled IR.
+    pub fn compression_configured(&self) -> bool {
+        self.filter_chain.compression
+    }
+
+    /// True when ratelimit and/or metrics counters are ON (wire-cheap hooks installable).
+    /// Independent of compression configuration (AE-idle stays Cap067/wire).
+    pub fn wire_cheap_modules_active(&self) -> bool {
+        self.filter_chain.ratelimit || self.filter_chain.metrics
+    }
+
+    /// Per-request: compression configured ∧ AE prefers a content coding → Hyper.
+    pub fn modules_require_hyper_for_request_head(&self, head: &[u8]) -> bool {
+        exyonq_module_api::compression_requires_hyper_for_request_head(
+            self.compression_configured(),
+            head,
+        )
+    }
+
     pub fn htaccess_site_id_for_route(&self, route_idx: usize) -> Option<&str> {
         self.htaccess_binding_for_route(route_idx)
             .map(|b| b.site_id.as_str())
@@ -399,6 +425,7 @@ pub fn compile_runtime_plan_from_ir(
                 route_prefix: route.r#match.path.clone(),
                 index_file: route.index.clone(),
                 route_name: route.name.clone(),
+                route_host: route.r#match.host.clone(),
                 preload_max_file_bytes: config.static_section.preload.max_file_bytes,
                 preload_max_total_bytes: config.static_section.preload.max_total_bytes,
                 preload_max_entries: config.static_section.preload.max_entries,
@@ -406,6 +433,30 @@ pub fn compile_runtime_plan_from_ir(
         }
     }
     let static_slots = static_slots.into_boxed_slice();
+
+    // Cap033: duplicate normalized (host, path) is ambiguous virtual-host identity — fail closed.
+    {
+        use crate::router::normalize_route_host;
+        use std::collections::HashMap;
+        let mut seen: HashMap<(String, String), String> = HashMap::new();
+        for route in &config.routes {
+            let Some(host) = route.r#match.host.as_deref() else {
+                continue;
+            };
+            let key = (
+                normalize_route_host(host),
+                route.r#match.path.trim_end_matches('/').to_string(),
+            );
+            if let Some(prev) = seen.insert(key, route.name.clone()) {
+                anyhow::bail!(
+                    "duplicate route host {:?} path {:?} (routes {prev} and {})",
+                    host,
+                    route.r#match.path,
+                    route.name
+                );
+            }
+        }
+    }
 
     let route_index = RouteIndex::new(config.routes.clone());
 
@@ -567,11 +618,13 @@ fn compile_proxy_compiled_slots(
                 endpoint_execution,
             },
         );
+        let hc = &upstream.health_check;
         slots.push(ProxyCompiledSlot {
             cluster_id: cluster_id as u32,
             upstream_name: name,
             target: target_uri,
             timeout: Duration::from_millis(upstream.timeout_ms),
+            max_connect_retries: upstream.max_connect_retries,
             single_endpoint_executable: matches!(
                 endpoint_execution,
                 EndpointExecutionStatus::SingleEndpointReady
@@ -586,6 +639,14 @@ fn compile_proxy_compiled_slots(
                 exyonq_config_ir::EndpointFailoverPolicy::PriorityBands
             ),
             endpoints: slot_endpoints,
+            health_check: exyonq_module_api::proxy_dispatch::ProxyHealthCheckCompiled {
+                enabled: hc.enabled,
+                interval: Duration::from_millis(hc.interval_ms),
+                timeout: Duration::from_millis(hc.timeout_ms),
+                path: hc.path.clone(),
+                healthy_threshold: hc.healthy_threshold,
+                unhealthy_threshold: hc.unhealthy_threshold,
+            },
         });
     }
     Ok(slots.into_boxed_slice())
@@ -698,6 +759,8 @@ mod tests {
             static_section: Default::default(),
             full_page_cache: Default::default(),
             http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
         };
         let snap = compile_config(config);
         assert!(snap.route_backend_id(0).is_none());
@@ -734,6 +797,8 @@ mod tests {
             static_section: Default::default(),
             full_page_cache: Default::default(),
             http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
         };
         let snap = compile_config(config);
         let api_id = snap.route_backend_id(0).unwrap();
@@ -1006,5 +1071,39 @@ timeout_ms = 1000
                 .single_endpoint_executable
         );
         assert!(snap.proxy_compiled_slot(0).unwrap().target.is_empty());
+    }
+
+    #[test]
+    fn hyper_required_only_when_ae_prefers_coding() {
+        let with_comp = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "u1"
+[[upstream]]
+name = "u1"
+target = "http://127.0.0.1:9000"
+[modules.metrics]
+enabled = true
+[modules.ratelimit]
+enabled = true
+requests_per_second = 1000000
+burst = 1000000
+[modules.compression]
+enabled = true
+"#;
+        let snap = compile_config(with_comp.parse().unwrap());
+        assert!(snap.modules_enabled());
+        assert!(snap.compression_configured());
+        assert!(!snap.hyper_required_for_modules());
+        assert!(snap.wire_cheap_modules_active());
+        let idle = b"GET /api/ HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert!(snap.modules_require_hyper_for_request_head(idle));
+        let gzip = b"GET /api/ HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n";
+        assert!(snap.modules_require_hyper_for_request_head(gzip));
     }
 }

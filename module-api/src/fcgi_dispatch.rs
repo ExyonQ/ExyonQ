@@ -36,7 +36,7 @@ pub struct MaterializedBackendOutcome {
 /// Aggregate FastCGI counters exposed for observability (implementation lives in the module).
 ///
 /// **Module runtime semantics (`responses_501`):** counts HTTP **501 outcomes produced inside
-/// a registered FastCGI runtime** (e.g. executor `NotRegistered`, authorization stub paths).
+/// a registered FastCGI runtime** (e.g. executor `NotRegistered`, authorization deny paths).
 /// Does **not** include HTTP 501 emitted by the core dispatch shell when no module is registered.
 ///
 /// **Public aggregate (`exyonq_core::fcgi_responses_501_total`):** core shell HTTP 501 on
@@ -127,7 +127,7 @@ pub trait FcgiDispatchService: Send + Sync {
     }
 
     /// Begin FastCGI connection-pool drain (idle drop + reject new checkout).
-    /// Default: no-op for stubs; production runtime overrides.
+    /// Default: empty; production runtime overrides.
     fn begin_drain(&self) {}
 
     /// Publish a new FastCGI pool generation from compiled plan slots.
@@ -152,7 +152,7 @@ pub trait FcgiDispatchService: Send + Sync {
 pub trait FcgiBackendExecutor: Send + Sync {
     fn dispatch(&self, request: &FcgiDispatchRequest) -> FcgiDispatchOutcome;
 
-    /// Drain pooled sockets for this executor (default no-op).
+    /// Drain pooled sockets for this executor (default empty).
     fn begin_drain(&self) {}
 }
 

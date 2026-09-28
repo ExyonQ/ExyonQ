@@ -1,8 +1,44 @@
 # ExyonQ example configuration — /etc/exyonq/config.toml
 config_version = 1
 
+# Cap061 — production observability (RD-005: IR implemented; not env-only).
 [logging]
+level = "info"
 format = "text"  # or "json"
+queue_capacity = 8192
+
+[logging.console]
+enabled = true
+stream = "stdout"  # stdout | stderr | split
+
+[logging.file]
+enabled = false
+# path = "/var/log/exyonq/exyonq.log"
+# [logging.file.rotation]
+# enabled = true
+# max_bytes = 104857600
+# keep = 7
+
+[logging.syslog]
+enabled = false
+# transport = "unix"  # unix | udp | tcp
+# address = "/dev/log"
+
+[logging.journald]
+enabled = false
+
+[logging.otel]
+enabled = false
+# endpoint = "http://127.0.0.1:4318"
+# protocol = "http_protobuf"  # http_protobuf only in Cap061; grpc not supported
+# service_name = "exyonq"
+# metrics_export = false  # Cap054 Prometheus remains metrics authority
+
+[logging.access]
+enabled = true
+
+[logging.audit]
+enabled = true
 
 [[server]]
 listen = "0.0.0.0:8080"

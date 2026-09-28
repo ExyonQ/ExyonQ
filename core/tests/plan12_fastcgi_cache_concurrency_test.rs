@@ -56,16 +56,6 @@ async fn fcgi_singleflight_deduplicates_concurrent_misses() {
         .expect("register global script resolver for multi-thread test");
     reset_cache_metrics_for_tests();
     let hits = Arc::new(AtomicUsize::new(0));
-    register_fcgi_dispatch_service(Arc::new(
-        FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: Arc::new(CountingExecutor {
-                hits: Arc::clone(&hits),
-            }),
-            pool_capacities: vec![(0, 32)],
-        })
-        .expect("fcgi runtime"),
-    ))
-    .expect("register global fcgi for multi-thread test");
 
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join("public")).expect("mkdir");
@@ -102,9 +92,20 @@ document_root = "{}"
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    // Cap048: External CountingExecutor after Module bind from publish.
+    register_fcgi_dispatch_service(Arc::new(
+        FcgiRuntime::new(FcgiRuntimeRegistration {
+            executor: Arc::new(CountingExecutor {
+                hits: Arc::clone(&hits),
+            }),
+            pool_capacities: vec![(0, 32)],
+        })
+        .expect("fcgi runtime"),
+    ))
+    .expect("register global fcgi for multi-thread test");
     let ctx = Arc::new(ConnectionContext {
         state,
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     });

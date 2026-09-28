@@ -29,8 +29,9 @@ pub const MAX_INCLUDE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 use exyonq_config_ir::{
     endpoint_from_discovery_hostport, endpoint_from_http_target, AppConfig, CachePolicyConfig,
-    ConfigError, EndpointSet, FcgiPoolConfig, FullPageCacheConfig, Http3Config, RawConfigInput,
-    RouteConfig, ServerConfig, UpstreamConfig, CONFIG_VERSION_V2, DEFAULT_UPSTREAM_TIMEOUT_MS,
+    ConfigError, EndpointSet, FcgiPoolConfig, FullPageCacheConfig, Http3Config, LoggingConfig,
+    RawConfigInput, RouteConfig, ServerConfig, UpstreamConfig, WafConfig, CONFIG_VERSION_V2,
+    DEFAULT_UPSTREAM_TIMEOUT_MS,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -71,6 +72,10 @@ struct RawRoot {
     full_page_cache: FullPageCacheConfig,
     #[serde(default)]
     http3: Http3Config,
+    #[serde(default)]
+    waf: WafConfig,
+    #[serde(default)]
+    logging: LoggingConfig,
 }
 
 /// Load IR from path, resolving `include` fragments (config_version = 2).
@@ -170,6 +175,8 @@ fn raw_to_ir(raw: RawRoot) -> RawConfigInput {
         static_section: raw.static_section,
         full_page_cache: raw.full_page_cache,
         http3: raw.http3,
+        waf: raw.waf,
+        logging: raw.logging,
     }
 }
 

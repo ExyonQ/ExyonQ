@@ -34,14 +34,26 @@ pub mod kernel;
 pub mod kernel_control_port;
 pub mod lab_coord_hooks;
 pub mod lifecycle;
+pub mod observability;
 pub mod pipeline_registry;
 pub mod platform;
 pub mod reload;
 pub mod server;
 pub mod structural_route_rules;
+pub mod waf;
 
 /// TLS runtime (KD4.5 — implementation in `exyonq-mod-tls`).
 pub use exyonq_mod_tls as tls;
+
+pub use waf::{
+    clear_waf_abuse_gate, commit_staged_waf_binding, commit_waf_reload,
+    compute_wire_inspection_active, current_waf_engine, discard_staged_waf_binding,
+    discard_waf_reload, install_waf_abuse_gate, install_waf_challenge_handler,
+    install_waf_commit_hook, install_waf_discard_hook, install_waf_engine,
+    install_waf_prepare_hook, install_waf_runtime_binding, prepare_waf_reload, set_waf_enforce,
+    stage_waf_runtime_binding, waf_binding_for_new_state, waf_enforce_enabled, WafRuntimeBinding,
+    WAF_CHALLENGE_VERIFY_PATH,
+};
 
 /// Exposed for fuzz targets and tests.
 pub fn find_header_end(buf: &[u8]) -> Option<usize> {
@@ -87,18 +99,18 @@ pub use execute_backend::fcgi_metrics_assert_guard;
 #[doc(hidden)]
 pub use execute_backend::proxy_metrics_assert_guard;
 pub use execute_backend::{
-    bind_proxy_compiled_slots, bind_static_compiled_slots, build_fcgi_dispatch_request,
-    build_proxy_dispatch_request, build_static_dispatch_request,
+    bind_fcgi_compiled_pools, bind_proxy_compiled_slots, bind_static_compiled_slots,
+    build_fcgi_dispatch_request, build_proxy_dispatch_request, build_static_dispatch_request,
     build_static_dispatch_request_from_str, build_static_dispatch_request_from_str_with_budget,
     clear_global_fcgi_dispatch_for_register_once_test,
     clear_global_proxy_dispatch_for_register_once_test,
     clear_global_static_dispatch_for_register_once_test, dispatch_proxy, execute_backend,
-    materialize_proxy_outcome, materialize_static_outcome, proxy_outcome_to_hyper,
-    register_fcgi_dispatch_service, register_fcgi_executor, register_fcgi_runtime,
-    register_proxy_dispatch_service, register_static_dispatch_service, ExecuteBackendOutcome,
-    FcgiDispatchTestGuard, FcgiRegisterError, FcgiRuntimeRegistration, ProxyDispatchTestGuard,
-    StaticDispatchTestGuard, StaticRegisterError, StaticRuntimeRegistration,
-    DEFAULT_FCGI_MAX_CONCURRENCY, FCGI_REQUEST_BODY_LIMIT,
+    fcgi_compiled_slots_from_config, materialize_proxy_outcome, materialize_static_outcome,
+    proxy_outcome_to_hyper, register_fcgi_dispatch_service, register_fcgi_executor,
+    register_fcgi_runtime, register_proxy_dispatch_service, register_static_dispatch_service,
+    ExecuteBackendOutcome, FcgiDispatchTestGuard, FcgiRegisterError, FcgiRuntimeRegistration,
+    ProxyDispatchTestGuard, StaticDispatchTestGuard, StaticRegisterError,
+    StaticRuntimeRegistration, DEFAULT_FCGI_MAX_CONCURRENCY, FCGI_REQUEST_BODY_LIMIT,
 };
 pub use exyonq_module_api::fcgi_dispatch::{
     FcgiBackendExecutor, FcgiDispatchOutcome, FcgiDispatchRequest, FcgiDispatchService,

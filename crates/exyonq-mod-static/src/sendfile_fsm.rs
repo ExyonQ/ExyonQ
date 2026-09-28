@@ -22,8 +22,11 @@
 use crate::sendfile::SendfileAsset;
 use std::io;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicI8, Ordering};
 use std::sync::Arc;
-use std::sync::OnceLock;
+
+/// Process-lifetime cache for `epoll_sendfile_enabled` (−1 unset, 0 off, 1 on).
+static EPOLL_SENDFILE_ENABLED_CACHE: AtomicI8 = AtomicI8::new(-1);
 
 pub const EPOLLIN: u32 = 0x001;
 pub const EPOLLOUT: u32 = 0x004;
@@ -34,9 +37,36 @@ pub const EPOLL_CTL_DEL: i32 = 2;
 pub const EPOLL_CTL_MOD: i32 = 3;
 
 /// Bench response headers fit in wire templates; stack buffer avoids heap in FSM.
-pub const MAX_RESPONSE_HEADER: usize = 128;
+/// Cap019: 206/416 header blocks need more than the historical 128-byte bench ceiling.
+/// No-Range response header templates are unchanged and still fit well under this limit.
+pub const MAX_RESPONSE_HEADER: usize = 512;
 
 pub(crate) const MSG_NOSIGNAL: i32 = 0x4000;
+/// Linux `MSG_MORE` — Cap067 P5: coalesce response header with following sendfile body.
+#[cfg(target_os = "linux")]
+pub(crate) const MSG_MORE: i32 = 0x8000;
+
+/// Cap067 P5: header `send` flags.
+///
+/// `MSG_MORE` only when this response has already committed to a non-zero Cap067
+/// sendfile body (`!head_only && body_remaining > 0`). Never for HEAD/304/416/
+/// header-only/zero-length — those must flush without waiting for a body.
+#[inline]
+fn header_send_flags(state: &SendingState) -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut flags = MSG_NOSIGNAL;
+        if !state.head_only && state.body_remaining > 0 {
+            flags |= MSG_MORE;
+        }
+        flags
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = state;
+        MSG_NOSIGNAL
+    }
+}
 
 /// Result of one FSM pump invocation. **`Parked` stops the EPOLLET caller** until `EPOLLOUT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,16 +129,38 @@ pub struct SendingState {
     pub file_offset: i64,
     pub body_remaining: usize,
     pub head_only: bool,
+    /// Cap061/Cap067: real terminal status for access logging (never invent 200).
+    pub access_status: u16,
+    /// Declared body bytes for this response (0 for HEAD/304/416).
+    pub access_body_len: usize,
 }
 
 impl SendingState {
     pub fn new_get(asset: Arc<SendfileAsset>) -> io::Result<Self> {
+        let body_len = asset.body_len;
         Ok(Self {
             header: ResponseHeaderBuf::from_header_bytes(asset.header.as_ref())?,
             header_done: false,
             file_offset: 0,
-            body_remaining: asset.body_len,
+            body_remaining: body_len,
             head_only: false,
+            access_status: 200,
+            access_body_len: body_len,
+            asset,
+        })
+    }
+
+    /// Cap067: GET 200 with Cap020 validators already baked into `header`.
+    pub fn new_get_full(asset: Arc<SendfileAsset>, header: &[u8]) -> io::Result<Self> {
+        let body_len = asset.body_len;
+        Ok(Self {
+            header: ResponseHeaderBuf::from_header_bytes(header)?,
+            header_done: false,
+            file_offset: 0,
+            body_remaining: body_len,
+            head_only: false,
+            access_status: 200,
+            access_body_len: body_len,
             asset,
         })
     }
@@ -120,25 +172,92 @@ impl SendingState {
             file_offset: 0,
             body_remaining: 0,
             head_only: true,
+            access_status: 200,
+            access_body_len: 0,
+            asset,
+        })
+    }
+
+    /// Cap019: GET with selected byte range (sendfile offset + remaining length).
+    pub fn new_get_range(
+        asset: Arc<SendfileAsset>,
+        header: &[u8],
+        start: u64,
+        length: usize,
+    ) -> io::Result<Self> {
+        let file_offset = i64::try_from(start)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "range start exceeds i64"))?;
+        Ok(Self {
+            header: ResponseHeaderBuf::from_header_bytes(header)?,
+            header_done: false,
+            file_offset,
+            body_remaining: length,
+            head_only: false,
+            access_status: 206,
+            access_body_len: length,
+            asset,
+        })
+    }
+
+    /// Cap019/Cap020: HEAD or error metadata responses (304/416/HEAD-206).
+    pub fn new_head_range(
+        asset: Arc<SendfileAsset>,
+        header: &[u8],
+        access_status: u16,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            header: ResponseHeaderBuf::from_header_bytes(header)?,
+            header_done: false,
+            file_offset: 0,
+            body_remaining: 0,
+            head_only: true,
+            access_status,
+            access_body_len: 0,
             asset,
         })
     }
 }
 
-/// `EXYONQ_EPOLL_STATIC=1` and `EXYONQ_EPOLL_SENDFILE=1`. Default off; PR #2 wires routing.
+/// Cap067: automatic sendfile mechanism on Linux (default ON).
+///
+/// Kill-switches: `EXYONQ_EPOLL_STATIC=0` and/or `EXYONQ_EPOLL_SENDFILE=0`.
+///
+/// Resolved once at first observation (process-lifetime). Mid-process env
+/// mutation is **not** observed in production — emergency disable requires
+/// process restart. Default / explicit on|off|invalid semantics are unchanged.
 pub fn epoll_sendfile_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        let static_on = std::env::var("EXYONQ_EPOLL_STATIC").ok().as_deref() == Some("1");
-        let sendfile_on = std::env::var("EXYONQ_EPOLL_SENDFILE").ok().as_deref() == Some("1");
-        if sendfile_on && !static_on {
-            tracing::warn!(
-                "EXYONQ_EPOLL_SENDFILE=1 ignored without EXYONQ_EPOLL_STATIC=1 (ADR-025 PR #2)"
-            );
-            return false;
-        }
-        static_on && sendfile_on
-    })
+    let cached = EPOLL_SENDFILE_ENABLED_CACHE.load(Ordering::Relaxed);
+    if cached >= 0 {
+        return cached != 0;
+    }
+    let v = env_flag_auto_on_value(std::env::var("EXYONQ_EPOLL_STATIC").ok().as_deref())
+        && env_flag_auto_on_value(std::env::var("EXYONQ_EPOLL_SENDFILE").ok().as_deref());
+    let encoded: i8 = if v { 1 } else { 0 };
+    let _ = EPOLL_SENDFILE_ENABLED_CACHE.compare_exchange(
+        -1,
+        encoded,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    EPOLL_SENDFILE_ENABLED_CACHE.load(Ordering::Relaxed) != 0
+}
+
+/// Auto-on flag: unset → true; `0`/`off`/`false`/`no` → false; anything else → true.
+fn env_flag_auto_on_value(raw: Option<&str>) -> bool {
+    match raw {
+        Some(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false" | "no"
+        ),
+        None => true,
+    }
+}
+
+/// Test-only: clear process-lifetime cache so a subsequent call re-reads env
+/// (simulates a fresh process). Production never calls this.
+#[doc(hidden)]
+pub fn reset_epoll_sendfile_enabled_cache_for_tests() {
+    EPOLL_SENDFILE_ENABLED_CACHE.store(-1, Ordering::Relaxed);
 }
 
 pub fn interest_reading() -> u32 {
@@ -158,9 +277,11 @@ pub fn interest_for_pump_result(result: PumpResult) -> u32 {
 }
 
 /// Non-blocking partial header write via `send(2)` — never `write_response_fd` / `write_all_fd`.
+/// `flags`: Cap067 P5 — `MSG_NOSIGNAL` [| `MSG_MORE`] from [`header_send_flags`].
 fn try_send_header_partial(
     out_fd: RawFd,
     header: &mut ResponseHeaderBuf,
+    flags: i32,
 ) -> Result<usize, io::Error> {
     let pending = header.pending();
     if pending.is_empty() {
@@ -172,7 +293,7 @@ fn try_send_header_partial(
                 out_fd,
                 pending.as_ptr() as *const libc::c_void,
                 pending.len(),
-                MSG_NOSIGNAL,
+                flags,
             )
         };
         if written < 0 {
@@ -197,7 +318,10 @@ pub fn pump_sendfile_nb(out_fd: RawFd, state: &mut SendingState) -> PumpResult {
 
     loop {
         if !state.header_done {
-            match try_send_header_partial(out_fd, &mut state.header) {
+            // Cap067 P5: decide MSG_MORE at the earliest FSM point where Cap067 has
+            // already committed to a non-zero sendfile body for this response.
+            let flags = header_send_flags(state);
+            match try_send_header_partial(out_fd, &mut state.header, flags) {
                 Ok(_) => {
                     if state.header.done() {
                         state.header_done = true;
@@ -271,7 +395,7 @@ pub fn epoll_drain_pump_once(out_fd: RawFd, state: &mut SendingState) -> EpollPu
     }
 }
 
-/// Mock correct EPOLLET caller for the strong `Parked` contract: it invokes the
+/// Reference EPOLLET caller for the strong `Parked` contract: it invokes the
 /// pump-drain exactly once per readiness event and never re-invokes after `Parked`
 /// (it re-arms `EPOLLOUT` and waits for the next event). PR #2's real readiness loop
 /// must preserve this — `Parked` is never mapped to a retry within the same event.
@@ -448,7 +572,16 @@ mod tests {
         let remaining_before = state.body_remaining;
         let result = pump_sendfile_nb(fd, &mut state);
         assert_eq!(result, PumpResult::Parked);
-        assert!(state.file_offset > offset_before || state.body_remaining < remaining_before);
+        // Persist offsets across Parked. With Cap067 P5 MSG_MORE the skb may already be
+        // full from the coalesced header+body enqueue, so a further pump can Park with
+        // zero additional progress — that is still correct persistence, not regression.
+        assert!(state.file_offset >= offset_before);
+        assert!(state.body_remaining <= remaining_before);
+        assert_eq!(
+            state.file_offset + state.body_remaining as i64,
+            offset_before + remaining_before as i64,
+            "Parked must not invent or lose body bytes"
+        );
         Ok(())
     }
 
@@ -460,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn parked_contract_stops_mock_caller() -> io::Result<()> {
+    fn parked_contract_stops_reference_caller() -> io::Result<()> {
         let (_dir, asset) = asset_64k()?;
         let (_writer, _reader, fd) = socket_pair_send_blocked()?;
         let mut state = SendingState::new_get(asset)?;
@@ -479,7 +612,7 @@ mod tests {
         let (writer, _reader) = socket_pair_nonblocking()?;
         let fd = writer.as_raw_fd();
         let mut state = SendingState::new_get(asset)?;
-        // Smoke: full pump completes on normal socket (EINTR path covered by loop structure)
+        // Diagnostic: full pump completes on normal socket (EINTR path covered by loop structure)
         let drain = epoll_drain_pump_once(fd, &mut state);
         assert_eq!(drain.result, PumpResult::Complete);
         Ok(())
@@ -539,13 +672,25 @@ mod tests {
     }
 
     #[test]
-    fn flag_off_no_runtime_behavior_change() {
-        // Default env in unit tests: feature gate must be off unless both vars set.
-        assert!(
-            !epoll_sendfile_enabled()
-                || (std::env::var("EXYONQ_EPOLL_STATIC").ok().as_deref() == Some("1")
-                    && std::env::var("EXYONQ_EPOLL_SENDFILE").ok().as_deref() == Some("1"))
-        );
+    fn env_flag_auto_on_value_semantics() {
+        assert!(env_flag_auto_on_value(None));
+        assert!(env_flag_auto_on_value(Some("")));
+        assert!(env_flag_auto_on_value(Some("1")));
+        assert!(env_flag_auto_on_value(Some("yes")));
+        assert!(env_flag_auto_on_value(Some("garbage")));
+        assert!(!env_flag_auto_on_value(Some("0")));
+        assert!(!env_flag_auto_on_value(Some("OFF")));
+        assert!(!env_flag_auto_on_value(Some(" False ")));
+        assert!(!env_flag_auto_on_value(Some("no")));
+    }
+
+    #[test]
+    fn flag_kill_switch_combined_requires_both_on() {
+        assert!(env_flag_auto_on_value(Some("1")) && env_flag_auto_on_value(Some("1")));
+        assert!(!(env_flag_auto_on_value(Some("1")) && env_flag_auto_on_value(Some("0"))));
+        assert!(!(env_flag_auto_on_value(Some("0")) && env_flag_auto_on_value(Some("1"))));
+        assert!(!(env_flag_auto_on_value(Some("0")) && env_flag_auto_on_value(Some("0"))));
+        assert!(env_flag_auto_on_value(None) && env_flag_auto_on_value(None));
     }
 
     /// InvalidInput contract: a response header above `MAX_RESPONSE_HEADER` must surface a
@@ -557,20 +702,282 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.bin");
         std::fs::write(&path, vec![0u8; 65536]).unwrap();
+        let file = File::open(&path).unwrap();
+        let meta = file.metadata().unwrap();
+        let prepared = crate::conditional::PreparedStaticWire::from_metadata(
+            &meta,
+            "application/octet-stream",
+        );
         let asset = Arc::new(SendfileAsset {
-            file: Arc::new(File::open(&path).unwrap()),
+            file: Arc::new(file),
             header: Arc::new(Bytes::from(vec![b'x'; MAX_RESPONSE_HEADER + 1])),
+            header_304: prepared.header_304,
             body_len: 65536,
+            content_type: "application/octet-stream",
+            validators: prepared.validators,
         });
         assert!(SendingState::new_get(Arc::clone(&asset)).is_err());
         assert!(SendingState::new_head_only(asset).is_err());
     }
 
     #[test]
-    fn bench_header_fits_stack_buffer() {
-        let header = crate::wire::bench_header_keep(65536);
+    fn response_header_fits_stack_buffer() {
+        let header = crate::wire::header_keep(65536, "application/octet-stream");
         assert!(header.len() <= MAX_RESPONSE_HEADER);
-        let header_1m = crate::wire::bench_header_keep(1048576);
+        let header_1m = crate::wire::header_keep(1048576, "application/octet-stream");
         assert!(header_1m.len() <= MAX_RESPONSE_HEADER);
+    }
+
+    /// Cap067 P5: MSG_MORE selection is derived only from committed sendfile body state.
+    #[test]
+    fn p5_header_send_flags_selection_matrix() -> io::Result<()> {
+        let (_dir, asset) = asset_64k()?;
+        let get = SendingState::new_get(Arc::clone(&asset))?;
+        assert_eq!(
+            header_send_flags(&get) & MSG_NOSIGNAL,
+            MSG_NOSIGNAL,
+            "NOSIGNAL always"
+        );
+        #[cfg(target_os = "linux")]
+        assert_ne!(
+            header_send_flags(&get) & MSG_MORE,
+            0,
+            "GET with body must set MSG_MORE"
+        );
+
+        let head = SendingState::new_head_only(Arc::clone(&asset))?;
+        assert_eq!(
+            header_send_flags(&head),
+            MSG_NOSIGNAL,
+            "HEAD must not set MSG_MORE"
+        );
+
+        let not_mod =
+            SendingState::new_head_range(Arc::clone(&asset), asset.header_304.as_ref(), 304)?;
+        assert_eq!(
+            header_send_flags(&not_mod),
+            MSG_NOSIGNAL,
+            "304 must not set MSG_MORE"
+        );
+
+        let range_hdr = crate::wire::partial_content_header(
+            0,
+            99,
+            asset.body_len as u64,
+            "application/octet-stream",
+        );
+        let range = SendingState::new_get_range(Arc::clone(&asset), range_hdr.as_ref(), 0, 100)?;
+        #[cfg(target_os = "linux")]
+        assert_ne!(
+            header_send_flags(&range) & MSG_MORE,
+            0,
+            "206 with non-zero body must set MSG_MORE"
+        );
+        assert_eq!(header_send_flags(&range) & MSG_NOSIGNAL, MSG_NOSIGNAL);
+
+        // Zero-length range body must not cork.
+        let empty_range =
+            SendingState::new_get_range(Arc::clone(&asset), range_hdr.as_ref(), 0, 0)?;
+        assert_eq!(
+            header_send_flags(&empty_range),
+            MSG_NOSIGNAL,
+            "zero-length 206 must not set MSG_MORE"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn p5_zero_length_static_no_msg_more_and_completes() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("empty.bin");
+        std::fs::write(&path, b"")?;
+        let asset = Arc::new(SendfileAsset::open(&path, 0)?);
+        let mut state = SendingState::new_get(Arc::clone(&asset))?;
+        assert_eq!(state.body_remaining, 0);
+        assert_eq!(
+            header_send_flags(&state),
+            MSG_NOSIGNAL,
+            "zero-length GET must not set MSG_MORE"
+        );
+        let (writer, mut reader) = socket_pair_nonblocking()?;
+        let fd = writer.as_raw_fd();
+        let drain = epoll_drain_pump_once(fd, &mut state);
+        assert_eq!(drain.result, PumpResult::Complete);
+        assert!(state.header_done);
+        let mut buf = [0u8; 512];
+        let n = reader.read(&mut buf)?;
+        assert!(n > 0, "header must be delivered");
+        let text = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(text.starts_with("HTTP/1.1 200"));
+        assert!(text.contains("Content-Length: 0"));
+        Ok(())
+    }
+
+    #[test]
+    fn p5_get_body_completes_with_exact_bytes() -> io::Result<()> {
+        let (_dir, asset) = asset_64k()?;
+        let (writer, mut reader) = socket_pair_nonblocking()?;
+        set_nonblocking(reader.as_raw_fd(), false)?;
+        let mut state = SendingState::new_get(asset)?;
+        #[cfg(target_os = "linux")]
+        assert_ne!(header_send_flags(&state) & MSG_MORE, 0);
+        let fd = writer.as_raw_fd();
+        assert_eq!(
+            epoll_drain_pump_once(fd, &mut state).result,
+            PumpResult::Complete
+        );
+        drop(writer);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf)?;
+        assert!(buf.windows(4).any(|w| w == b"HTTP"));
+        let sep = buf
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("header/body separator");
+        let body = &buf[sep + 4..];
+        assert_eq!(body.len(), 65536);
+        assert!(body.iter().all(|&b| b == 7));
+        Ok(())
+    }
+
+    #[test]
+    fn p5_range_206_exact_body_bytes() -> io::Result<()> {
+        let (_dir, asset) = asset_64k()?;
+        let start = 100u64;
+        let length = 50usize;
+        let hdr = crate::wire::partial_content_header(
+            start,
+            start + length as u64 - 1,
+            asset.body_len as u64,
+            "application/octet-stream",
+        );
+        let (writer, mut reader) = socket_pair_nonblocking()?;
+        set_nonblocking(reader.as_raw_fd(), false)?;
+        let mut state = SendingState::new_get_range(asset, hdr.as_ref(), start, length)?;
+        assert_eq!(state.access_status, 206);
+        #[cfg(target_os = "linux")]
+        assert_ne!(header_send_flags(&state) & MSG_MORE, 0);
+        let fd = writer.as_raw_fd();
+        assert_eq!(
+            epoll_drain_pump_once(fd, &mut state).result,
+            PumpResult::Complete
+        );
+        drop(writer);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf)?;
+        let text = std::str::from_utf8(&buf).unwrap();
+        assert!(text.starts_with("HTTP/1.1 206"));
+        assert!(text.contains("Content-Range:"));
+        let sep = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        assert_eq!(&buf[sep + 4..], &vec![7u8; length]);
+        Ok(())
+    }
+
+    #[test]
+    fn p5_head_then_get_keepalive_boundaries() -> io::Result<()> {
+        // Real TCP loopback: MSG_MORE is a TCP semantic; UnixStream is not authoritative.
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("1k.bin");
+        std::fs::write(&path, vec![9u8; 1024])?;
+        let asset = Arc::new(SendfileAsset::open(&path, 1024)?);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let mut client = std::net::TcpStream::connect(addr)?;
+        let (server, _) = listener.accept()?;
+        server.set_nonblocking(true)?;
+        client.set_nonblocking(false)?;
+        let fd = server.as_raw_fd();
+
+        fn pump_complete(fd: RawFd, state: &mut SendingState) -> io::Result<()> {
+            for _ in 0..10_000 {
+                match epoll_drain_pump_once(fd, state).result {
+                    PumpResult::Complete => return Ok(()),
+                    PumpResult::Parked | PumpResult::Progress => continue,
+                    PumpResult::Error(k) => return Err(io::Error::new(k, "pump error")),
+                }
+            }
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "pump did not complete",
+            ))
+        }
+
+        fn read_one_http(
+            client: &mut std::net::TcpStream,
+            leftover: &mut Vec<u8>,
+            expect_body: bool,
+        ) -> io::Result<(String, Vec<u8>)> {
+            let mut buf = std::mem::take(leftover);
+            let mut tmp = [0u8; 4096];
+            loop {
+                if let Some(sep) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..sep]).into_owned();
+                    let body_start = sep + 4;
+                    if !expect_body {
+                        *leftover = buf[body_start..].to_vec();
+                        return Ok((head, Vec::new()));
+                    }
+                    let mut cl = 0usize;
+                    for line in head.lines() {
+                        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            cl = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    while buf.len() < body_start + cl {
+                        let n = client.read(&mut tmp)?;
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&tmp[..n]);
+                    }
+                    let body = buf[body_start..body_start + cl].to_vec();
+                    *leftover = buf[body_start + cl..].to_vec();
+                    return Ok((head, body));
+                }
+                let n = client.read(&mut tmp)?;
+                if n == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "incomplete HTTP",
+                    ));
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+        }
+
+        let mut leftover = Vec::new();
+
+        let mut head = SendingState::new_head_only(Arc::clone(&asset))?;
+        assert_eq!(header_send_flags(&head), MSG_NOSIGNAL);
+        pump_complete(fd, &mut head)?;
+        let (h1, b1) = read_one_http(&mut client, &mut leftover, false)?;
+        assert!(h1.starts_with("HTTP/1.1 200"));
+        assert!(b1.is_empty(), "HEAD must have empty body");
+
+        let mut get = SendingState::new_get(Arc::clone(&asset))?;
+        assert_ne!(header_send_flags(&get) & MSG_MORE, 0);
+        pump_complete(fd, &mut get)?;
+        let (h2, b2) = read_one_http(&mut client, &mut leftover, true)?;
+        assert!(h2.starts_with("HTTP/1.1 200"));
+        assert_eq!(b2, vec![9u8; 1024]);
+
+        let mut not_mod =
+            SendingState::new_head_range(Arc::clone(&asset), asset.header_304.as_ref(), 304)?;
+        assert_eq!(header_send_flags(&not_mod), MSG_NOSIGNAL);
+        pump_complete(fd, &mut not_mod)?;
+        let (h3, b3) = read_one_http(&mut client, &mut leftover, false)?;
+        assert!(
+            h3.starts_with("HTTP/1.1 304"),
+            "304 must not be delayed: {h3}"
+        );
+        assert!(b3.is_empty());
+
+        let mut get2 = SendingState::new_get(asset)?;
+        pump_complete(fd, &mut get2)?;
+        let (h4, b4) = read_one_http(&mut client, &mut leftover, true)?;
+        assert!(h4.starts_with("HTTP/1.1 200"));
+        assert_eq!(b4, vec![9u8; 1024]);
+        Ok(())
     }
 }

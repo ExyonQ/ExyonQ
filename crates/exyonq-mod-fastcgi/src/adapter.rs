@@ -18,8 +18,8 @@
 use crate::caps::{MAX_CGI_HEADER_BYTES, MAX_CGI_HEADER_COUNT, MAX_FCGI_RESPONSE_BYTES};
 use crate::client::{ClientError, PhpFpmClient};
 use crate::metrics;
-use crate::mock::{MockFpmConfig, MockFpmTransport};
 use crate::params::MinForwardRequest;
+use crate::scripted::{ScriptedFpmConfig, ScriptedFpmTransport};
 use crate::transport::TransportError;
 use exyonq_module_api::fcgi_dispatch::{
     FcgiBackendExecutor, FcgiDispatchOutcome, FcgiDispatchRequest, FcgiSuccessResponse,
@@ -43,14 +43,14 @@ pub fn map_transport_error(err: TransportError) -> FcgiDispatchOutcome {
         TransportError::EncodeFailed => FcgiDispatchOutcome::BadGateway,
         TransportError::ResponseCapExceeded => FcgiDispatchOutcome::BadGateway,
         TransportError::IoFailed => FcgiDispatchOutcome::BadGateway,
-        TransportError::NotImplemented => FcgiDispatchOutcome::NotRegistered,
+        TransportError::InertUnavailable => FcgiDispatchOutcome::NotRegistered,
     }
 }
 
 /// Map client-level errors (encode/decode/params/wire) to dispatch outcomes.
 pub fn map_client_error(err: ClientError) -> FcgiDispatchOutcome {
     match err {
-        ClientError::NotImplemented => FcgiDispatchOutcome::NotRegistered,
+        ClientError::InertUnavailable => FcgiDispatchOutcome::NotRegistered,
         ClientError::Transport(e) => map_transport_error(e),
         ClientError::Encode(_) | ClientError::Decode(_) | ClientError::Params(_) => {
             FcgiDispatchOutcome::BadGateway
@@ -94,6 +94,7 @@ pub fn parse_cgi_stdout(stdout: &[u8]) -> Result<FcgiSuccessResponse, CgiParseEr
     let header_block = trim_trailing_crlf(&stdout[..header_end]);
     let body = stdout[header_end..].to_vec();
     let header_text = std::str::from_utf8(header_block).map_err(|_| CgiParseError::Invalid)?;
+    let nominated = connection_nominated_from_cgi_headers(header_text);
     let mut status = 200u16;
     let mut headers = Vec::new();
     let mut saw_content_length = false;
@@ -116,7 +117,10 @@ pub fn parse_cgi_stdout(stdout: &[u8]) -> Result<FcgiSuccessResponse, CgiParseEr
             status = parse_status_value(value).ok_or(CgiParseError::Invalid)?;
             continue;
         }
-        if is_hop_by_hop_header(name) {
+        if exyonq_module_api::is_fixed_hop_by_hop_header(name) {
+            continue;
+        }
+        if nominated.iter().any(|n| n.eq_ignore_ascii_case(name)) {
             continue;
         }
         let lower = name.to_ascii_lowercase();
@@ -135,6 +139,22 @@ pub fn parse_cgi_stdout(stdout: &[u8]) -> Result<FcgiSuccessResponse, CgiParseEr
     })
 }
 
+fn connection_nominated_from_cgi_headers(header_text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in header_text.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("connection") {
+            continue;
+        }
+        for token in exyonq_module_api::connection_nominating_tokens_from_str(value) {
+            out.push(token.to_string());
+        }
+    }
+    out
+}
+
 fn trim_trailing_crlf(mut bytes: &[u8]) -> &[u8] {
     while bytes.ends_with(b"\r") || bytes.ends_with(b"\n") {
         bytes = &bytes[..bytes.len() - 1];
@@ -147,21 +167,6 @@ fn parse_status_value(value: &str) -> Option<u16> {
     (100..=599).contains(&code).then_some(code)
 }
 
-fn is_hop_by_hop_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "proxy-connection"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
-}
-
 /// Map successful upstream roundtrip stdout to authorized success outcome.
 pub fn map_forward_success(stdout: &[u8]) -> FcgiDispatchOutcome {
     match parse_cgi_stdout(stdout) {
@@ -170,30 +175,30 @@ pub fn map_forward_success(stdout: &[u8]) -> FcgiDispatchOutcome {
     }
 }
 
-/// Mock-backed executor for tests and composition registration.
+/// Scripted in-memory executor for unit/composition tests (not registered by CLI).
 #[derive(Debug, Clone)]
-pub struct MockFcgiExecutor {
-    config: MockFpmConfig,
+pub struct ScriptedFcgiExecutor {
+    config: ScriptedFpmConfig,
 }
 
-impl MockFcgiExecutor {
+impl ScriptedFcgiExecutor {
     pub fn success_default() -> Self {
-        Self::from_config(MockFpmConfig::default())
+        Self::from_config(ScriptedFpmConfig::default())
     }
 
     pub fn pr5b1_default() -> Self {
-        Self::from_config(MockFpmConfig::pr5b1_default())
+        Self::from_config(ScriptedFpmConfig::pr5b1_default())
     }
 
-    pub fn from_config(config: MockFpmConfig) -> Self {
+    pub fn from_config(config: ScriptedFpmConfig) -> Self {
         Self { config }
     }
 }
 
-impl FcgiBackendExecutor for MockFcgiExecutor {
+impl FcgiBackendExecutor for ScriptedFcgiExecutor {
     fn dispatch(&self, _request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
         let client =
-            PhpFpmClient::with_transport("php", MockFpmTransport::new(self.config.clone()));
+            PhpFpmClient::with_transport("php", ScriptedFpmTransport::new(self.config.clone()));
         match client.forward_once(
             &[("REQUEST_METHOD", "GET"), ("SCRIPT_NAME", "/index.php")],
             b"",
@@ -438,7 +443,7 @@ pub fn parse_tcp_pool_address(
     address.parse()
 }
 
-/// Resolve `pool_id` → [`PoolEndpoint`] (Unix or TCP) from config.
+/// Resolve `pool_id` → [`crate::PoolEndpoint`] (Unix or TCP) from config.
 pub fn resolve_pool_endpoints(
     sorted_pool_names: &[String],
     address_by_name: &HashMap<String, String>,
@@ -542,8 +547,8 @@ mod tests {
     }
 
     #[test]
-    fn mock_pr5b1_success_transports_status_headers_body() {
-        let executor = MockFcgiExecutor::pr5b1_default();
+    fn scripted_pr5b1_success_transports_status_headers_body() {
+        let executor = ScriptedFcgiExecutor::pr5b1_default();
         let outcome = executor.dispatch(&test_dispatch_request());
         match outcome {
             FcgiDispatchOutcome::Success(response) => {
@@ -570,6 +575,53 @@ mod tests {
     }
 
     #[test]
+    fn parse_filters_every_fixed_hop_member() {
+        let mut stdout = String::from("Content-Type: text/plain\r\n");
+        for &name in exyonq_module_api::FIXED_HOP_BY_HOP_HEADERS {
+            if name == "connection" {
+                // exercised separately with nomination
+                continue;
+            }
+            stdout.push_str(name);
+            stdout.push_str(": x\r\n");
+        }
+        stdout.push_str("WWW-Authenticate: Basic realm=\"o\"\r\n");
+        stdout.push_str("Authorization: AuthScheme keep\r\n");
+        stdout.push_str("X-End-To-End: survive\r\n\r\nbody");
+        let parsed = parse_cgi_stdout(stdout.as_bytes()).expect("parse");
+        for &name in exyonq_module_api::FIXED_HOP_BY_HOP_HEADERS {
+            assert!(
+                !parsed.headers.iter().any(|(k, _)| k == name),
+                "CGI stdout must drop fixed hop {name}"
+            );
+        }
+        assert!(parsed
+            .headers
+            .iter()
+            .any(|(k, v)| k == "www-authenticate" && v == "Basic realm=\"o\""));
+        assert!(parsed
+            .headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == "AuthScheme keep"));
+        assert!(parsed
+            .headers
+            .iter()
+            .any(|(k, v)| k == "x-end-to-end" && v == "survive"));
+    }
+
+    #[test]
+    fn parse_filters_connection_nominated_headers() {
+        let stdout = b"Content-Type: text/plain\r\nConnection: X-Secret\r\nX-Secret: leak\r\nX-End-To-End: ok\r\n\r\nbody";
+        let parsed = parse_cgi_stdout(stdout).expect("parse");
+        assert!(!parsed.headers.iter().any(|(k, _)| k == "x-secret"));
+        assert!(!parsed.headers.iter().any(|(k, _)| k == "connection"));
+        assert!(parsed
+            .headers
+            .iter()
+            .any(|(k, v)| k == "x-end-to-end" && v == "ok"));
+    }
+
+    #[test]
     fn client_decode_error_maps_to_bad_gateway() {
         use crate::DecodeError;
         assert_eq!(
@@ -586,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn production_unix_executor_does_not_return_mock_body() {
+    fn production_unix_executor_does_not_return_scripted_body() {
         let exec = FcgiModuleExecutor::production_unix(
             PathBuf::from("/nonexistent/exyonq-fcgi-test.sock"),
             Duration::from_millis(50),
@@ -597,7 +649,7 @@ mod tests {
             FcgiDispatchOutcome::Success(response) => {
                 assert_ne!(
                     response.body, PR5B1_BODY,
-                    "mock body leaked into production"
+                    "scripted fixture body leaked into production"
                 );
             }
             other => panic!("unexpected outcome: {other:?}"),

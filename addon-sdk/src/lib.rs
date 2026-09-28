@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! ExyonQ Addon SDK — thin helpers over [`exyonq-addon-api`].
+//! ExyonQ Addon SDK — thin helpers over [`exyonq_addon_api`].
 //!
 //! Official addons should depend on this crate for descriptor builders and re-exports.
 

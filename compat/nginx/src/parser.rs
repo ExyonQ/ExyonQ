@@ -30,7 +30,7 @@ impl<'a> Parser<'a> {
             let loc = tokens
                 .first()
                 .map(|t| t.loc.clone())
-                .unwrap_or_else(|| SourceLoc::synthetic("input"));
+                .unwrap_or_else(|| SourceLoc::unlocated("input"));
             return Err(ParseError::Limit {
                 loc,
                 message: format!("token count exceeds {MAX_TOKENS}"),
@@ -78,7 +78,7 @@ impl<'a> Parser<'a> {
             .tokens
             .get(self.pos.saturating_sub(1))
             .map(|t| t.loc.clone())
-            .unwrap_or_else(|| SourceLoc::synthetic("input"));
+            .unwrap_or_else(|| SourceLoc::unlocated("input"));
 
         let args = self.parse_args()?;
         let block = if self.peek_lbrace() {
@@ -199,7 +199,7 @@ impl<'a> Parser<'a> {
         self.tokens
             .get(self.pos)
             .map(|t| t.loc.clone())
-            .unwrap_or_else(|| SourceLoc::synthetic("input"))
+            .unwrap_or_else(|| SourceLoc::unlocated("input"))
     }
 
     fn eof(&self) -> bool {

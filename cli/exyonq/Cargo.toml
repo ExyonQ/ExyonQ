@@ -48,7 +48,6 @@ exyonq-mod-fastcgi = { workspace = true, features = ["core-bridge"] }
 exyonq-mod-static = { workspace = true }
 exyonq-mod-proxy = { workspace = true }
 exyonq-mod-htaccess.workspace = true
-exyonq-mod-tls.workspace = true
 exyonq-mod-http3 = { workspace = true }
 exyonq-ops-runtime.workspace = true
 exyonq-discovery-runtime.workspace = true
@@ -61,8 +60,15 @@ exyonq-config-schema.workspace = true
 exyonq-config-surface.workspace = true
 exyonq-config-cli.workspace = true
 exyonq-cache-redis = { path = "../../crates/exyonq-cache-redis" }
+exyonq-waf = { workspace = true }
+exyonq-waf-api = { workspace = true }
+exyonq-ratelimit = { workspace = true }
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+exyonq-observability = { workspace = true, features = ["full"] }
+exyonq-cfd-control = { path = "../../crates/exyonq-cfd-control" }
 # Optional process-wide Rust allocator (compile-time only; not a glibc substitute).
 tikv-jemallocator = { version = "0.7", optional = true }
+
+[package.metadata.cargo-machete]
+ignored = ["exyonq-mod-http3"]

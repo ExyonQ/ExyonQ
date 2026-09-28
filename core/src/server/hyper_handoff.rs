@@ -14,20 +14,30 @@
  * limitations under the License.
  */
 //! PS1B: unified TCP → Tokio/Hyper handoff consumer (in-core).
+//!
+//! Cap067 listen workers run on OS threads. Per-connection `Handle::spawn` from those
+//! threads was the P5 Connection:close tax (Netcup: ~7k vs ~43k with Tokio-native
+//! accept). Handoffs from non-Tokio threads enqueue into a bounded MPMC queue drained
+//! by long-lived Tokio tasks — static Cap067 stay-attached paths unchanged.
 
+use crate::kernel::generation::GenerationView;
 pub(crate) use crate::kernel::handoff::HyperHandoff;
-use crate::lifecycle::{self, LifecycleState};
+use crate::lifecycle::{self, ConnectionLifecycleToken, LifecycleState};
 use crate::reload::{self, SharedServerState};
 use crate::server::wire_dispatch::{
     dispatch_tcp_inner, dispatch_tcp_prefixed_inner, WireDispatchContext,
 };
+use bytes::Bytes;
 use exyonq_mod_proxy::ProxyClient;
 use hyper::header::HeaderValue;
+use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::runtime::Handle;
+use tokio::sync::Notify;
 
 /// **INTERNAL WORKSPACE CONTRACT — NOT STABLE PUBLIC API**
 pub fn xff_from_peer(peer: SocketAddr) -> HeaderValue {
@@ -35,8 +45,190 @@ pub fn xff_from_peer(peer: SocketAddr) -> HeaderValue {
         .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"))
 }
 
-/// **INTERNAL WORKSPACE CONTRACT — NOT STABLE PUBLIC API**
-pub fn spawn_hyper_handoff(
+struct QueuedHandoff {
+    stream: std::net::TcpStream,
+    peer: SocketAddr,
+    prefetched: Option<(Bytes, Bytes)>,
+    generation: GenerationView,
+    token: ConnectionLifecycleToken,
+}
+
+struct HandoffBridge {
+    queue: Mutex<VecDeque<QueuedHandoff>>,
+    notify: Notify,
+    depth: AtomicUsize,
+    max_depth: usize,
+}
+
+static HANDOFF_BRIDGE: OnceLock<Arc<HandoffBridge>> = OnceLock::new();
+
+/// Install the Cap067→Tokio handoff queue once per process (idempotent).
+///
+/// `worker_count` long-lived consumers drain the queue on `runtime`.
+pub fn install_handoff_bridge(
+    runtime: &Handle,
+    shared: SharedServerState,
+    proxy_client: ProxyClient,
+    ops: Arc<LifecycleState>,
+    worker_count: usize,
+) {
+    let workers = worker_count.max(1);
+    let max_depth = handoff_queue_capacity();
+    let bridge = Arc::new(HandoffBridge {
+        queue: Mutex::new(VecDeque::with_capacity(max_depth.min(1024))),
+        notify: Notify::new(),
+        depth: AtomicUsize::new(0),
+        max_depth,
+    });
+    if HANDOFF_BRIDGE.set(Arc::clone(&bridge)).is_err() {
+        return; // already installed
+    }
+    for _ in 0..workers {
+        let bridge = Arc::clone(&bridge);
+        let shared = SharedServerState::clone(&shared);
+        let proxy_client = proxy_client.clone();
+        let ops = Arc::clone(&ops);
+        runtime.spawn(async move {
+            bridge.consumer_loop(shared, proxy_client, ops).await;
+        });
+    }
+}
+
+fn handoff_queue_capacity() -> usize {
+    match std::env::var("EXYONQ_HANDOFF_QUEUE_CAP")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        Some(n) if n >= 64 => n,
+        _ => 8192,
+    }
+}
+
+fn handoff_worker_count_default() -> usize {
+    match std::env::var("EXYONQ_WORKER_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        Some(n) if n >= 1 => n,
+        _ => std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(2, 16),
+    }
+}
+
+impl HandoffBridge {
+    fn try_enqueue(&self, handoff: HyperHandoff) -> Result<(), HyperHandoff> {
+        let HyperHandoff {
+            stream,
+            peer,
+            prefetched,
+            generation,
+            token,
+        } = handoff;
+        let mut guard = match self.queue.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if guard.len() >= self.max_depth {
+            return Err(HyperHandoff {
+                stream,
+                peer,
+                prefetched,
+                generation,
+                token,
+            });
+        }
+        guard.push_back(QueuedHandoff {
+            stream,
+            peer,
+            prefetched,
+            generation,
+            token,
+        });
+        drop(guard);
+        self.depth.fetch_add(1, Ordering::Relaxed);
+        self.notify.notify_one();
+        Ok(())
+    }
+
+    fn pop(&self) -> Option<QueuedHandoff> {
+        let mut guard = match self.queue.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let item = guard.pop_front();
+        if item.is_some() {
+            self.depth.fetch_sub(1, Ordering::Relaxed);
+        }
+        item
+    }
+
+    async fn consumer_loop(
+        self: Arc<Self>,
+        shared: SharedServerState,
+        proxy_client: ProxyClient,
+        ops: Arc<LifecycleState>,
+    ) {
+        loop {
+            while let Some(item) = self.pop() {
+                // Spawn from inside Tokio (cheap). Never await the connection here —
+                // that would serialize Cap067 handoffs through `worker_count` tasks.
+                spawn_queued_handoff(item, &shared, proxy_client.clone(), &ops);
+            }
+            let notified = self.notify.notified();
+            if let Some(item) = self.pop() {
+                drop(notified);
+                spawn_queued_handoff(item, &shared, proxy_client.clone(), &ops);
+                continue;
+            }
+            notified.await;
+        }
+    }
+}
+
+fn spawn_queued_handoff(
+    item: QueuedHandoff,
+    shared: &SharedServerState,
+    proxy_client: ProxyClient,
+    ops: &Arc<LifecycleState>,
+) {
+    let QueuedHandoff {
+        stream,
+        peer,
+        prefetched,
+        generation,
+        token,
+    } = item;
+    let _ = stream.set_nonblocking(true);
+    let xff = xff_from_peer(peer);
+    let shared = SharedServerState::clone(shared);
+    let ops = Arc::clone(ops);
+    tokio::spawn(async move {
+        lifecycle::run_with_connection_token(token, async move {
+            let Ok(stream) = TokioTcpStream::from_std(stream) else {
+                return;
+            };
+            let state = reload::read_state(&shared);
+            let ctx = WireDispatchContext {
+                shared: SharedServerState::clone(&shared),
+                state,
+                proxy_client,
+                x_forwarded_for: xff,
+                ops,
+                pinned_generation: generation.generation,
+            };
+            if let Some((head, rest)) = prefetched {
+                dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
+            } else {
+                dispatch_tcp_inner(stream, ctx).await;
+            }
+        })
+        .await;
+    });
+}
+
+fn spawn_hyper_handoff_direct(
     handoff: HyperHandoff,
     shared: &SharedServerState,
     proxy_client: ProxyClient,
@@ -58,6 +250,7 @@ pub fn spawn_hyper_handoff(
             };
             let state = reload::read_state(&shared);
             let ctx = WireDispatchContext {
+                shared: SharedServerState::clone(&shared),
                 state,
                 proxy_client,
                 x_forwarded_for: xff,
@@ -73,6 +266,50 @@ pub fn spawn_hyper_handoff(
         .await;
     });
     Ok(())
+}
+
+/// **INTERNAL WORKSPACE CONTRACT — NOT STABLE PUBLIC API**
+pub fn spawn_hyper_handoff(
+    handoff: HyperHandoff,
+    shared: &SharedServerState,
+    proxy_client: ProxyClient,
+    ops: &Arc<LifecycleState>,
+    runtime: &Handle,
+) -> io::Result<()> {
+    // Already on a Tokio worker (tests / divert): direct spawn on that runtime.
+    if let Ok(current) = Handle::try_current() {
+        return spawn_hyper_handoff_direct(handoff, shared, proxy_client, ops, &current);
+    }
+
+    if let Some(bridge) = HANDOFF_BRIDGE.get() {
+        match bridge.try_enqueue(handoff) {
+            Ok(()) => return Ok(()),
+            Err(handoff) => {
+                return spawn_hyper_handoff_direct(handoff, shared, proxy_client, ops, runtime);
+            }
+        }
+    }
+
+    spawn_hyper_handoff_direct(handoff, shared, proxy_client, ops, runtime)
+}
+
+/// Ensure the bridge exists (composition / executor construction).
+pub(crate) fn ensure_handoff_bridge(
+    runtime: &Handle,
+    shared: SharedServerState,
+    proxy_client: ProxyClient,
+    ops: Arc<LifecycleState>,
+) {
+    if HANDOFF_BRIDGE.get().is_some() {
+        return;
+    }
+    install_handoff_bridge(
+        runtime,
+        shared,
+        proxy_client,
+        ops,
+        handoff_worker_count_default(),
+    );
 }
 
 #[cfg(test)]
@@ -202,10 +439,76 @@ mod tests {
         )
         .expect("spawn");
         assert_eq!(xff_before.to_str().unwrap(), peer.ip().to_string());
-        assert_eq!(ops.active_connections(), 1);
+        // Token is owned by the Hyper task after spawn. Under load it may already
+        // have finished (0) before this assert; never allow >1.
+        assert!(ops.active_connections() <= 1);
         rt.block_on(async {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            for _ in 0..100 {
+                if ops.active_connections() == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
         });
         assert_eq!(ops.active_connections(), 0);
+    }
+
+    #[test]
+    fn handoff_queue_capacity_respects_floor() {
+        // Unset / tiny values fall back to default ≥ 64 semantics via parse arm.
+        let cap = handoff_queue_capacity();
+        assert!(cap >= 64, "cap={cap}");
+    }
+
+    #[test]
+    fn handoff_bridge_enqueues_when_outside_tokio() {
+        let bridge = Arc::new(HandoffBridge {
+            queue: Mutex::new(VecDeque::new()),
+            notify: Notify::new(),
+            depth: AtomicUsize::new(0),
+            max_depth: 8,
+        });
+        let ops = LifecycleState::new();
+        let token = ops.try_enter().unwrap();
+        let cache = SyncBenchCache {
+            site_static_slot: None,
+            modules_enabled: false,
+            generation: 1,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, peer) = listener.accept().unwrap();
+        drop(server);
+        let handoff = HyperHandoff::new(stream, peer, None, cache, token);
+        assert!(bridge.try_enqueue(handoff).is_ok());
+        assert_eq!(bridge.depth.load(Ordering::Relaxed), 1);
+        assert!(bridge.pop().is_some());
+        assert_eq!(bridge.depth.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn handoff_bridge_rejects_when_full() {
+        let bridge = Arc::new(HandoffBridge {
+            queue: Mutex::new(VecDeque::new()),
+            notify: Notify::new(),
+            depth: AtomicUsize::new(0),
+            max_depth: 1,
+        });
+        let ops = LifecycleState::new();
+        let mk = || {
+            let token = ops.try_enter().unwrap();
+            let cache = SyncBenchCache {
+                site_static_slot: None,
+                modules_enabled: false,
+                generation: 1,
+            };
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (server, peer) = listener.accept().unwrap();
+            drop(server);
+            HyperHandoff::new(stream, peer, None, cache, token)
+        };
+        assert!(bridge.try_enqueue(mk()).is_ok());
+        assert!(bridge.try_enqueue(mk()).is_err());
     }
 }

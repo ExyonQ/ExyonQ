@@ -126,12 +126,16 @@ pub trait KernelControlPort: Send + Sync {
 
 /// Module-owned control plane (unix socket, command parsing, JSON formatting).
 pub trait ControlPlaneService: Send + Sync {
+    /// Bind the control Unix socket synchronously, then accept in the background.
+    ///
+    /// Cap063: when `EXYONQ_CONTROL_SOCKET` is set, bind failure must fail serve
+    /// startup (no silent continue without control; no live-socket name theft).
     fn spawn_unix_control_socket(
         &self,
         socket_path: PathBuf,
         config_path: PathBuf,
         port: Arc<dyn KernelControlPort>,
-    );
+    ) -> Result<(), String>;
 
     /// Dedicated FPC purge socket (WC3) — not the lifecycle socket.
     fn spawn_unix_cache_purge_socket(

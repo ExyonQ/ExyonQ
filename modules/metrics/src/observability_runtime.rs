@@ -53,5 +53,6 @@ pub fn register_observability_runtime() -> Result<(), ObservabilityRegisterError
     register_prometheus_appender(exyonq_mod_htaccess::append_htaccess_prometheus);
 
     ensure_runtime_prometheus_hook(crate::register_runtime_prometheus_append);
+    crate::touch_process_http_metrics();
     Ok(())
 }

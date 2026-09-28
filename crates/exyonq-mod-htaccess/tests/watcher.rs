@@ -1,4 +1,4 @@
-//! Watcher smoke (temp dir).
+//! Watcher integration check (temp dir).
 
 use exyonq_mod_htaccess::{compile_and_publish, spawn_watcher, HtaccessSite, OverlayPublisher};
 use std::sync::Arc;

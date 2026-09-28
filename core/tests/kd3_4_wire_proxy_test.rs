@@ -8,7 +8,7 @@ async fn state_for(config: exyonq_config_ir::AppConfig) -> Arc<ServerState> {
     let proxy_runtime = Arc::new(ProxyRuntime::new());
     install_kernel_hooks(Arc::clone(&proxy_runtime));
     let _guard: ProxyDispatchTestGuard = ProxyDispatchTestGuard::install(proxy_runtime);
-    let proxy_client = exyonq_mod_proxy::build_incoming_client();
+    let proxy_client = exyonq_mod_proxy::build_incoming_client().clone();
     ServerState::new_with_generation(1, config, proxy_client)
         .await
         .expect("server state")

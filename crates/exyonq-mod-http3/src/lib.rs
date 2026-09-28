@@ -17,20 +17,12 @@
 //!
 //! Product compile default (Phase 6R): s2n (`http3-provider-s2n`).
 //! Optional: quiche (`http3-provider-quiche`); s2n+quiche dual-compile supported.
-//! Quinn legacy (`http3-provider-quinn-legacy`) is rollback-only and exclusive.
+//! Quinn legacy (`http3-provider-quinn-legacy`) is rollback-only and exclusive
+//! with modern providers. Under `cargo … --all-features`, modern providers win
+//! and quinn-legacy code stays inactive (no hard `compile_error` on the combo —
+//! required for workspace clippy `--all-features` while preserving exclusive
+//! Quinn-only builds).
 //! Selection is startup-only via neutral `[http3].provider` (product: s2n|quiche).
-
-#[cfg(any(
-    all(
-        feature = "http3-provider-quinn-legacy",
-        feature = "http3-provider-s2n"
-    ),
-    all(
-        feature = "http3-provider-quinn-legacy",
-        feature = "http3-provider-quiche"
-    ),
-))]
-compile_error!("exyonq-mod-http3: http3-provider-quinn-legacy cannot combine with s2n or quiche");
 
 #[cfg(not(any(
     feature = "http3-provider-quinn-legacy",
@@ -77,7 +69,11 @@ impl Http3Settings {
 /// Compiled provider ids available in this binary (facade-local registry).
 pub fn available_providers() -> Vec<&'static str> {
     [
-        #[cfg(feature = "http3-provider-quinn-legacy")]
+        #[cfg(all(
+            feature = "http3-provider-quinn-legacy",
+            not(feature = "http3-provider-s2n"),
+            not(feature = "http3-provider-quiche")
+        ))]
         "quinn-legacy",
         #[cfg(feature = "http3-provider-s2n")]
         "s2n",
@@ -88,7 +84,11 @@ pub fn available_providers() -> Vec<&'static str> {
     .collect()
 }
 
-#[cfg(not(feature = "http3-provider-quinn-legacy"))]
+#[cfg(not(all(
+    feature = "http3-provider-quinn-legacy",
+    not(feature = "http3-provider-s2n"),
+    not(feature = "http3-provider-quiche")
+)))]
 fn provider_compiled(id: &str) -> bool {
     available_providers().contains(&id)
 }
@@ -99,46 +99,70 @@ fn provider_compiled(id: &str) -> bool {
 /// - Quinn-only build → `quinn-legacy` (public IR provider ignored).
 /// - Modern build, provider absent → `"s2n"` if compiled, else the sole modern provider.
 /// - Modern build, provider set → must be `s2n`|`quiche` and compiled.
+#[cfg(all(
+    feature = "http3-provider-quinn-legacy",
+    not(feature = "http3-provider-s2n"),
+    not(feature = "http3-provider-quiche")
+))]
 pub fn resolve_provider(settings: &Http3Settings) -> Result<&'static str, String> {
-    #[cfg(feature = "http3-provider-quinn-legacy")]
-    {
-        let _ = settings;
-        return Ok("quinn-legacy");
-    }
-
-    #[cfg(not(feature = "http3-provider-quinn-legacy"))]
-    {
-        let requested = match settings.provider.as_deref() {
-            None | Some("") => {
-                if provider_compiled("s2n") {
-                    "s2n"
-                } else if provider_compiled("quiche") {
-                    "quiche"
-                } else {
-                    return Err("no http3 provider compiled".into());
-                }
-            }
-            Some(raw) => match raw {
-                "s2n" | "s2n-quic" => "s2n",
-                "quiche" => "quiche",
-                "quinn" | "quinn-legacy" => {
-                    return Err(
-                        "invalid http3 provider: quinn-legacy is not a public IR option (compile feature only)"
-                            .into(),
-                    );
-                }
-                other => return Err(format!("invalid http3 provider: {other}")),
-            },
-        };
-        if !provider_compiled(requested) {
-            return Err(format!("http3 provider {requested} not in this build"));
-        }
-        Ok(requested)
-    }
+    let _ = settings;
+    Ok("quinn-legacy")
 }
 
-#[cfg(feature = "http3-provider-quinn-legacy")]
+#[cfg(not(all(
+    feature = "http3-provider-quinn-legacy",
+    not(feature = "http3-provider-s2n"),
+    not(feature = "http3-provider-quiche")
+)))]
+pub fn resolve_provider(settings: &Http3Settings) -> Result<&'static str, String> {
+    let requested = match settings.provider.as_deref() {
+        None | Some("") => {
+            if provider_compiled("s2n") {
+                "s2n"
+            } else if provider_compiled("quiche") {
+                "quiche"
+            } else {
+                return Err("no http3 provider compiled".into());
+            }
+        }
+        Some(raw) => match raw {
+            "s2n" | "s2n-quic" => "s2n",
+            "quiche" => "quiche",
+            "quinn" | "quinn-legacy" => {
+                return Err(
+                    "invalid http3 provider: quinn-legacy is not a public IR option (compile feature only)"
+                        .into(),
+                );
+            }
+            other => return Err(format!("invalid http3 provider: {other}")),
+        },
+    };
+    if !provider_compiled(requested) {
+        return Err(format!("http3 provider {requested} not in this build"));
+    }
+    Ok(requested)
+}
+
+#[cfg(all(
+    feature = "http3-provider-quinn-legacy",
+    not(feature = "http3-provider-s2n"),
+    not(feature = "http3-provider-quiche")
+))]
 mod quinn_provider;
+
+/// Process-local s2n HTTP/3 provider diagnostics (error-response write observation).
+#[cfg(feature = "http3-provider-s2n")]
+pub use exyonq_http3_provider_s2n::{diagnostics_snapshot, S2nProviderDiagSnapshot};
+
+/// Quinn-legacy failed response / error-response write count.
+#[cfg(all(
+    feature = "http3-provider-quinn-legacy",
+    not(feature = "http3-provider-s2n"),
+    not(feature = "http3-provider-quiche")
+))]
+pub fn quinn_response_write_errors() -> u64 {
+    quinn_provider::response_write_errors()
+}
 
 /// Serve HTTP/3 with the resolved provider (startup selection only).
 pub async fn serve<LC>(
@@ -159,11 +183,19 @@ where
 
     match selected {
         "quinn-legacy" => {
-            #[cfg(feature = "http3-provider-quinn-legacy")]
+            #[cfg(all(
+                feature = "http3-provider-quinn-legacy",
+                not(feature = "http3-provider-s2n"),
+                not(feature = "http3-provider-quiche")
+            ))]
             {
                 quinn_provider::serve(settings, dispatch, lifecycle).await
             }
-            #[cfg(not(feature = "http3-provider-quinn-legacy"))]
+            #[cfg(not(all(
+                feature = "http3-provider-quinn-legacy",
+                not(feature = "http3-provider-s2n"),
+                not(feature = "http3-provider-quiche")
+            )))]
             {
                 Err(anyhow::Error::msg(
                     "http3 provider quinn-legacy not in this build",
@@ -234,21 +266,21 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    struct MockLifecycle(Arc<AtomicUsize>);
-    struct MockLease(Arc<AtomicUsize>);
+    struct CountingLifecycle(Arc<AtomicUsize>);
+    struct CountingLease(Arc<AtomicUsize>);
 
-    impl Drop for MockLease {
+    impl Drop for CountingLease {
         fn drop(&mut self) {
             self.0.fetch_sub(1, Ordering::Release);
         }
     }
 
-    impl Http3ConnectionLifecycle for MockLifecycle {
-        type Lease = MockLease;
+    impl Http3ConnectionLifecycle for CountingLifecycle {
+        type Lease = CountingLease;
 
-        fn try_enter_connection(&self) -> Result<MockLease, Http3DrainRejected> {
+        fn try_enter_connection(&self) -> Result<CountingLease, Http3DrainRejected> {
             self.0.fetch_add(1, Ordering::AcqRel);
-            Ok(MockLease(Arc::clone(&self.0)))
+            Ok(CountingLease(Arc::clone(&self.0)))
         }
     }
 
@@ -264,9 +296,9 @@ mod tests {
     }
 
     #[test]
-    fn mock_lease_drop_decrements_once() {
+    fn counting_lease_drop_decrements_once() {
         let active = Arc::new(AtomicUsize::new(0));
-        let lifecycle = MockLifecycle(Arc::clone(&active));
+        let lifecycle = CountingLifecycle(Arc::clone(&active));
         let lease = lifecycle.try_enter_connection().unwrap();
         assert_eq!(active.load(Ordering::Acquire), 1);
         drop(lease);

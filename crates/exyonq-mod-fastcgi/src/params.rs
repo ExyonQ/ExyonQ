@@ -152,7 +152,15 @@ impl MinForwardRequest {
             seen.insert(name.to_ascii_uppercase());
         }
 
+        let nominated = connection_nominated_names_from_pairs(&self.http_headers);
+
         for (name, value) in &self.http_headers {
+            if nominated
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(name.as_str()))
+            {
+                continue;
+            }
             if let Some(cgi_name) = http_header_to_cgi_param(name) {
                 if seen.contains(&cgi_name) {
                     continue;
@@ -164,6 +172,20 @@ impl MinForwardRequest {
 
         Ok(params)
     }
+}
+
+/// Connection option tokens that nominate hop-by-hop header field names (RFC 7230 §6.1).
+fn connection_nominated_names_from_pairs(headers: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, value) in headers {
+        if !name.eq_ignore_ascii_case("connection") {
+            continue;
+        }
+        for token in exyonq_module_api::connection_nominating_tokens_from_str(value) {
+            out.push(token.to_string());
+        }
+    }
+    out
 }
 
 fn push_param(
@@ -186,27 +208,12 @@ fn validate_param_pair(name: &str, value: &str) -> Result<(), ParamsError> {
     Ok(())
 }
 
-fn is_hop_by_hop_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "proxy-connection"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
-}
-
 /// Map an HTTP header to `HTTP_*` CGI param when safe.
 pub fn http_header_to_cgi_param(name: &str) -> Option<String> {
     if name.is_empty() {
         return None;
     }
-    if is_hop_by_hop_header(name) {
+    if exyonq_module_api::is_fixed_hop_by_hop_header(name) {
         return None;
     }
     let upper = name.to_ascii_uppercase().replace('-', "_");
@@ -239,6 +246,39 @@ mod tests {
         assert!(http_header_to_cgi_param("Connection").is_none());
         assert!(http_header_to_cgi_param("Content-Type").is_none());
         assert_eq!(http_header_to_cgi_param("Host"), Some("HTTP_HOST".into()));
+    }
+
+    #[test]
+    fn skips_every_fixed_hop_member() {
+        for &name in exyonq_module_api::FIXED_HOP_BY_HOP_HEADERS {
+            assert!(
+                http_header_to_cgi_param(name).is_none(),
+                "fixed hop {name} must not become CGI HTTP_*"
+            );
+        }
+        assert_eq!(
+            http_header_to_cgi_param("Authorization"),
+            Some("HTTP_AUTHORIZATION".into())
+        );
+        assert_eq!(
+            http_header_to_cgi_param("WWW-Authenticate"),
+            Some("HTTP_WWW_AUTHENTICATE".into())
+        );
+    }
+
+    #[test]
+    fn skips_connection_nominated_custom_headers() {
+        let mut req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        req.http_headers = vec![
+            ("Connection".into(), "X-Secret".into()),
+            ("X-Secret".into(), "nope".into()),
+            ("X-End-To-End".into(), "yes".into()),
+        ];
+        let params = req.to_fcgi_params().expect("params");
+        assert!(!params.iter().any(|(k, _)| k == "HTTP_X_SECRET"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "HTTP_X_END_TO_END" && v == "yes"));
     }
 
     #[test]

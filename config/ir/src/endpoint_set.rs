@@ -341,6 +341,7 @@ impl EndpointSet {
 
 /// Raw TOML/JSON endpoint row before normalize.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RawEndpointConfig {
     #[serde(default)]
     pub id: Option<String>,

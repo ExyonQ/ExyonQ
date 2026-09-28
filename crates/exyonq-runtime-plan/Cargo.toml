@@ -8,9 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 http.workspace = true
-matchit = "0.8"
-serde.workspace = true
-serde_json.workspace = true
+matchit = "0.9"
 tracing.workspace = true
 
 exyonq-config-ir.workspace = true

@@ -1,0 +1,11 @@
+# Cap016 Rust client generation — contract source of truth is OpenAPI.
+[generator]
+spec_path = "../../docs/control-api/openapi-v1.yaml"
+output_dir = "src/generated"
+module_name = "control_api"
+
+[features]
+enable_async_client = true
+
+[http_client.tracing]
+enabled = false

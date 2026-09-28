@@ -85,7 +85,7 @@ pub fn compile_from_discovered(
             front_controller: state.front_controller,
         })
         .collect();
-    entries.sort_by(|a, b| b.directory.0.len().cmp(&a.directory.0.len()));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.directory.0.len()));
 
     report.executed = report
         .diagnostics

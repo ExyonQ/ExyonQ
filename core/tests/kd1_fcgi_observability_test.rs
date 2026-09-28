@@ -20,7 +20,7 @@ use exyonq_core::{
     DEFAULT_FCGI_MAX_CONCURRENCY,
 };
 use exyonq_metrics::{fastcgi_http_501_total, fcgi_responses_501_total, KernelShellMetrics};
-use exyonq_mod_fastcgi::{fcgi_metrics_snapshot, FcgiRuntime, MockFcgiExecutor};
+use exyonq_mod_fastcgi::{fcgi_metrics_snapshot, FcgiRuntime, ScriptedFcgiExecutor};
 use exyonq_module_api::fcgi_dispatch::{
     FcgiBackendExecutor, FcgiDispatchOutcome, FcgiDispatchRequest,
 };
@@ -122,7 +122,7 @@ async fn registered_runtime_not_registered_increments_module_only() {
 async fn registered_success_does_not_increment_501_counters() {
     let _lock = METRICS_TEST_LOCK.lock().await;
     let _obs = KernelObservationTestGuard::install(Arc::new(KernelShellMetrics));
-    let _guard = install_fcgi_runtime(Arc::new(MockFcgiExecutor::pr5b1_default()));
+    let _guard = install_fcgi_runtime(Arc::new(ScriptedFcgiExecutor::pr5b1_default()));
 
     let http_before = fastcgi_http_501_total();
     let runtime_before = fcgi_metrics_snapshot().responses_501;

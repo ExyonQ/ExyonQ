@@ -45,6 +45,8 @@ pub enum CacheRejection {
     ResponseContentRange,
     ResponseStreaming,
     ResponseHopByHop,
+    /// Cap056: Content-Encoding other than identity is incompatible with identity key.
+    ResponseContentEncoding,
     BodyTooLarge,
     BodyNotMaterialized,
     PolicyDisabled,
@@ -59,6 +61,8 @@ pub enum BypassReason {
     CookieDenied,
     CookiePresent,
     Range,
+    /// Cap020: If-None-Match / If-Modified-Since must hit origin Cap020 path.
+    Conditional,
     Upgrade,
     RequestCacheControl,
     RequestPragma,
@@ -322,6 +326,11 @@ pub fn fpc_request_evaluate(
     if header_present_ignore_case(request_headers, "range") {
         return Err(BypassReason::Range);
     }
+    if header_present_ignore_case(request_headers, "if-none-match")
+        || header_present_ignore_case(request_headers, "if-modified-since")
+    {
+        return Err(BypassReason::Conditional);
+    }
     if header_present_ignore_case(request_headers, "upgrade")
         || connection_requests_upgrade(request_headers)
     {
@@ -393,16 +402,7 @@ fn query_param_truthy(query_lower: &str, name: &str) -> bool {
     false
 }
 
-const HOP_BY_HOP_RESPONSE: &[&str] = &[
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-];
+use crate::hop_by_hop::FIXED_HOP_BY_HOP_HEADERS as HOP_BY_HOP_RESPONSE;
 
 /// Whether a request may participate in cache lookup / singleflight (fail closed).
 pub fn request_eligible_for_cache(method: &str, request_headers: &[(String, String)]) -> bool {
@@ -417,6 +417,12 @@ pub fn request_eligible_for_cache(method: &str, request_headers: &[(String, Stri
         return false;
     }
     if header_present_ignore_case(request_headers, "range") {
+        return false;
+    }
+    // Cap020: conditional validators must evaluate at origin (not cache HIT as full 200).
+    if header_present_ignore_case(request_headers, "if-none-match")
+        || header_present_ignore_case(request_headers, "if-modified-since")
+    {
         return false;
     }
     if header_present_ignore_case(request_headers, "upgrade") {
@@ -477,18 +483,17 @@ pub fn assess_cacheability(
     if header_present_ignore_case(response_headers, "set-cookie") {
         return Err(CacheRejection::ResponseSetCookie);
     }
-    if let Some(value) = header_value_ignore_case(response_headers, "cache-control") {
+    if let Some(value) = header_values_joined_ignore_case(response_headers, "cache-control") {
         let lower = value.to_ascii_lowercase();
-        if lower.contains("no-store") || lower.contains("private") {
+        if cache_control_token_present(&lower, "no-store")
+            || cache_control_token_present(&lower, "private")
+        {
             return Err(CacheRejection::ResponseCacheControl);
         }
     }
-    if let Some(value) = header_value_ignore_case(response_headers, "vary") {
+    if let Some(value) = header_values_joined_ignore_case(response_headers, "vary") {
         let trimmed = value.trim();
-        if trimmed == "*" {
-            return Err(CacheRejection::ResponseVary);
-        }
-        if !trimmed.is_empty() {
+        if trimmed == "*" || !trimmed.is_empty() {
             return Err(CacheRejection::ResponseVary);
         }
     }
@@ -530,19 +535,20 @@ fn header_values_joined_ignore_case(headers: &[(String, String)], name: &str) ->
 }
 
 fn request_cache_control_blocks_lookup(headers: &[(String, String)]) -> bool {
-    header_value_ignore_case(headers, "cache-control").is_some_and(|value| {
+    header_values_joined_ignore_case(headers, "cache-control").is_some_and(|value| {
         let lower = value.to_ascii_lowercase();
-        lower.contains("no-cache") || lower.contains("no-store")
+        cache_control_token_present(&lower, "no-cache")
+            || cache_control_token_present(&lower, "no-store")
     })
 }
 
 fn request_pragma_blocks_lookup(headers: &[(String, String)]) -> bool {
-    header_value_ignore_case(headers, "pragma")
+    header_values_joined_ignore_case(headers, "pragma")
         .is_some_and(|value| value.to_ascii_lowercase().contains("no-cache"))
 }
 
 fn connection_requests_upgrade(headers: &[(String, String)]) -> bool {
-    header_value_ignore_case(headers, "connection")
+    header_values_joined_ignore_case(headers, "connection")
         .is_some_and(|value| value.to_ascii_lowercase().contains("upgrade"))
 }
 
@@ -550,13 +556,20 @@ fn response_headers_block_storage(headers: &[(String, String)]) -> Option<CacheR
     if header_present_ignore_case(headers, "content-range") {
         return Some(CacheRejection::ResponseContentRange);
     }
-    if header_value_ignore_case(headers, "content-type").is_some_and(|value| {
-        value
-            .split(';')
-            .next()
-            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/event-stream"))
+    if headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("content-type")
+            && value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
     }) {
         return Some(CacheRejection::ResponseStreaming);
+    }
+    if let Some(ce) = header_values_joined_ignore_case(headers, "content-encoding") {
+        let trimmed = ce.trim();
+        if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("identity") {
+            return Some(CacheRejection::ResponseContentEncoding);
+        }
     }
     for (name, _) in headers {
         let lower = name.to_ascii_lowercase();
@@ -594,6 +607,7 @@ pub enum FpcStoreReject {
     UnsupportedVary,
     Streaming,
     ContentRange,
+    ContentEncoding,
     HopByHop,
     BodyTooLarge,
     TtlInvalid,
@@ -612,6 +626,7 @@ impl FpcStoreReject {
             Self::UnsupportedVary => "unsupported_vary",
             Self::Streaming => "streaming",
             Self::ContentRange => "content_range",
+            Self::ContentEncoding => "content_encoding",
             Self::HopByHop => "hop_by_hop",
             Self::BodyTooLarge => "body_too_large",
             Self::TtlInvalid => "ttl_invalid",
@@ -664,9 +679,17 @@ fn fpc_response_headers_block_store(headers: &[(String, String)]) -> Option<FpcS
         value
             .split(';')
             .next()
-            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/event-stream"))
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
     }) {
         return Some(FpcStoreReject::Streaming);
+    }
+    // Cap057 LA-CAP057-001: FPC lookup keys force content_encoding=identity.
+    // Never store a non-identity representation under that identity key.
+    if let Some(ce) = header_values_joined_ignore_case(headers, "content-encoding") {
+        let trimmed = ce.trim();
+        if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("identity") {
+            return Some(FpcStoreReject::ContentEncoding);
+        }
     }
     for (name, _) in headers {
         let lower = name.to_ascii_lowercase();
@@ -746,6 +769,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_response_cache_control_private_rejects_store() {
+        assert_eq!(
+            assess_cacheability(
+                "GET",
+                &[],
+                200,
+                &[
+                    ("cache-control".into(), "public".into()),
+                    ("cache-control".into(), "private".into()),
+                ],
+                1,
+                1024,
+            )
+            .unwrap_err(),
+            CacheRejection::ResponseCacheControl
+        );
+    }
+
+    #[test]
+    fn split_request_cache_control_no_cache_not_eligible() {
+        assert!(!request_eligible_for_cache(
+            "GET",
+            &[
+                ("Cache-Control".into(), "max-age=0".into()),
+                ("Cache-Control".into(), "no-cache".into()),
+            ]
+        ));
+    }
+
+    #[test]
+    fn non_identity_content_encoding_rejects_store() {
+        assert_eq!(
+            assess_cacheability(
+                "GET",
+                &[],
+                200,
+                &[("content-encoding".into(), "gzip".into())],
+                4,
+                1024,
+            )
+            .unwrap_err(),
+            CacheRejection::ResponseContentEncoding
+        );
+    }
+
+    #[test]
     fn get_200_without_blockers_is_cacheable() {
         assert!(assess_cacheability(
             "GET",
@@ -764,6 +833,33 @@ mod tests {
             "GET",
             &[(String::from("Authorization"), String::from("x"))]
         ));
+    }
+
+    #[test]
+    fn cap020_conditional_headers_skip_cache_lookup() {
+        assert!(!request_eligible_for_cache(
+            "GET",
+            &[("If-None-Match".into(), "W/\"exq-1\"".into())]
+        ));
+        assert!(!request_eligible_for_cache(
+            "GET",
+            &[(
+                "If-Modified-Since".into(),
+                "Sun, 06 Nov 1994 08:49:37 GMT".into()
+            )]
+        ));
+        assert_eq!(
+            fpc_request_evaluate(
+                "GET",
+                "/a",
+                "",
+                &[("If-None-Match".into(), "W/\"x\"".into())],
+                &[],
+                &[],
+            )
+            .unwrap_err(),
+            BypassReason::Conditional
+        );
     }
 
     #[test]
@@ -1048,6 +1144,57 @@ mod tests {
             )
             .unwrap_err(),
             FpcStoreReject::UnsupportedVary
+        );
+    }
+
+    #[test]
+    fn fpc_assess_rejects_non_identity_content_encoding() {
+        assert_eq!(
+            fpc_assess_store(
+                "GET",
+                200,
+                &[
+                    ("content-type".into(), "text/plain".into()),
+                    ("content-encoding".into(), "gzip".into()),
+                ],
+                1,
+                1024,
+                Duration::from_secs(30),
+                Duration::from_secs(60),
+            )
+            .unwrap_err(),
+            FpcStoreReject::ContentEncoding
+        );
+        assert!(fpc_assess_store(
+            "GET",
+            200,
+            &[
+                ("content-type".into(), "text/plain".into()),
+                ("content-encoding".into(), "identity".into()),
+            ],
+            1,
+            1024,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn fpc_assess_rejects_sse_content_type_with_leading_space() {
+        // Cap057 LA-CAP057-004: trim before mime compare (Plan12 already trims).
+        assert_eq!(
+            fpc_assess_store(
+                "GET",
+                200,
+                &[("content-type".into(), " text/event-stream".into())],
+                1,
+                1024,
+                Duration::from_secs(30),
+                Duration::from_secs(60),
+            )
+            .unwrap_err(),
+            FpcStoreReject::Streaming
         );
     }
 

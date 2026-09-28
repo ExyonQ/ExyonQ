@@ -16,12 +16,15 @@
 //! WebSocket reverse proxy (HTTP/1.1 Upgrade tunnel).
 
 use crate::hyper_client::{get_empty_body_client, ProxyClient};
-use crate::hyper_forward::{bad_gateway, bad_request, ProxyHyperMetrics};
+use crate::hyper_forward::{bad_gateway, bad_request, gateway_timeout, ProxyHyperMetrics};
 use crate::request_headers_safe_for_proxy;
 use crate::upstream_target::UpstreamTarget;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty};
 use hyper::body::Incoming;
-use hyper::header::{HeaderValue, HOST, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE};
+use hyper::header::{
+    HeaderValue, CONNECTION, HOST, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION,
+    UPGRADE,
+};
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::sync::atomic::Ordering;
@@ -41,16 +44,26 @@ fn sec_websocket_accept(key: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
 }
 
+fn connection_has_token(headers: &hyper::HeaderMap, token: &str) -> bool {
+    headers.get_all(CONNECTION).iter().any(|value| {
+        value
+            .to_str()
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .any(|t| t.eq_ignore_ascii_case(token))
+            })
+            .unwrap_or(false)
+    })
+}
+
 pub fn is_websocket_upgrade(headers: &hyper::HeaderMap) -> bool {
-    let connection = headers
-        .get(hyper::header::CONNECTION)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
     let upgrade = headers
-        .get(hyper::header::UPGRADE)
+        .get(UPGRADE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    connection.to_ascii_lowercase().contains("upgrade") && upgrade.eq_ignore_ascii_case("websocket")
+    connection_has_token(headers, "upgrade") && upgrade.eq_ignore_ascii_case("websocket")
 }
 
 pub async fn forward_websocket(
@@ -86,7 +99,18 @@ pub async fn forward_websocket(
     let mut upstream_builder = Request::builder()
         .method(req.method())
         .uri(upstream.uri_for(&path_and_query));
-    for (name, value) in req.headers() {
+    let mut forward_headers = req.headers().clone();
+    // Remove Connection-nominated hop fields, then restore WebSocket upgrade markers.
+    crate::headers::strip_hop_by_hop_headers(&mut forward_headers);
+    forward_headers.insert(UPGRADE, HeaderValue::from_static("websocket"));
+    forward_headers.insert(CONNECTION, HeaderValue::from_static("Upgrade"));
+    if let Some(key) = req.headers().get(SEC_WEBSOCKET_KEY) {
+        forward_headers.insert(SEC_WEBSOCKET_KEY, key.clone());
+    }
+    if let Some(ver) = req.headers().get(SEC_WEBSOCKET_VERSION) {
+        forward_headers.insert(SEC_WEBSOCKET_VERSION, ver.clone());
+    }
+    for (name, value) in forward_headers.iter() {
         upstream_builder = upstream_builder.header(name, value);
     }
     if let Some(value) = x_forwarded_for {
@@ -112,22 +136,50 @@ pub async fn forward_websocket(
         Err(_) => {
             warn!("websocket handshake timeout");
             metrics.responses_504.fetch_add(1, Ordering::Relaxed);
-            return bad_gateway();
+            return gateway_timeout();
         }
     };
 
     if upstream_response.status() != StatusCode::SWITCHING_PROTOCOLS {
-        let (parts, body) = upstream_response.into_parts();
+        let (mut parts, body) = upstream_response.into_parts();
+        crate::headers::strip_hop_by_hop_headers(&mut parts.headers);
         return Response::from_parts(parts, body.boxed());
     }
 
+    // Cap031: refuse tunnel unless upstream 101 looks like a WebSocket upgrade.
+    if !upstream_websocket_101_ok(upstream_response.headers()) {
+        warn!("websocket upstream 101 missing Upgrade/Connection websocket tokens");
+        metrics.responses_502.fetch_add(1, Ordering::Relaxed);
+        return bad_gateway();
+    }
+
     let accept = sec_websocket_accept(&client_key);
+    let upstream_accept = upstream_response
+        .headers()
+        .get(SEC_WEBSOCKET_ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if upstream_accept != accept {
+        warn!("websocket upstream Sec-WebSocket-Accept mismatch");
+        metrics.responses_502.fetch_add(1, Ordering::Relaxed);
+        return bad_gateway();
+    }
+    let Ok(accept_hv) = HeaderValue::from_str(&accept) else {
+        metrics.responses_502.fetch_add(1, Ordering::Relaxed);
+        return bad_gateway();
+    };
+
     let (upstream_parts, upstream_body) = upstream_response.into_parts();
     drop(upstream_body);
     let mut upstream_response = Response::from_parts(upstream_parts, Empty::<bytes::Bytes>::new());
     let on_upstream_upgrade = hyper::upgrade::on(&mut upstream_response);
 
+    // Cap031 LA-001: Hyper fulfills OnUpgrade and ends the HTTP connection future while the
+    // tunnel task still runs. Extend admission so active_connections covers the tunnel.
+    let lifecycle_hold = exyonq_module_api::websocket_lifecycle::take_websocket_tunnel_hold();
+
     tokio::spawn(async move {
+        let _lifecycle_hold = lifecycle_hold;
         let (client_res, upstream_res) = tokio::join!(on_client_upgrade, on_upstream_upgrade);
         match (client_res, upstream_res) {
             (Ok(client_io), Ok(upstream_io)) => {
@@ -153,15 +205,18 @@ pub async fn forward_websocket(
     *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
     res.headers_mut()
         .insert(UPGRADE, HeaderValue::from_static("websocket"));
-    res.headers_mut().insert(
-        hyper::header::CONNECTION,
-        HeaderValue::from_static("upgrade"),
-    );
-    res.headers_mut().insert(
-        SEC_WEBSOCKET_ACCEPT,
-        HeaderValue::from_str(&accept).unwrap_or_else(|_| HeaderValue::from_static("")),
-    );
+    res.headers_mut()
+        .insert(CONNECTION, HeaderValue::from_static("upgrade"));
+    res.headers_mut().insert(SEC_WEBSOCKET_ACCEPT, accept_hv);
     res
+}
+
+fn upstream_websocket_101_ok(headers: &hyper::HeaderMap) -> bool {
+    let upgrade = headers
+        .get(UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    upgrade.eq_ignore_ascii_case("websocket") && connection_has_token(headers, "upgrade")
 }
 
 async fn tunnel<C, U>(client: C, upstream: U) -> std::io::Result<()>
@@ -337,6 +392,7 @@ mod tests {
             upstream_name: "backend".into(),
             target: format!("http://127.0.0.1:{upstream_port}"),
             timeout: Duration::from_millis(5000),
+            max_connect_retries: 1,
             host: Some("127.0.0.1".into()),
         };
         let upstream = UpstreamTarget::from_descriptor(&desc).unwrap();
@@ -446,6 +502,7 @@ mod tests {
             upstream_name: "backend".into(),
             target: format!("http://127.0.0.1:{upstream_port}"),
             timeout: Duration::from_millis(5000),
+            max_connect_retries: 1,
             host: Some("127.0.0.1".into()),
         };
         let upstream = UpstreamTarget::from_descriptor(&desc).unwrap();
@@ -507,6 +564,7 @@ mod tests {
             upstream_name: "backend".into(),
             target: format!("http://127.0.0.1:{upstream_port}"),
             timeout: Duration::from_millis(5000),
+            max_connect_retries: 1,
             host: Some("127.0.0.1".into()),
         };
         let upstream = UpstreamTarget::from_descriptor(&desc).unwrap();

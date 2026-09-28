@@ -7,13 +7,12 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 bytes.workspace = true
 exyonq-http3-provider-api = { path = "../exyonq-http3-provider-api" }
 exyonq-module-api = { path = "../../module-api" }
 http.workspace = true
-mio = { version = "0.8", features = ["net", "os-poll"] }
-quiche = { version = "0.29.3", default-features = true }
+mio = { version = "1", features = ["net", "os-poll"] }
+quiche = { version = "0.30.0", default-features = true }
 ring = "0.17"
 tokio.workspace = true
 tracing.workspace = true

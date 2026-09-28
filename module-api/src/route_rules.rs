@@ -56,10 +56,8 @@ pub enum RouteRuleOutcome<'a> {
 
 #[inline]
 fn location_rejected(location: &str) -> bool {
-    location
-        .as_bytes()
-        .iter()
-        .any(|&b| b == b'\r' || b == b'\n')
+    // Mirror Cap036 IR validate_redirect_location: empty / CTL / DEL.
+    location.is_empty() || location.as_bytes().iter().any(|&b| b <= 0x20 || b == 0x7f)
 }
 
 /// Evaluate structural redirect/rewrite for a matched route.
@@ -75,7 +73,15 @@ pub fn evaluate_structural_route_rules(input: RouteRuleInput<'_>) -> RouteRuleOu
         return RouteRuleOutcome::Redirect { status, location };
     }
     if let Some(path) = input.rewrite_target {
-        if path.is_empty() || !path.starts_with('/') {
+        // Mirror Cap035 config validation: absolute path, no authority/query/fragment/space.
+        if path.is_empty()
+            || !path.starts_with('/')
+            || path.starts_with("//")
+            || path.contains('?')
+            || path.contains('#')
+            || path.as_bytes().iter().any(|&b| b <= 0x20 || b == 0x7f)
+            || path.parse::<http::Uri>().is_err()
+        {
             return RouteRuleOutcome::NoChange;
         }
         return RouteRuleOutcome::InternalRewrite { path };
@@ -224,5 +230,27 @@ mod tests {
             evaluate_structural_route_rules(input),
             RouteRuleOutcome::NoChange
         );
+    }
+
+    #[test]
+    fn rewrite_rejects_authority_and_query() {
+        for target in [
+            "//evil.example/x",
+            "/ok?a=1",
+            "/ok#frag",
+            "/bad\n",
+            "/api/foo bar",
+        ] {
+            let input = RouteRuleInput {
+                redirect_status: None,
+                redirect_location: None,
+                rewrite_target: Some(target),
+            };
+            assert_eq!(
+                evaluate_structural_route_rules(input),
+                RouteRuleOutcome::NoChange,
+                "target={target}"
+            );
+        }
     }
 }

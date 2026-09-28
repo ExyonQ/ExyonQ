@@ -26,6 +26,6 @@ http3-provider-s2n = ["exyonq-core/http3-provider-s2n"]
 http3-provider-quiche = ["exyonq-core/http3-provider-quiche"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "net", "time"] }
 exyonq-mod-static = { workspace = true }
 exyonq-mod-proxy = { workspace = true }

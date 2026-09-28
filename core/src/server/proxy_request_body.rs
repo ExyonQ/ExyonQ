@@ -28,7 +28,7 @@ use hyper::header::{HeaderMap, CONTENT_LENGTH};
 /// Private error for proxy request body reads (not a public API).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProxyRequestBodyReadError {
-    /// Transport / body frame error (preserves prior empty-body fallback).
+    /// Transport / body frame error. Caller must fail closed (no empty-body fallback).
     Body,
     /// Declared or observed size exceeds the configured limit.
     TooLarge,

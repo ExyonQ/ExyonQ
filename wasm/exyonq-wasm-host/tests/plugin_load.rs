@@ -30,8 +30,8 @@ fn compile_fixture(name: &str) -> PathBuf {
 
 #[test]
 fn plugin_load_and_call_continue() {
-    let wasm_path = compile_fixture("noop");
-    let plugin = WasmPlugin::load("noop", &wasm_path, "{}").expect("load plugin");
+    let wasm_path = compile_fixture("continue_ok");
+    let plugin = WasmPlugin::load("continue_ok", &wasm_path, "{}").expect("load plugin");
     let kv = SharedKvStore::new();
     let headers: Vec<(String, String)> = vec![("Host".into(), "example.com".into())];
     let req = RequestView {

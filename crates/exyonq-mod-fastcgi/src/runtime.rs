@@ -427,9 +427,10 @@ mod tests {
     use super::*;
     use exyonq_module_api::fcgi_dispatch::FcgiSuccessResponse;
 
-    struct StubExecutor(FcgiDispatchOutcome);
+    /// Unit-test executor that returns a fixed outcome (not a product transport).
+    struct FixedOutcomeExecutor(FcgiDispatchOutcome);
 
-    impl FcgiBackendExecutor for StubExecutor {
+    impl FcgiBackendExecutor for FixedOutcomeExecutor {
         fn dispatch(&self, _request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
             self.0.clone()
         }
@@ -467,7 +468,7 @@ mod tests {
     async fn success_maps_to_200() {
         let _gate = metrics::fcgi_metric_test_gate();
         let runtime = FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: Arc::new(StubExecutor(success_response())),
+            executor: Arc::new(FixedOutcomeExecutor(success_response())),
             pool_capacities: vec![(0, 16)],
         })
         .unwrap();
@@ -560,7 +561,7 @@ mod tests {
         impl FcgiBackendExecutor for PanicOnce {
             fn dispatch(&self, _request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
                 if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                    panic!("simulated blocking failure");
+                    panic!("forced join failure for pool-permit release test");
                 }
                 success_response()
             }
@@ -585,7 +586,7 @@ mod tests {
     async fn executor_error_releases_pool_permit() {
         let _gate = metrics::fcgi_metric_test_gate();
         let runtime = FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: Arc::new(StubExecutor(FcgiDispatchOutcome::BadGateway)),
+            executor: Arc::new(FixedOutcomeExecutor(FcgiDispatchOutcome::BadGateway)),
             pool_capacities: vec![(0, 1)],
         })
         .unwrap();

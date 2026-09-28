@@ -27,7 +27,7 @@ mod tests {
         clear_kernel_observation_for_tests, kernel_observation_registration_test_gate,
         note_fastcgi_http_501, KernelObservationTestGuard,
     };
-    use exyonq_module_api::observability_runtime::clear_prometheus_appenders_for_tests;
+    use exyonq_module_api::observability_runtime::begin_prometheus_appender_test;
     use std::sync::Arc;
 
     #[test]
@@ -46,6 +46,9 @@ mod tests {
     #[test]
     fn register_observability_runtime_is_register_once() {
         let _gate = kernel_observation_registration_test_gate();
+        // Serialize against overlay-mutating tests (do not call clear_* while
+        // another thread may hold begin_prometheus_appender_test).
+        let _overlay = begin_prometheus_appender_test();
         clear_kernel_observation_for_tests();
         register_observability_runtime().expect("first");
         assert_eq!(
@@ -53,6 +56,6 @@ mod tests {
             Err(ObservabilityRegisterError::KernelObservationAlreadyRegistered)
         );
         clear_kernel_observation_for_tests();
-        clear_prometheus_appenders_for_tests();
+        // Overlay cleared on `_overlay` Drop — no ungated clear.
     }
 }

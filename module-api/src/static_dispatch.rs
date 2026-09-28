@@ -27,8 +27,8 @@ use std::sync::Arc;
 
 /// Opaque module-owned sendfile asset id.
 ///
-/// **Owner:** `exyonq-mod-static` [`SendfileHandleRegistry`] holds `Arc<SendfileAsset>` until
-/// [`StaticRuntime::take_sendfile_handle`] (exactly once) or [`StaticRuntime::release_sendfile_handle`].
+/// **Owner:** `exyonq-mod-static` `SendfileHandleRegistry` holds `Arc<SendfileAsset>` until
+/// `StaticRuntime::take_sendfile_handle` (exactly once) or `StaticRuntime::release_sendfile_handle`.
 /// **Fd lifetime:** `Arc<File>` inside the asset; kernel closes when last `Arc` drops — no manual fd close in core.
 /// **Reload:** handles tagged with runtime generation; stale ids are invalidated on `bind_roots`.
 /// **KD2.3:** epoll FSM calls `take_sendfile_handle` once; cancel/error paths call `release_sendfile_handle`.
@@ -53,6 +53,8 @@ pub struct StaticCompiledSlot {
     pub index_file: Option<String>,
     /// IR route name (e.g. `"site"` for wire/epoll fast path).
     pub route_name: String,
+    /// IR `match.host`. `None` is hostless and matches any Host.
+    pub route_host: Option<String>,
     /// Tree-preload per-file logical cap (bytes). `0` disables preload.
     pub preload_max_file_bytes: u64,
     /// Tree-preload total logical budget (bytes). `0` disables preload.
@@ -114,7 +116,7 @@ pub struct StaticResourceIdentitySnapshot {
     pub canonical_path: String,
     pub file_len: u64,
     pub modified_unix_secs: Option<u64>,
-    /// Subsecond fraction of [`modified_unix_secs`] (nanoseconds within the second).
+    /// Subsecond fraction of [`Self::modified_unix_secs`] (nanoseconds within the second).
     pub modified_subsec_nanos: Option<u32>,
     #[cfg(unix)]
     pub dev: Option<u64>,

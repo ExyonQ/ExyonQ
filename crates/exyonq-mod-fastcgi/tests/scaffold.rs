@@ -68,7 +68,7 @@ fn parser_transport_and_client_modules_present() {
     assert!(lib.contains("mod transport"));
     assert!(lib.contains("mod client"));
     assert!(lib.contains("mod encode"));
-    assert!(lib.contains("mod mock"));
+    assert!(lib.contains("mod scripted"));
     assert!(lib.contains("mod wire"));
     assert!(lib.contains("mod unix_transport"));
     assert!(lib.contains("mod unix_connect"));

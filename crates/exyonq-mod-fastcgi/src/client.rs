@@ -13,22 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! `PhpFpmClient` — module-local; inert by default, mock transport for PR4-A tests.
+//! `PhpFpmClient` — module-local FastCGI client.
 //!
-//! PR4-A: no sockets, no connect, no live forwarding, no production pool runtime.
+//! Default [`InertTransport`] is fail-closed. Production uses wire/unix transports via
+//! [`crate::adapter::FcgiModuleExecutor`]. [`crate::ScriptedFpmTransport`] is for protocol unit tests.
 
 use crate::encode::{
     decode_forward_response, encode_params_frames, encode_stdin_frames, DecodeError, EncodeError,
 };
-use crate::mock::MockFpmTransport;
 use crate::params::{MinForwardRequest, ParamsError};
+use crate::scripted::ScriptedFpmTransport;
 use crate::transport::{FastcgiRecordTransport, InertTransport, TransportError};
 use crate::wire::{WireError, WireTransport};
 
 /// Client-level errors (no live 502/503/504 mapping in PR4-A).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientError {
-    NotImplemented,
+    InertUnavailable,
     Transport(TransportError),
     Encode(EncodeError),
     Decode(DecodeError),
@@ -65,7 +66,7 @@ impl PhpFpmClient<InertTransport> {
 }
 
 impl<T> PhpFpmClient<T> {
-    /// Create a client with an injected transport (mock, inert, or wire).
+    /// Create a client with an injected transport (scripted, inert, or wire).
     pub fn with_transport(pool_name: &'static str, transport: T) -> Self {
         Self {
             pool: PoolLabel { name: pool_name },
@@ -89,16 +90,16 @@ impl<T: FastcgiRecordTransport> PhpFpmClient<T> {
 }
 
 impl PhpFpmClient<InertTransport> {
-    /// Request forwarding — PR3-A/PR4-A inert default: always [`ClientError::NotImplemented`].
+    /// Request forwarding — PR3-A/PR4-A inert default: always [`ClientError::InertUnavailable`].
     pub fn forward_request(&self, _request_frames: &[&[u8]]) -> Result<(), ClientError> {
-        Err(ClientError::NotImplemented)
+        Err(ClientError::InertUnavailable)
     }
 }
 
-impl PhpFpmClient<MockFpmTransport> {
-    /// Encode PARAMS + STDIN, drive the mock transport, decode STDOUT + END_REQUEST.
+impl PhpFpmClient<ScriptedFpmTransport> {
+    /// Encode PARAMS + STDIN, drive the scripted transport, decode STDOUT + END_REQUEST.
     ///
-    /// Uses the mock's configured `request_id`. Does not emit `BEGIN_REQUEST`.
+    /// Uses the scripted peer's configured `request_id`. Does not emit `BEGIN_REQUEST`.
     pub fn forward_once(
         &self,
         params: &[(&str, &str)],

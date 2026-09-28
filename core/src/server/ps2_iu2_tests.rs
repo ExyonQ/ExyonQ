@@ -83,7 +83,9 @@ fn unblock_worker_accepts(addr: std::net::SocketAddr, count: usize) {
 fn ps2_iu2_workers_survive_idle_header_read_timeout() {
     crate::kernel::test_hooks::ensure_wire_hooks_installed();
     let prev = std::env::var("EXYONQ_READ_TIMEOUT_MS").ok();
+    crate::server::reset_header_read_timeout_cache_for_tests();
     std::env::set_var("EXYONQ_READ_TIMEOUT_MS", "80");
+    crate::server::reset_header_read_timeout_cache_for_tests();
 
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let raw = include_str!("../../../tests/fixtures/minimal.toml");
@@ -151,6 +153,7 @@ fn ps2_iu2_workers_survive_idle_header_read_timeout() {
         Some(v) => std::env::set_var("EXYONQ_READ_TIMEOUT_MS", v),
         None => std::env::remove_var("EXYONQ_READ_TIMEOUT_MS"),
     }
+    crate::server::reset_header_read_timeout_cache_for_tests();
 }
 
 #[test]

@@ -65,16 +65,6 @@ async fn fcgi_cache_ctx(
     reset_cache_metrics_for_tests();
     let script_resolver =
         FastcgiScriptResolverTestGuard::install(exyonq_mod_fastcgi::FastcgiScriptResolver::arc());
-    let fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
-        FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: Arc::new(CountingExecutor {
-                hits: Arc::clone(&hits),
-                response: success_body(body),
-            }),
-            pool_capacities: vec![(0, 16)],
-        })
-        .expect("fcgi runtime"),
-    ));
 
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join("public")).expect("mkdir public");
@@ -125,10 +115,21 @@ document_root = "{root}"
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    // Cap048: External CountingExecutor after Module bind from publish.
+    let fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
+        FcgiRuntime::new(FcgiRuntimeRegistration {
+            executor: Arc::new(CountingExecutor {
+                hits: Arc::clone(&hits),
+                response: success_body(body),
+            }),
+            pool_capacities: vec![(0, 16)],
+        })
+        .expect("fcgi runtime"),
+    ));
     FcgiHarness {
         ctx: Arc::new(ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         }),
@@ -230,23 +231,6 @@ async fn fcgi_set_cookie_response_not_stored() {
     let hits = Arc::new(AtomicUsize::new(0));
     let _script_resolver =
         FastcgiScriptResolverTestGuard::install(exyonq_mod_fastcgi::FastcgiScriptResolver::arc());
-    let _fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
-        FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: Arc::new(CountingExecutor {
-                hits: Arc::clone(&hits),
-                response: FcgiDispatchOutcome::Success(FcgiSuccessResponse {
-                    status: 200,
-                    headers: vec![
-                        ("content-type".into(), "text/plain".into()),
-                        ("set-cookie".into(), "x=1".into()),
-                    ],
-                    body: b"setcookie".to_vec(),
-                }),
-            }),
-            pool_capacities: vec![(0, 16)],
-        })
-        .expect("fcgi runtime"),
-    ));
 
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join("public")).expect("mkdir");
@@ -279,9 +263,26 @@ document_root = "{}"
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    let _fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
+        FcgiRuntime::new(FcgiRuntimeRegistration {
+            executor: Arc::new(CountingExecutor {
+                hits: Arc::clone(&hits),
+                response: FcgiDispatchOutcome::Success(FcgiSuccessResponse {
+                    status: 200,
+                    headers: vec![
+                        ("content-type".into(), "text/plain".into()),
+                        ("set-cookie".into(), "x=1".into()),
+                    ],
+                    body: b"setcookie".to_vec(),
+                }),
+            }),
+            pool_capacities: vec![(0, 16)],
+        })
+        .expect("fcgi runtime"),
+    ));
     let ctx = Arc::new(ConnectionContext {
         state,
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     });

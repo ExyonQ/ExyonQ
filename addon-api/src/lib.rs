@@ -120,7 +120,7 @@ impl ResponseStub {
     }
 }
 
-/// Opaque connection view (v1 stub — populated by core in future hooks).
+/// Opaque connection view (v1 — populated by core in future hooks).
 #[derive(Debug, Clone)]
 pub struct ConnectionView {
     pub remote_addr: Option<&'static str>,

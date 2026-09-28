@@ -29,11 +29,11 @@ use exyonq_core::lifecycle::LifecycleState;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
-/// Opaque failure for PS1C consumer scaffold smoke (not a stable product error contract).
+/// Opaque failure for PS1C consumer scaffold diagnostic (not a stable product error contract).
 #[derive(Debug)]
 pub struct ScaffoldAdmitError;
 
-/// Consumer-side admission + planner + handoff bundle construction (PS1C seam smoke).
+/// Consumer-side admission + planner + handoff bundle construction (PS1C seam diagnostic).
 pub fn consumer_admit_plan_and_bundle(
     ops: &Arc<LifecycleState>,
     head: &[u8],
@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn ps1c_compile_consumer_gate_smoke() {
+    fn ps1c_compile_consumer_gate_diagnostic() {
         ensure_wire_hooks();
         let ops = LifecycleState::new();
         let head = b"GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";

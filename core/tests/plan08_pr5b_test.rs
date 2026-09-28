@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Plan 08 PR5-B1 — live FastCGI 200 via production registration + mock roundtrip.
+//! Plan 08 PR5-B1 — live FastCGI 200 via production registration + scripted unit peer.
 
 use exyonq_core::{
     execute_backend, Backend, FcgiDispatchTestGuard, FcgiRuntimeRegistration,
@@ -22,7 +22,7 @@ use exyonq_core::{
 use exyonq_metrics::{fcgi_responses_501_total, KernelShellMetrics};
 use exyonq_mod_fastcgi::fcgi_responses_200_total;
 use exyonq_mod_fastcgi::{
-    parse_cgi_stdout, FcgiRuntime, MockFcgiExecutor, PR5B1_BODY, PR5B1_STDOUT,
+    parse_cgi_stdout, FcgiRuntime, ScriptedFcgiExecutor, PR5B1_BODY, PR5B1_STDOUT,
 };
 use exyonq_module_api::fcgi_dispatch::{
     FcgiBackendExecutor, FcgiDispatchOutcome, FcgiDispatchRequest,
@@ -30,7 +30,7 @@ use exyonq_module_api::fcgi_dispatch::{
 use exyonq_module_api::kernel_observation::KernelObservationTestGuard;
 use std::sync::Arc;
 
-fn install_mock_executor(executor: Arc<dyn FcgiBackendExecutor>) -> FcgiDispatchTestGuard {
+fn install_scripted_executor(executor: Arc<dyn FcgiBackendExecutor>) -> FcgiDispatchTestGuard {
     let runtime = Arc::new(
         FcgiRuntime::new(FcgiRuntimeRegistration {
             executor,
@@ -81,7 +81,7 @@ async fn pr5_b1_no_executor_returns_501() {
 
 #[tokio::test]
 async fn pr5_b1_registered_success_returns_200_with_exact_body() {
-    let _guard = install_mock_executor(Arc::new(MockFcgiExecutor::pr5b1_default()));
+    let _guard = install_scripted_executor(Arc::new(ScriptedFcgiExecutor::pr5b1_default()));
     let before = fcgi_responses_200_total();
     let outcome = execute_backend(
         &Backend::Fastcgi { pool_id: 0 },
@@ -105,8 +105,8 @@ async fn pr5_b1_registered_success_returns_200_with_exact_body() {
 }
 
 #[tokio::test]
-async fn pr5_b1_mock_roundtrip_byte_exact() {
-    let executor = MockFcgiExecutor::pr5b1_default();
+async fn pr5_b1_scripted_roundtrip_byte_exact() {
+    let executor = ScriptedFcgiExecutor::pr5b1_default();
     let outcome = executor.dispatch(&test_fcgi_request());
     match outcome {
         FcgiDispatchOutcome::Success(response) => {
@@ -131,7 +131,7 @@ impl FcgiBackendExecutor for FailureExecutor {
 async fn pr5_b1_failure_and_timeout_mappings() {
     {
         let _guard =
-            install_mock_executor(Arc::new(FailureExecutor(FcgiDispatchOutcome::BadGateway)));
+            install_scripted_executor(Arc::new(FailureExecutor(FcgiDispatchOutcome::BadGateway)));
         let outcome = execute_backend(
             &Backend::Fastcgi { pool_id: 0 },
             Some(test_fcgi_request()),
@@ -144,7 +144,7 @@ async fn pr5_b1_failure_and_timeout_mappings() {
     }
 
     {
-        let _guard = install_mock_executor(Arc::new(FailureExecutor(
+        let _guard = install_scripted_executor(Arc::new(FailureExecutor(
             FcgiDispatchOutcome::GatewayTimeout,
         )));
         let outcome = execute_backend(

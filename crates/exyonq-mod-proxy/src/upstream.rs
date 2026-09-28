@@ -32,6 +32,8 @@ pub struct UpstreamDescriptor {
     pub target: String,
     pub timeout: Duration,
     pub host: Option<String>,
+    /// Cap021 — copied from compiled slot / defaults to 1 for helpers.
+    pub max_connect_retries: u8,
 }
 
 impl UpstreamDescriptor {
@@ -51,6 +53,7 @@ impl UpstreamDescriptor {
             target: target.to_string(),
             timeout: Duration::from_millis(timeout_ms),
             host,
+            max_connect_retries: 1,
         })
     }
 

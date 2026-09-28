@@ -71,6 +71,8 @@ pub async fn prepare_proxy_cache_load(
         );
     }
 
+    // Cap056 LA-003: fail-closed before lossy UTF-8 conversion can drop blockers.
+    let raw_store_rejection = plan12_raw_header_store_gate(&parts.headers);
     let headers = header_pairs(&parts);
 
     let declared_len = match parse_response_content_length(&parts.headers) {
@@ -108,14 +110,18 @@ pub async fn prepare_proxy_cache_load(
                     );
                 }
             }
-            let assessment = assess_cacheability(
-                "GET",
-                request_headers,
-                parts.status.as_u16(),
-                &headers,
-                body.len(),
-                max_object_bytes,
-            );
+            let assessment = if let Some(rejection) = raw_store_rejection {
+                Err(rejection)
+            } else {
+                assess_cacheability(
+                    "GET",
+                    request_headers,
+                    parts.status.as_u16(),
+                    &headers,
+                    body.len(),
+                    max_object_bytes,
+                )
+            };
             materialized(
                 parts.status,
                 &headers,
@@ -270,6 +276,62 @@ fn header_pairs(parts: &http::response::Parts) -> Vec<(String, String)> {
                 .map(|v| (name.as_str().to_string(), v.to_string()))
         })
         .collect()
+}
+
+/// Cap056 LA-003: opaque (non-UTF8) privacy/variant headers must fail closed for store.
+/// Presence of Set-Cookie / Vary / Content-Range is enough without UTF-8 decode.
+fn plan12_raw_header_store_gate(headers: &hyper::HeaderMap) -> Option<CacheRejection> {
+    if headers.contains_key(hyper::header::SET_COOKIE) {
+        return Some(CacheRejection::ResponseSetCookie);
+    }
+    if headers.contains_key(hyper::header::CONTENT_RANGE) {
+        return Some(CacheRejection::ResponseContentRange);
+    }
+    if headers.contains_key(hyper::header::VARY) {
+        return Some(CacheRejection::ResponseVary);
+    }
+    for value in headers.get_all(hyper::header::CACHE_CONTROL) {
+        match value.to_str() {
+            Ok(s) => {
+                let lower = s.to_ascii_lowercase();
+                if lower.split(',').any(|part| {
+                    let p = part.trim();
+                    p == "private"
+                        || p.starts_with("private=")
+                        || p == "no-store"
+                        || p.starts_with("no-store=")
+                }) {
+                    return Some(CacheRejection::ResponseCacheControl);
+                }
+            }
+            Err(_) => return Some(CacheRejection::ResponseCacheControl),
+        }
+    }
+    for value in headers.get_all(hyper::header::CONTENT_ENCODING) {
+        match value.to_str() {
+            Ok(s) => {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("identity") {
+                    return Some(CacheRejection::ResponseContentEncoding);
+                }
+            }
+            Err(_) => return Some(CacheRejection::ResponseContentEncoding),
+        }
+    }
+    for value in headers.get_all(hyper::header::CONTENT_TYPE) {
+        match value.to_str() {
+            Ok(s) => {
+                if s.split(';')
+                    .next()
+                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+                {
+                    return Some(CacheRejection::ResponseStreaming);
+                }
+            }
+            Err(_) => return Some(CacheRejection::ResponseStreaming),
+        }
+    }
+    None
 }
 
 fn materialized(

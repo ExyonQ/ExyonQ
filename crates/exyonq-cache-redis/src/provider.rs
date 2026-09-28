@@ -667,12 +667,18 @@ fn claim_pending(
     consumer: &str,
     tx: &SyncSender<InvalidationEvent>,
 ) -> Result<(), ()> {
-    // XAUTOCLAIM stream group consumer 60000 0-0 COUNT 32
+    // XAUTOCLAIM stream group consumer <min-idle> 0-0 COUNT 32
+    // Override: EXYONQ_REDIS_XAUTOCLAIM_MIN_IDLE_MS (lab/tests); default 60000.
+    let min_idle_ms: u64 = std::env::var("EXYONQ_REDIS_XAUTOCLAIM_MIN_IDLE_MS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60_000);
     let result: RedisResult<redis::Value> = redis::cmd("XAUTOCLAIM")
         .arg(stream)
         .arg(group)
         .arg(consumer)
-        .arg(60_000u64)
+        .arg(min_idle_ms)
         .arg("0-0")
         .arg("COUNT")
         .arg(32)
@@ -808,10 +814,24 @@ fn parse_and_deliver_entry(
         &shared.cfg.replay,
         shared.cfg.max_event_bytes,
     ) {
-        Ok(event) => {
-            let _ = tx.try_send(event);
-            let _ = conn.xack::<_, _, _, u64>(stream, group, &[id.as_str()]);
-        }
+        // Same contract as `deliver_stream_id`: overflow/closed must NOT ACK
+        // (redelivery + reconcile). Silent try_send+ACK loses invalidation events.
+        Ok(event) => match tx.try_send(event) {
+            Ok(()) => {
+                metrics::note_receive();
+                if conn
+                    .xack::<_, _, _, u64>(stream, group, &[id.as_str()])
+                    .is_err()
+                {
+                    metrics::note_ack_fail();
+                }
+            }
+            Err(_) => {
+                shared.reconcile_needed.store(true, Ordering::Relaxed);
+                metrics::note_publish_fail();
+                return Err(());
+            }
+        },
         Err(_) => {
             // Counters owned by `decode_signed_event` (single increment per reject).
             let _ = conn.xack::<_, _, _, u64>(stream, group, &[id.as_str()]);

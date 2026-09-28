@@ -297,7 +297,7 @@ pub fn invoke_i32_with_fuel(wat: &str, export: &str, fuel: u64) -> Result<i32> {
     // (already elapsed), so every call traps immediately unless a future deadline is
     // set. Fuel-only helpers must arm a deadline so fuel remains the limiter; epoch
     // traps also match `is_fuel_interrupt_trap` ("interrupt") and would otherwise
-    // report false `FuelExhausted` (see invoke_latency / noop with large fuel).
+    // report false `FuelExhausted` (see invoke_latency / const-answer with large fuel).
     store.set_epoch_deadline(u64::MAX / 4);
     let instance = Linker::new(&engine).instantiate(&mut store, &module)?;
     let func = instance.get_typed_func::<(), i32>(&mut store, export)?;
@@ -655,6 +655,7 @@ pub struct PluginManagerStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wasmtime::{Linker, Module, Store};
 
     const INFINITE_LOOP_WAT: &str = r#"
         (module
@@ -668,7 +669,7 @@ mod tests {
         )
     "#;
 
-    const NOOP_WAT: &str = r#"
+    const CONST_ANSWER_WAT: &str = r#"
         (module
           (func (export "run") (result i32)
             i32.const 42)
@@ -694,9 +695,83 @@ mod tests {
     }
 
     #[test]
-    fn noop_invoke_succeeds_with_fuel_budget() {
-        let v = invoke_i32_with_fuel(NOOP_WAT, "run", 1_000_000).expect("noop invoke");
+    fn const_answer_invoke_succeeds_with_fuel_budget() {
+        let v =
+            invoke_i32_with_fuel(CONST_ANSWER_WAT, "run", 1_000_000).expect("const answer invoke");
         assert_eq!(v, 42);
+    }
+
+    /// Fuel used by `export` under the production engine (fuel on, Cranelift).
+    /// A large budget so the call completes; the return value is units consumed.
+    fn fuel_consumed(engine: &Engine, wat: &str, export: &str) -> u64 {
+        let wasm_bytes = wat::parse_str(wat).expect("wat");
+        let module = Module::new(engine, &wasm_bytes).expect("module");
+        let mut store = Store::new(engine, ());
+        let budget = 50_000_000u64;
+        store.set_fuel(budget).expect("set fuel");
+        store.set_epoch_deadline(u64::MAX / 4);
+        let instance = Linker::new(engine)
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let func = instance
+            .get_typed_func::<(), ()>(&mut store, export)
+            .expect("export");
+        func.call(&mut store, ()).expect("call");
+        let left = store.get_fuel().expect("get fuel");
+        budget - left
+    }
+
+    /// GHSA-m63x-6p34-q65x: Cranelift used to drop fuel charged inside a
+    /// `call_ref` callee, so a second call cost about the same as the first.
+    #[test]
+    fn call_ref_callee_fuel_is_not_reset() {
+        const WAT: &str = r#"
+            (module
+              (type $t (func))
+              (elem declare func $burn)
+              (func $burn
+                (local $i i32)
+                (local.set $i (i32.const 4000))
+                (loop $l
+                  (local.tee $i (i32.sub (local.get $i) (i32.const 1)))
+                  (br_if $l)))
+              (func (export "once")
+                (call_ref $t (ref.func $burn)))
+              (func (export "twice")
+                (call_ref $t (ref.func $burn))
+                (call_ref $t (ref.func $burn))))
+        "#;
+        let engine = engine_for_tests().expect("engine");
+        let once = fuel_consumed(&engine, WAT, "once");
+        let twice = fuel_consumed(&engine, WAT, "twice");
+        assert!(
+            twice > once + once / 2,
+            "second call_ref must keep the callee's fuel charge: once={once} twice={twice}"
+        );
+    }
+
+    /// The catch-path half of GHSA-m63x-6p34-q65x needs the exception-handling
+    /// proposal. That proposal is compiled only with wasmtime's `gc` feature,
+    /// which this host does not enable, so a `try_table` module never reaches
+    /// Cranelift.
+    #[test]
+    fn production_engine_rejects_exception_handling() {
+        const WAT: &str = r#"
+            (module
+              (tag $exn)
+              (func (export "run")
+                (block $h
+                  (try_table (catch $exn $h)
+                    (throw $exn)))))
+        "#;
+        let engine = engine_for_tests().expect("engine");
+        let wasm_bytes = wat::parse_str(WAT).expect("wat");
+        let err = Module::new(&engine, &wasm_bytes).expect_err("exceptions stay off");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("exceptions proposal not enabled"),
+            "expected the proposal to be off, got {msg}"
+        );
     }
 
     #[test]

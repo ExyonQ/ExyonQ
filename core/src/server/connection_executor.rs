@@ -32,11 +32,15 @@ use crate::server::connection_errors::{
 use crate::server::drain_probes;
 use crate::server::hyper_handoff::spawn_hyper_handoff;
 use crate::server::io as conn_io;
-use crate::server::wire_dispatch::might_use_static_wire;
+use crate::server::wire_dispatch::{
+    evaluate_wire_waf, format_waf_reject_http, might_use_static_wire,
+    waf_wire_materialization_active,
+};
 use bytes::Bytes;
 use exyonq_mod_proxy::ProxyClient;
 use exyonq_module_api::static_epoll;
 use exyonq_module_api::static_wire;
+use hyper::header::HeaderValue;
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::io::AsRawFd;
@@ -58,7 +62,7 @@ pub(crate) struct EpollAdmitAttach {
 
 /// PS3A-F3 I6: admission decision at accept (one try_admit, one generation pin).
 pub(crate) enum EpollAdmitDecision {
-    /// modules_enabled or peek requires Tokio/Hyper — token already admitted.
+    /// Peek / force_hyper / WAF-enforce requires Tokio/Hyper — token already admitted.
     HyperReady(EpollAdmitAttach),
     /// Stay on epoll map (static/sendfile pump) — token already admitted.
     StayInMap(EpollAdmitAttach),
@@ -79,6 +83,12 @@ impl CoreConnectionExecutor {
         ops: Arc<LifecycleState>,
         runtime: Handle,
     ) -> Self {
+        crate::server::hyper_handoff::ensure_handoff_bridge(
+            &runtime,
+            SharedServerState::clone(&shared),
+            proxy_client.clone(),
+            Arc::clone(&ops),
+        );
         Self {
             shared,
             proxy_client,
@@ -112,7 +122,8 @@ impl CoreConnectionExecutor {
 
         let view = self.pin_generation_view();
 
-        if view.modules_enabled {
+        // Compression (body filters) forces Hyper. Ratelimit+metrics are wire-cheap.
+        if view.modules_enabled && self.hyper_required_from_shared() {
             return self.spawn_hyper(conn, None, view, token);
         }
 
@@ -143,20 +154,40 @@ impl CoreConnectionExecutor {
         }
 
         if let Some(site_slot) = view.site_static_slot {
-            // P1 bench fd write (io_uring / shared static_epoll path) before blocking pool.
-            let p1_wire = static_wire::p1_bench_wire_rodata();
-            match static_epoll::try_write_bench_response(
+            // Cap015 / WAF-LOGIC-P1-E: sync/epoll static must not bypass WAF.
+            // ARCH-002: when WAF is disabled, skip XFF/HeaderValue + wire materialization.
+            let state = reload::read_state(&self.shared);
+            if waf_wire_materialization_active(&state) {
+                let xff = HeaderValue::from_str(&conn.peer.ip().to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
+                if let crate::waf::WafHookResult::Reject(reject) =
+                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff)
+                {
+                    let bytes = format_waf_reject_http(&reject);
+                    let _ = conn.stream.set_nodelay(true);
+                    if let Err(err) = conn.stream.write_all(&bytes) {
+                        warn!(
+                            %err,
+                            peer = %conn.peer,
+                            "waf reject response write failed"
+                        );
+                    }
+                    return ConnectionServeOutcome::Completed;
+                }
+            }
+
+            // Inline health wire (io_uring / shared static_epoll path) before blocking pool.
+            match static_epoll::try_write_inline_wire_response(
                 site_slot,
                 conn.stream.as_raw_fd(),
                 head.as_ref(),
-                p1_wire,
                 conn_io::write_response_fd,
             ) {
-                static_epoll::StaticEpollBenchWriteResult::Written => {
+                static_epoll::StaticEpollInlineWireResult::Written => {
                     return ConnectionServeOutcome::Completed;
                 }
-                static_epoll::StaticEpollBenchWriteResult::Handoff
-                | static_epoll::StaticEpollBenchWriteResult::NoMatch => {}
+                static_epoll::StaticEpollInlineWireResult::Handoff
+                | static_epoll::StaticEpollInlineWireResult::NoMatch => {}
             }
             if might_use_static_wire(head.as_ref())
                 && static_wire::static_use_blocking_pool(head.as_ref())
@@ -179,13 +210,76 @@ impl CoreConnectionExecutor {
         self.spawn_hyper(conn, Some((head, rest)), view, token)
     }
 
+    /// Cap015 / WAF-KEEPALIVE-001: header-phase WAF for each epoll keepalive request.
+    ///
+    /// Returns reject response bytes when the request must be blocked; `None` to continue.
+    /// Callers must invoke this on **every** request head, including keepalive subsequent
+    /// requests (inspecting only the first request on a TCP connection is insufficient).
+    pub(crate) fn evaluate_wire_waf_reject_bytes(
+        &self,
+        generation: u64,
+        head: &[u8],
+        peer: SocketAddr,
+    ) -> Option<Vec<u8>> {
+        // Root3 / ARCH-002: Cap067 P1 WAF-off must not pay `read_state` (RwLock + Arc clone)
+        // solely to discover that wire materialization is inactive.
+        // Fail-closed:
+        // - while structural reload is in progress, always load ServerState (LA-CAP067-R3-001)
+        // - re-sample published flag after reload_in_progress so a concurrent WAF-enable
+        //   cannot complete between the two loads and skip inspect (LA-CAP067-R3-002)
+        if !reload::waf_wire_inspection_active_published() {
+            if !reload::reload_in_progress() && !reload::waf_wire_inspection_active_published() {
+                return None;
+            }
+        }
+        let state = reload::read_state(&self.shared);
+        // Cap015: when WAF is active this still runs on every keepalive request.
+        if !waf_wire_materialization_active(&state) {
+            return None;
+        }
+        let xff = HeaderValue::from_str(&peer.ip().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
+        match evaluate_wire_waf(&state, generation, head, &xff) {
+            crate::waf::WafHookResult::Reject(reject) => Some(format_waf_reject_http(&reject)),
+            crate::waf::WafHookResult::Continue => None,
+        }
+    }
+
     /// I6: admit once + pin once for epoll accept (Hyper vs stay-in-map).
     pub(crate) fn admit_epoll_accept(
         &self,
         force_hyper: bool,
     ) -> Result<EpollAdmitDecision, DrainRejected> {
+        // Cap067 P5: HyperReady (`GET /api/`, Connection:close) must not pay
+        // `read_state` (RwLock + Arc clone) on the accept thread — that serializes
+        // Cap067 workers and collapses effective concurrency under wrk -c100.
+        // Cheap pin: generation from the published atomic; Hyper dispatch reloads
+        // ServerState on the Tokio task. WAF enforce still forces Hyper via the
+        // StayInMap path below (peek may say stay, WAF says Hyper).
+        if force_hyper {
+            let token = PlatformConnectionAdmission::try_admit(&self.ops)?;
+            return Ok(EpollAdmitDecision::HyperReady(EpollAdmitAttach {
+                token,
+                bench_cache: SyncBenchCache {
+                    site_static_slot: None,
+                    modules_enabled: true,
+                    generation: reload::active_runtime_generation(),
+                },
+            }));
+        }
+
         let attach = self.admit_for_epoll_interest()?;
-        if attach.bench_cache.modules_enabled || force_hyper {
+        // Cap015 / WAF-LOGIC-P1-E: when WAF is enforcing, keep Hyper for accept-time
+        // handoff. Monitor/disabled WAF stays on Cap067 — keepalive re-enters WAF via
+        // [`Self::evaluate_wire_waf_reject_bytes`] (WAF-KEEPALIVE-001).
+        //
+        // `modules_enabled` must NOT force Hyper: Cap067 `EPOLL_LISTEN` owns static
+        // sendfile with modules compiled in; non-static (/api/, NeedHyper) hand off
+        // per-request. Divert Tokio→Cap067 already uses `admit_for_epoll_interest`
+        // without this gate — listen must match.
+        let state = reload::read_state(&self.shared);
+        let waf_requires_hyper = state.waf_enforce;
+        if waf_requires_hyper {
             Ok(EpollAdmitDecision::HyperReady(attach))
         } else {
             Ok(EpollAdmitDecision::StayInMap(attach))
@@ -212,8 +306,11 @@ impl CoreConnectionExecutor {
     }
 
     /// I6: generation-stale check without exposing SharedServerState to the worker.
+    ///
+    /// Cap067 Root3: uses process-visible [`reload::active_runtime_generation`] (AtomicU64),
+    /// the same authority Hyper uses — not per-request `read_state` (RwLock + Arc::clone).
     pub(crate) fn is_generation_stale(&self, pinned_generation: u64) -> bool {
-        reload::read_state(&self.shared).generation != pinned_generation
+        reload::active_runtime_generation() != pinned_generation
     }
 
     /// I6: Hyper handoff when ConnState (or accept decision) already holds the token.
@@ -273,6 +370,10 @@ impl CoreConnectionExecutor {
             state.modules_enabled(),
             state.site_static_slot,
         )
+    }
+
+    fn hyper_required_from_shared(&self) -> bool {
+        reload::read_state(&self.shared).hyper_required_for_modules()
     }
 
     fn spawn_hyper(
@@ -380,10 +481,11 @@ mod tests {
             TransportKind::SyncAccept,
         ));
         assert!(matches!(outcome, ConnectionServeOutcome::Completed));
-        assert_eq!(ops.active_connections(), 1);
+        // Hyper task may already have finished under load; never allow >1.
+        assert!(ops.active_connections() <= 1);
         let _ = client.join();
         rt.block_on(async {
-            for _ in 0..50 {
+            for _ in 0..100 {
                 if ops.active_connections() == 0 {
                     break;
                 }

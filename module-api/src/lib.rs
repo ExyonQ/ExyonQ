@@ -19,6 +19,9 @@
 //! This crate re-exports addon-api 1.x types and wraps [`AddonRegistry`] for
 //! backward-compatible async [`Module`] pipeline integration.
 
+#![forbid(unsafe_code)]
+
+pub mod accept_encoding;
 pub mod acme_integration;
 pub mod cache;
 pub mod cache_coordination;
@@ -27,6 +30,7 @@ pub mod cross_cutting_pipeline;
 pub mod discovery_runtime;
 pub mod fcgi_dispatch;
 pub mod fcgi_script_resolver;
+pub mod hop_by_hop;
 pub mod htaccess_overlay;
 pub mod htaccess_runtime;
 pub mod http3_runtime;
@@ -36,6 +40,7 @@ pub mod observability_runtime;
 pub mod proxy_dispatch;
 pub mod proxy_wire;
 pub mod reload_runtime;
+pub mod response_observation;
 pub mod route_rules;
 pub mod static_dispatch;
 #[cfg(target_os = "linux")]
@@ -43,6 +48,8 @@ pub mod static_epoll;
 pub mod static_paths;
 pub mod static_wire;
 pub mod tls_runtime;
+pub mod websocket_lifecycle;
+pub mod wire_module_hooks;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -53,6 +60,11 @@ use std::error::Error;
 use std::sync::Arc;
 
 // Re-export addon-api 1.x surface for backward-compatible imports.
+pub use accept_encoding::{
+    accept_encoding_from_request_head, accept_encoding_prefers_content_coding,
+    compression_requires_hyper_for_request_head, negotiate, ContentCoding, NegotiateOutcome,
+    Negotiation,
+};
 pub use acme_integration::{
     acme_integration_registration_test_gate, acme_integration_service,
     clear_acme_integration_for_tests, register_acme_integration_service,
@@ -98,6 +110,12 @@ pub use fcgi_script_resolver::{
     FastcgiScriptResolutionService, FastcgiScriptResolverRegisterError,
     FastcgiScriptResolverTestGuard,
 };
+pub use hop_by_hop::{
+    connection_nominated_header_names, connection_nominating_tokens_from_bytes,
+    connection_nominating_tokens_from_str, connection_option_skips_nomination,
+    is_fixed_hop_by_hop_header, split_connection_option_tokens, strip_hop_by_hop_headers,
+    FIXED_HOP_BY_HOP_HEADERS,
+};
 pub use htaccess_overlay::{
     join_directory_index_uri, lookup_overlay, normalize_uri_path,
     validate_directory_index_candidate, validate_front_controller_target, validate_overlay,
@@ -127,23 +145,28 @@ pub use kernel_observation::{
     KernelObservationTestGuard,
 };
 #[doc(hidden)]
-#[cfg(test)]
 pub use observability_runtime::clear_prometheus_appenders_for_tests;
 pub use observability_runtime::{
-    append_registered_prometheus, ensure_runtime_prometheus_hook, register_prometheus_appender,
-    PrometheusAppendFn,
+    append_registered_prometheus, begin_prometheus_appender_test, ensure_runtime_prometheus_hook,
+    freeze_prometheus_appenders, register_prometheus_appender, register_test_prometheus_appender,
+    PrometheusAppendFn, PrometheusAppenderTestGuard,
 };
 pub use reload_runtime::{
     clear_reload_runtime_for_tests, register_reload_runtime_service,
     reload_runtime_registration_test_gate, reload_runtime_service, ReloadRuntimeRegisterError,
     ReloadRuntimeService, ReloadRuntimeSupervisor, ReloadRuntimeTestGuard,
 };
+pub use response_observation::{ResponseBodyState, ResponseObservation, StreamingBodyError};
 pub use route_rules::{
     evaluate_structural_route_rules, RouteRuleInput, RouteRuleOutcome, DISPATCH_STAGE_BACKEND,
     DISPATCH_STAGE_HTACCESS_OVERLAY, DISPATCH_STAGE_ROUTE_LOOKUP, DISPATCH_STAGE_STRUCTURAL_RULES,
     FROZEN_DISPATCH_STAGE_ORDER,
 };
 pub use tls_runtime::{TlsAlpnProfile, TlsListenerBinding};
+pub use wire_module_hooks::{
+    install_wire_module_hooks, rate_limit_reject_wire, wire_admit, wire_admit_active,
+    wire_record_exchange, wire_record_response, WireAdmit, WireModuleHooks,
+};
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 pub type Body = Full<Bytes>;
@@ -188,7 +211,7 @@ pub trait Module: Send + Sync {
         Ok(())
     }
 
-    async fn on_request(&self, _req: &HttpRequest) -> Result<(), BoxError> {
+    async fn on_request(&self, _req: &mut HttpRequest) -> Result<(), BoxError> {
         Ok(())
     }
 
@@ -200,10 +223,15 @@ pub trait Module: Send + Sync {
         Ok(())
     }
 
+    /// Observe (and optionally transform) a completed response.
+    ///
+    /// For SSE / other streaming bodies the pipeline passes
+    /// [`ResponseBodyState::StreamingUnavailable`] — modules must treat that as
+    /// body-not-observed, never as a genuine empty product body.
     async fn on_response(
         &self,
         _req: &HttpRequest,
-        _resp: &mut HttpResponse,
+        _obs: &mut ResponseObservation,
     ) -> Result<(), BoxError> {
         Ok(())
     }

@@ -79,7 +79,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> WireStream for TokioWireStream<S>
 ///
 /// On Unix, when `S: AsRawFd`, prefer [`box_wire_stream_with_fd`] so platform
 /// cork hooks can run. This entry point does not require `AsRawFd` (tests /
-/// duplex mocks) and therefore cannot cork.
+/// duplex test peers) and therefore cannot cork.
 pub fn box_wire_stream<S>(stream: S) -> BoxedWireStream
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -117,11 +117,7 @@ impl AsyncRead for BoxedWireIo {
         match Pin::new(&mut *this.0).poll_read(cx, unfilled) {
             Poll::Ready(Ok(0)) => Poll::Ready(Ok(())),
             Poll::Ready(Ok(n)) => {
-                // SAFETY: `poll_read` wrote `n` bytes into `unfilled`.
-                unsafe {
-                    buf.assume_init(n);
-                }
-                buf.advance(n);
+                exyonq_linux_ffi::assume_init_advance(buf, n);
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
@@ -165,9 +161,8 @@ pub(crate) fn into_async_io(stream: BoxedWireStream) -> impl AsyncRead + AsyncWr
     BoxedWireIo(stream)
 }
 
-/// Peer TCP fd from a boxed wire stream (Unix), if captured at box time.
-#[cfg(unix)]
-#[allow(dead_code)] // seam for cork diagnostics / future fd-aware product path
+/// Peer TCP fd from a boxed wire stream (Linux), if captured at box time.
+#[cfg(target_os = "linux")]
 pub(crate) fn peer_tcp_fd_of(stream: &BoxedWireStream) -> Option<RawFd> {
     stream.peer_tcp_fd()
 }

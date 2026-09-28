@@ -15,16 +15,21 @@
  */
 //! KD3 reverse-proxy module — metadata, Hyper runtime, dispatch service.
 
+#![forbid(unsafe_code)]
+
 pub mod attach;
 pub mod cache_metrics;
 pub mod cache_serve;
 pub mod errors;
 pub mod forward;
 pub mod headers;
+pub mod health;
 pub mod hyper_client;
 pub mod hyper_forward;
 pub mod kernel_hooks;
 pub mod proxy_cache;
+pub mod raw_upstream;
+pub mod retry;
 pub mod runtime;
 pub mod selector;
 pub mod spike;
@@ -34,6 +39,7 @@ pub mod upstream_target;
 pub mod uri;
 pub mod websocket;
 pub mod wire_conn;
+pub mod wire_framing;
 pub mod wire_io;
 pub mod wire_stream;
 
@@ -52,9 +58,9 @@ pub use cache_serve::{serve_proxy_with_cache, PROXY_CACHE_NAMESPACE};
 pub use errors::ProxyConfigError;
 pub use forward::ForwardingHeaders;
 pub use headers::{
-    is_hop_by_hop_header, parse_response_content_length, request_headers_safe_for_proxy,
-    strip_hop_by_hop_headers, ContentLengthParse, REQUEST_UPSTREAM_STRIP_HEADERS,
-    RESPONSE_HOP_BY_HOP_HEADERS,
+    connection_nominated_header_names, is_hop_by_hop_header, parse_response_content_length,
+    request_headers_safe_for_proxy, strip_hop_by_hop_headers, ContentLengthParse,
+    FIXED_HOP_BY_HOP_HEADERS, REQUEST_UPSTREAM_STRIP_HEADERS, RESPONSE_HOP_BY_HOP_HEADERS,
 };
 pub use hyper_client::{
     build_incoming_client, get_empty_body_client, hyper_client_config, set_hyper_client_config,
@@ -83,6 +89,9 @@ pub use upstream::{UpstreamDescriptor, BENCH_SMALL_UPSTREAM_BODY};
 pub use upstream_target::UpstreamTarget;
 pub use uri::{build_uri, preseed_path_uris, PRESEED_PROXY_PATHS};
 pub use websocket::{forward_websocket, is_websocket_upgrade};
+pub use wire_conn::try_shutdown_health;
+#[cfg(target_os = "linux")]
+pub use wire_conn::with_proxy_peer_fd;
 pub use wire_stream::box_wire_stream;
 #[cfg(unix)]
 pub use wire_stream::box_wire_stream_with_fd;

@@ -41,10 +41,8 @@ impl CoreCachePurgePort {
             .iter()
             .position(|&id| id == site_id)
     }
-}
 
-impl CachePurgePort for CoreCachePurgePort {
-    fn purge(&self, op: CachePurgeOp) -> CachePurgeOutcome {
+    fn purge_committed(&self, op: CachePurgeOp) -> CachePurgeOutcome {
         note_fpc_purge_request();
         let started = Instant::now();
         let state = reload::read_state(&self.shared);
@@ -173,6 +171,12 @@ impl CachePurgePort for CoreCachePurgePort {
                 });
                 let stats = cache.invalidate_key(&key);
                 let us = started.elapsed().as_micros() as u64;
+                // Cap057 LA-CAP057-003: purge.url must not report operator success when
+                // zero live entries were removed (wrong scheme/host/key → no-op).
+                if stats.purged_entries == 0 {
+                    note_fpc_purge_rejected("not_found");
+                    return CachePurgeOutcome::fail("purge.url", site_id, generation, "not_found");
+                }
                 note_fpc_purge_success(stats.purged_entries, stats.purged_bytes, us);
                 CachePurgeOutcome::success(
                     "purge.url",
@@ -183,6 +187,26 @@ impl CachePurgePort for CoreCachePurgePort {
                 )
             }
         }
+    }
+}
+
+impl CachePurgePort for CoreCachePurgePort {
+    fn purge(&self, op: CachePurgeOp) -> CachePurgeOutcome {
+        let outcome = self.purge_committed(op);
+        // Cap061: AUDIT_SUCCESS only after invalidate_* returned (committed deletion stats).
+        let detail = format!(
+            "site_id={} purged_entries={} err={}",
+            outcome.site_id,
+            outcome.purged_entries,
+            outcome.error.unwrap_or("")
+        );
+        crate::observability::emit_audit(crate::observability::AuditEvent {
+            action: outcome.operation,
+            result: if outcome.ok { "success" } else { "failure" },
+            detail: Some(&detail),
+            request_id: None,
+        });
+        outcome
     }
 }
 

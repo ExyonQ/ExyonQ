@@ -1,0 +1,13 @@
+[package]
+name = "exyonq-cfd-gen"
+description = "Competitive Frontier dataplane generation format (Phase 1 foundations)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

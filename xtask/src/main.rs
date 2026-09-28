@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run fmt, clippy, and tests (CI smoke).
+    /// Run fmt, clippy, and tests (CI check).
     Ci,
     /// Security audit gates (deps, tests, release).
     Security {
@@ -94,7 +94,7 @@ enum BenchCommands {
         mode: String,
         #[arg(long, default_value_t = 60, help = "Tier % for fixed-rps (30, 60, 90)")]
         tier: u8,
-        #[arg(long, help = "Force perf from host (macOS smoke)")]
+        #[arg(long, help = "Force perf from host (macOS from-host)")]
         from_host: bool,
         #[arg(long, help = "Force perf via bench-runner on Docker network")]
         in_docker: bool,
@@ -125,7 +125,7 @@ enum BenchCommands {
         peak_source: Option<PathBuf>,
         #[arg(long, help = "Capture perf profiles on Linux after each point")]
         profile: bool,
-        #[arg(long, help = "Override measure window seconds (smoke)")]
+        #[arg(long, help = "Override measure window seconds (measure override)")]
         point_duration_sec: Option<u64>,
     },
     /// Functional F1-F8 only.

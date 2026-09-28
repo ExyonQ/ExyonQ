@@ -1,0 +1,8 @@
+[package]
+name = "exyonq-waf-api"
+description = "Public contracts for the ExyonQ native WAF (no HTTP stack / Pingora)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

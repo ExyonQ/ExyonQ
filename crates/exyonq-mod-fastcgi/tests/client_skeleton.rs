@@ -18,7 +18,7 @@ fn forward_request_is_not_implemented() {
     let frame = minimal_frame();
     assert_eq!(
         client.forward_request(&[&frame]),
-        Err(ClientError::NotImplemented)
+        Err(ClientError::InertUnavailable)
     );
 }
 
@@ -27,13 +27,13 @@ fn submit_frame_uses_inert_transport() {
     let client = PhpFpmClient::new("php");
     assert_eq!(
         client.submit_frame(&minimal_frame()),
-        Err(ClientError::Transport(TransportError::NotImplemented))
+        Err(ClientError::Transport(TransportError::InertUnavailable))
     );
 }
 
 #[test]
 fn client_skeleton_has_no_socket_fields() {
-    for path in ["src/client.rs", "src/transport.rs", "src/mock.rs"] {
+    for path in ["src/client.rs", "src/transport.rs", "src/scripted.rs"] {
         let content = std::fs::read_to_string(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path))
             .expect("read src");
         for forbidden in ["TcpStream", "UnixStream", "connect(", "tokio::net"] {

@@ -9,7 +9,7 @@
 #   EXYONQ_OSS_BOUNDARIES_STRICT=1 bash scripts/verify-oss-boundaries.sh
 #   bash scripts/verify-oss-boundaries.sh --selftest
 #
-# Strict-mode negative smoke test (--selftest):
+# Strict-mode negative selftest (--selftest):
 #   Builds a temp tree with `use exyonq_core::...` under modules/, runs this script
 #   with EXYONQ_OSS_BOUNDARIES_ROOT pointing at it and STRICT=1 (expect exit 1).
 #   Then runs STRICT=1 on the real repo (expect exit 0). Does not modify the repo.
@@ -121,7 +121,7 @@ scan_module_cargo_manifests() {
 }
 
 run_selftest() {
-  echo "verify-oss-boundaries: --selftest (strict negative smoke) ..."
+  echo "verify-oss-boundaries: --selftest (strict negative selftest) ..."
   local tmp strict_rc clean_strict_rc
   tmp="$(mktemp -d)"
   # shellcheck disable=SC2064

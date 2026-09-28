@@ -15,7 +15,8 @@
  */
 use clap::{Parser, Subcommand, ValueEnum};
 use exyonq_compat_nginx::{
-    redact_product_report, MigrateOptions, OutputFormat, ProductImportReport, ReportFormat,
+    redact_product_report, MigrateOptions, MigrateProfile, OutputFormat, ProductImportReport,
+    ReportFormat,
 };
 use exyonq_config_cli::{
     classify_reload_diff, emit_result, explain, format_config_status, format_exy,
@@ -212,16 +213,17 @@ enum ConfigCommand {
     MigrateNginx {
         #[arg(long)]
         input: PathBuf,
-        /// Write IR TOML to this path (requires `--write`; ignored under `--dry-run`).
+        /// Write IR TOML to this path (requires `--write`).
+        /// `--write` overrides the default dry-run preview and writes the file.
         #[arg(long)]
         output: Option<PathBuf>,
         /// Write product compatibility report to this path.
         #[arg(long)]
         report: Option<PathBuf>,
-        /// Preview only — never write `--output` (default true).
+        /// Preview only when `--write` is not set (default true).
         #[arg(long, default_value_t = true)]
         dry_run: bool,
-        /// Allow writing `--output` (implies not dry-run for the IR file).
+        /// Write `--output` IR (overrides default dry-run preview).
         #[arg(long)]
         write: bool,
         /// Import + AppConfig validate + RuntimePlan compile (discard; no listeners).
@@ -229,6 +231,10 @@ enum ConfigCommand {
         check: bool,
         #[arg(long)]
         strict: bool,
+        /// Import profile: `full` (default Tier1/2), fail-closed `static-mvp`,
+        /// `reverse-proxy-mvp`, or `fastcgi-php-mvp`.
+        #[arg(long, value_enum, default_value_t = CliMigrateProfile::Full)]
+        profile: CliMigrateProfile,
         /// Operator report format.
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
@@ -347,6 +353,33 @@ enum DiagFormat {
 enum CliOutputFormat {
     Toml,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+enum CliMigrateProfile {
+    /// Existing Tier1/2 importer (default).
+    #[default]
+    Full,
+    /// Fail-closed static hosting subset (`compat/nginx/NGINX_STATIC_IMPORT_MVP.md`).
+    #[value(name = "static-mvp")]
+    StaticMvp,
+    /// Fail-closed reverse-proxy subset (`compat/nginx/NGINX_REVERSE_PROXY_IMPORT_MVP.md`).
+    #[value(name = "reverse-proxy-mvp")]
+    ReverseProxyMvp,
+    /// Fail-closed FastCGI/PHP subset (`compat/nginx/NGINX_FASTCGI_PHP_IMPORT_MVP.md`).
+    #[value(name = "fastcgi-php-mvp")]
+    FastcgiPhpMvp,
+}
+
+impl From<CliMigrateProfile> for MigrateProfile {
+    fn from(value: CliMigrateProfile) -> Self {
+        match value {
+            CliMigrateProfile::Full => MigrateProfile::Full,
+            CliMigrateProfile::StaticMvp => MigrateProfile::StaticMvp,
+            CliMigrateProfile::ReverseProxyMvp => MigrateProfile::ReverseProxyMvp,
+            CliMigrateProfile::FastcgiPhpMvp => MigrateProfile::FastcgiPhpMvp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -489,6 +522,7 @@ fn run_config(command: ConfigCommand) -> ExitCode {
             write,
             check,
             strict,
+            profile,
             format,
             config_format,
         } => run_migrate_nginx(
@@ -500,6 +534,7 @@ fn run_config(command: ConfigCommand) -> ExitCode {
                 write,
                 check,
                 strict,
+                profile: profile.into(),
             },
             format,
             config_format,
@@ -530,7 +565,14 @@ fn run_config_reload(
         return emit_result(&reload_check(&path, map_fmt(format)));
     }
     if diff {
-        let (cur_fp, cur_gen) = match invoke_control(&control_socket(socket.clone()), "status\n") {
+        let sock = match control_socket(socket.clone()) {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("exyonqctl config reload: {err}");
+                return ExitCode::from(2);
+            }
+        };
+        let (cur_fp, cur_gen) = match invoke_control(&sock, "status\n") {
             Ok(r) => (Some(r.fingerprint), Some(r.generation)),
             Err(_) => (None, None),
         };
@@ -580,7 +622,16 @@ fn run_config_reload(
     if pre.exit != exyonq_config_cli::CliExit::Ok {
         return emit_result(&pre);
     }
-    match invoke_control(&control_socket(socket), "reload\n") {
+    match invoke_control(
+        &match control_socket(socket) {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("exyonqctl config reload: {err}");
+                return ExitCode::from(2);
+            }
+        },
+        "reload\n",
+    ) {
         Ok(response) => print_response(response, ControlOutFormat::Human),
         Err(err) => {
             eprintln!("exyonqctl config reload: {err}");
@@ -594,8 +645,25 @@ fn run_config_status(
     socket: Option<PathBuf>,
     source_config: Option<PathBuf>,
 ) -> ExitCode {
-    match invoke_control(&control_socket(socket), "status\n") {
+    let sock = match control_socket(socket) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("exyonqctl config status: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    match invoke_control(&sock, "status\n") {
         Ok(r) => {
+            if !r.ok {
+                eprintln!(
+                    "exyonqctl config status: control reported failure{}",
+                    r.error
+                        .as_ref()
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default()
+                );
+                return ExitCode::from(1);
+            }
             let src =
                 source_config.or_else(|| std::env::var("EXYONQ_CONFIG").ok().map(PathBuf::from));
             emit_result(&format_config_status(
@@ -615,12 +683,31 @@ fn run_config_status(
 }
 
 fn run_config_generation(format: DiagFormat, socket: Option<PathBuf>) -> ExitCode {
-    match invoke_control(&control_socket(socket), "status\n") {
-        Ok(r) => emit_result(&format_generation(
-            r.generation,
-            &r.fingerprint,
-            map_fmt(format),
-        )),
+    let sock = match control_socket(socket) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("exyonqctl config generation: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    match invoke_control(&sock, "status\n") {
+        Ok(r) => {
+            if !r.ok {
+                eprintln!(
+                    "exyonqctl config generation: control reported failure{}",
+                    r.error
+                        .as_ref()
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default()
+                );
+                return ExitCode::from(1);
+            }
+            emit_result(&format_generation(
+                r.generation,
+                &r.fingerprint,
+                map_fmt(format),
+            ))
+        }
         Err(err) => {
             eprintln!("exyonqctl config generation: {err}");
             ExitCode::from(1)
@@ -691,6 +778,7 @@ struct MigrateNginxMode {
     write: bool,
     check: bool,
     strict: bool,
+    profile: MigrateProfile,
 }
 
 fn run_migrate_nginx(
@@ -720,6 +808,7 @@ fn run_migrate_nginx(
             DiagFormat::Human => ReportFormat::Text,
             DiagFormat::Json => ReportFormat::Json,
         },
+        profile: mode.profile,
     };
 
     let source_bytes = match std::fs::read(&input) {
@@ -741,6 +830,36 @@ fn run_migrate_nginx(
         }
     };
 
+    // Fail-closed MVPs must not surface a usable IR body on reject.
+    if matches!(
+        mode.profile,
+        MigrateProfile::StaticMvp | MigrateProfile::ReverseProxyMvp | MigrateProfile::FastcgiPhpMvp
+    ) && migrate_out.exit_code_for_profile(mode.profile, mode.strict) != 0
+    {
+        let reason = match mode.profile {
+            MigrateProfile::StaticMvp => "REFUSED_STATIC_MVP",
+            MigrateProfile::ReverseProxyMvp => "REFUSED_REVERSE_PROXY_MVP",
+            MigrateProfile::FastcgiPhpMvp => "REFUSED_FASTCGI_PHP_MVP",
+            MigrateProfile::Full => "REFUSED",
+        };
+        let product = redact_product_report(ProductImportReport::from_migrate(
+            &input.display().to_string(),
+            &source_bytes,
+            "",
+            &migrate_out.report,
+            reason,
+        ));
+        emit_product_report(&product, format, report_path.as_deref());
+        let label = match mode.profile {
+            MigrateProfile::StaticMvp => "static-mvp",
+            MigrateProfile::ReverseProxyMvp => "reverse-proxy-mvp",
+            MigrateProfile::FastcgiPhpMvp => "fastcgi-php-mvp",
+            MigrateProfile::Full => "full",
+        };
+        eprintln!("TOTAL_COMPAT_PROMISE=FORBIDDEN profile={label} refused usable IR");
+        return ExitCode::from(1);
+    }
+
     // Prefer TOML IR for check / fingerprint even if JSON wrapper requested for display.
     let ir_toml = if matches!(config_format, CliOutputFormat::Toml) {
         migrate_out.config.clone()
@@ -748,7 +867,7 @@ fn run_migrate_nginx(
         // JSON wrapper embeds config_toml — re-migrate as TOML for validation path.
         let toml_opts = MigrateOptions {
             format: OutputFormat::Toml,
-            ..options
+            ..options.clone()
         };
         match exyonq_compat_nginx::migrate_file(&input, &toml_opts) {
             Ok(o) => {
@@ -809,10 +928,8 @@ fn run_migrate_nginx(
         &compile_result,
     ));
 
-    let will_write = mode.write && output.is_some() && !mode.dry_run;
-    if mode.write && mode.dry_run {
-        eprintln!("exyonqctl config migrate-nginx: --write ignored because --dry-run is set");
-    }
+    // `--write` implies not dry-run for the IR file (see flag help text).
+    let will_write = mode.write && output.is_some();
     if will_write {
         if let Some(path) = &output {
             if let Err(err) = std::fs::write(path, &ir_toml) {
@@ -837,7 +954,7 @@ fn run_migrate_nginx(
         product.taxonomy.rejected,
         product.taxonomy.invalid_source
     );
-    ExitCode::from(product.exit_code(mode.strict) as u8)
+    ExitCode::from(migrate_out.exit_code_for_profile(mode.profile, mode.strict) as u8)
 }
 
 fn emit_product_report(
@@ -1139,6 +1256,7 @@ fn run_purge(command: PurgeCommand, socket: Option<PathBuf>, token: Option<Strin
 
 fn invoke_purge(socket_path: &Path, command: &str) -> std::io::Result<PurgeResponse> {
     let mut stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+    apply_control_timeouts(&stream)?;
     stream.write_all(command.as_bytes())?;
     let mut line = String::new();
     std::io::BufReader::new(&mut stream).read_line(&mut line)?;
@@ -1150,25 +1268,70 @@ fn invoke_purge(socket_path: &Path, command: &str) -> std::io::Result<PurgeRespo
     })
 }
 
-fn control_socket(explicit: Option<PathBuf>) -> PathBuf {
-    explicit
-        .or_else(|| {
-            std::env::var("EXYONQ_CONTROL_SOCKET")
-                .ok()
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| PathBuf::from("/tmp/exyonq.sock"))
+/// Cap052 default control endpoint when neither `--socket` nor env is set.
+const DEFAULT_CONTROL_SOCKET: &str = "/tmp/exyonq.sock";
+
+/// Bound for connect/read/write on the operational control Unix socket.
+/// An accepting-but-silent peer must not hang the CLI forever.
+const CONTROL_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn control_socket(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+    match std::env::var_os("EXYONQ_CONTROL_SOCKET") {
+        Some(os) => {
+            if os.is_empty() {
+                return Err(
+                    "EXYONQ_CONTROL_SOCKET is set but empty; pass --socket or unset the env".into(),
+                );
+            }
+            Ok(PathBuf::from(os))
+        }
+        None => Ok(PathBuf::from(DEFAULT_CONTROL_SOCKET)),
+    }
 }
 
 fn run_reload(config: Option<PathBuf>, socket: Option<PathBuf>) -> ExitCode {
-    let config_path =
-        match config.or_else(|| std::env::var("EXYONQ_CONFIG").ok().map(PathBuf::from)) {
-            Some(path) => path,
-            None => {
-                eprintln!("exyonqctl reload: pass --config or set EXYONQ_CONFIG");
-                return ExitCode::from(2);
+    // Server reloads the daemon-bound EXYONQ_CONFIG path only. Operator --config
+    // (or EXYONQ_CONFIG in this process) must identify that same file — Cap048 honesty.
+    let env_cfg = std::env::var_os("EXYONQ_CONFIG").map(PathBuf::from);
+    let config_path = match (config, env_cfg.as_ref()) {
+        (Some(cli), Some(env_path)) => {
+            let cli_c = match std::fs::canonicalize(&cli) {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!("exyonqctl reload: canonicalize {}: {err}", cli.display());
+                    return ExitCode::from(2);
+                }
+            };
+            let env_c = match std::fs::canonicalize(env_path) {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!(
+                        "exyonqctl reload: canonicalize EXYONQ_CONFIG {}: {err}",
+                        env_path.display()
+                    );
+                    return ExitCode::from(2);
+                }
+            };
+            if cli_c != env_c {
+                eprintln!(
+                    "EXY-RELOAD-0009: --config ({}) does not match EXYONQ_CONFIG ({})",
+                    cli.display(),
+                    env_path.display()
+                );
+                return ExitCode::from(1);
             }
-        };
+            cli
+        }
+        (Some(cli), None) => cli,
+        (None, Some(env_path)) => env_path.clone(),
+        (None, None) => {
+            eprintln!("exyonqctl reload: pass --config or set EXYONQ_CONFIG");
+            return ExitCode::from(2);
+        }
+    };
 
     if !config_path.is_file() {
         eprintln!(
@@ -1178,8 +1341,14 @@ fn run_reload(config: Option<PathBuf>, socket: Option<PathBuf>) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let _ = config_path;
-    match invoke_control(&control_socket(socket), "reload\n") {
+    let socket_path = match control_socket(socket) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("exyonqctl reload: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    match invoke_control(&socket_path, "reload\n") {
         Ok(response) => print_response(response, ControlOutFormat::Human),
         Err(err) => {
             eprintln!("exyonqctl reload: {err}");
@@ -1189,7 +1358,14 @@ fn run_reload(config: Option<PathBuf>, socket: Option<PathBuf>) -> ExitCode {
 }
 
 fn run_control(command: &str, socket: Option<PathBuf>, format: ControlOutFormat) -> ExitCode {
-    match invoke_control(&control_socket(socket), &format!("{command}\n")) {
+    let socket_path = match control_socket(socket) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("exyonqctl {command}: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    match invoke_control(&socket_path, &format!("{command}\n")) {
         Ok(response) => print_response(response, format),
         Err(err) => {
             eprintln!("exyonqctl {command}: {err}");
@@ -1198,8 +1374,18 @@ fn run_control(command: &str, socket: Option<PathBuf>, format: ControlOutFormat)
     }
 }
 
+fn apply_control_timeouts(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(CONTROL_IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(CONTROL_IO_TIMEOUT))?;
+    Ok(())
+}
+
 fn invoke_control(socket_path: &Path, command: &str) -> std::io::Result<ControlResponse> {
+    // Cap052: bound post-connect I/O. Unix domain connect fails immediately when the
+    // path is absent/non-socket; hang risk is an accepting peer that never replies —
+    // covered by CONTROL_IO_TIMEOUT on read/write.
     let mut stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+    apply_control_timeouts(&stream)?;
     stream.write_all(command.as_bytes())?;
     let mut line = String::new();
     std::io::BufReader::new(&mut stream).read_line(&mut line)?;

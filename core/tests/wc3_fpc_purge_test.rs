@@ -53,7 +53,7 @@ max_ttl_seconds = 300
     );
     let config: AppConfig = raw.parse().expect("config");
     let proxy = exyonq_mod_proxy::build_incoming_client();
-    let state = ServerState::new_with_generation(gen, config, proxy)
+    let state = ServerState::new_with_generation(gen, config, proxy.clone())
         .await
         .expect("state");
     let site_a = stable_fpc_site_id(route_a);
@@ -231,4 +231,35 @@ async fn purge_idempotent_and_invalid_path() {
     });
     assert!(!bad.ok);
     assert_eq!(bad.error, Some("invalid_key"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn purge_url_zero_entries_is_not_found() {
+    let _gate = WC3_PURGE_SUITE_GATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    reset_metrics_for_tests();
+    let (shared, site_a, _) = fpc_state(3, "nf-a", "nf-b").await;
+    let state = reload::read_state(&shared);
+    let cache = state.fpc_cache.as_ref().unwrap();
+    let be = state.snapshot.route_backend_id(0).unwrap().index();
+    insert(cache, site_a, 0, be, 3, "example.test", "/a/x", b"ax");
+
+    let port = CoreCachePurgePort {
+        shared: SharedServerState::clone(&shared),
+    };
+    // Wrong host → key miss → must fail closed (LA-CAP057-003), not ok+0.
+    let miss = port.purge(CachePurgeOp::Url {
+        site_id: site_a,
+        scheme: "http".into(),
+        host: "other.test".into(),
+        path: "/a/x".into(),
+        query: String::new(),
+    });
+    assert!(!miss.ok);
+    assert_eq!(miss.error, Some("not_found"));
+    assert_eq!(miss.purged_entries, 0);
+    assert_eq!(cache.snapshot().entries, 1);
+    assert!(fpc_purge_rejected_total("not_found") >= 1);
 }

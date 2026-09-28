@@ -15,6 +15,8 @@
  */
 //! KD4.9 — control plane and operations runtime.
 
+#![forbid(unsafe_code)]
+
 mod control_socket;
 mod purge_socket;
 mod service;

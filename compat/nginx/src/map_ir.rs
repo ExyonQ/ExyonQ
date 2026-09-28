@@ -21,7 +21,56 @@ pub struct MappedConfig {
     pub toml: String,
 }
 
-pub fn map_to_ir(analyzed: &AnalyzedConfig, report: &mut CompatibilityReport) -> MappedConfig {
+/// Inject static-mvp IR defaults (index.html) without changing Full-profile mapping.
+pub(crate) fn apply_static_mvp_defaults(mapped: &mut MappedConfig) {
+    let mut changed = false;
+    for route in &mut mapped.app.routes {
+        if route.root.is_some() && route.index.is_none() {
+            route.index = Some("index.html".into());
+            changed = true;
+        }
+    }
+    if changed {
+        mapped.toml = render_toml(&mapped.app, &mapped.app.pools_fcgi);
+    }
+}
+
+/// Normalize reverse-proxy-mvp upstream targets (strip authority trailing slash).
+pub(crate) fn normalize_proxy_mvp_upstreams(mapped: &mut MappedConfig) {
+    let mut changed = false;
+    for upstream in mapped.app.upstreams.values_mut() {
+        if upstream.target.starts_with("http://") && upstream.target.ends_with('/') {
+            let trimmed = upstream.target.trim_end_matches('/');
+            if trimmed.len() > "http://".len() {
+                upstream.target = trimmed.to_string();
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        mapped.toml = render_toml(&mapped.app, &mapped.app.pools_fcgi);
+    }
+}
+
+/// FastCGI/PHP MVP: never emit static `index` on FastCGI routes.
+pub(crate) fn apply_fastcgi_php_mvp_defaults(mapped: &mut MappedConfig) {
+    let mut changed = false;
+    for route in &mut mapped.app.routes {
+        if route.fastcgi.is_some() && route.index.is_some() {
+            route.index = None;
+            changed = true;
+        }
+    }
+    if changed {
+        mapped.toml = render_toml(&mapped.app, &mapped.app.pools_fcgi);
+    }
+}
+
+pub fn map_to_ir(
+    analyzed: &AnalyzedConfig,
+    report: &mut CompatibilityReport,
+    allow_tcp_fastcgi: bool,
+) -> MappedConfig {
     let mut servers = Vec::new();
     let mut routes = Vec::new();
 
@@ -53,6 +102,7 @@ pub fn map_to_ir(analyzed: &AnalyzedConfig, report: &mut CompatibilityReport) ->
                     &mut upstreams,
                     &mut pools_fcgi,
                     report,
+                    allow_tcp_fastcgi,
                 ) {
                     route_names.push(route.name.clone());
                     routes.push(route);
@@ -88,6 +138,8 @@ pub fn map_to_ir(analyzed: &AnalyzedConfig, report: &mut CompatibilityReport) ->
         static_section: Default::default(),
         full_page_cache: Default::default(),
         http3: Default::default(),
+        waf: Default::default(),
+        logging: Default::default(),
     };
 
     report.summary.servers_parsed = analyzed.servers.len();
@@ -275,6 +327,7 @@ fn d_extra_index_warnings(location: &ParsedLocation, report: &mut CompatibilityR
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_location(
     route_name: &str,
     location: &ParsedLocation,
@@ -283,6 +336,7 @@ fn map_location(
     upstreams: &mut HashMap<String, UpstreamConfig>,
     pools_fcgi: &mut HashMap<String, FcgiPoolConfig>,
     report: &mut CompatibilityReport,
+    allow_tcp_fastcgi: bool,
 ) -> Option<RouteConfig> {
     if !is_runtime_mappable(location.kind) {
         return None;
@@ -356,6 +410,7 @@ fn map_location(
                 upstream_index,
                 pools_fcgi,
                 report,
+                allow_tcp_fastcgi,
             );
         }
     }
@@ -520,6 +575,7 @@ fn map_fastcgi(
     upstream_index: &NginxUpstreamIndex,
     pools_fcgi: &mut HashMap<String, FcgiPoolConfig>,
     report: &mut CompatibilityReport,
+    allow_tcp_fastcgi: bool,
 ) -> Option<RouteConfig> {
     let target = d.args.first()?;
     let root = location_root(location, server, report);
@@ -590,6 +646,68 @@ fn map_fastcgi(
     }
 
     if target.contains(':') && !target.starts_with("http") {
+        if allow_tcp_fastcgi && target.parse::<std::net::SocketAddr>().is_ok() {
+            let pool_name = format!("{route_name}_fcgi");
+            pools_fcgi.insert(
+                pool_name.clone(),
+                FcgiPoolConfig {
+                    name: pool_name.clone(),
+                    address: target.clone(),
+                    document_root: root_path.clone(),
+                    max_concurrency: exyonq_config_ir::DEFAULT_FCGI_MAX_CONCURRENCY,
+                    max_connections: None,
+                    transport: "tcp".to_string(),
+                    idle_timeout_ms: 30_000,
+                    total_timeout_ms: 30_000,
+                    checkout_timeout_ms: 5_000,
+                },
+            );
+            report.push(
+                &d.loc,
+                "fastcgi_pass",
+                CompatStatus::Supported,
+                format!("tcp fastcgi_pass `{target}` → fcgi_pool `{pool_name}`"),
+                Some(format!("fcgi_pool.{pool_name}")),
+            );
+            if let Some(ref r) = root_path {
+                report.push(
+                    &location.loc,
+                    "root",
+                    CompatStatus::Supported,
+                    format!(
+                        "document_root `{}` bound to fcgi_pool `{pool_name}`",
+                        r.display()
+                    ),
+                    Some(format!(
+                        "fcgi_pool.{pool_name}.document_root={}",
+                        r.display()
+                    )),
+                );
+            } else {
+                report.push(
+                    &d.loc,
+                    "fastcgi_pass",
+                    CompatStatus::Partial,
+                    "no document root for FastCGI route; set fcgi_pool.document_root in generated config",
+                    None,
+                );
+            }
+            return Some(RouteConfig {
+                name: route_name.to_string(),
+                r#match: RouteMatch {
+                    path: path.to_string(),
+                    host: None,
+                },
+                upstream: None,
+                root: None,
+                index: None,
+                redirect: None,
+                rewrite: None,
+                fastcgi: Some(pool_name),
+                htaccess: Default::default(),
+                cache: None,
+            });
+        }
         report.push(
             &d.loc,
             "fastcgi_pass",
@@ -929,6 +1047,9 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         out.push_str(&format!("address = {:?}\n", pool.address));
         if let Some(root) = &pool.document_root {
             out.push_str(&format!("document_root = {:?}\n", root.display()));
+        }
+        if pool.transport != "unix" {
+            out.push_str(&format!("transport = {:?}\n", pool.transport));
         }
         out.push_str(&format!("max_concurrency = {}\n\n", pool.max_concurrency));
     }

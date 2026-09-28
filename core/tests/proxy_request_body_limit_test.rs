@@ -46,7 +46,9 @@ impl ProxyDispatchService for CountingProxy {
 
 async fn proxy_ctx(counting: Arc<CountingProxy>) -> (ConnectionContext, ProxyDispatchTestGuard) {
     let raw = include_str!("../../tests/fixtures/minimal.toml");
-    let config: AppConfig = raw.parse().expect("minimal.toml");
+    let mut config: AppConfig = raw.parse().expect("minimal.toml");
+    // Isolate SEC-PROXY-001 from Cap015 default-on WAF (headers/body gates).
+    config.waf.enabled = false;
     let proxy_runtime = Arc::new(ProxyRuntime::new());
     install_kernel_hooks(Arc::clone(&proxy_runtime));
     clear_global_proxy_dispatch_for_register_once_test();
@@ -60,7 +62,7 @@ async fn proxy_ctx(counting: Arc<CountingProxy>) -> (ConnectionContext, ProxyDis
     (
         ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -128,12 +130,18 @@ async fn live_post(
         client_io.write_all(body).await.expect("write body");
     }
 
-    let mut response = Vec::new();
-    client_io
-        .read_to_end(&mut response)
-        .await
-        .expect("read response");
-    let _ = server.await;
+    // Do not read_to_end: after early CL reject Hyper may wait to drain the
+    // remaining declared body while the client waits for EOF → deadlock.
+    // Read one framed HTTP/1 response, then drop the duplex to unblock drain.
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        read_http11_response(&mut client_io),
+    )
+    .await
+    .expect("response within timeout")
+    .expect("read response");
+    drop(client_io);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
 
     String::from_utf8_lossy(&response)
         .lines()
@@ -141,6 +149,37 @@ async fn live_post(
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|code| code.parse().ok())
         .expect("HTTP status line")
+}
+
+async fn read_http11_response(io: &mut (impl AsyncReadExt + Unpin)) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    loop {
+        let n = io.read(&mut tmp).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers_end = header_end + 4;
+        let headers = std::str::from_utf8(&buf[..headers_end]).unwrap_or("");
+        let mut content_length = None;
+        for line in headers.lines().skip(1) {
+            let lower = line.to_ascii_lowercase();
+            if let Some(v) = lower.strip_prefix("content-length:") {
+                content_length = v.trim().parse::<usize>().ok();
+                break;
+            }
+        }
+        let need = headers_end + content_length.unwrap_or(0);
+        if buf.len() >= need {
+            buf.truncate(need);
+            return Ok(buf);
+        }
+    }
+    Ok(buf)
 }
 
 #[tokio::test]
@@ -216,6 +255,23 @@ fn handler_uses_bounded_collector_not_unbounded_collect() {
     assert!(
         section.contains("BadGateway"),
         "must preserve 502 rejection semantics"
+    );
+
+    let with_body = handler
+        .split("async fn handle_core_request_with_body")
+        .nth(1)
+        .and_then(|rest| rest.split("\nasync fn ").next())
+        .expect("handle_core_request_with_body");
+    assert!(
+        with_body.contains("collect_proxy_request_body_bounded"),
+        "POST with_body path must use bounded collector (Cap035 + SEC-PROXY-001)"
+    );
+    assert!(
+        !with_body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .any(|l| l.contains("body.collect(") || l.contains("BodyExt::collect")),
+        "POST with_body must not unbounded-collect before limit check"
     );
 }
 

@@ -6,10 +6,37 @@ Tier 1 release artifacts and Docker images for ExyonQ.
 
 | OS | Arch | Artifact |
 |----|------|----------|
-| Linux | x86_64 | `exyonq-linux-amd64.tar.gz` |
-| Linux | arm64 | `exyonq-linux-arm64.tar.gz` |
+| Linux | x86_64 | `exyonq-linux-amd64.tar.gz` (flat: binaries + legal + SBOM) |
+| Linux | arm64 | `exyonq-linux-arm64.tar.gz` (flat: binaries + legal + SBOM) |
+| Linux | x86_64 | `exyonq-${VERSION}-linux-amd64.tar.gz` (versioned FHS layout) |
+| Linux | arm64 | `exyonq-${VERSION}-linux-arm64.tar.gz` (versioned FHS layout) |
+| Linux | x86_64 | `exyonq_*_amd64.deb` / `exyonq-*.x86_64.rpm` |
+| Linux | arm64 | `exyonq_*_arm64.deb` / `exyonq-*.aarch64.rpm` |
 | macOS | arm64 | `exyonq-macos-arm64.tar.gz` |
 | Windows | x86_64 | `exyonq-windows-amd64.zip` |
+
+### Linux packaging contract (Cap062)
+
+Required current product surfaces:
+
+1. Flat Linux tarball (amd64 + arm64) — binaries + LICENSE/NOTICE/THIRD_PARTY_NOTICES/sbom
+2. Versioned FHS Linux tarball (amd64 + arm64) — `/usr/bin`, `/etc/exyonq`, systemd unit, tmpfiles, logrotate, licenses, `build-manifest.json`
+3. DEB (amd64 + arm64) via nfpm from the matching flat tarball payload
+4. RPM (amd64 + arm64) via nfpm from the matching flat tarball payload
+
+OCI multiarch images are Cap010 — not Cap062.
+
+Architecture labels must agree across filename, package metadata, ELF payload, manifest, and SBOM binding.
+
+Local helper (packages prebuilt binaries; does not execute them):
+
+```bash
+bash scripts/release/nfpm-package-linux.sh \
+  --arch amd64|arm64 \
+  --version "$(grep -E '^version' Cargo.toml | head -1 | cut -d'"' -f2)" \
+  --bin-dir /path/to/binaries \
+  --out-dir dist/packages
+```
 
 ## Optional L2 Redis coordination (WC7D)
 
@@ -25,7 +52,7 @@ Examples (Redis not bundled; private network only):
 
 See `docs/operations/cache/DISTRIBUTED_INVALIDATION_REDIS_RUNBOOK.md`.
 
-## Local release smoke
+## Local release build check
 
 ```bash
 cargo build --release -p exyonq
@@ -73,7 +100,7 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.3 \
+  --build-arg EXYONQ_VERSION=0.4.4 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
@@ -81,14 +108,22 @@ docker buildx build -f packaging/docker/Dockerfile \
 # Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.3 \
+  --build-arg EXYONQ_VERSION=0.4.4 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t ghcr.io/exyonq/exyonq:0.4.3 .
+  -t ghcr.io/exyonq/exyonq:0.4.4 .
 ```
 
 ## CI
 
-GitHub Release workflow (`.github/workflows/release.yml`) builds Tier 1 matrix on tag `v*` and publishes SHA256 checksums.
+GitHub Release workflow (`.github/workflows/release.yml`) builds Tier 1 matrix on tag `v*` and publishes SHA256 checksums. Linux packages job builds **both** amd64 and arm64 `.deb`/`.rpm`.
+
+OCI publish (`docker` job) encodes the canonical contract explicitly:
+
+- platforms: `linux/amd64,linux/arm64` (multiarch index)
+- provenance: `mode=max`
+- SBOM attestation: enabled
+- tags: `ghcr.io/exyonq/exyonq:<version>` only (no `:latest`)
+- revision/version/source via build-args + OCI labels
 
 Signing (cosign/minisign) is optional follow-up when infra is ready.

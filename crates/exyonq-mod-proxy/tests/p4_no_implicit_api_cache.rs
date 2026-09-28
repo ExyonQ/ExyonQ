@@ -13,13 +13,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-struct MockState {
+struct UpstreamProbeState {
     hits: AtomicU64,
     body_mode: AtomicUsize, // 0=A, 1=B
     last_path: Mutex<String>,
 }
 
-async fn spawn_counting_upstream(state: Arc<MockState>) -> u16 {
+async fn spawn_counting_upstream(state: Arc<UpstreamProbeState>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -66,10 +66,11 @@ async fn spawn_counting_upstream(state: Arc<MockState>) -> u16 {
 fn target(port: u16) -> UpstreamTarget {
     let desc = UpstreamDescriptor {
         cluster_id: 0,
-        upstream_name: "mock".into(),
+        upstream_name: "peer".into(),
         target: format!("http://127.0.0.1:{port}"),
         timeout: Duration::from_secs(2),
         host: Some("127.0.0.1".into()),
+        max_connect_retries: 1,
     };
     UpstreamTarget::from_descriptor(&desc).unwrap()
 }
@@ -84,7 +85,7 @@ async fn get_body(upstream: &UpstreamTarget, path: &str) -> (u16, bytes::Bytes) 
 
 #[tokio::test]
 async fn api_path_five_gets_equal_five_upstream_hits() {
-    let state = Arc::new(MockState {
+    let state = Arc::new(UpstreamProbeState {
         hits: AtomicU64::new(0),
         body_mode: AtomicUsize::new(0),
         last_path: Mutex::new(String::new()),
@@ -101,7 +102,7 @@ async fn api_path_five_gets_equal_five_upstream_hits() {
 
 #[tokio::test]
 async fn api_health_five_gets_equal_five_upstream_hits() {
-    let state = Arc::new(MockState {
+    let state = Arc::new(UpstreamProbeState {
         hits: AtomicU64::new(0),
         body_mode: AtomicUsize::new(0),
         last_path: Mutex::new(String::new()),
@@ -117,7 +118,7 @@ async fn api_health_five_gets_equal_five_upstream_hits() {
 
 #[tokio::test]
 async fn unique_query_strings_each_hit_upstream() {
-    let state = Arc::new(MockState {
+    let state = Arc::new(UpstreamProbeState {
         hits: AtomicU64::new(0),
         body_mode: AtomicUsize::new(0),
         last_path: Mutex::new(String::new()),
@@ -133,7 +134,7 @@ async fn unique_query_strings_each_hit_upstream() {
 
 #[tokio::test]
 async fn upstream_body_change_propagates_without_policy() {
-    let state = Arc::new(MockState {
+    let state = Arc::new(UpstreamProbeState {
         hits: AtomicU64::new(0),
         body_mode: AtomicUsize::new(0),
         last_path: Mutex::new(String::new()),
@@ -151,8 +152,8 @@ async fn upstream_body_change_propagates_without_policy() {
 }
 
 #[tokio::test]
-async fn mock_down_does_not_return_stale_200() {
-    let state = Arc::new(MockState {
+async fn upstream_down_does_not_return_stale_200() {
+    let state = Arc::new(UpstreamProbeState {
         hits: AtomicU64::new(0),
         body_mode: AtomicUsize::new(0),
         last_path: Mutex::new(String::new()),
@@ -188,7 +189,7 @@ async fn mock_down_does_not_return_stale_200() {
 
 #[tokio::test]
 async fn diagnostic_route_pass_through() {
-    let state = Arc::new(MockState {
+    let state = Arc::new(UpstreamProbeState {
         hits: AtomicU64::new(0),
         body_mode: AtomicUsize::new(0),
         last_path: Mutex::new(String::new()),
@@ -204,7 +205,7 @@ async fn diagnostic_route_pass_through() {
 
 #[tokio::test]
 async fn concurrent_eight_requests_eight_upstream_hits() {
-    let state = Arc::new(MockState {
+    let state = Arc::new(UpstreamProbeState {
         hits: AtomicU64::new(0),
         body_mode: AtomicUsize::new(0),
         last_path: Mutex::new(String::new()),

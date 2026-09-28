@@ -9,12 +9,18 @@ license.workspace = true
 dashmap.workspace = true
 thiserror.workspace = true
 wasmtime.workspace = true
-wat = "1"
+# Pin to the wasm-tools line that shares wasmtime 49's wasm-encoder.
+wat = "=1.259.0"
+# crypto-common 0.1.7 is the same source as 0.1.6, plus `generic-array = "=0.14.7"`
+# so dependents never see the 0.14.8+ deprecation warning. 0.14.9 only adds that
+# warning. Holding 0.1.6 lets the digest 0.10 stack (cranelift → sha2 0.10) resolve
+# generic-array 0.14.9 instead of the exact 0.14.7 pin.
+crypto-common = "=0.1.6"
 
 [dev-dependencies]
-wat = "1"
+wat = "=1.259.0"
 tempfile = "3"
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "invoke_latency"

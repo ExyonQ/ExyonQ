@@ -87,33 +87,18 @@ fn materialize_sendfile(
     (status, headers, body)
 }
 
-/// Linux bench sendfile paths: return handle instead of inlining body (GET only).
+/// Cap061 LA-CAP061-008 removed filename-keyed Hyper sendfile divert.
+/// Cap067 restores zero-copy via the epoll FSM (not this Hyper materialize path).
+/// Hyper continues ordinary read I/O; epoll engagement is WAF → register_sendfile.
 #[cfg(target_os = "linux")]
 pub fn try_sendfile_outcome(
-    root: &StaticRoot,
-    method: StaticMethod,
-    request_path: &str,
-    generation: u64,
-    handles: &SendfileHandleRegistry,
+    _root: &StaticRoot,
+    _method: StaticMethod,
+    _request_path: &str,
+    _generation: u64,
+    _handles: &SendfileHandleRegistry,
 ) -> Option<StaticDispatchOutcome> {
-    if method != StaticMethod::Get {
-        return None;
-    }
-    let head = format!("GET {request_path} ");
-    let asset = root.match_bench_sendfile_head_arc(head.as_bytes())?;
-    let body_len = asset.body_len;
-    let handle = handles.issue(generation, asset);
-    Some(StaticDispatchOutcome {
-        status: 200,
-        headers: vec![
-            (
-                "content-type".to_string(),
-                "application/octet-stream".to_string(),
-            ),
-            ("content-length".to_string(), body_len.to_string()),
-        ],
-        body: StaticDispatchBody::SendfileHandle(handle),
-    })
+    None
 }
 
 #[cfg(not(target_os = "linux"))]

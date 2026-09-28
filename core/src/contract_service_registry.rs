@@ -16,7 +16,7 @@
 //! Single-slot registry for composition-root contract services (KD1.1 / KD2D).
 //!
 //! Production: register-once at process startup (CLI). Reads clone an [`Arc`] under a mutex.
-//! Tests: per-thread overrides via [`ContractServiceTestGuard`] — parallel-safe, restored on drop.
+//! Tests: per-thread overrides via `ContractServiceTestGuard` — parallel-safe, restored on drop.
 
 use exyonq_module_api::fcgi_dispatch::FcgiRegisterError;
 use exyonq_module_api::htaccess_runtime::HtaccessRegisterError;

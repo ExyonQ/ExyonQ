@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical ephemeral TLS material for tests / smoke / soak / bench.
+# Canonical ephemeral TLS material for tests / soak / bench / e2e.
 # RULE: no static private keys in the repository or build contexts.
 #
 # Usage:
@@ -49,7 +49,17 @@ if [[ -n "$CLEANUP_DIR" ]]; then
   esac
 fi
 
-command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl required" >&2; exit 1; }
+OPENSSL_BIN="${EXYONQ_OPENSSL_BIN:-}"
+if [[ -z "$OPENSSL_BIN" ]]; then
+  for cand in /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+    if [[ -x "$cand" ]]; then
+      OPENSSL_BIN="$cand"
+      break
+    fi
+  done
+fi
+OPENSSL_BIN="${OPENSSL_BIN:-openssl}"
+command -v "$OPENSSL_BIN" >/dev/null 2>&1 || { echo "ERROR: openssl required" >&2; exit 1; }
 
 DIR="$(mktemp -d "${OUT_PARENT%/}/exyonq-tls-ephemeral-XXXXXX")"
 chmod 700 "$DIR"
@@ -79,7 +89,7 @@ IP.2 = ::1
 EOF
 
 # Unique per process; safe under parallel tests.
-openssl req -x509 -newkey rsa:2048 -nodes \
+"$OPENSSL_BIN" req -x509 -newkey rsa:2048 -nodes \
   -keyout "$KEY" \
   -out "$CERT" \
   -days 1 \

@@ -33,6 +33,7 @@ fn multi_slot() -> ProxyCompiledSlot {
         upstream_name: "backend".into(),
         target: String::new(),
         timeout: Duration::from_millis(50),
+        max_connect_retries: 1,
         single_endpoint_executable: false,
         multi_endpoint_executable: true,
         endpoint_count: 2,
@@ -53,6 +54,7 @@ fn multi_slot() -> ProxyCompiledSlot {
                 admin_enabled: true,
             },
         ]),
+        health_check: Default::default(),
     }
 }
 
@@ -114,11 +116,13 @@ async fn empty_multi_binding_is_service_unavailable() {
             upstream_name: "backend".into(),
             target: String::new(),
             timeout: Duration::from_millis(50),
+            max_connect_retries: 1,
             single_endpoint_executable: false,
             multi_endpoint_executable: false,
             endpoint_count: 0,
             failover_priority_bands: true,
             endpoints: Box::new([]),
+            health_check: Default::default(),
         }],
     );
     let outcome = rt.dispatch(get_req(0)).await;
@@ -215,6 +219,7 @@ async fn open002_configured_multi_one_eligible_binds_single_path() {
         upstream_name: "backend".into(),
         target: "http://10.0.0.1:8080".into(),
         timeout: Duration::from_millis(50),
+        max_connect_retries: 1,
         single_endpoint_executable: true,
         multi_endpoint_executable: false,
         endpoint_count: 2,
@@ -235,6 +240,7 @@ async fn open002_configured_multi_one_eligible_binds_single_path() {
                 admin_enabled: true,
             },
         ]),
+        health_check: Default::default(),
     };
     let rt = Arc::new(ProxyRuntime::new());
     rt.bind_compiled_slots(1, &[slot]);
@@ -259,6 +265,7 @@ async fn open002_multi_flag_with_one_eligible_collapses_defense_in_depth() {
         upstream_name: "backend".into(),
         target: String::new(),
         timeout: Duration::from_millis(50),
+        max_connect_retries: 1,
         single_endpoint_executable: false,
         multi_endpoint_executable: true,
         endpoint_count: 2,
@@ -279,6 +286,7 @@ async fn open002_multi_flag_with_one_eligible_collapses_defense_in_depth() {
                 admin_enabled: false,
             },
         ]),
+        health_check: Default::default(),
     };
     let rt = Arc::new(ProxyRuntime::new());
     rt.bind_compiled_slots(1, &[slot]);
@@ -349,11 +357,13 @@ fn websocket_and_helper_no_eligible_is_503() {
             upstream_name: "backend".into(),
             target: String::new(),
             timeout: Duration::from_millis(50),
+            max_connect_retries: 1,
             single_endpoint_executable: false,
             multi_endpoint_executable: false,
             endpoint_count: 0,
             failover_priority_bands: true,
             endpoints: Box::new([]),
+            health_check: Default::default(),
         }],
     );
     assert!(rt.upstream_for_cluster(0).is_none());
@@ -370,11 +380,13 @@ async fn cache_load_no_eligible_passthrough_is_503() {
             upstream_name: "backend".into(),
             target: String::new(),
             timeout: Duration::from_millis(50),
+            max_connect_retries: 1,
             single_endpoint_executable: false,
             multi_endpoint_executable: false,
             endpoint_count: 0,
             failover_priority_bands: true,
             endpoints: Box::new([]),
+            health_check: Default::default(),
         }],
     );
     wire_conn::pin_runtime(Arc::clone(&rt));

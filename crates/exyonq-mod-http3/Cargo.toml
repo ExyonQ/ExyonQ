@@ -8,7 +8,7 @@ license.workspace = true
 [features]
 # P13D Phase 6R: default s2n. Quinn exclusive with modern providers (compile_error).
 default = ["http3-provider-s2n"]
-http3-provider-quinn-legacy = ["dep:h3", "dep:h3-quinn", "dep:quinn", "dep:quinn-proto"]
+http3-provider-quinn-legacy = ["dep:h3", "dep:h3-quinn", "dep:quinn"]
 http3-provider-s2n = ["dep:exyonq-http3-provider-s2n", "dep:exyonq-http3-provider-api"]
 http3-provider-quiche = ["dep:exyonq-http3-provider-quiche", "dep:exyonq-http3-provider-api"]
 # Aliases kept during P13P→P13D transition
@@ -17,7 +17,6 @@ provider-quiche = ["http3-provider-quiche"]
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 bytes.workspace = true
 exyonq-module-api = { path = "../../module-api" }
 exyonq-mod-tls = { path = "../exyonq-mod-tls" }
@@ -28,7 +27,6 @@ http.workspace = true
 h3 = { version = "0.0.8", optional = true }
 h3-quinn = { version = "0.0.10", optional = true }
 quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls", "ring"], optional = true }
-quinn-proto = { version = "0.11.15", optional = true }
 tokio.workspace = true
 tracing.workspace = true
 
