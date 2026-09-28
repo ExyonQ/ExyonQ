@@ -13,19 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Precomputes P1 bench wire (header + 1024-byte body) for `.rodata` embed.
+//! Cap061 P3-01: no build-time benchmark wire blobs.
 
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-
-fn main() {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    let header = b"HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\n";
-    let body = vec![b'x'; 1024];
-    let mut wire = Vec::with_capacity(header.len() + body.len());
-    wire.extend_from_slice(header);
-    wire.extend_from_slice(&body);
-    fs::write(out_dir.join("p1_bench_wire.bin"), wire).expect("write p1_bench_wire.bin");
-    println!("cargo:rerun-if-changed=build.rs");
-}
+fn main() {}

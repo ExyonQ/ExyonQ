@@ -20,7 +20,8 @@ pub struct SourceLoc {
 }
 
 impl SourceLoc {
-    pub fn synthetic(file: &str) -> Self {
+    /// Fallback location when the lexer did not attach a precise span.
+    pub fn unlocated(file: &str) -> Self {
         Self {
             file: file.to_string(),
             line: 1,

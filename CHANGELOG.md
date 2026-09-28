@@ -25,18 +25,53 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- Follow-up after private **`0.4.3`** (this line). Publication/signing remain owner-gated.
+- Follow-up after privately published **`0.4.4`** (`v0.4.4`).
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
 
-## [0.4.3] — private release candidate (not published)
+## [0.4.4] — private release (published on exyonq-github)
 
 ```text
-PUBLICATION_STATUS = FORBIDDEN
+PUBLICATION_STATUS = PRIVATE_V044_RELEASE_COMPLETE
 PUBLIC_OPENING = NO
+PUBLIC_RELEASE = v0.4.4
 LATEST_CHANGED = NO
-PRODUCTION_SIGNING_EXECUTED = NO
+```
+
+### Changed
+
+- Workspace product version **0.4.3 → 0.4.4**.
+- Rust toolchain **1.98.1**.
+- Production Linux binaries are musl and statically linked (`scripts/release/build-production.sh`).
+- Dependency line moved to the current stables used by the product: Wasmtime 49.0.1, quiche 0.30.0, s2n-quic 1.89.0, tachyon-quic 0.3.0, rustls 0.23.45, hyper 1.11.1, OpenTelemetry 0.33.0, redis 1.7.1.
+- `instant-acme` stays on the published 0.8.5 API. `third_party/instant-acme` is that release with `base64` 0.23, because 0.9.0 is not on crates.io.
+- Dataplane fixes reproduced by independent Netcup oracles: static host routing, epoll inline access and request id, wire metrics, proxy upstream body completion, WAF challenge host, compression and rate-limit exemptions.
+
+### Not in this publication
+
+- Benchmark suites, development HTML, and local evidence packs stay out of this tree.
+- No claim that a public official benchmark or a `latest` tag was updated.
+
+---
+
+
+## [0.4.3] — private release (published on exyonq-github)
+
+```text
+RELEASE_AUTHORITY = exyonq-github (not this lab worktree)
+PUBLICATION_STATUS = PRIVATE_V043_RELEASE_COMPLETE
+PUBLIC_OPENING = NO
+PUBLIC_RELEASE = v0.4.3
+RELEASE_COMMIT = 3a8af75dd0939e5aae2f4d09b842573499e15a1c
+EXYONQ_GITHUB_POST_RELEASE_HEAD = 22b20dfcce6718a0cad64938436af87e27ff383e
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.3
+GHCR = ghcr.io/exyonq/exyonq:0.4.3 @ sha256:ab02b5ffc3d54407a56b6edbb318d80a077da0f431970984408d82415217f2e5
+LATEST_CHANGED = NO
+PRODUCTION_SIGNING_EXECUTED = YES
+SSH_TAG_SIGNATURE_STATUS = PASS
+COSIGN_BLOB_SIGNATURE_STATUS = PASS
+COSIGN_OCI_SIGNATURE_STATUS = PASS
 ```
 
 ### Changed
@@ -52,15 +87,15 @@ PRODUCTION_SIGNING_EXECUTED = NO
 
 ### Security
 
-- `docs/security/audit-v0.4.3.md` freeze-track audit executed (release evidence; does not authorize tag/sign/publish).
-- RUSTSEC-2026-0222 remains **unfixed** and **waived for v0.4.3 only** (Wasmtime 45.0.2).
+- `docs/security/audit-v0.4.3.md` freeze-track audit executed (release evidence).
+- RUSTSEC-2026-0222 remains **unfixed** (`VULNERABILITY_FIXED=NO`) and **waived for v0.4.3 only** (`WAIVED_FOR_V043=YES`; Wasmtime 45.0.2; expiry/review **v0.4.4**).
 
 ### Limitations (honest)
 
 - No Kubernetes controller, Helm, or CRD support claimed.
 - No full Apache htaccess compatibility claim.
 - No open-loop benchmark superiority claim.
-- Tag, GitHub Release, GHCR push, `latest`, and production signing remain owner-gated.
+- `ghcr.io/exyonq/exyonq:latest` was **not** mutated by this release.
 
 ---
 

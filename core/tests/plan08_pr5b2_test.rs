@@ -21,7 +21,7 @@ use exyonq_core::{
     FcgiDispatchTestGuard,
 };
 use exyonq_mod_fastcgi::{
-    fcgi_responses_503_total, fcgi_saturation_rejections_total, FcgiRuntime, MockFcgiExecutor,
+    fcgi_responses_503_total, fcgi_saturation_rejections_total, FcgiRuntime, ScriptedFcgiExecutor,
 };
 use exyonq_module_api::fcgi_dispatch::{
     FcgiBackendExecutor, FcgiDispatchOutcome, FcgiDispatchRequest, FcgiRuntimeRegistration,
@@ -205,9 +205,9 @@ async fn pr5_b2_dual_pool_saturation_is_isolated() {
 }
 
 #[tokio::test]
-async fn pr5_b2_mock_success_still_200_with_capacity() {
+async fn pr5_b2_scripted_success_still_200_with_capacity() {
     let _guard = install_runtime(FcgiRuntimeRegistration {
-        executor: Arc::new(MockFcgiExecutor::pr5b1_default()),
+        executor: Arc::new(ScriptedFcgiExecutor::pr5b1_default()),
         pool_capacities: vec![(0, 16)],
     });
     let outcome = execute_backend(

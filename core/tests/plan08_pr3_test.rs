@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Plan 08 PR5-B1 — integration smoke (no test-harness APIs in production path).
+//! Plan 08 PR5-B1 — integration check (no test-harness APIs in production path).
 
 use exyonq_core::{execute_backend, Backend};
 use exyonq_metrics::{fcgi_responses_501_total, KernelShellMetrics};

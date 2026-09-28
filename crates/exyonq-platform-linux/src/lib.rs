@@ -45,6 +45,8 @@ use exyonq_core::server::register_epoll_keepalive_enqueue;
 #[cfg(target_os = "linux")]
 use exyonq_core::server::register_epoll_keepalive_prepare;
 #[cfg(target_os = "linux")]
+use exyonq_core::server::register_epoll_keepalive_signal_stop;
+#[cfg(target_os = "linux")]
 use exyonq_core::server::register_epoll_keepalive_stop;
 #[cfg(target_os = "linux")]
 use exyonq_core::server::register_epoll_listen_start;
@@ -69,9 +71,9 @@ mod tcp_cork;
 /// Marker for composition-root linking (binary may call; no runtime side effects alone).
 pub const COMPOSITION_LINK: &str = "exyonq-platform-linux:ps3a-pm4-extraction-cleanup";
 
-/// Re-export cork install for explicit CLI wiring if needed.
+/// Re-export the Linux mechanism; the CLI composition root owns module-api wiring.
 #[cfg(target_os = "linux")]
-pub use tcp_cork::install_proxy_tcp_send_hooks;
+pub use tcp_cork::set_tcp_cork;
 
 /// Composition root: link crate + register Linux worker starters.
 #[inline(always)]
@@ -83,17 +85,11 @@ pub fn ensure_composition_link() {
         register_io_uring_start(io_uring_worker::start_io_uring_workers);
         register_epoll_listen_start(epoll_worker::start_epoll_listen_workers);
         register_epoll_keepalive_prepare(epoll_worker::prepare_keepalive_pool);
+        register_epoll_keepalive_signal_stop(epoll_worker::signal_keepalive_pool_stop);
         register_epoll_keepalive_stop(epoll_worker::stop_keepalive_pool);
         register_epoll_keepalive_enqueue(epoll_worker::enqueue_keepalive_transfer);
-        // P8TP: compose TCP_CORK hooks into module-api (no-op until peer fd captured).
-        tcp_cork::install_proxy_tcp_send_hooks();
         // Compile/shape proof: allowlisted mechanism symbols remain reachable.
         let _ = static_epoll::interest_reading;
-        let _ = static_wire::p1_bench_wire_rodata;
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = static_wire::p1_bench_wire_rodata;
     }
 }
 
@@ -115,11 +111,11 @@ pub fn consume_keepalive_transfer(
     entry.attach_epoll_keepalive_transfer(transfer)
 }
 
-/// Opaque failure for PS1C scaffold smoke (not a stable product error contract).
+/// Opaque failure for PS1C scaffold diagnostic (not a stable product error contract).
 #[derive(Debug)]
 pub struct ScaffoldAdmitError;
 
-/// PS1C scaffold smoke (admit/plan/handoff primitives). Not the productive move API.
+/// PS1C scaffold diagnostic (admit/plan/handoff primitives). Not the productive move API.
 pub fn admit_plan_and_bundle(
     ops: &Arc<LifecycleState>,
     head: &[u8],
@@ -171,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn ps3a_platform_linux_d1_contract_smoke() {
+    fn ps3a_platform_linux_d1_contract_diagnostic() {
         ensure_wire_hooks();
         ensure_composition_link();
         let ops = LifecycleState::new();
@@ -247,7 +243,6 @@ mod tests {
 
     #[test]
     fn pm3_f2_mechanism_module_api_allowlisted() {
-        let _ = static_wire::p1_bench_wire_rodata;
         #[cfg(target_os = "linux")]
         {
             let _ = static_epoll::interest_reading;

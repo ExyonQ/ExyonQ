@@ -138,12 +138,15 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_generation_clears_stale_handles() {
+    fn abort_before_take_must_release_to_avoid_leak() {
+        // Cap067 LA-CAP067-001: match/issue then abort without begin/take
+        // must release; otherwise active_count grows without bound.
         let reg = SendfileHandleRegistry::new();
-        let old = reg.issue(1, sample_asset());
-        let _new = reg.issue(2, sample_asset());
-        reg.invalidate_through_generation(2);
-        assert!(reg.take(old).is_none());
-        assert_eq!(reg.active_count(), 1);
+        let h1 = reg.issue(1, sample_asset());
+        let h2 = reg.issue(1, sample_asset());
+        assert_eq!(reg.active_count(), 2);
+        reg.release(h1);
+        reg.release(h2);
+        assert_eq!(reg.active_count(), 0);
     }
 }

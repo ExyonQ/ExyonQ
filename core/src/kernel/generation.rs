@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Pinned generation view — no full [`ServerState`] exposure.
+//! Pinned generation view — no full [`crate::server::state::ServerState`] exposure.
 
 /// Minimal pinned snapshot for wire planning and handoff (PS1C).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

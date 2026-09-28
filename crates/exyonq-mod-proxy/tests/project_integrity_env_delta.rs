@@ -2,6 +2,8 @@
 //! must not change proxy forward outcomes (status/body/upstream hits).
 //!
 //! PROJECT_SEMANTIC_ENVIRONMENT_DELTA = NONE (observational variance only).
+//! AUDITOR_NEGATIVE_FIXTURE: intentionally sets forbidden env names to prove
+//! the product path ignores them (not an operational DEMO shortcut).
 
 use exyonq_mod_proxy::hyper_forward::forward_get;
 use exyonq_mod_proxy::{ProxyHyperMetrics, UpstreamDescriptor, UpstreamTarget};
@@ -41,10 +43,11 @@ async fn spawn_counting_upstream(hits: Arc<AtomicU64>) -> u16 {
 fn target(port: u16) -> UpstreamTarget {
     let desc = UpstreamDescriptor {
         cluster_id: 0,
-        upstream_name: "mock".into(),
+        upstream_name: "peer".into(),
         target: format!("http://127.0.0.1:{port}"),
         timeout: Duration::from_secs(2),
         host: Some("127.0.0.1".into()),
+        max_connect_retries: 1,
     };
     UpstreamTarget::from_descriptor(&desc).unwrap()
 }

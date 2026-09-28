@@ -59,6 +59,9 @@ pub fn strip_route_prefix(route_prefix: &str, request_path: &str) -> Option<Stri
 }
 
 /// Map request URI to filesystem path under a compiled static root (sync probe only).
+///
+/// Symlink targets are resolved via canonicalize; results outside `filesystem_root`
+/// are rejected as path traversal.
 pub fn resolve_path_under_root(
     filesystem_root: &Path,
     route_prefix: &str,
@@ -78,8 +81,15 @@ pub fn resolve_path_under_root(
         let safe = relative_as_safe_path(&relative)?;
         path.push(safe);
     }
-    if path.starts_with(filesystem_root) {
-        Ok(path)
+    let root = filesystem_root
+        .canonicalize()
+        .map_err(|_| StaticPathError::NotFound)?;
+    let canonical = path.canonicalize().map_err(|_| StaticPathError::NotFound)?;
+    if canonical.starts_with(&root) && canonical.is_file() {
+        Ok(canonical)
+    } else if canonical.starts_with(&root) {
+        // Directory or non-file under root — callers expecting a file treat as missing.
+        Err(StaticPathError::NotFound)
     } else {
         Err(StaticPathError::PathTraversal)
     }
@@ -106,5 +116,21 @@ mod tests {
         let resolved =
             resolve_path_under_root(&root, "/site", "/site", Some("index.html")).expect("path");
         assert!(resolved.ends_with("index.html"));
+        assert!(resolved.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_escape_under_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("public");
+        let outside = dir.path().join("secret.txt");
+        std::fs::create_dir_all(root.join("safe")).expect("mkdir");
+        std::fs::write(&outside, b"SECRET").expect("outside");
+        std::os::unix::fs::symlink(&outside, root.join("safe/escape.link")).expect("symlink");
+        assert_eq!(
+            resolve_path_under_root(&root, "/assets", "/assets/safe/escape.link", None),
+            Err(StaticPathError::PathTraversal)
+        );
     }
 }

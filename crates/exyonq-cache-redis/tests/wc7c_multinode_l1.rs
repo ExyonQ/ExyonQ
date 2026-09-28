@@ -1,6 +1,6 @@
 //! WC7C — independent L1 stores + signed Redis coordination (lab topology).
 
-use exyonq_cache::direct_purge::DirectL1PurgePort;
+use exyonq_cache::direct_purge::{test_has, test_insert, DirectL1PurgePort};
 use exyonq_cache::ResponseCache;
 use exyonq_cache_redis::{
     EventSigningKeys, RedisCoordConfig, RedisCoordSecrets, RedisCoordinationProvider, ReplayPolicy,
@@ -71,8 +71,12 @@ fn wc7c_independent_l1_url_purge_and_stale_window() {
     let store_a = Arc::new(ResponseCache::new());
     let store_b = Arc::new(ResponseCache::new());
     assert!(!Arc::ptr_eq(&store_a, &store_b));
-    let port_a = DirectL1PurgePort::new(store_a, 1);
-    let port_b = DirectL1PurgePort::new(store_b, 1);
+    // Seed both L1s so URL purge hits (product contract: zero-entry URL purge → not_found).
+    // test_insert uses scheme "http" — purge op scheme must match.
+    test_insert(&store_a, 1, 0, 1, 1, ("ex.test", "/page"), b"seed-a");
+    test_insert(&store_b, 1, 0, 1, 1, ("ex.test", "/page"), b"seed-b");
+    let port_a = DirectL1PurgePort::new(store_a.clone(), 1);
+    let port_b = DirectL1PurgePort::new(store_b.clone(), 1);
 
     let a = open(&ns, "node-a");
     let b = open(&ns, "node-b");
@@ -80,12 +84,14 @@ fn wc7c_independent_l1_url_purge_and_stale_window() {
 
     let op = CachePurgeOp::Url {
         site_id: 1,
-        scheme: "https".into(),
+        scheme: "http".into(),
         host: "ex.test".into(),
         path: "/page".into(),
         query: String::new(),
     };
-    assert!(port_a.purge(op.clone()).ok);
+    assert!(port_a.purge(op.clone()).ok, "seeded URL must purge on A");
+    assert!(!test_has(&store_a, 1, 0, 1, 1, "ex.test", "/page"));
+    assert!(test_has(&store_b, 1, 0, 1, 1, "ex.test", "/page"));
     let t0 = Instant::now();
     let mut ev = event_from_purge_op(&op, a.next_event_id(), "node-a", 1).unwrap();
     ev.issued_at_unix_ms = now_ms();

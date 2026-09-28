@@ -1,6 +1,6 @@
 use exyonq_mod_fastcgi::{
     parse_record, FastcgiRecordTransport, InertTransport, ParseError, RecordHeader, TransportError,
-    ValidatingMockTransport, FCGI_VERSION_1, RECORD_HEADER_LEN,
+    ValidatingScriptedTransport, FCGI_VERSION_1, RECORD_HEADER_LEN,
 };
 
 fn minimal_frame() -> [u8; RECORD_HEADER_LEN] {
@@ -29,19 +29,19 @@ fn inert_transport_returns_not_implemented() {
     let transport = InertTransport;
     assert_eq!(
         transport.submit_frame(&minimal_frame()),
-        Err(TransportError::NotImplemented)
+        Err(TransportError::InertUnavailable)
     );
 }
 
 #[test]
-fn validating_mock_accepts_minimal_valid_frame() {
-    let transport = ValidatingMockTransport;
+fn validating_peer_accepts_minimal_valid_frame() {
+    let transport = ValidatingScriptedTransport;
     assert!(transport.submit_frame(&minimal_frame()).is_ok());
 }
 
 #[test]
-fn validating_mock_rejects_truncated_frame() {
-    let transport = ValidatingMockTransport;
+fn validating_peer_rejects_truncated_frame() {
+    let transport = ValidatingScriptedTransport;
     let err = transport
         .submit_frame(&[FCGI_VERSION_1, 1, 0, 1])
         .unwrap_err();
@@ -55,8 +55,8 @@ fn validating_mock_rejects_truncated_frame() {
 }
 
 #[test]
-fn validating_mock_does_not_forward_or_mutate_input() {
-    let transport = ValidatingMockTransport;
+fn validating_peer_does_not_forward_or_mutate_input() {
+    let transport = ValidatingScriptedTransport;
     let frame = minimal_frame();
     let before = frame;
     let _ = transport.submit_frame(&frame);

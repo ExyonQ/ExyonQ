@@ -1,0 +1,2 @@
+# AUDITOR must-fail: YAML selects a mock backend.
+backend: mock

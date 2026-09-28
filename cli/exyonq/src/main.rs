@@ -15,7 +15,9 @@
  */
 
 mod allocator;
+mod cfd_dataplane;
 mod l2_coord_lab;
+mod waf_install;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -32,7 +34,6 @@ use exyonq_platform_linux::ensure_composition_link;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 
 /// Honest product version metadata (P1.5-WS6). No builder paths or secrets.
 #[cfg(feature = "allocator-jemalloc")]
@@ -76,7 +77,7 @@ const CLI_VERSION: &str = concat!(
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -148,45 +149,64 @@ impl From<IrProfile> for Profile {
 }
 
 fn tokio_worker_threads() -> usize {
-    if let Ok(raw) = std::env::var("EXYONQ_WORKER_THREADS") {
-        if let Ok(n) = raw.parse::<usize>() {
-            return n.clamp(1, 64);
-        }
-    }
-    std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1)
-        .clamp(1, 16)
+    exyonq_core::server::resolve_tokio_worker_threads()
 }
 
-fn init_tracing() -> anyhow::Result<()> {
-    let filter = EnvFilter::from_default_env().add_directive("info".parse()?);
-    if std::env::var("EXYONQ_LOG_FORMAT")
-        .map(|v| v.eq_ignore_ascii_case("json"))
-        .unwrap_or(false)
-    {
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(filter)
-            .init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-    }
-    Ok(())
+#[cfg(target_os = "linux")]
+fn install_platform_tcp_send_hooks() {
+    let _ = exyonq_module_api::proxy_wire::install_proxy_tcp_send_hooks(
+        exyonq_module_api::proxy_wire::ProxyTcpSendHooks {
+            set_cork: exyonq_platform_linux::set_tcp_cork,
+        },
+    );
 }
 
 fn main() -> anyhow::Result<()> {
     // PS3A: composition root links `exyonq-platform-linux` → `exyonq-core` (D1).
     // Workers remain in core until authorized extraction follow-up.
     ensure_composition_link();
-    init_tracing()?;
+    #[cfg(target_os = "linux")]
+    install_platform_tcp_send_hooks();
+    // Cap061: bootstrap from env; serve path upgrades via IR `[logging]`.
+    let _o11y = exyonq_observability::bootstrap_from_env()?;
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(tokio_worker_threads())
         .max_blocking_threads(4)
         .enable_all()
         .build()?;
-    rt.block_on(async_main())
+    let result = rt.block_on(async_main());
+    _o11y.shutdown();
+    result
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod platform_composition_tests {
+    use super::install_platform_tcp_send_hooks;
+    use std::net::{TcpListener, TcpStream};
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn cli_installs_working_platform_tcp_cork_hook() {
+        install_platform_tcp_send_hooks();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let client = TcpStream::connect(listener.local_addr().expect("listener address"))
+            .expect("connect loopback");
+        let (server, _) = listener.accept().expect("accept loopback");
+
+        assert!(
+            exyonq_module_api::proxy_wire::try_set_tcp_cork(server.as_raw_fd(), true)
+                .expect("CLI must install TCP_CORK hook")
+                .is_ok()
+        );
+        assert!(
+            exyonq_module_api::proxy_wire::try_set_tcp_cork(server.as_raw_fd(), false)
+                .expect("CLI must install TCP_CORK hook")
+                .is_ok()
+        );
+        drop(client);
+    }
 }
 
 async fn async_main() -> anyhow::Result<()> {
@@ -198,10 +218,45 @@ async fn async_main() -> anyhow::Result<()> {
     );
 
     match cli.command {
-        Some(Commands::Serve { config }) => {
+        Commands::Serve { config } => {
             info!(allocator = allocator::ALLOCATOR_NAME, "allocator identity");
+            // Cap051: EXYONQ_CONFIG must preserve path identity for reload/control.
+            // Path::display().to_string() is lossy — reject non-UTF-8 explicitly.
+            let config_utf8 = config.to_str().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "config path is not valid UTF-8; ExyonQ requires UTF-8 config paths \
+                     so EXYONQ_CONFIG preserves the same path identity as --config"
+                )
+            })?;
             let app_config = load_for_serve(&config)?;
-            std::env::set_var("EXYONQ_CONFIG", config.display().to_string());
+            // Cap061: install IR logging (reloadable generation after bootstrap).
+            let _o11y_ir = exyonq_observability::install_from_config(&app_config.logging)?;
+            exyonq_core::observability::set_access_logging_enabled(
+                app_config.logging.access.enabled,
+            );
+            exyonq_core::observability::set_audit_logging_enabled(app_config.logging.audit.enabled);
+            exyonq_core::observability::set_otel_spans_enabled(app_config.logging.otel.enabled);
+            // notices synced inside set_access_logging_enabled
+            exyonq_core::observability::register_logging_reload_hook(|logging| {
+                exyonq_observability::reload_from_config(logging)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())?;
+                exyonq_core::observability::set_access_logging_enabled(logging.access.enabled);
+                exyonq_core::observability::set_audit_logging_enabled(logging.audit.enabled);
+                exyonq_core::observability::set_otel_spans_enabled(logging.otel.enabled);
+                Ok(())
+            });
+            exyonq_core::server::install_static_wire_access_bridge();
+            if std::env::var("EXYONQ_CAP061_REDACTION_PROBE")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                let sentinel = std::env::var("EXYONQ_CAP061_REDACTION_SENTINEL")
+                    .unwrap_or_else(|_| "CAP061_SENTINEL_SECRET_xyz".to_string());
+                exyonq_observability::emit_redaction_probe(&sentinel);
+            }
+            std::env::set_var("EXYONQ_CONFIG", config_utf8);
             if std::env::var("EXYONQ_CONTROL_SOCKET").is_err() {
                 std::env::set_var("EXYONQ_CONTROL_SOCKET", "/tmp/exyonq.sock");
             }
@@ -257,6 +312,23 @@ async fn async_main() -> anyhow::Result<()> {
                     }
                 },
             )?;
+            // ADR-046: Cap067 static encoding cache (default OFF; IR + env override).
+            {
+                let ec = &app_config.static_section.encoding_cache;
+                exyonq_mod_static::install_encoding_cache_config(
+                    exyonq_mod_static::EncodingCacheConfig {
+                        enabled: ec.enabled,
+                        cache_dir: ec.cache_dir.clone(),
+                        level: ec.level,
+                        min_bytes: ec.min_bytes,
+                        max_bytes: ec.max_bytes,
+                        max_entries: ec.max_entries,
+                        max_total_bytes: ec.max_total_bytes,
+                        gzip: ec.gzip,
+                        brotli: ec.brotli,
+                    },
+                );
+            }
             exyonq_mod_static::install_kernel_hooks(static_runtime);
             let proxy_reg = exyonq_mod_proxy::registration_with_default_runtime();
             exyonq_core::register_proxy_dispatch_service(proxy_reg.service).map_err(
@@ -281,10 +353,20 @@ async fn async_main() -> anyhow::Result<()> {
             exyonq_reload_runtime::register_reload_runtime()
                 .map_err(|_| anyhow::anyhow!("reload runtime already registered"))?;
             l2_coord_lab::maybe_install_l2_coord_lab(&app_config)?;
+            waf_install::install_native_waf_runtime(&app_config)?;
+            // Competitive Frontier H1 dataplane foundations (default OFF).
+            // Separate process; exclusive listen; no Hyper fallback; no product routing yet.
+            let cfd_child = cfd_dataplane::maybe_start_competitive_h1_dataplane(&app_config)?;
             info!(path = %config.display(), listen = %app_config.primary_listen_addr()?);
-            exyonq_core::server::run(app_config).await?;
+            let run_result = exyonq_core::server::run(app_config).await;
+            if let Some(child) = cfd_child {
+                child
+                    .shutdown()
+                    .context("competitive H1 dataplane shutdown")?;
+            }
+            run_result?;
         }
-        Some(Commands::Validate { config }) => {
+        Commands::Validate { config } => {
             eprintln!(
                 "warning: `exyonq validate` is transitional; prefer `exyonqctl config lint` \
                  (or `exyonqctl config test` for RuntimePlan compile)"
@@ -305,12 +387,12 @@ async fn async_main() -> anyhow::Result<()> {
                 std::process::exit(result.exit as u8 as i32);
             }
         }
-        Some(Commands::Compile {
+        Commands::Compile {
             input,
             output,
             check,
             profile,
-        }) => {
+        } => {
             eprintln!(
                 "warning: `exyonq compile` is transitional; product surface is \
                  `exyonqctl config lint|test` after authoring `.exy` (compile remains \
@@ -340,13 +422,13 @@ async fn async_main() -> anyhow::Result<()> {
                 print!("{toml}");
             }
         }
-        Some(Commands::MigrateConfig { config, output }) => {
+        Commands::MigrateConfig { config, output } => {
             let raw = std::fs::read_to_string(&config)?;
             let migrated = migrate_v1_to_v2_toml(&raw)?;
             std::fs::write(&output, migrated)?;
             println!("migrated {} -> {}", config.display(), output.display());
         }
-        Some(Commands::Fmt { input, write }) => {
+        Commands::Fmt { input, write } => {
             eprintln!("warning: `exyonq fmt` is transitional; prefer `exyonqctl config format`");
             let mode = if write {
                 FormatMode::Write
@@ -363,7 +445,7 @@ async fn async_main() -> anyhow::Result<()> {
                 std::process::exit(result.exit as u8 as i32);
             }
         }
-        Some(Commands::Explain { directive }) => {
+        Commands::Explain { directive } => {
             eprintln!(
                 "warning: `exyonq explain` is transitional; prefer `exyonqctl config explain`"
             );
@@ -378,16 +460,15 @@ async fn async_main() -> anyhow::Result<()> {
                 std::process::exit(result.exit as u8 as i32);
             }
         }
-        Some(Commands::ExportSchema { output }) => {
+        Commands::ExportSchema { output } => {
             write_ir_schema(&output)?;
             println!("wrote schema {}", output.display());
         }
-        Some(Commands::Spike { listen, upstream }) => {
+        Commands::Spike { listen, upstream } => {
             let upstream = upstream.parse().context("invalid upstream URI")?;
             info!("starting spike proxy");
             exyonq_mod_proxy::run_spike_proxy(listen, upstream).await?;
         }
-        None => {}
     }
 
     Ok(())
@@ -403,22 +484,13 @@ fn load_for_serve(path: &Path) -> anyhow::Result<AppConfig> {
 }
 
 fn load_ir(path: &Path) -> anyhow::Result<AppConfig> {
-    if looks_like_v2_include(path) {
-        load_with_includes(path).map_err(Into::into)
-    } else {
-        AppConfig::from_file(path).map_err(Into::into)
-    }
+    // Cap047 LA-CAP047-002: always use include-aware load (same as exyonqctl lint).
+    // Never gate merge on brittle substring heuristics (compact/tabbed TOML).
+    load_with_includes(path).map_err(Into::into)
 }
 
 fn is_serverfile(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "exy")
-}
-
-fn looks_like_v2_include(path: &Path) -> bool {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    raw.contains("include =") && raw.contains("config_version = 2")
 }
 
 fn resolve_fcgi_registration(app_config: &AppConfig) -> Option<FcgiRuntimeRegistration> {

@@ -20,8 +20,8 @@ use crate::contract_service_registry::{
 };
 use crate::Backend;
 use exyonq_module_api::fcgi_dispatch::{
-    FcgiDispatchRequest, FcgiDispatchService, MaterializedBackendOutcome,
-    FCGI_MAX_REQUEST_BODY_BYTES,
+    FcgiBindError, FcgiCompiledSlot, FcgiDispatchRequest, FcgiDispatchService,
+    MaterializedBackendOutcome, FCGI_MAX_REQUEST_BODY_BYTES,
 };
 use exyonq_module_api::fcgi_script_resolver::{
     fastcgi_script_resolver, FastcgiScriptResolutionOutcome, FastcgiScriptResolutionPurpose,
@@ -192,6 +192,45 @@ pub fn bind_proxy_compiled_slots(generation: u64, slots: &[ProxyCompiledSlot]) {
     if let Some(service) = registered_proxy_service() {
         service.bind_compiled_slots(generation, slots);
     }
+}
+
+/// Cap048: build `FcgiCompiledSlot` list from IR (sorted pool names → dense pool_id).
+pub fn fcgi_compiled_slots_from_config(config: &crate::config::AppConfig) -> Vec<FcgiCompiledSlot> {
+    let mut names: Vec<String> = config.pools_fcgi.keys().cloned().collect();
+    names.sort();
+    names
+        .into_iter()
+        .enumerate()
+        .map(|(idx, name)| {
+            let pool = config
+                .pools_fcgi
+                .get(&name)
+                .expect("pool name present in map");
+            FcgiCompiledSlot {
+                pool_id: idx as u32,
+                name,
+                address: pool.address.clone(),
+                transport: pool.transport.clone(),
+                document_root: pool.document_root.clone(),
+                max_concurrency: pool.max_concurrency,
+                max_connections: pool.max_connections.unwrap_or(pool.max_concurrency),
+                idle_timeout_ms: pool.idle_timeout_ms,
+                total_timeout_ms: pool.total_timeout_ms,
+                checkout_timeout_ms: pool.checkout_timeout_ms,
+            }
+        })
+        .collect()
+}
+
+/// Cap048: publish FastCGI pool generation via registered dispatch service.
+pub fn bind_fcgi_compiled_pools(
+    generation: u64,
+    slots: &[FcgiCompiledSlot],
+) -> Result<(), FcgiBindError> {
+    let Some(service) = registered_service() else {
+        return Ok(());
+    };
+    service.bind_compiled_pools(generation, slots)
 }
 
 /// Build a proxy dispatch request for the registered module runtime.

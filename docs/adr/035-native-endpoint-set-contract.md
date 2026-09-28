@@ -43,7 +43,7 @@ P2A_OPEN_001_STATUS = CLOSED
 P2A_OPEN_FINDING_BLOCKS_P2B_CLOSE = NO
 ```
 
-P2B note: productive smooth WRR + priority bands are **conditionally accepted** for a **local provisional commit** only (`OWNER_IMPLEMENTATION_ACCEPTANCE=CONDITIONAL_ACCEPT_PENDING_LINUX_PERFORMANCE_PROTECTORS`). K8S-P2B is **not closed**. Finding **P2B-OPEN-001** (Linux performance/contention protectors on Linux amd64 + Linux arm64) blocks P2B close, P2C admit, and release claims. `IMPLEMENTATION_AUTHORIZED=NO` retains the historical P1 documentary gate (controller still not authorized by ADR acceptance alone).
+P2B note: productive smooth WRR + priority bands are **conditionally accepted** for a **local provisional commit** only (`OWNER_IMPLEMENTATION_ACCEPTANCE=CONDITIONAL_ACCEPT_PENDING_LINUX_PERFORMANCE_PROTECTORS`). K8S-P2B is **not closed**. Finding **P2B-OPEN-001** (Linux performance/contention protectors on Netcup amd64 + Oracle arm64) blocks P2B close, P2C admit, and release claims. `IMPLEMENTATION_AUTHORIZED=NO` retains the historical P1 documentary gate (controller still not authorized by ADR acceptance alone).
 
 ## CONTEXT
 

@@ -14,14 +14,22 @@
  * limitations under the License.
  */
 //! Hop-by-hop filtering and request safety checks (policy only — no socket ownership).
+//!
+//! Fixed hop-by-hop semantics live in [`exyonq_module_api::hop_by_hop`]. This module
+//! re-exports them for proxy callers and adds request/content-length helpers.
 
-use http::header::{HeaderMap, HeaderName, CONTENT_LENGTH, TRANSFER_ENCODING};
+use http::header::{HeaderMap, CONTENT_LENGTH, TRANSFER_ENCODING};
+
+pub use exyonq_module_api::hop_by_hop::{
+    connection_nominated_header_names, is_fixed_hop_by_hop_header as is_hop_by_hop_header,
+    strip_hop_by_hop_headers, FIXED_HOP_BY_HOP_HEADERS,
+};
 
 /// Response header names stripped before forwarding to downstream clients.
-pub const RESPONSE_HOP_BY_HOP_HEADERS: &[&str] = &["connection", "transfer-encoding", "upgrade"];
+pub const RESPONSE_HOP_BY_HOP_HEADERS: &[&str] = FIXED_HOP_BY_HOP_HEADERS;
 
-/// Request header names stripped before forwarding to upstream (keep-alive warm path).
-pub const REQUEST_UPSTREAM_STRIP_HEADERS: &[&str] = &["connection", "upgrade", "proxy-connection"];
+/// Request header names stripped before forwarding to upstream.
+pub const REQUEST_UPSTREAM_STRIP_HEADERS: &[&str] = FIXED_HOP_BY_HOP_HEADERS;
 
 /// Reject ambiguous length/framing headers before forwarding to upstream.
 pub fn request_headers_safe_for_proxy(headers: &HeaderMap) -> bool {
@@ -32,30 +40,6 @@ pub fn request_headers_safe_for_proxy(headers: &HeaderMap) -> bool {
         return false;
     }
     true
-}
-
-/// True when a header must not be forwarded hop-by-hop to upstream or stored in cache.
-pub fn is_hop_by_hop_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailers"
-            | "transfer-encoding"
-            | "upgrade"
-            | "proxy-connection"
-    )
-}
-
-/// Remove hop-by-hop headers from a mutable header map (response or request).
-pub fn strip_hop_by_hop_headers(headers: &mut HeaderMap) {
-    headers.remove(HeaderName::from_static("connection"));
-    headers.remove(HeaderName::from_static("transfer-encoding"));
-    headers.remove(HeaderName::from_static("upgrade"));
-    headers.remove(HeaderName::from_static("proxy-connection"));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,27 +73,199 @@ pub fn parse_response_content_length(headers: &HeaderMap) -> ContentLengthParse 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::header::{HeaderValue, TRANSFER_ENCODING};
+    use http::header::{HeaderName, HeaderValue};
 
     #[test]
-    fn rejects_duplicate_content_length() {
+    fn detects_duplicate_content_length() {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_LENGTH, HeaderValue::from_static("1"));
+        headers.append(CONTENT_LENGTH, HeaderValue::from_static("1"));
         headers.append(CONTENT_LENGTH, HeaderValue::from_static("2"));
         assert!(!request_headers_safe_for_proxy(&headers));
     }
 
     #[test]
-    fn rejects_te_and_cl_together() {
+    fn detects_te_and_cl_together() {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_LENGTH, HeaderValue::from_static("10"));
+        headers.insert(CONTENT_LENGTH, HeaderValue::from_static("1"));
         headers.insert(TRANSFER_ENCODING, HeaderValue::from_static("chunked"));
         assert!(!request_headers_safe_for_proxy(&headers));
     }
 
     #[test]
-    fn hop_by_hop_detects_upgrade() {
+    fn hop_by_hop_detection() {
+        assert!(is_hop_by_hop_header("Connection"));
         assert!(is_hop_by_hop_header("Upgrade"));
         assert!(!is_hop_by_hop_header("content-type"));
+    }
+
+    #[test]
+    fn strip_removes_connection_nominated_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("X-Secret, keep-alive"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-secret"),
+            HeaderValue::from_static("leak"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-end-to-end"),
+            HeaderValue::from_static("ok"),
+        );
+        strip_hop_by_hop_headers(&mut headers);
+        assert!(!headers.contains_key("x-secret"));
+        assert!(!headers.contains_key("connection"));
+        assert!(headers.contains_key("x-end-to-end"));
+    }
+
+    #[test]
+    fn strip_handles_ows_and_multiple_connection_values() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("  X-A  "),
+        );
+        headers.append(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("X-B, close"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-a"),
+            HeaderValue::from_static("1"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-b"),
+            HeaderValue::from_static("2"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-keep"),
+            HeaderValue::from_static("3"),
+        );
+        strip_hop_by_hop_headers(&mut headers);
+        assert!(!headers.contains_key("x-a"));
+        assert!(!headers.contains_key("x-b"));
+        assert!(headers.contains_key("x-keep"));
+    }
+
+    #[test]
+    fn strip_parses_opaque_non_utf8_connection_without_panic() {
+        let mut headers = HeaderMap::new();
+        let mut raw = b"X-Opaque".to_vec();
+        raw.push(0xff);
+        headers.insert(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_bytes(&raw).expect("bytes"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-opaque"),
+            HeaderValue::from_static("nope"),
+        );
+        strip_hop_by_hop_headers(&mut headers);
+        // Token with 0xff is not a valid HeaderName → no nomination; Connection still stripped.
+        assert!(!headers.contains_key("connection"));
+        assert!(headers.contains_key("x-opaque"));
+    }
+
+    #[test]
+    fn strip_nominates_ascii_custom_from_connection() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("X-Opaque"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-opaque"),
+            HeaderValue::from_static("nope"),
+        );
+        strip_hop_by_hop_headers(&mut headers);
+        assert!(!headers.contains_key("x-opaque"));
+    }
+
+    #[test]
+    fn strip_case_insensitive_nominated_name() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("x-backend-private"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-backend-private"),
+            HeaderValue::from_static("secret"),
+        );
+        strip_hop_by_hop_headers(&mut headers);
+        assert!(!headers.contains_key("x-backend-private"));
+        assert!(!headers.contains_key("connection"));
+    }
+
+    #[test]
+    fn strip_removes_every_fixed_member_preserves_origin_auth() {
+        let mut headers = HeaderMap::new();
+        for &name in FIXED_HOP_BY_HOP_HEADERS {
+            headers.insert(
+                HeaderName::from_bytes(name.as_bytes()).expect("valid"),
+                HeaderValue::from_static("x"),
+            );
+        }
+        headers.insert(
+            HeaderName::from_static("www-authenticate"),
+            HeaderValue::from_static("Basic realm=\"o\""),
+        );
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("AuthScheme keep"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-end-to-end"),
+            HeaderValue::from_static("survive"),
+        );
+        strip_hop_by_hop_headers(&mut headers);
+        for &name in FIXED_HOP_BY_HOP_HEADERS {
+            assert!(
+                !headers.contains_key(name),
+                "missing strip for FIXED member {name}"
+            );
+            assert!(is_hop_by_hop_header(name));
+        }
+        assert!(headers.contains_key("www-authenticate"));
+        assert!(headers.contains_key("authorization"));
+        assert!(headers.contains_key("x-end-to-end"));
+        assert!(!is_hop_by_hop_header("Authorization"));
+        assert!(!is_hop_by_hop_header("WWW-Authenticate"));
+    }
+
+    #[test]
+    fn strip_does_not_prevent_post_strip_xff_reinject() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("x-forwarded-for"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("1.2.3.4"),
+        );
+        strip_hop_by_hop_headers(&mut headers);
+        assert!(!headers.contains_key("x-forwarded-for"));
+        headers.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("9.9.9.9"),
+        );
+        assert_eq!(
+            headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
+            Some("9.9.9.9")
+        );
+    }
+
+    #[test]
+    fn aliases_point_at_canonical_fixed_set() {
+        assert!(std::ptr::eq(
+            RESPONSE_HOP_BY_HOP_HEADERS.as_ptr(),
+            FIXED_HOP_BY_HOP_HEADERS.as_ptr()
+        ));
+        assert!(std::ptr::eq(
+            REQUEST_UPSTREAM_STRIP_HEADERS.as_ptr(),
+            FIXED_HOP_BY_HOP_HEADERS.as_ptr()
+        ));
     }
 }

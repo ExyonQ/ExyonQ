@@ -499,6 +499,8 @@ pub const ROOT_FIELD_CATALOG: &[&str] = &[
     "static",
     "full_page_cache",
     "http3",
+    "waf",
+    "logging",
 ];
 
 pub const SERVER_FIELD_CATALOG: &[&str] =

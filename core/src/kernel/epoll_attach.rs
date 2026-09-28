@@ -178,9 +178,8 @@ impl EpollConnectionAttachment {
 
     /// Generation observe — **at most once per completed request** by contract.
     ///
-    /// Cost: one `reload::read_state` generation compare via the private executor
-    /// (same as today's `CoreConnectionExecutor::is_generation_stale`). No lock, no alloc,
-    /// no per-event API.
+    /// Cost: one `reload::active_runtime_generation` AtomicU64 load via the private executor
+    /// (Cap067 Root3; same authority Hyper uses). No `read_state`, no lock, no alloc.
     #[inline]
     pub fn is_generation_stale(&self) -> bool {
         #[cfg(target_os = "linux")]
@@ -192,6 +191,46 @@ impl EpollConnectionAttachment {
         #[cfg(not(target_os = "linux"))]
         {
             false
+        }
+    }
+
+    /// Cap040 / SECINT-003: keepalive already holds an admission token; new product work
+    /// after drain must still fail closed without a second `try_enter`.
+    #[inline]
+    pub fn is_draining(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.token.is_draining()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
+    /// Probe-aware drain boundary body for epoll keepalive rejects (P15-WS5-PROBE-002).
+    #[inline]
+    pub fn drain_boundary_response(&self, request_head: &[u8]) -> &'static [u8] {
+        crate::server::drain_probes::drain_boundary_response(request_head)
+    }
+
+    /// Cap015 / WAF-KEEPALIVE-001: evaluate header-phase WAF on **each** request head.
+    ///
+    /// Returns reject wire bytes when blocked; `None` to continue serving. Must be called
+    /// for keepalive subsequent requests on the epoll map — first-request-only inspection
+    /// is a production-reachable bypass.
+    #[inline]
+    pub fn evaluate_wire_waf_reject(&self, head: &[u8], peer: SocketAddr) -> Option<Vec<u8>> {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner
+                .executor
+                .evaluate_wire_waf_reject_bytes(self.inner.generation, head, peer)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (head, peer);
+            None
         }
     }
 
@@ -256,6 +295,13 @@ impl EpollKeepaliveTransfer {
     pub(crate) fn into_inner(self) -> AttachmentInner {
         self.inner
     }
+
+    /// Extract admission token after a failed handoff so ownership can return to task-local.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn into_admission_token(self) -> crate::lifecycle::ConnectionLifecycleToken {
+        let AttachmentInner { token, .. } = self.inner;
+        token
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -283,7 +329,10 @@ mod epoll_contract_tests {
         });
         let rt = Runtime::new().expect("rt");
         let raw = include_str!("../../../tests/fixtures/minimal.toml");
-        let config: crate::config::AppConfig = raw.parse().expect("config");
+        let mut config: crate::config::AppConfig = raw.parse().expect("config");
+        // Cap015: WAF defaults enabled → admit forces HyperReady. StayAttached
+        // contract requires WAF off and modules off (minimal fixture has no modules).
+        config.waf.enabled = false;
         let proxy = build_incoming_client();
         let shared = rt.block_on(async {
             reload::wrap_state(
@@ -396,11 +445,12 @@ mod epoll_contract_tests {
         let (entry, _rt) = test_entry(Arc::clone(&ops));
         let token = PlatformConnectionAdmission::try_admit(&ops).expect("admit");
         let (live_gen, slot, modules) = admission_pin(&entry);
-        // Pass a distinct synthetic pin — transfer must keep it (no pin_bench_cache).
-        let synthetic = live_gen.wrapping_add(9_001);
-        let transfer = entry.create_epoll_keepalive_transfer(token, synthetic, slot, modules);
+        // Pass a distinct pin generation — transfer must keep it (no pin_bench_cache).
+        let distinct_pin_gen = live_gen.wrapping_add(9_001);
+        let transfer =
+            entry.create_epoll_keepalive_transfer(token, distinct_pin_gen, slot, modules);
         let att = entry.attach_epoll_keepalive_transfer(transfer);
-        assert_eq!(att.pinned_generation(), synthetic);
+        assert_eq!(att.pinned_generation(), distinct_pin_gen);
         assert_ne!(att.pinned_generation(), live_gen);
         // Stale observe still works against live reload generation.
         assert!(att.is_generation_stale());

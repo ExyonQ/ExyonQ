@@ -80,16 +80,6 @@ async fn fpc_fcgi_ctx(
     let hits = Arc::new(AtomicUsize::new(0));
     let script_resolver =
         FastcgiScriptResolverTestGuard::install(exyonq_mod_fastcgi::FastcgiScriptResolver::arc());
-    let fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
-        FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: Arc::new(CountingExecutor {
-                hits: Arc::clone(&hits),
-                response: success_outcome(body, headers),
-            }),
-            pool_capacities: vec![(0, 16)],
-        })
-        .expect("fcgi runtime"),
-    ));
 
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join("public")).expect("mkdir");
@@ -129,10 +119,22 @@ max_ttl_seconds = 300
     let state = ServerState::new_with_generation(21, config, proxy_client.clone())
         .await
         .expect("state");
+    // Cap048: External Capture must be installed after ServerState publish so
+    // bind_fcgi_compiled_pools cannot replace it with Module (unix sock → 502).
+    let fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
+        FcgiRuntime::new(FcgiRuntimeRegistration {
+            executor: Arc::new(CountingExecutor {
+                hits: Arc::clone(&hits),
+                response: success_outcome(body, headers),
+            }),
+            pool_capacities: vec![(0, 16)],
+        })
+        .expect("fcgi runtime"),
+    ));
     FcgiHarness {
         ctx: Arc::new(ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         }),
@@ -383,18 +385,6 @@ async fn fcgi_generation_mismatch_e2e_mid_fastcgi() {
 
     let script_resolver =
         FastcgiScriptResolverTestGuard::install(exyonq_mod_fastcgi::FastcgiScriptResolver::arc());
-    let fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
-        FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: Arc::new(LatchExecutor {
-                hits: Arc::clone(&hits),
-                started_tx,
-                release_rx: Mutex::new(release_rx),
-                response: success_outcome(body, vec![("content-type".into(), "text/html".into())]),
-            }),
-            pool_capacities: vec![(0, 16)],
-        })
-        .expect("fcgi runtime"),
-    ));
 
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join("public")).expect("mkdir");
@@ -435,6 +425,19 @@ max_ttl_seconds = 300
         .expect("state g1");
     assert_eq!(state_g1.generation, G1);
     assert_eq!(active_runtime_generation(), G1);
+    // Cap048: install Latch External after publish (Module bind would replace Capture).
+    let fcgi_guard = FcgiDispatchTestGuard::install(Arc::new(
+        FcgiRuntime::new(FcgiRuntimeRegistration {
+            executor: Arc::new(LatchExecutor {
+                hits: Arc::clone(&hits),
+                started_tx,
+                release_rx: Mutex::new(release_rx),
+                response: success_outcome(body, vec![("content-type".into(), "text/html".into())]),
+            }),
+            pool_capacities: vec![(0, 16)],
+        })
+        .expect("fcgi runtime"),
+    ));
 
     let ctx_g1 = Arc::new(ConnectionContext {
         state: Arc::clone(&state_g1),
@@ -521,7 +524,7 @@ max_ttl_seconds = 300
     assert_eq!(hits.load(Ordering::SeqCst), 1);
     assert_eq!(active_runtime_generation(), G1);
 
-    // Simulate reload advancing the process-visible generation while FastCGI is in flight.
+    // Advance the process-visible generation while FastCGI is in flight (reload race).
     publish_runtime_generation(G2);
     assert_eq!(active_runtime_generation(), G2);
     assert_eq!(state_g1.generation, G1, "in-flight Arc remains G1");
@@ -559,7 +562,7 @@ max_ttl_seconds = 300
     assert_eq!(active_runtime_generation(), G2);
     let ctx_g2 = Arc::new(ConnectionContext {
         state: Arc::clone(&state_g2),
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     });

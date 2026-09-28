@@ -16,9 +16,15 @@
 //! `ProxyDispatchService` runtime — Hyper upstream execution (KD3.2) + P2B WRR.
 
 use crate::headers::{request_headers_safe_for_proxy, strip_hop_by_hop_headers};
+use crate::health::{peer_key_from_http_uri, HealthSupervisor};
 use crate::hyper_client::{build_incoming_client, post_body_client, ProxyClient};
 use crate::hyper_forward::{
-    classify_hyper_response, forward_get, forward_get_streaming, forward_request, ProxyHyperMetrics,
+    attempt_forward_empty_body, classify_hyper_response, forward_get_streaming, forward_request,
+    note_connect_retry, response_for_attempt_class, ProxyHyperMetrics,
+};
+use crate::retry::{
+    classify_hyper_error, may_retry_connect, remaining_budget, shared_deadline,
+    UpstreamAttemptClass,
 };
 use crate::selector::{
     endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, SelectionOutcome,
@@ -72,6 +78,8 @@ pub struct ProxyRuntime {
     metrics: Arc<ProxyHyperMetrics>,
     incoming_client: ProxyClient,
     responses_503: AtomicU64,
+    /// Cap024 active health supervisor (generation-scoped probe tasks).
+    health: HealthSupervisor,
 }
 
 impl Default for ProxyRuntime {
@@ -96,8 +104,9 @@ impl ProxyRuntime {
         Self {
             clusters: RwLock::new(ClusterTable::default()),
             metrics,
-            incoming_client: build_incoming_client(),
+            incoming_client: build_incoming_client().clone(),
             responses_503: AtomicU64::new(0),
+            health: HealthSupervisor::new(),
         }
     }
 
@@ -107,6 +116,11 @@ impl ProxyRuntime {
 
     pub fn hyper_metrics(&self) -> Arc<ProxyHyperMetrics> {
         Arc::clone(&self.metrics)
+    }
+
+    /// Cap024: abort health probe tasks (process shutdown / test teardown).
+    pub fn shutdown_health(&self) {
+        self.health.shutdown();
     }
 
     pub fn bind_compiled_slots(&self, generation: u64, slots: &[ProxyCompiledSlot]) {
@@ -147,9 +161,35 @@ impl ProxyRuntime {
             }
             built[idx] = Some(build_cluster_binding(generation, slot, &prior));
         }
+        // Cap024: publish cluster bindings BEFORE health views so a reload that
+        // removes a peer cannot race (old bindings + new health map fail-open).
         let mut clusters = self.clusters.write().expect("proxy clusters poisoned");
         clusters.generation = generation;
         clusters.bindings = built.into_boxed_slice();
+        drop(clusters);
+
+        let mut health_clusters = Vec::new();
+        for slot in slots {
+            if !slot.health_check.enabled {
+                continue;
+            }
+            let mut peers = Vec::new();
+            for ep in slot.endpoints.iter() {
+                if !(ep.admin_enabled && ep.weight > 0) {
+                    continue;
+                }
+                if let Some(key) = peer_key_from_http_uri(&ep.http_uri) {
+                    peers.push((key, ep.http_uri.clone()));
+                }
+            }
+            if peers.is_empty() && !slot.target.is_empty() {
+                if let Some(key) = peer_key_from_http_uri(&slot.target) {
+                    peers.push((key, slot.target.clone()));
+                }
+            }
+            health_clusters.push((slot.cluster_id, slot.health_check.clone(), peers));
+        }
+        self.health.replace_generation(generation, &health_clusters);
     }
 
     pub fn bind_upstream_targets(&self, generation: u64, targets: &[UpstreamTarget]) {
@@ -178,24 +218,63 @@ impl ProxyRuntime {
     }
 
     fn resolve(&self, cluster_id: u32) -> Resolve {
+        self.resolve_excluding(cluster_id, None)
+    }
+
+    /// Cap021: on connect-only retry, skip the peer that just failed (request-local).
+    /// Cap024: skip peers marked UNHEALTHY by active health (cross-request).
+    fn resolve_excluding(&self, cluster_id: u32, exclude_peer: Option<&str>) -> Resolve {
+        let health = self.health.view(cluster_id);
+        let peer_ok = |peer_key: &str| -> bool {
+            health
+                .as_ref()
+                .map(|h| h.is_selectable(peer_key))
+                .unwrap_or(true)
+        };
         let Ok(table) = self.clusters.read() else {
             return Resolve::Missing;
         };
         match table.bindings.get(cluster_id as usize) {
             None | Some(None) => Resolve::Missing,
             Some(Some(ClusterBinding::NoEligible)) => Resolve::NoEligible,
-            Some(Some(ClusterBinding::Single(t))) => Resolve::Selected(t.clone()),
+            Some(Some(ClusterBinding::Single(t))) => {
+                if !peer_ok(&t.peer_key) {
+                    return Resolve::NoEligible;
+                }
+                if exclude_peer.is_some_and(|k| k == t.peer_key) {
+                    // Sole peer failed connect — still return it so final attempt can map 502.
+                    // Caller stops retrying when may_retry is false / same peer only.
+                }
+                Resolve::Selected(t.clone())
+            }
             Some(Some(ClusterBinding::Multi {
                 selector,
                 targets_by_index,
-            })) => match selector.select() {
-                SelectionOutcome::NoEligibleEndpoint => Resolve::NoEligible,
-                SelectionOutcome::Selected { endpoint_index, .. } => targets_by_index
-                    .get(endpoint_index)
-                    .and_then(|t| t.clone())
-                    .map(Resolve::Selected)
-                    .unwrap_or(Resolve::NoEligible),
-            },
+            })) => {
+                // Cap045 / LA-CAP045-001: WRR among currently selectable peers only.
+                // Do not charge SWWR on Cap024-unhealthy / Cap021-excluded peers, and
+                // do not fall back to first-match scan among remaining healthy peers.
+                match selector.select_filtered(|endpoint_index| {
+                    let Some(t) = targets_by_index
+                        .get(endpoint_index)
+                        .and_then(|slot| slot.as_ref())
+                    else {
+                        return false;
+                    };
+                    if exclude_peer.is_some_and(|k| k == t.peer_key) {
+                        return false;
+                    }
+                    peer_ok(&t.peer_key)
+                }) {
+                    SelectionOutcome::NoEligibleEndpoint => Resolve::NoEligible,
+                    SelectionOutcome::Selected { endpoint_index, .. } => {
+                        match targets_by_index.get(endpoint_index).and_then(|t| t.clone()) {
+                            Some(t) => Resolve::Selected(t),
+                            None => Resolve::NoEligible,
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -225,53 +304,43 @@ impl ProxyRuntime {
         }
     }
 
-    async fn dispatch_get_like(
+    async fn attempt_get_like(
         &self,
         target: &UpstreamTarget,
         request: &ProxyDispatchRequest,
-        streaming: bool,
-    ) -> ProxyDispatchOutcome {
+        budget: std::time::Duration,
+    ) -> Result<ProxyDispatchOutcome, UpstreamAttemptClass> {
         let xff = Self::xff_from_request(request);
         let xfp = Self::xfp_from_request(request);
-        let response = if streaming {
-            crate::hyper_forward::forward_get_streaming_with_proto(
-                target,
-                &request.path_and_query,
-                xff.as_ref(),
-                xfp.as_ref(),
-                &self.metrics,
-            )
-            .await
-        } else if request.method == ProxyMethod::Head {
-            crate::hyper_forward::forward_head_with_proto(
-                target,
-                &request.path_and_query,
-                xff.as_ref(),
-                xfp.as_ref(),
-                &self.metrics,
-            )
-            .await
-        } else {
-            crate::hyper_forward::forward_get_with_proto(
-                target,
-                &request.path_and_query,
-                xff.as_ref(),
-                xfp.as_ref(),
-                &self.metrics,
-            )
-            .await
+        let method = match request.method {
+            ProxyMethod::Head => Method::HEAD,
+            _ => Method::GET,
         };
-        classify_hyper_response(response, &request.path_and_query, request.method).await
+        let response = attempt_forward_empty_body(
+            target,
+            &request.path_and_query,
+            method,
+            xff.as_ref(),
+            xfp.as_ref(),
+            &self.metrics,
+            budget,
+        )
+        .await?;
+        Ok(classify_hyper_response(response, &request.path_and_query, request.method).await)
     }
 
-    async fn dispatch_post_like(
+    async fn attempt_post_like(
         &self,
         target: &UpstreamTarget,
         request: &ProxyDispatchRequest,
-    ) -> ProxyDispatchOutcome {
+        budget: std::time::Duration,
+    ) -> Result<ProxyDispatchOutcome, UpstreamAttemptClass> {
+        if budget.is_zero() {
+            return Err(UpstreamAttemptClass::TimedOut);
+        }
         let body = request.body.clone().unwrap_or_default();
         if body.len() > PROXY_MAX_REQUEST_BODY_BYTES {
-            return ProxyDispatchOutcome::BadGateway;
+            return Ok(ProxyDispatchOutcome::BadGateway);
         }
 
         let mut header_map = hyper::HeaderMap::new();
@@ -284,7 +353,7 @@ impl ProxyRuntime {
             }
         }
         if !request_headers_safe_for_proxy(&header_map) {
-            return ProxyDispatchOutcome::BadGateway;
+            return Ok(ProxyDispatchOutcome::BadGateway);
         }
 
         let path_and_query = request.path_and_query.clone();
@@ -308,15 +377,29 @@ impl ProxyRuntime {
             builder = builder.header(HOST, host.clone());
         }
 
-        let mut req = builder
-            .body(Full::from(body))
-            .expect("valid proxy body request");
+        let mut req = match builder.body(Full::from(body)) {
+            Ok(req) => req,
+            Err(err) => {
+                warn!(%err, "proxy request builder failed (operator/network headers)");
+                return Ok(ProxyDispatchOutcome::BadGateway);
+            }
+        };
         {
             let headers = req.headers_mut();
             headers.remove("x-forwarded-for");
             headers.remove("x-forwarded-proto");
             headers.remove("x-forwarded-host");
             headers.remove("forwarded");
+            // Strip before re-injecting intermediary identity headers so Connection
+            // cannot nominate-and-wipe XFF / Host after injection.
+            strip_hop_by_hop_headers(headers);
+            if let Some(host) = &request.host {
+                if let Ok(v) = HeaderValue::from_str(host.as_str()) {
+                    headers.insert(HOST, v);
+                }
+            } else if let Some(host) = &target.host {
+                headers.insert(HOST, host.clone());
+            }
             if let Some(xff) = Self::xff_from_request(request) {
                 headers.insert("x-forwarded-for", xff);
             }
@@ -325,9 +408,8 @@ impl ProxyRuntime {
             }
         }
 
-        let timeout = upstream_timeout_for_path(target.timeout, &path_and_query);
         let upstream_req = post_body_client().request(req);
-        match tokio::time::timeout(timeout, upstream_req).await {
+        match tokio::time::timeout(budget, upstream_req).await {
             Ok(Ok(resp)) => {
                 use http_body_util::BodyExt;
                 let (mut parts, body) = resp.into_parts();
@@ -335,17 +417,29 @@ impl ProxyRuntime {
                 let response: hyper::Response<
                     http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>,
                 > = hyper::Response::from_parts(parts, body.boxed());
-                classify_hyper_response(response, &path_and_query, request.method).await
+                Ok(classify_hyper_response(response, &path_and_query, request.method).await)
             }
             Ok(Err(err)) => {
-                warn!(%err, "upstream error");
-                self.metrics.responses_502.fetch_add(1, Ordering::Relaxed);
-                ProxyDispatchOutcome::BadGateway
+                let class = classify_hyper_error(&err);
+                warn!(%err, ?class, "upstream error");
+                Err(class)
             }
             Err(_) => {
-                warn!(timeout_ms = target.timeout.as_millis(), "upstream timeout");
+                warn!(budget_ms = budget.as_millis(), "upstream attempt timeout");
+                Err(UpstreamAttemptClass::TimedOut)
+            }
+        }
+    }
+
+    fn outcome_for_class(&self, class: UpstreamAttemptClass) -> ProxyDispatchOutcome {
+        match class {
+            UpstreamAttemptClass::TimedOut => {
                 self.metrics.responses_504.fetch_add(1, Ordering::Relaxed);
                 ProxyDispatchOutcome::GatewayTimeout
+            }
+            UpstreamAttemptClass::ConnectFailed | UpstreamAttemptClass::UnretryableError => {
+                self.metrics.responses_502.fetch_add(1, Ordering::Relaxed);
+                ProxyDispatchOutcome::BadGateway
             }
         }
     }
@@ -395,6 +489,7 @@ fn build_cluster_binding(
             if let Some(existing) = prior.get(key) {
                 let mut reused = existing.clone();
                 reused.timeout = slot.timeout;
+                reused.max_connect_retries = slot.max_connect_retries;
                 return ClusterBinding::Single(reused);
             }
         }
@@ -409,10 +504,20 @@ fn build_cluster_binding(
             target: slot.target.clone(),
             timeout: slot.timeout,
             host,
+            max_connect_retries: slot.max_connect_retries,
         };
-        return ClusterBinding::Single(
-            UpstreamTarget::from_descriptor(&desc).expect("compiled proxy slot must parse"),
-        );
+        return match UpstreamTarget::from_descriptor(&desc) {
+            Ok(target) => ClusterBinding::Single(target),
+            Err(err) => {
+                warn!(
+                    %err,
+                    cluster_id = slot.cluster_id,
+                    target = %slot.target,
+                    "compiled proxy slot failed to parse; binding NoEligible"
+                );
+                ClusterBinding::NoEligible
+            }
+        };
     }
 
     if slot.multi_endpoint_executable && !slot.endpoints.is_empty() {
@@ -447,6 +552,7 @@ fn build_cluster_binding(
             let target = if let Some(existing) = prior.get(&key) {
                 let mut reused = existing.clone();
                 reused.timeout = slot.timeout;
+                reused.max_connect_retries = slot.max_connect_retries;
                 reused
             } else {
                 let host = ep
@@ -460,6 +566,7 @@ fn build_cluster_binding(
                     target: ep.http_uri.clone(),
                     timeout: slot.timeout,
                     host,
+                    max_connect_retries: slot.max_connect_retries,
                 };
                 match UpstreamTarget::from_descriptor(&desc) {
                     Ok(t) => t,
@@ -476,7 +583,11 @@ fn build_cluster_binding(
         }
         // OPEN-002 defense-in-depth: effective N=1 uses Single even if multi flag set.
         if eligible_count == 1 {
-            return ClusterBinding::Single(sole.expect("eligible_count==1"));
+            // Structural: eligible_count==1 implies `sole` was set in the loop above.
+            return match sole {
+                Some(target) => ClusterBinding::Single(target),
+                None => ClusterBinding::NoEligible,
+            };
         }
         return ClusterBinding::Multi {
             selector,
@@ -491,22 +602,62 @@ fn build_cluster_binding(
 #[async_trait]
 impl ProxyDispatchService for ProxyRuntime {
     async fn dispatch(&self, request: ProxyDispatchRequest) -> ProxyDispatchOutcome {
-        let target = match self.resolve(request.cluster_id) {
+        let first = match self.resolve(request.cluster_id) {
             Resolve::Selected(t) => t,
             Resolve::NoEligible | Resolve::Missing => {
                 self.responses_503.fetch_add(1, Ordering::Relaxed);
                 return ProxyDispatchOutcome::ServiceUnavailable;
             }
         };
+        let total_timeout = upstream_timeout_for_path(first.timeout, &request.path_and_query);
+        let deadline = shared_deadline(total_timeout);
+        let max_retries = first.max_connect_retries;
+        let mut retries_used: u8 = 0;
+        let mut target = first;
 
-        match request.method {
-            ProxyMethod::Get => self.dispatch_get_like(&target, &request, false).await,
-            ProxyMethod::Head => self.dispatch_get_like(&target, &request, false).await,
-            ProxyMethod::Post | ProxyMethod::Put | ProxyMethod::Patch | ProxyMethod::Delete => {
-                self.dispatch_post_like(&target, &request).await
+        loop {
+            let budget = remaining_budget(deadline);
+            // timeout_ms = 0 is already elapsed. Do not poll the upstream:
+            // a zero tokio timeout can still observe a ready localhost future.
+            if budget.is_zero() {
+                return self.outcome_for_class(UpstreamAttemptClass::TimedOut);
             }
-            ProxyMethod::Options | ProxyMethod::Other => {
-                self.dispatch_post_like(&target, &request).await
+            let attempt = match request.method {
+                ProxyMethod::Get | ProxyMethod::Head => {
+                    self.attempt_get_like(&target, &request, budget).await
+                }
+                ProxyMethod::Post
+                | ProxyMethod::Put
+                | ProxyMethod::Patch
+                | ProxyMethod::Delete
+                | ProxyMethod::Options
+                | ProxyMethod::Other => self.attempt_post_like(&target, &request, budget).await,
+            };
+            match attempt {
+                Ok(outcome) => return outcome,
+                Err(class) => {
+                    let remain = remaining_budget(deadline);
+                    if may_retry_connect(max_retries, retries_used, class, remain) {
+                        let failed_peer = target.peer_key.clone();
+                        target = match self
+                            .resolve_excluding(request.cluster_id, Some(failed_peer.as_str()))
+                        {
+                            Resolve::Selected(t) => t,
+                            Resolve::NoEligible | Resolve::Missing => {
+                                return self.outcome_for_class(class);
+                            }
+                        };
+                        note_connect_retry(&self.metrics);
+                        retries_used = retries_used.saturating_add(1);
+                        warn!(
+                            retries_used,
+                            peer = %failed_peer,
+                            "cap021 connect-only retry"
+                        );
+                        continue;
+                    }
+                    return self.outcome_for_class(class);
+                }
             }
         }
     }
@@ -516,6 +667,7 @@ impl ProxyDispatchService for ProxyRuntime {
             responses_502: self.metrics.responses_502.load(Ordering::Relaxed),
             responses_503: self.responses_503.load(Ordering::Relaxed),
             responses_504: self.metrics.responses_504.load(Ordering::Relaxed),
+            connect_retries: self.metrics.connect_retries.load(Ordering::Relaxed),
             cache_hits: 0,
             cache_misses: 0,
         }
@@ -588,10 +740,92 @@ pub async fn forward_websocket_by_cluster(
 impl ProxyRuntime {
     pub async fn forward_get_for_wire(
         &self,
+        cluster_id: u32,
         target: &UpstreamTarget,
         path_and_query: &str,
         x_forwarded_for: Option<&HeaderValue>,
     ) -> hyper::Response<http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>> {
-        forward_get(target, path_and_query, x_forwarded_for, &self.metrics).await
+        // Cap021: wire GET shares connect-only retry + peer exclusion + deadline with dispatch.
+        let total = upstream_timeout_for_path(target.timeout, path_and_query);
+        let deadline = shared_deadline(total);
+        let max_retries = target.max_connect_retries;
+        let mut retries_used = 0u8;
+
+        // Happy path: borrow `target` — no UpstreamTarget/HeaderValue clone until a connect retry.
+        let budget = remaining_budget(deadline);
+        match attempt_forward_empty_body(
+            target,
+            path_and_query,
+            Method::GET,
+            x_forwarded_for,
+            None,
+            &self.metrics,
+            budget,
+        )
+        .await
+        {
+            Ok(resp) => resp,
+            Err(class) => {
+                let remain = remaining_budget(deadline);
+                if !may_retry_connect(max_retries, retries_used, class, remain) {
+                    return response_for_attempt_class(class, &self.metrics);
+                }
+                let failed_peer = target.peer_key.clone();
+                let mut current =
+                    match self.resolve_excluding(cluster_id, Some(failed_peer.as_str())) {
+                        Resolve::Selected(t) => t,
+                        Resolve::NoEligible | Resolve::Missing => {
+                            return response_for_attempt_class(class, &self.metrics);
+                        }
+                    };
+                note_connect_retry(&self.metrics);
+                retries_used = retries_used.saturating_add(1);
+                warn!(
+                    retries_used,
+                    peer = %failed_peer,
+                    "cap021 connect-only retry"
+                );
+
+                loop {
+                    let budget = remaining_budget(deadline);
+                    match attempt_forward_empty_body(
+                        &current,
+                        path_and_query,
+                        Method::GET,
+                        x_forwarded_for,
+                        None,
+                        &self.metrics,
+                        budget,
+                    )
+                    .await
+                    {
+                        Ok(resp) => return resp,
+                        Err(class) => {
+                            let remain = remaining_budget(deadline);
+                            if may_retry_connect(max_retries, retries_used, class, remain) {
+                                let failed_peer = current.peer_key.clone();
+                                current = match self
+                                    .resolve_excluding(cluster_id, Some(failed_peer.as_str()))
+                                {
+                                    Resolve::Selected(t) => t,
+                                    Resolve::NoEligible | Resolve::Missing => {
+                                        return response_for_attempt_class(class, &self.metrics);
+                                    }
+                                };
+                                note_connect_retry(&self.metrics);
+                                retries_used = retries_used.saturating_add(1);
+                                warn!(
+                                    retries_used,
+                                    peer = %failed_peer,
+                                    "cap021 connect-only retry"
+                                );
+                                continue;
+                            }
+                            return response_for_attempt_class(class, &self.metrics);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

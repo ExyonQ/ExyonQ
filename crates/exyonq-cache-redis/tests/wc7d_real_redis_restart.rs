@@ -115,13 +115,20 @@ impl Drop for RedisResourceGuard {
 }
 
 fn docker_available() -> bool {
-    Command::new("docker")
-        .args(["info"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    // Bound wait: a wedged Docker Desktop makes `docker info` hang forever and
+    // stalls the whole `cargo test --workspace` (observed Darwin hang at WC7D).
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ok = Command::new("docker")
+            .args(["info"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let _ = tx.send(ok);
+    });
+    rx.recv_timeout(Duration::from_secs(8)).unwrap_or(false)
 }
 
 fn docker(args: &[&str]) -> std::process::Output {

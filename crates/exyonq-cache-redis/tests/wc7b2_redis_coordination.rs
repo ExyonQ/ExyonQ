@@ -348,23 +348,58 @@ fn redis_reconnect_and_reconcile_after_outage() {
     b.stop();
 }
 
+fn xpending_total(url: &str, stream: &str, group: &str) -> i64 {
+    let client = redis::Client::open(url).expect("client");
+    let mut conn = client
+        .get_connection_with_timeout(Duration::from_millis(800))
+        .expect("conn");
+    let value: redis::Value = redis::cmd("XPENDING")
+        .arg(stream)
+        .arg(group)
+        .query(&mut conn)
+        .expect("XPENDING");
+    match value {
+        redis::Value::Array(items) if !items.is_empty() => match &items[0] {
+            redis::Value::Int(n) => *n,
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
 #[test]
 fn redis_queue_backpressure_marks_reconcile() {
     need_redis!();
+    let url = require_redis().expect("redis");
     let mut cfg = base_cfg(&unique_ns("q"), "node-b", &[1]);
     cfg.max_pending_events = 1;
+    let stream = cfg.stream_key();
+    let group = format!("{}:{}", cfg.consumer_group(), cfg.node_id);
     let a = open(&cfg.namespace, "node-a", &[1]);
     let b =
         RedisCoordinationProvider::connect(cfg.clone(), RedisCoordSecrets::default(), test_keys())
             .unwrap();
+    // Lab/test override so reconnect XAUTOCLAIM can reclaim quickly while queue stays full.
+    // Production default remains 60000ms when unset.
+    std::env::set_var("EXYONQ_REDIS_XAUTOCLAIM_MIN_IDLE_MS", "50");
     b.start_subscriber().unwrap();
-    // Flood more events than queue depth; overflow should not panic/deadlock.
-    for i in 0..8 {
+    // Do not drain the receiver: keep SyncSender full so XREADGROUP and later
+    // XAUTOCLAIM hit try_send Full. Full must not ACK-and-drop.
+    for i in 0..16 {
         let ev = sample_url_event("node-a", 1, &format!("/flood/{i}"), a.next_event_id(), 1);
         let _ = a.publish(ev);
     }
-    std::thread::sleep(Duration::from_millis(500));
-    // Provider stays usable
+    // Allow Full → reconnect → claim_pending while still full.
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(
+        b.reconcile_needed(),
+        "queue overflow must mark reconcile_needed (no silent ACK drop)"
+    );
+    let pending = xpending_total(&url, &stream, &group);
+    assert!(
+        pending > 0,
+        "overflow must leave PEL entries (independent Redis oracle); pending={pending}"
+    );
     let _ = b.try_recv();
     b.stop();
 }

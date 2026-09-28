@@ -25,6 +25,8 @@ use std::thread::JoinHandle;
 /// Join/shutdown bundle for accept workers started outside `exyonq-core`.
 pub struct OsWorkerGuard {
     shutdown: Arc<AtomicBool>,
+    /// Cap041: force worker exit even with in-map connections (after grace wait).
+    abort: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
     listeners: Vec<TcpListener>,
     /// Shutdown-only retain (e.g. `Arc<ConnectionPool>`). Not used on the accept hot path.
@@ -37,8 +39,23 @@ impl OsWorkerGuard {
         handles: Vec<JoinHandle<()>>,
         listeners: Vec<TcpListener>,
     ) -> Self {
+        Self::new_with_abort(
+            shutdown,
+            Arc::new(AtomicBool::new(false)),
+            handles,
+            listeners,
+        )
+    }
+
+    pub fn new_with_abort(
+        shutdown: Arc<AtomicBool>,
+        abort: Arc<AtomicBool>,
+        handles: Vec<JoinHandle<()>>,
+        listeners: Vec<TcpListener>,
+    ) -> Self {
         Self {
             shutdown,
+            abort,
             handles,
             listeners,
             retain: Vec::new(),
@@ -49,7 +66,14 @@ impl OsWorkerGuard {
         self.retain.push(value);
     }
 
+    /// Cap041: stop new accepts; workers keep serving in-map connections until empty or [`Self::stop`].
+    pub fn signal_stop(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+
+    /// Force-abort remaining in-map work (if any) and join worker threads.
     pub fn stop(mut self) {
+        self.abort.store(true, Ordering::SeqCst);
         self.shutdown.store(true, Ordering::SeqCst);
         self.listeners.clear();
         for handle in self.handles.drain(..) {

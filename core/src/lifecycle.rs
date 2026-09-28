@@ -25,11 +25,20 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
 
 /// Admission rejected while the server is draining (no counter increment).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DrainRejected;
+
+/// Per-instance test hook for the increment→recheck window (never process-global).
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TryEnterTestHook {
+    pause_after_increment: AtomicBool,
+    release: AtomicBool,
+}
 
 #[derive(Debug)]
 pub struct LifecycleState {
@@ -37,13 +46,10 @@ pub struct LifecycleState {
     active_connections: AtomicU64,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
+    /// Instance-scoped only: arming pause on one `LifecycleState` must not affect peers.
+    #[cfg(test)]
+    try_enter_hook: TryEnterTestHook,
 }
-
-/// Test-only latch to force the interleaving between increment and drain recheck.
-#[cfg(test)]
-pub static TEST_TRY_ENTER_PAUSE_AFTER_INCREMENT: AtomicBool = AtomicBool::new(false);
-#[cfg(test)]
-pub static TEST_TRY_ENTER_RELEASE: AtomicBool = AtomicBool::new(false);
 
 impl LifecycleState {
     pub fn new() -> Arc<Self> {
@@ -53,7 +59,24 @@ impl LifecycleState {
             active_connections: AtomicU64::new(0),
             shutdown_tx,
             shutdown_rx,
+            #[cfg(test)]
+            try_enter_hook: TryEnterTestHook::default(),
         })
+    }
+
+    /// Arm the post-increment pause on *this* instance only (test isolation).
+    #[cfg(test)]
+    fn test_arm_try_enter_pause(self: &Arc<Self>) {
+        self.try_enter_hook
+            .pause_after_increment
+            .store(true, Ordering::Release);
+        self.try_enter_hook.release.store(false, Ordering::Release);
+    }
+
+    /// Release the post-increment pause on *this* instance only.
+    #[cfg(test)]
+    fn test_release_try_enter_pause(self: &Arc<Self>) {
+        self.try_enter_hook.release.store(true, Ordering::Release);
     }
 
     pub fn start_drain(self: &Arc<Self>) {
@@ -85,6 +108,33 @@ impl LifecycleState {
         let _ = rx.changed().await;
     }
 
+    /// Cap041 default grace: wait for admitted work to finish after shutdown is requested.
+    ///
+    /// Not a TOML knob — product constant. Timeout proceeds to forced exit (runtime drop).
+    pub const DEFAULT_GRACEFUL_SHUTDOWN_WAIT: Duration = Duration::from_secs(30);
+
+    /// Poll until [`Self::drain_complete`] or `timeout`.
+    ///
+    /// Returns `true` when `drain_complete` observed; `false` on timeout.
+    pub async fn wait_for_drain_complete(ops: &Arc<Self>, timeout: Duration) -> bool {
+        debug_assert!(
+            ops.is_draining(),
+            "wait_for_drain_complete requires drain/shutdown already requested"
+        );
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if ops.drain_complete() {
+                return true;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let slice = (deadline - now).min(Duration::from_millis(25));
+            tokio::time::sleep(slice).await;
+        }
+    }
+
     /// Observed together with [`Self::is_draining`] for drain completion — Acquire pairs with
     /// token enter (AcqRel) and drop (Release).
     pub fn active_connections(&self) -> u64 {
@@ -101,9 +151,13 @@ impl LifecycleState {
         }
         self.active_connections.fetch_add(1, Ordering::AcqRel);
 
+        // Instance-scoped only — process-global latches caused parallel-test flakes/hangs.
         #[cfg(test)]
-        while TEST_TRY_ENTER_PAUSE_AFTER_INCREMENT.load(Ordering::Acquire)
-            && !TEST_TRY_ENTER_RELEASE.load(Ordering::Acquire)
+        while self
+            .try_enter_hook
+            .pause_after_increment
+            .load(Ordering::Acquire)
+            && !self.try_enter_hook.release.load(Ordering::Acquire)
         {
             std::thread::yield_now();
         }
@@ -122,11 +176,31 @@ impl LifecycleState {
     pub fn drain_complete(&self) -> bool {
         self.is_draining() && self.active_connections() == 0
     }
+
+    /// Cap031: extend admission for a Hyper WebSocket tunnel that outlives the HTTP connection future.
+    ///
+    /// Call only after a successful upstream 101 while the original connection is still admitted.
+    /// Increments even during drain so a pre-drain tunnel remains counted until teardown
+    /// (`LIVE_WEBSOCKET_TUNNEL ⇒ LIVE_LIFECYCLE_OWNERSHIP`).
+    pub fn extend_for_upgraded_tunnel(self: &Arc<Self>) -> ConnectionLifecycleToken {
+        self.active_connections.fetch_add(1, Ordering::AcqRel);
+        ConnectionLifecycleToken {
+            state: Arc::clone(self),
+        }
+    }
 }
 
 /// RAII connection admission: drop decrements `active_connections` exactly once.
 pub struct ConnectionLifecycleToken {
     state: Arc<LifecycleState>,
+}
+
+impl ConnectionLifecycleToken {
+    /// Observe drain without releasing admission (keepalive / epoll per-request gate).
+    #[inline]
+    pub fn is_draining(&self) -> bool {
+        self.state.is_draining()
+    }
 }
 
 impl Drop for ConnectionLifecycleToken {
@@ -159,6 +233,35 @@ pub(crate) fn take_task_connection_token() -> Option<ConnectionLifecycleToken> {
         .flatten()
 }
 
+/// Restore admission ownership to the task-local slot after a failed handoff.
+///
+/// Returns `Err(token)` when not inside [`run_with_connection_token`] or when the slot is
+/// already occupied — caller must then end the connection with the token (Drop) rather than
+/// continuing without accounting (V044-LIFECYCLE-C1).
+///
+/// Call site: Linux `epoll_start::register_keepalive_from_tokio_buffered` (cfg-gated).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn restore_task_connection_token(
+    token: ConnectionLifecycleToken,
+) -> Result<(), ConnectionLifecycleToken> {
+    let mut token = Some(token);
+    let placed = TASK_CONNECTION_TOKEN
+        .try_with(|slot| {
+            let mut guard = slot.borrow_mut();
+            if guard.is_some() {
+                return false;
+            }
+            *guard = token.take();
+            true
+        })
+        .unwrap_or(false);
+    if placed {
+        Ok(())
+    } else {
+        Err(token.expect("admission token not placed in task-local slot"))
+    }
+}
+
 /// Admit using task-local token when present, otherwise [`LifecycleState::try_enter`].
 pub fn admit_connection(
     ops: &Arc<LifecycleState>,
@@ -175,17 +278,28 @@ mod tests {
     use std::sync::Barrier;
     use std::thread;
 
-    fn reset_test_latch() {
-        TEST_TRY_ENTER_PAUSE_AFTER_INCREMENT.store(false, Ordering::Release);
-        TEST_TRY_ENTER_RELEASE.store(false, Ordering::Release);
-    }
-
     #[test]
     fn try_enter_increments_once() {
         let ops = LifecycleState::new();
         assert_eq!(ops.active_connections(), 0);
         let _t = ops.try_enter().unwrap();
         assert_eq!(ops.active_connections(), 1);
+    }
+
+    #[test]
+    fn extend_for_upgraded_tunnel_counts_during_drain() {
+        let ops = LifecycleState::new();
+        let _http = ops.try_enter().unwrap();
+        ops.start_drain();
+        let tunnel = ops.extend_for_upgraded_tunnel();
+        assert_eq!(ops.active_connections(), 2);
+        assert!(!ops.drain_complete());
+        drop(_http);
+        assert_eq!(ops.active_connections(), 1);
+        assert!(!ops.drain_complete());
+        drop(tunnel);
+        assert_eq!(ops.active_connections(), 0);
+        assert!(ops.drain_complete());
     }
 
     #[test]
@@ -214,11 +328,14 @@ mod tests {
         assert_eq!(ops.active_connections(), 0);
     }
 
+    /// Option A rollback: one fetch_add, one rollback fetch_sub, no token Drop.
+    ///
+    /// Pause is instance-scoped so parallel peers cannot clear/release a process-global latch
+    /// (root cause of V044_LOGIC_FLAKE_001).
     #[test]
     fn rollback_admission_decrements_exactly_once() {
-        reset_test_latch();
-        TEST_TRY_ENTER_PAUSE_AFTER_INCREMENT.store(true, Ordering::Release);
         let ops = LifecycleState::new();
+        ops.test_arm_try_enter_pause();
         let worker = {
             let ops = Arc::clone(&ops);
             thread::spawn(move || ops.try_enter())
@@ -229,11 +346,61 @@ mod tests {
         assert_eq!(ops.active_connections(), 1);
         ops.start_drain();
         assert!(!ops.drain_complete());
-        TEST_TRY_ENTER_RELEASE.store(true, Ordering::Release);
+        ops.test_release_try_enter_pause();
         assert!(worker.join().unwrap().is_err());
         assert_eq!(ops.active_connections(), 0);
         assert!(ops.drain_complete());
-        reset_test_latch();
+    }
+
+    /// Peer LifecycleState must not observe another instance's pause arming.
+    #[test]
+    fn try_enter_pause_is_instance_scoped() {
+        let paused = LifecycleState::new();
+        let peer = LifecycleState::new();
+        paused.test_arm_try_enter_pause();
+        let token = peer.try_enter().expect("peer must not share pause latch");
+        assert_eq!(peer.active_connections(), 1);
+        drop(token);
+        assert_eq!(peer.active_connections(), 0);
+        assert_eq!(paused.active_connections(), 0);
+        paused.test_release_try_enter_pause();
+    }
+
+    /// Concurrent peer try_enter/reset traffic must not break instance-scoped rollback proof.
+    #[test]
+    fn rollback_admission_survives_parallel_peer_try_enter() {
+        let ops = LifecycleState::new();
+        ops.test_arm_try_enter_pause();
+        let peer = LifecycleState::new();
+        let peer_stop = Arc::new(AtomicBool::new(false));
+        let peer_worker = {
+            let peer = Arc::clone(&peer);
+            let peer_stop = Arc::clone(&peer_stop);
+            thread::spawn(move || {
+                while !peer_stop.load(Ordering::Acquire) {
+                    if let Ok(token) = peer.try_enter() {
+                        drop(token);
+                    }
+                    thread::yield_now();
+                }
+            })
+        };
+        let worker = {
+            let ops = Arc::clone(&ops);
+            thread::spawn(move || ops.try_enter())
+        };
+        while ops.active_connections() == 0 {
+            thread::yield_now();
+        }
+        assert_eq!(ops.active_connections(), 1);
+        ops.start_drain();
+        ops.test_release_try_enter_pause();
+        assert!(worker.join().unwrap().is_err());
+        assert_eq!(ops.active_connections(), 0);
+        assert!(ops.drain_complete());
+        peer_stop.store(true, Ordering::Release);
+        peer_worker.join().unwrap();
+        assert_eq!(peer.active_connections(), 0);
     }
 
     #[test]
@@ -256,6 +423,28 @@ mod tests {
             assert!(taken.is_some());
             assert_eq!(ops.active_connections(), 1);
             drop(taken);
+            assert_eq!(ops.active_connections(), 0);
+        })
+        .await;
+        assert_eq!(ops.active_connections(), 0);
+    }
+
+    /// V044-LIFECYCLE-C1: failed handoff must restore admission ownership without undercount.
+    #[tokio::test]
+    async fn restore_task_local_token_preserves_active_count() {
+        let ops = LifecycleState::new();
+        let token = ops.try_enter().unwrap();
+        run_with_connection_token(token, async {
+            assert_eq!(ops.active_connections(), 1);
+            let taken = take_task_connection_token().expect("task-local token");
+            assert_eq!(ops.active_connections(), 1);
+            assert!(
+                restore_task_connection_token(taken).is_ok(),
+                "restore into empty slot"
+            );
+            assert_eq!(ops.active_connections(), 1);
+            let again = take_task_connection_token().expect("restored token");
+            drop(again);
             assert_eq!(ops.active_connections(), 0);
         })
         .await;
@@ -298,9 +487,35 @@ mod tests {
         assert_eq!(ops.active_connections(), 1);
     }
 
+    #[tokio::test]
+    async fn wait_for_drain_complete_observes_token_drop() {
+        let ops = LifecycleState::new();
+        let token = ops.try_enter().unwrap();
+        ops.request_shutdown();
+        assert!(!ops.drain_complete());
+        let ops_wait = Arc::clone(&ops);
+        let waiter = tokio::spawn(async move {
+            LifecycleState::wait_for_drain_complete(&ops_wait, Duration::from_secs(2)).await
+        });
+        tokio::task::yield_now().await;
+        drop(token);
+        assert!(waiter.await.expect("join"));
+        assert!(ops.drain_complete());
+    }
+
+    #[tokio::test]
+    async fn wait_for_drain_complete_times_out_while_held() {
+        let ops = LifecycleState::new();
+        let _token = ops.try_enter().unwrap();
+        ops.request_shutdown();
+        let drained =
+            LifecycleState::wait_for_drain_complete(&ops, Duration::from_millis(50)).await;
+        assert!(!drained);
+        assert_eq!(ops.active_connections(), 1);
+    }
+
     #[test]
     fn concurrent_try_enter_while_drain_starts() {
-        reset_test_latch();
         let ops = LifecycleState::new();
         let threads = 32;
         let start = Arc::new(Barrier::new(threads + 1));
@@ -333,7 +548,10 @@ mod tests {
         }
         assert_eq!(ops.active_connections(), 0);
         assert!(ops.drain_complete());
-        reset_test_latch();
+        assert_eq!(
+            successes.load(Ordering::Acquire) + failures.load(Ordering::Acquire),
+            threads as u64
+        );
     }
 
     #[test]

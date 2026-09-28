@@ -323,12 +323,17 @@ async fn handle_client(
     Ok(())
 }
 
-fn chmod_owner_only(path: &Path) {
+fn chmod_owner_only(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 pub async fn run_cache_purge_socket(
@@ -346,7 +351,12 @@ pub async fn run_cache_purge_socket(
     }
 
     let listener = UnixListener::bind(socket_path)?;
-    chmod_owner_only(socket_path);
+    chmod_owner_only(socket_path).map_err(|err| {
+        anyhow::anyhow!(
+            "chmod owner-only on purge socket {}: {err}",
+            socket_path.display()
+        )
+    })?;
     info!(path = %socket_path.display(), "cache purge socket listening");
 
     let limiter = Arc::new(Mutex::new(PurgeRateLimiter::new()));

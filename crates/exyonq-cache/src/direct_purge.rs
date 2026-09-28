@@ -129,6 +129,9 @@ impl CachePurgePort for DirectL1PurgePort {
                     content_encoding: "identity".into(),
                 });
                 let stats = self.cache.invalidate_key(&key);
+                if stats.purged_entries == 0 {
+                    return CachePurgeOutcome::fail("purge.url", site_id, gen, "not_found");
+                }
                 CachePurgeOutcome::success(
                     "purge.url",
                     site_id,

@@ -130,17 +130,17 @@ document_root = "{}"
         htaccess_runtime_support::install_htaccess_runtime_publisher(Arc::clone(&getter));
 
     let _static_guard = install_static_runtime_for_tests();
-    let _fcgi_guard =
-        install_fcgi_runtime_for_tests(executor, vec![(0, DEFAULT_FCGI_MAX_CONCURRENCY)]);
-
     let proxy_client = exyonq_mod_proxy::build_incoming_client();
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    // Cap048: External Capture must be installed after Module bind from publish.
+    let _fcgi_guard =
+        install_fcgi_runtime_for_tests(executor, vec![(0, DEFAULT_FCGI_MAX_CONCURRENCY)]);
     FcgiOverlayHarness {
         ctx: ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -243,7 +243,6 @@ async fn fcgi_overlay_redirect_precedes_fastcgi_dispatch() {
             FcgiDispatchOutcome::BadGateway
         }
     }
-    let _fcgi_guard = install_fcgi_runtime_for_tests(Arc::new(NoCall), vec![(0, 1)]);
     let _static_guard = install_static_runtime_for_tests();
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -289,9 +288,10 @@ document_root = "{}"
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    let _fcgi_guard = install_fcgi_runtime_for_tests(Arc::new(NoCall), vec![(0, 1)]);
     let ctx = ConnectionContext {
         state,
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -435,16 +435,15 @@ document_root = "{}"
     let _htaccess_install =
         htaccess_runtime_support::install_htaccess_runtime_publisher(Arc::clone(&getter));
     let _static_guard = install_static_runtime_for_tests();
-    let _fcgi_guard =
-        install_fcgi_runtime_for_tests(Arc::new(CaptureScriptExecutor), vec![(0, 8), (1, 8)]);
-
     let proxy_client = exyonq_mod_proxy::build_incoming_client();
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    let _fcgi_guard =
+        install_fcgi_runtime_for_tests(Arc::new(CaptureScriptExecutor), vec![(0, 8), (1, 8)]);
     let ctx = ConnectionContext {
         state,
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -530,7 +529,7 @@ document_root = "{}"
         .expect("state");
     let ctx = ConnectionContext {
         state,
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -589,16 +588,16 @@ document_root = "{}"
         htaccess_runtime_support::install_htaccess_runtime_publisher(Arc::clone(&getter));
 
     let _static_guard = install_static_runtime_for_tests();
-    let _fcgi_guard = install_fcgi_runtime_for_tests(executor, capacities);
-
     let proxy_client = exyonq_mod_proxy::build_incoming_client();
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    // Cap048: External after publish.
+    let _fcgi_guard = install_fcgi_runtime_for_tests(executor, capacities);
     FcgiOverlayHarness {
         ctx: ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -668,14 +667,6 @@ async fn fcgi_overlay_saturation_returns_503() {
         started_tx,
         release_rx: std::sync::Mutex::new(release_rx),
     });
-    register_fcgi_dispatch_service(Arc::new(
-        FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: gate_executor,
-            pool_capacities: vec![(0, 1)],
-        })
-        .expect("fcgi runtime"),
-    ))
-    .expect("register global fcgi for multi-thread test");
 
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(".htaccess"), "DirectoryIndex index.php\n").expect("htaccess");
@@ -716,9 +707,17 @@ document_root = "{}"
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
+    register_fcgi_dispatch_service(Arc::new(
+        FcgiRuntime::new(FcgiRuntimeRegistration {
+            executor: gate_executor,
+            pool_capacities: vec![(0, 1)],
+        })
+        .expect("fcgi runtime"),
+    ))
+    .expect("register global fcgi for multi-thread test");
     let harness_ctx = ConnectionContext {
         state,
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };

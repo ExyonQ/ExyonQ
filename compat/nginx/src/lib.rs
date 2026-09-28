@@ -17,6 +17,7 @@
 
 mod analyze;
 mod ast;
+mod fastcgi_php_mvp;
 mod include;
 mod lexer;
 mod limits;
@@ -24,8 +25,10 @@ mod location;
 mod map_ir;
 mod parser;
 mod product;
+mod proxy_mvp;
 mod report;
 mod rewrite;
+mod static_mvp;
 mod try_files;
 mod upstream;
 mod variables;
@@ -59,12 +62,43 @@ pub enum ReportFormat {
     Json,
 }
 
+/// Import profile. Default preserves existing Tier1/2 mapping.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MigrateProfile {
+    /// Existing Plan 09 Tier1/2 importer (proxy/FastCGI/includes as today).
+    #[default]
+    Full,
+    /// Fail-closed static hosting subset — see `NGINX_STATIC_IMPORT_MVP.md`.
+    StaticMvp,
+    /// Fail-closed reverse-proxy subset — see `NGINX_REVERSE_PROXY_IMPORT_MVP.md`.
+    ReverseProxyMvp,
+    /// Fail-closed FastCGI/PHP subset — see `NGINX_FASTCGI_PHP_IMPORT_MVP.md`.
+    FastcgiPhpMvp,
+}
+
+fn is_fail_closed_profile(profile: MigrateProfile) -> bool {
+    matches!(
+        profile,
+        MigrateProfile::StaticMvp | MigrateProfile::ReverseProxyMvp | MigrateProfile::FastcgiPhpMvp
+    )
+}
+
+fn profile_must_refuse(profile: MigrateProfile, report: &CompatibilityReport) -> bool {
+    match profile {
+        MigrateProfile::StaticMvp => static_mvp::must_refuse(report),
+        MigrateProfile::ReverseProxyMvp => proxy_mvp::must_refuse(report),
+        MigrateProfile::FastcgiPhpMvp => fastcgi_php_mvp::must_refuse(report),
+        MigrateProfile::Full => false,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MigrateOptions {
     pub dry_run: bool,
     pub strict: bool,
     pub format: OutputFormat,
     pub report_format: ReportFormat,
+    pub profile: MigrateProfile,
 }
 
 #[derive(Debug, Clone)]
@@ -84,10 +118,32 @@ impl MigrateOutput {
         }
         0
     }
+
+    /// Exit policy for an explicit profile (fail-closed MVPs always refuse on Error/Partial).
+    pub fn exit_code_for_profile(&self, profile: MigrateProfile, strict: bool) -> i32 {
+        match profile {
+            MigrateProfile::StaticMvp
+            | MigrateProfile::ReverseProxyMvp
+            | MigrateProfile::FastcgiPhpMvp => {
+                if profile_must_refuse(profile, &self.report) || self.config.trim().is_empty() {
+                    1
+                } else {
+                    0
+                }
+            }
+            MigrateProfile::Full => self.exit_code(strict),
+        }
+    }
 }
 
-/// Migrate NGINX config from a filesystem path (includes expanded).
+/// Migrate NGINX config from a filesystem path (includes expanded for Full profile).
 pub fn migrate_file(path: &Path, options: &MigrateOptions) -> Result<MigrateOutput> {
+    // Fail-closed MVPs must see raw `include` directives (no expansion).
+    if is_fail_closed_profile(options.profile) {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed reading {}", path.display()))?;
+        return migrate_source(&path.display().to_string(), &raw, options);
+    }
     let mut report = CompatibilityReport::default();
     let tokens = include::load_config(path, &mut report)
         .with_context(|| format!("failed loading {}", path.display()))?;
@@ -122,12 +178,47 @@ fn run_pipeline(
     expand_includes: bool,
 ) -> Result<MigrateOutput> {
     let config = include::parse_tokens(&tokens, report)?;
-    if !expand_includes {
+    if !expand_includes && !is_fail_closed_profile(options.profile) {
         note_unexpanded_includes(&config, report);
     }
     let analyzed = analyze::analyze(&config, report);
-    let mapped = map_ir::map_to_ir(&analyzed, report);
+    match options.profile {
+        MigrateProfile::StaticMvp => static_mvp::enforce(&config, &analyzed, report),
+        MigrateProfile::ReverseProxyMvp => proxy_mvp::enforce(&config, &analyzed, report),
+        MigrateProfile::FastcgiPhpMvp => fastcgi_php_mvp::enforce(&config, &analyzed, report),
+        MigrateProfile::Full => {}
+    }
+
+    if is_fail_closed_profile(options.profile) && profile_must_refuse(options.profile, report) {
+        let summary = report.summary.clone();
+        return Ok(MigrateOutput {
+            config: String::new(),
+            report: std::mem::take(report),
+            summary,
+        });
+    }
+
+    let allow_tcp_fastcgi = options.profile == MigrateProfile::FastcgiPhpMvp;
+    let mut mapped = map_ir::map_to_ir(&analyzed, report, allow_tcp_fastcgi);
+    if options.profile == MigrateProfile::StaticMvp {
+        map_ir::apply_static_mvp_defaults(&mut mapped);
+    }
+    if options.profile == MigrateProfile::ReverseProxyMvp {
+        map_ir::normalize_proxy_mvp_upstreams(&mut mapped);
+    }
+    if options.profile == MigrateProfile::FastcgiPhpMvp {
+        map_ir::apply_fastcgi_php_mvp_defaults(&mut mapped);
+    }
     map_ir::validate_mapped(&mapped).context("generated IR failed validation")?;
+
+    if is_fail_closed_profile(options.profile) && profile_must_refuse(options.profile, report) {
+        let summary = report.summary.clone();
+        return Ok(MigrateOutput {
+            config: String::new(),
+            report: std::mem::take(report),
+            summary,
+        });
+    }
 
     let summary = report.summary.clone();
     let config_out = match options.format {

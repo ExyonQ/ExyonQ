@@ -26,12 +26,14 @@ members = [
   "crates/exyonq-mod-htaccess",
   "crates/exyonq-mod-static",
   "crates/exyonq-mod-proxy",
+  "crates/exyonq-proxy-sdp",
   "crates/exyonq-mod-tls",
   "crates/exyonq-mod-http3",
   "crates/exyonq-http3-provider-api",
   "crates/exyonq-http3-provider-s2n",
   "crates/exyonq-http3-provider-quiche",
   "crates/exyonq-cache",
+  "crates/exyonq-control-api",
   "crates/exyonq-cache-redis",
   "crates/exyonq-runtime-plan",
   "crates/exyonq-module-pipeline",
@@ -42,10 +44,19 @@ members = [
   "crates/exyonq-platform-boundary-spike-harness",
   "crates/exyonq-kernel-contract-consumer",
   "crates/exyonq-platform-linux",
+  "crates/exyonq-linux-ffi",
+  "crates/exyonq-waf-api",
+  "crates/exyonq-waf",
+  "crates/exyonq-control-api-client",
+  "crates/exyonq-observability",
+  "crates/exyonq-cfd-gen",
+  "crates/exyonq-cfd-control",
+  "crates/exyonq-cfd-dataplane",
+  "crates/exyonq-fastcgi-wire",
 ]
 
 [workspace.package]
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/ExyonQ/ExyonQ"
@@ -58,6 +69,9 @@ bytes = "1"
 memmap2 = "0.9.11"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
+brotli = "9"
+# Cap071: buffered encode_all only — no legacy / dictionary / arrays defaults.
+zstd = { version = "0.14", default-features = false }
 http = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1", "http2", "client"] }
@@ -69,12 +83,12 @@ thiserror = "2"
 semver = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
-toml = "0.8"
+toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "ring"] }
-wasmtime = { version = "=45.0.2", default-features = false, features = ["cranelift", "pooling-allocator", "runtime"] }
+wasmtime = { version = "=49.0.1", default-features = false, features = ["cranelift", "pooling-allocator", "runtime"] }
 dashmap = "6"
 
 exyonq-core = { path = "core", default-features = false }
@@ -95,12 +109,16 @@ exyonq-acme = { path = "modules/acme" }
 exyonq-compat-common = { path = "compat/common" }
 exyonq-compat-nginx = { path = "compat/nginx" }
 exyonq-mod-fastcgi = { path = "crates/exyonq-mod-fastcgi" }
+exyonq-fastcgi-wire = { path = "crates/exyonq-fastcgi-wire" }
 exyonq-mod-htaccess = { path = "crates/exyonq-mod-htaccess" }
 exyonq-mod-static = { path = "crates/exyonq-mod-static" }
 exyonq-mod-proxy = { path = "crates/exyonq-mod-proxy" }
+exyonq-proxy-sdp = { path = "crates/exyonq-proxy-sdp" }
 exyonq-mod-tls = { path = "crates/exyonq-mod-tls" }
 exyonq-mod-http3 = { path = "crates/exyonq-mod-http3", default-features = false }
 exyonq-cache = { path = "crates/exyonq-cache" }
+exyonq-control-api = { path = "crates/exyonq-control-api" }
+exyonq-control-api-client = { path = "crates/exyonq-control-api-client" }
 exyonq-cache-redis = { path = "crates/exyonq-cache-redis" }
 exyonq-runtime-plan = { path = "crates/exyonq-runtime-plan" }
 exyonq-module-pipeline = { path = "crates/exyonq-module-pipeline" }
@@ -108,6 +126,20 @@ exyonq-ops-runtime = { path = "crates/exyonq-ops-runtime" }
 exyonq-discovery-runtime = { path = "crates/exyonq-discovery-runtime" }
 exyonq-reload-runtime = { path = "crates/exyonq-reload-runtime" }
 arc-swap = "1"
+regex = "1"
+ipnetwork = "0.21"
+hmac = "0.13"
+sha2 = "0.11"
+getrandom = "0.4"
+exyonq-waf-api = { path = "crates/exyonq-waf-api" }
+exyonq-waf = { path = "crates/exyonq-waf" }
+exyonq-observability = { path = "crates/exyonq-observability" }
+tracing-appender = "0.2.5"
+
+# instant-acme 0.8.5 on crates.io still requires base64 ^0.22.
+# third_party/instant-acme is that release with the requirement moved to 0.23.
+[patch.crates-io]
+instant-acme = { path = "third_party/instant-acme" }
 
 [profile.release]
 lto = true

@@ -17,11 +17,11 @@ jobs:
   security-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (pin; preserves toolchain input contract)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
-          toolchain: 1.93.0
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Install cargo-deny
@@ -65,11 +65,11 @@ jobs:
     needs: security-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (pin; preserves toolchain input contract)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
-          toolchain: 1.93.0
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-about
         run: cargo install cargo-about --locked --features cli
       - name: Install cargo-cyclonedx
@@ -77,7 +77,7 @@ jobs:
       - name: Generate release compliance artifacts
         shell: bash
         run: bash scripts/legal/generate-release-compliance-artifacts.sh
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-compliance
           path: |
@@ -93,10 +93,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact: exyonq-linux-amd64
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             artifact: exyonq-linux-arm64
           - os: macos-15
             target: aarch64-apple-darwin
@@ -105,19 +105,25 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: exyonq-windows-amd64
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-compliance
           path: .
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (pin; preserves toolchain input contract)
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
-          toolchain: 1.93.0
+          toolchain: 1.98.1
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
-      - name: Build binaries (unix)
-        if: runner.os != 'Windows'
-        # P1.5-WS6: --locked required for release artifacts.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install musl C toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build binaries (linux static)
+        if: runner.os == 'Linux'
+        # P1.5-WS6: --locked required for release artifacts. musl static is the production default.
+        run: EXYONQ_TARGET=${{ matrix.target }} bash scripts/release/build-production.sh
+      - name: Build binaries (macOS)
+        if: runner.os == 'macOS'
         run: cargo build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli --target ${{ matrix.target }}
       - name: Build binaries (windows)
         if: runner.os == 'Windows'
@@ -184,7 +190,7 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/exyonqctl.exe dist/exyonqctl.exe -ErrorAction SilentlyContinue
           Copy-Item LICENSE, NOTICE, THIRD_PARTY_NOTICES.md, sbom.cdx.json dist/
           Compress-Archive -Path dist/exyonq.exe, dist/LICENSE, dist/NOTICE, dist/THIRD_PARTY_NOTICES.md, dist/sbom.cdx.json -DestinationPath dist/${{ matrix.artifact }}.zip -Force
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -196,18 +202,29 @@ jobs:
           if-no-files-found: warn
 
   package-linux:
-    name: package deb/rpm amd64
+    # Cap062: dual-arch deb+rpm from prebuilt Tier-1 Linux flat tarballs.
+    # nfpm packages bytes; it does not execute the payload — amd64 runner may
+    # package arm64 ELF without QEMU runtime proof (runtime proof = Oracle arm64).
+    name: package deb/rpm ${{ matrix.arch }}
     needs: [build, compliance-artifacts]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            artifact: exyonq-linux-amd64
+          - arch: arm64
+            artifact: exyonq-linux-arm64
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-compliance
           path: .
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: exyonq-linux-amd64
+          name: ${{ matrix.artifact }}
           path: dist
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -216,7 +233,7 @@ jobs:
         run: |
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
-      - name: Build .deb and .rpm
+      - name: Build .deb and .rpm (${{ matrix.arch }})
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
@@ -232,15 +249,22 @@ jobs:
             echo "ERROR: legacy version forbidden: $VERSION" >&2
             exit 1
           fi
-          export VERSION ARCH=amd64
-          tar -xzf dist/exyonq-linux-amd64.tar.gz -C dist
-          ls -la dist/
-          nfpm pkg --config packaging/nfpm.yaml --packager deb --target dist/
-          nfpm pkg --config packaging/nfpm.yaml --packager rpm --target dist/
-          ls -la dist/*.{deb,rpm}
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+          ARCH="${{ matrix.arch }}"
+          FLAT="dist/${{ matrix.artifact }}.tar.gz"
+          [[ -f "$FLAT" ]] || { echo "ERROR: missing flat tarball $FLAT" >&2; exit 1; }
+          mkdir -p dist/bin
+          tar -xzf "$FLAT" -C dist/bin
+          bash scripts/release/nfpm-package-linux.sh \
+            --arch "$ARCH" \
+            --version "$VERSION" \
+            --bin-dir dist/bin \
+            --out-dir dist/packages
+          ls -la dist/packages/*.{deb,rpm}
+          # Promote into dist/ for artifact upload naming compatibility.
+          cp -f dist/packages/*.deb dist/packages/*.rpm dist/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: exyonq-linux-packages
+          name: exyonq-linux-packages-${{ matrix.arch }}
           path: |
             dist/*.deb
             dist/*.rpm
@@ -254,8 +278,8 @@ jobs:
       # RELEASE_MANIFEST_INCLUDED_IN_SHA256SUMS = YES
       # ARTIFACTS_INCLUDED_IN_SHA256SUMS = YES
       # Cosign sign-blob / OCI sign steps intentionally NOT wired (no secrets, no production keys).
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: exyonq-*
           path: download
@@ -294,11 +318,24 @@ jobs:
           done < <(find download -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z)
           deb_n="$(find bundle/artifacts -type f -name '*.deb' | wc -l | tr -d ' ')"
           rpm_n="$(find bundle/artifacts -type f -name '*.rpm' | wc -l | tr -d ' ')"
-          if [[ "$deb_n" -lt 1 || "$rpm_n" -lt 1 ]]; then
-            echo "ERROR: expected >=1 .deb and >=1 .rpm from package-linux (deb=${deb_n} rpm=${rpm_n})" >&2
+          # Cap062: dual-arch deb+rpm required (amd64 + arm64).
+          if [[ "$deb_n" -lt 2 || "$rpm_n" -lt 2 ]]; then
+            echo "ERROR: expected >=2 .deb and >=2 .rpm from package-linux dual-arch (deb=${deb_n} rpm=${rpm_n})" >&2
             find download -type f | head -50 >&2 || true
             exit 1
           fi
+          find bundle/artifacts -type f -name '*amd64*.deb' | grep -q . || {
+            echo "ERROR: missing amd64 .deb artifact" >&2; exit 1;
+          }
+          find bundle/artifacts -type f \( -name '*arm64*.deb' -o -name '*aarch64*.deb' \) | grep -q . || {
+            echo "ERROR: missing arm64 .deb artifact" >&2; exit 1;
+          }
+          find bundle/artifacts -type f \( -name '*amd64*.rpm' -o -name '*x86_64*.rpm' \) | grep -q . || {
+            echo "ERROR: missing amd64/x86_64 .rpm artifact" >&2; exit 1;
+          }
+          find bundle/artifacts -type f \( -name '*arm64*.rpm' -o -name '*aarch64*.rpm' \) | grep -q . || {
+            echo "ERROR: missing arm64/aarch64 .rpm artifact" >&2; exit 1;
+          }
           art_n="$(find bundle/artifacts -type f | wc -l | tr -d ' ')"
           if [[ "$art_n" -lt 1 ]]; then
             echo "ERROR: no release artifacts assembled under bundle/artifacts" >&2
@@ -336,7 +373,7 @@ jobs:
           echo "ROOT_SIGNED_OBJECT=SHA256SUMS.txt"
           echo "RELEASE_MANIFEST_INCLUDED_IN_SHA256SUMS=YES"
           echo "ARTIFACTS_INCLUDED_IN_SHA256SUMS=YES"
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: checksums
           path: |
@@ -350,8 +387,8 @@ jobs:
       packages: write
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-compliance
           path: .
@@ -373,23 +410,42 @@ jobs:
             echo "ERROR: legacy version forbidden: $VERSION" >&2
             exit 1
           fi
+          if [[ "$VERSION" == "latest" ]]; then
+            echo "ERROR: latest forbidden as version identity" >&2
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+      # V044_DEP_BASELINE_OCI_001: encode canonical multiarch + explicit attestations.
+      # Contract: linux/amd64 + linux/arm64 index; provenance mode=max; SBOM attest;
+      # revision/version/source labels; version tag only (no :latest).
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: packaging/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           # P14V042: inject tag commit into binary + OCI label; fail closed without real SHA.
           # Do not copy .git into the build context (.dockerignore remains authoritative).
           build-args: |
             EXYONQ_VERSION=${{ steps.ver.outputs.version }}
             EXYONQ_GIT_REVISION=${{ github.sha }}
             EXYONQ_OFFICIAL_RELEASE=1
+          # Explicit OCI identity (also set in Dockerfile LABEL from the same ARGs).
+          labels: |
+            org.opencontainers.image.title=ExyonQ
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/ExyonQ/ExyonQ
+            org.opencontainers.image.licenses=Apache-2.0
           # P14SIGN: digest is the release identity; do not publish :latest or legacy :v0.3 aliases.
           tags: |
             ghcr.io/exyonq/exyonq:${{ steps.ver.outputs.version }}
@@ -400,7 +456,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve version
         id: ver
         run: |
@@ -426,16 +482,16 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-compliance
           path: compliance
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: exyonq-*
           path: artifacts
           merge-multiple: true
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: checksums
           path: artifacts
@@ -490,7 +546,7 @@ jobs:
             exit 1
           }
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ExyonQ v${{ steps.ver.outputs.version }}

@@ -3,6 +3,7 @@
 use exyonq_module_api::{
     CoordinationError, CoordinationRejectReason, InvalidationEvent, InvalidationOperation,
 };
+use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -189,7 +190,7 @@ pub fn sign_mac(
 ) -> Result<(String, String), CoordinationError> {
     let key_id = keys.active_key_id.clone();
     let bytes = canonical_signing_bytes(event, deployment_id, &key_id);
-    let mut mac = HmacSha256::new_from_slice(&keys.active_key)
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&keys.active_key)
         .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
     mac.update(&bytes);
     let tag = mac.finalize().into_bytes();
@@ -211,7 +212,7 @@ pub fn verify_mac(
     let expected = hex_decode(mac_hex)
         .ok_or_else(|| CoordinationError::new(CoordinationRejectReason::InvalidTarget))?;
     let bytes = canonical_signing_bytes(event, deployment_id, key_id);
-    let mut mac = HmacSha256::new_from_slice(key)
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key)
         .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
     mac.update(&bytes);
     mac.verify_slice(&expected)
@@ -486,5 +487,68 @@ mod tests {
         let ev = sample();
         let (kid, _) = sign_mac(&ev, "deploy1", &keys).unwrap();
         assert_eq!(kid, "k2", "PREVIOUS_KEY_USED_FOR_SIGNING=NO");
+    }
+
+    /// Independent known-answer vector (RustCrypto hmac 0.13 docs / standard HMAC-SHA256).
+    /// Proves library digest+tag bytes, not merely self-sign/self-verify.
+    #[test]
+    fn hmac_sha256_known_answer_vector() {
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(b"my secret and secure key")
+            .expect("HMAC accepts arbitrary key length");
+        mac.update(b"input message");
+        let tag = mac.finalize().into_bytes();
+        let expected =
+            hex_decode("97d2a569059bbcd8ead4444ff99071f4c01d005bcefe0d3567e1be628e5fdcd9")
+                .expect("public hex vector");
+        assert_eq!(
+            tag.as_slice(),
+            expected.as_slice(),
+            "HMAC_SHA256_KNOWN_ANSWER"
+        );
+
+        let mut v = <HmacSha256 as KeyInit>::new_from_slice(b"my secret and secure key").unwrap();
+        v.update(b"input message");
+        v.verify_slice(&expected).expect("known vector verifies");
+    }
+
+    #[test]
+    fn modified_tag_rejected() {
+        let keys = EventSigningKeys::for_tests("k1", b"secret-key-material-32bytes!!");
+        let ev = sample();
+        let (kid, mac) = sign_mac(&ev, "deploy1", &keys).unwrap();
+        let mut bad = mac.into_bytes();
+        // Flip one nibble without changing length / hex validity.
+        let b0 = bad[0];
+        bad[0] = if b0 == b'0' { b'1' } else { b'0' };
+        let bad = String::from_utf8(bad).unwrap();
+        assert!(verify_mac(&ev, "deploy1", &kid, &bad, &keys).is_err());
+    }
+
+    #[test]
+    fn wrong_key_rejects_valid_tag() {
+        let signer = EventSigningKeys::for_tests("k1", b"secret-key-material-32bytes!!");
+        let other = EventSigningKeys::for_tests("k1", b"other-key-material-32bytes!!!!");
+        let ev = sample();
+        let (kid, mac) = sign_mac(&ev, "deploy1", &signer).unwrap();
+        assert!(verify_mac(&ev, "deploy1", &kid, &mac, &other).is_err());
+    }
+
+    #[test]
+    fn truncated_and_malformed_tag_rejected() {
+        let keys = EventSigningKeys::for_tests("k1", b"secret-key-material-32bytes!!");
+        let ev = sample();
+        let (kid, mac) = sign_mac(&ev, "deploy1", &keys).unwrap();
+        assert!(
+            verify_mac(&ev, "deploy1", &kid, &mac[..mac.len() - 2], &keys).is_err(),
+            "truncated tag must fail (no truncation contract)"
+        );
+        assert!(
+            verify_mac(&ev, "deploy1", &kid, "zz", &keys).is_err(),
+            "malformed hex must fail"
+        );
+        assert!(
+            verify_mac(&ev, "deploy1", &kid, "abc", &keys).is_err(),
+            "odd-length hex must fail"
+        );
     }
 }

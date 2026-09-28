@@ -7,7 +7,7 @@ publish = false
 
 [dev-dependencies]
 bytes = "1"
-exyonq-core = { path = "../../core", default-features = false, features = ["http3-provider-s2n"] }
+exyonq-core = { path = "../../core", default-features = false, features = ["http3-provider-s2n", "test-utils"] }
 exyonq-mod-proxy = { workspace = true }
 exyonq-mod-static = { workspace = true }
 exyonq-ops-runtime = { workspace = true }
@@ -28,8 +28,8 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "io-util"] }
 
 [[test]]
-name = "smoke"
-path = "smoke.rs"
+name = "workspace_version"
+path = "workspace_version.rs"
 
 [[test]]
 name = "spike_proxy"

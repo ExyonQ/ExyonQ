@@ -206,7 +206,9 @@ pub fn append_prometheus(out: &mut String) {
     ));
 }
 
-/// Minimal OpenMetrics scrape for the wire/epoll path (`GET /metrics` on bench.toml).
+/// Former wire-path OpenMetrics body builder (LA-CAP054-008 removed unauthenticated
+/// wire scrapes). Kept for unit tests of counter formatting only.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn wire_prometheus_response() -> Vec<u8> {
     let mut body = String::new();
     append_prometheus(&mut body);

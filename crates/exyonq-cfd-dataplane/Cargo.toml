@@ -1,0 +1,42 @@
+[package]
+name = "exyonq-cfd-dataplane"
+description = "Competitive Frontier H1 dataplane process (Phase 2 GET+routing+headers — gate default OFF)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Compile-time only: one-shot sendfile errno override for pread fallback oracles.
+# Not enabled in production release builds.
+test-utils = []
+
+[[bin]]
+name = "exyonq-dataplane"
+path = "src/main.rs"
+
+[lib]
+name = "exyonq_cfd_dataplane"
+path = "src/lib.rs"
+
+[dependencies]
+exyonq-cfd-gen = { path = "../exyonq-cfd-gen" }
+exyonq-cfd-control = { path = "../exyonq-cfd-control" }
+exyonq-fastcgi-wire = { path = "../exyonq-fastcgi-wire" }
+# Product WAF engine (sync, no Tokio/Hyper) — Phase-3 compiled projection execution.
+exyonq-waf = { path = "../exyonq-waf" }
+exyonq-waf-api = { path = "../exyonq-waf-api" }
+# mio + socket2 authorized only in this dataplane crate (CFD).
+# socket2 `all` required solely for SO_REUSEPORT among dataplane shards.
+# libc: flock for single-process exclusivity (pre-existing Phase-1 unsafe).
+# linux-ffi: Cap004 openat2 / sendfile Safe wrappers (ADR-045); Tokio=0.
+exyonq-linux-ffi = { path = "../exyonq-linux-ffi" }
+mio = { version = "1", features = ["net", "os-poll"] }
+socket2 = { version = "0.6", features = ["all"] }
+libc = "0.2"
+thiserror.workspace = true
+
+[dev-dependencies]
+exyonq-cfd-control = { path = "../exyonq-cfd-control" }
+exyonq-cfd-gen = { path = "../exyonq-cfd-gen" }
+tempfile = "3"

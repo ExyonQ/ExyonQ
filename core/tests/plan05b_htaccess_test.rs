@@ -1,4 +1,4 @@
-//! Plan 05B — runtime overlay redirect smoke (no `.htaccess` I/O on request path).
+//! Plan 05B — runtime overlay redirect integration check (no `.htaccess` I/O on request path).
 
 mod htaccess_runtime_support;
 use exyonq_core::server::handler::{serve_http3_request, ConnectionContext};
@@ -9,13 +9,13 @@ use hyper::header::HeaderValue;
 use hyper::{Method, Request, StatusCode};
 use std::sync::Arc;
 
-struct HtaccessSmokeHarness {
+struct HtaccessRuntimeHarness {
     ctx: ConnectionContext,
     _root: tempfile::TempDir,
     _htaccess_install: htaccess_runtime_support::HtaccessRuntimeInstall,
 }
 
-async fn htaccess_ctx() -> HtaccessSmokeHarness {
+async fn htaccess_ctx() -> HtaccessRuntimeHarness {
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(".htaccess"), "Redirect 301 /old /new\n").expect("write");
     let raw = format!(
@@ -52,10 +52,10 @@ htaccess = "overlay"
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())
         .await
         .expect("state");
-    HtaccessSmokeHarness {
+    HtaccessRuntimeHarness {
         ctx: ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },

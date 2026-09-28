@@ -83,11 +83,11 @@ fn guards_script_enforces_fastcgi_and_handler_bans() {
 }
 
 #[test]
-fn pr1_execute_backend_contract_stub_unchanged_in_core() {
+fn pr1_execute_backend_contract_surface_unchanged_in_core() {
     let execute_backend_src = include_str!("../src/execute_backend.rs");
     assert!(
         execute_backend_src.contains("Backend::Fastcgi"),
-        "contract stub must retain Fastcgi arm"
+        "contract surface must retain Fastcgi arm"
     );
     assert!(
         !execute_backend_src.contains("connect("),

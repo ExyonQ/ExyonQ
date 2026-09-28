@@ -1,0 +1,13 @@
+[package]
+name = "exyonq-fastcgi-wire"
+description = "Sync FastCGI wire codec/params/exchange — Tokio/Hyper free (Phase 6B CFD)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

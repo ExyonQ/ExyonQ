@@ -144,6 +144,9 @@ pub enum ConfigError {
     #[error("invalid redirect status: {value}")]
     InvalidRedirectStatus { value: u16 },
 
+    #[error("invalid redirect location: {value}")]
+    InvalidRedirectLocation { value: String },
+
     #[error("invalid rewrite target: {value}")]
     InvalidRewriteTarget { value: String },
 
@@ -164,6 +167,9 @@ pub enum ConfigError {
 
     #[error("invalid static.preload: {message}")]
     InvalidStaticPreload { message: String },
+
+    #[error("invalid static.encoding_cache: {message}")]
+    InvalidStaticEncodingCache { message: String },
 
     #[error("invalid http3.provider: {value} (allowed: s2n, quiche)")]
     InvalidHttp3Provider { value: String },
@@ -305,7 +311,8 @@ impl ConfigError {
             Self::InvalidListen { value }
             | Self::InvalidMatchPath { value }
             | Self::InvalidUpstreamTarget { value }
-            | Self::InvalidRewriteTarget { value } => {
+            | Self::InvalidRewriteTarget { value }
+            | Self::InvalidRedirectLocation { value } => {
                 Diagnostic::error(DiagnosticCode::InvalidValue, self.to_string())
                     .with_received(value.clone())
             }

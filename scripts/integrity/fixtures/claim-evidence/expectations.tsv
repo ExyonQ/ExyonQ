@@ -1,0 +1,71 @@
+# Expected outcomes for the CLAIM-EVIDENCE-INTEGRITY adversarial cases.
+#
+# SOURCE OF TRUTH: the owner authorization "DEVELOPMENT INTEGRITY GUARD",
+# section 14, cases CASE-01..CASE-12, plus the fail-closed requirement in
+# section 11. These rows were written from that specification, not from
+# checker output. Rows must not be edited to match a checker result; if the
+# checker disagrees with a row, the checker is wrong until the owner says
+# otherwise.
+#
+# Columns (tab separated):
+#   CASE_ID           identifier used in the report
+#   FIXTURE           file under this directory
+#   EXPECTED_VERDICT  PASS | FAIL | REVIEW
+#   REQUIRED_FINDING  finding code that must appear, or - for PASS rows
+#   MUTATION          KEY=VALUE pairs separated by ';' forming the minimal
+#                     honest repair for every defect the fixture exhibits;
+#                     after applying them the block must become PASS. This is
+#                     the counterfactual: it proves the verdict was caused by
+#                     the intended fields and not by an unconditional reject.
+#                     A repair may have to narrow the prose as well as the
+#                     tokens, because relabelling a field while the sentence
+#                     still overclaims is not a repair. A case may exhibit
+#                     more than one defect, so this column is not a claim that
+#                     the fixture has exactly one.
+#   OWNER_WORD        the outcome word used in the owner specification. The
+#                     verifier enforces the translation table below, so the
+#                     verdict column cannot drift away from the owner's text:
+#                       REJECT                 -> FAIL
+#                       INSUFFICIENT           -> FAIL
+#                       REVIEW_OR_INSUFFICIENT -> FAIL or REVIEW
+#                       SELF_CONFIRMING_RISK   -> FAIL or REVIEW
+#                       WRONG_CAUSAL_PATH      -> FAIL
+#                       STALE_OR_REJECT        -> FAIL
+#                       NEGATIVE_CONTROL       -> PASS
+#                       FAIL_CLOSED            -> REVIEW
+#                     The table is this project's reading of the owner's
+#                     words, not the owner's own mapping. INSUFFICIENT is read
+#                     as FAIL (the evidence is shown to be inadequate) while
+#                     REVIEW_OR_INSUFFICIENT admits either, because the owner
+#                     wrote both words for CASE-03.
+#   SPEC_REF          case in the owner specification
+#
+# Source bindings in the fixtures are synthetic hex strings that cannot be a
+# real commit here, so the fixtures assert nothing about the checkout they sit
+# in. Live git binding is covered by a separate structural probe in the
+# verifier.
+#
+CASE_ID	FIXTURE	EXPECTED_VERDICT	REQUIRED_FINDING	MUTATION	OWNER_WORD	SPEC_REF
+CASE-01	case-01-library-test-as-production.cei	FAIL	EXECUTION_CLASS_INFLATION	CLAIM_EXECUTION_CLASS=UNIT	REJECT	spec-14-CASE-01
+CASE-02	case-02-package-clippy-as-global.cei	FAIL	SCOPE_INFLATION	CLAIM=exyonq-core is clippy-clean with -D warnings;CLAIM_SCOPE=PACKAGE;CLAIM_REQUIRED_EFFECT=POSITIVE_OBSERVATION no lint diagnostics for that package	REJECT	spec-14-CASE-02
+CASE-03	case-03-green-test-as-contract-proof.cei	REVIEW	TEST_PASS_AS_CONTRACT_PROOF	CONTRACT_SOURCE=RFC;EVIDENCE_ORACLE_ORIGIN=RFC;EVIDENCE_INDEPENDENCE=INDEPENDENT;SELF_CONFIRMING_TEST_LOOP_RISK=LOW	REVIEW_OR_INSUFFICIENT	spec-14-CASE-03
+CASE-04	case-04-no-failure-as-no-defect.cei	FAIL	NO_FAILURE_AS_NO_DEFECT	CLAIM=Descriptor count returned to baseline after the standard scenario;CLAIM_REQUIRED_EFFECT=POSITIVE_OBSERVATION descriptor count returns to baseline;EVIDENCE_OBSERVED_EFFECT=POSITIVE_OBSERVATION descriptor count returned to baseline	REJECT	spec-14-CASE-04
+CASE-05	case-05-hypothesis-as-root-cause.cei	FAIL	HYPOTHESIS_AS_CAUSE	EPISTEMIC_STATUS=PROVEN;PATH_EXECUTED=YES;PATH_EXECUTION_EVIDENCE=TRACE wait-time trace attributes the spike to that cache mutex;CLAIM_CONCURRENCY_CLASS=LOCKING;CONCURRENCY_EVIDENCE_FORM=STRESS_WITH_INDEPENDENT_ORACLE	REJECT	spec-14-CASE-05
+CASE-06	case-06-mirrored-implementation-oracle.cei	FAIL	SELF_CONFIRMING_ORACLE	EVIDENCE=the test enumerates the header list transcribed from the specification;MIRRORED_IMPLEMENTATION_ORACLE=NO;SELF_CONFIRMING_TEST_LOOP_RISK=LOW;CONTRACT_SOURCE=EXTERNAL_SPEC;EVIDENCE_ORACLE_ORIGIN=EXTERNAL_SPEC;EVIDENCE_INDEPENDENCE=INDEPENDENT	SELF_CONFIRMING_RISK	spec-14-CASE-06
+CASE-07	case-07-wrong-causal-path.cei	FAIL	WRONG_CAUSAL_PATH	EVIDENCE=the upstream harness truncated the body mid-stream and the proxy answered 502;EVIDENCE_COMMAND=scripts/e2e/proxy-failure-matrix.sh --case upstream-truncated-body;EVIDENCE_OBSERVED_EFFECT=POSITIVE_OBSERVATION 502 returned after a truncated body;PATH_EXECUTION_EVIDENCE=LOG_CORRELATION the harness logged a short write then abort, correlated by connection id	WRONG_CAUSAL_PATH	spec-14-CASE-07
+CASE-08	case-08-stdio-as-real-client.cei	FAIL	CLIENT_SCOPE_INFLATION	CLAIM=The tool answers a request over an MCP stdio session;CLAIM_CLIENT=MCP_STDIO;CLAIM_EXECUTION_CLASS=REAL_RUNTIME	REJECT	spec-14-CASE-08
+CASE-09	case-09-cross-build-as-runtime.cei	FAIL	PLATFORM_SCOPE_INFLATION	CLAIM=The Linux amd64 binary compiles on the Darwin workstation;CLAIM_PLATFORM=DARWIN_ARM64;CLAIM_EXECUTION_CLASS=BUILD;CLAIM_REQUIRED_EFFECT=POSITIVE_OBSERVATION an artifact is produced for the target triple	REJECT	spec-14-CASE-09
+CASE-10	case-10-stale-source-evidence.cei	FAIL	STALE_EVIDENCE	CLAIM=The routing suite passed at the commit the evidence names;CLAIM_SOURCE_STATE=HEAD=1111beef1111dead STATE=CLEAN	STALE_OR_REJECT	spec-14-CASE-10
+CASE-11	case-11-sequential-tests-as-concurrency-proof.cei	FAIL	CONCURRENCY_EVIDENCE_GAP	EVIDENCE=a barrier-synchronised reader and reloader on the amd64 evidence host;EVIDENCE_COMMAND=scripts/e2e/reload-race.sh --barrier --iterations 20000;EVIDENCE_EXECUTION_CLASS=E2E;CONCURRENCY_EVIDENCE_FORM=BARRIER_CONTROLLED_RACE	INSUFFICIENT	spec-14-CASE-11
+CASE-12	case-12-unexecuted-evidence-as-pass.cei	FAIL	UNEXECUTED_CLAIM	EVIDENCE=the matrix job ran on both legs;EVIDENCE_EXECUTION=EXECUTED;EVIDENCE_RESULT=PASS;EVIDENCE_OBSERVED_EFFECT=POSITIVE_OBSERVATION both matrix legs reported green	REJECT	spec-14-CASE-12
+PROSE-01	prose-01-universal-wording-vs-fields.cei	REVIEW	PROSE_SCOPE_DIVERGENCE	CLAIM=Graceful drain works on Linux amd64	FAIL_CLOSED	spec-04-scope-wording
+CMD-01	cmd-01-excluded-package-in-wide-claim.cei	FAIL	SCOPE_COMMAND_MISMATCH	EVIDENCE=the workspace suite with no package excluded;EVIDENCE_COMMAND=cargo test --workspace	REJECT	spec-11-mechanical
+CMD-02	cmd-02-wide-claim-without-command.cei	REVIEW	SCOPE_COMMAND_UNVERIFIABLE	EVIDENCE_COMMAND=cargo build --workspace	FAIL_CLOSED	spec-11-fail-closed
+OMIT-01	omit-01-effect-fields-deleted.cei	REVIEW	MISSING_REQUIRED_FIELD	CLAIM_REQUIRED_EFFECT=POSITIVE_OBSERVATION descriptor count returns to baseline;EVIDENCE_OBSERVED_EFFECT=POSITIVE_OBSERVATION descriptor count returned to baseline	FAIL_CLOSED	spec-11-fail-closed
+OMIT-02	omit-02-self-confirming-fields-deleted.cei	REVIEW	MISSING_REQUIRED_FIELD	MIRRORED_IMPLEMENTATION_ORACLE=NO;SELF_CONFIRMING_TEST_LOOP_RISK=LOW	FAIL_CLOSED	spec-11-fail-closed
+OMIT-03	omit-03-concurrency-class-deleted.cei	REVIEW	MISSING_REQUIRED_FIELD	CLAIM_CONCURRENCY_CLASS=TOCTOU	FAIL_CLOSED	spec-11-fail-closed
+PASS-01	pass-01-package-scoped-claim.cei	PASS	-	-	NEGATIVE_CONTROL	negative-control
+PASS-02	pass-02-dual-arch-race-evidence.cei	PASS	-	-	NEGATIVE_CONTROL	negative-control
+PASS-03	pass-03-honest-non-material-status.cei	PASS	-	-	NEGATIVE_CONTROL	negative-control
+REVIEW-01	review-01-unrecognized-execution-class.cei	REVIEW	UNKNOWN_TOKEN	EVIDENCE_EXECUTION_CLASS=E2E;CLAIM_EVIDENCE_COMPATIBILITY=PASS	FAIL_CLOSED	spec-11-fail-closed
+REVIEW-02	review-02-missing-required-field.cei	REVIEW	MISSING_REQUIRED_FIELD	EVIDENCE_RESULT=PASS	FAIL_CLOSED	spec-11-fail-closed

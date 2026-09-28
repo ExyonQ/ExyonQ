@@ -37,12 +37,3 @@ pub fn set_tcp_cork(fd: RawFd, on: bool) -> io::Result<()> {
         Err(io::Error::last_os_error())
     }
 }
-
-/// Compose cork hooks into module-api for proxy wire (CLI ownership).
-pub fn install_proxy_tcp_send_hooks() {
-    let _ = exyonq_module_api::proxy_wire::install_proxy_tcp_send_hooks(
-        exyonq_module_api::proxy_wire::ProxyTcpSendHooks {
-            set_cork: set_tcp_cork,
-        },
-    );
-}

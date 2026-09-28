@@ -15,7 +15,8 @@
  */
 //! s2n-quic HTTP/3 provider (P13D Phase 3) — sole authorized `s2n-quic` zone.
 //!
-//! Uses hyperium `h3` via `s2n-quic-h3`. Local `max_ack_delay` is applied through
+//! Uses hyperium `h3` via `tachyon-quic` (h3↔s2n-quic binding; replaces yanked `s2n-quic-h3`).
+//! Local `max_ack_delay` is applied through
 //! `s2n_quic::provider::limits::Limits::with_max_ack_delay`.
 
 use bytes::{Buf, Bytes};
@@ -146,7 +147,7 @@ where
         .unwrap_or_else(|_| "0.0.0.0".to_string());
 
     let mut h3_conn = h3::server::builder()
-        .build(s2n_quic_h3::Connection::new(connection))
+        .build(tachyon_quic::Connection::new(connection))
         .await?;
 
     while let Some(resolver) = h3_conn.accept().await? {
@@ -159,13 +160,21 @@ where
             Ok(req) => req,
             Err(RequestBodyReadError::TooLarge) => {
                 let response = payload_too_large_response();
-                let _ = write_h3_response(&mut stream, response, drain_cap).await;
+                // Required error-response write: failure is authoritative for emission,
+                // never treated as a successfully emitted 413.
+                if let Err(err) = write_h3_response(&mut stream, response, drain_cap).await {
+                    DIAG.response_errors.fetch_add(1, Ordering::Relaxed);
+                    warn!(%err, "s2n http3 error response failed after payload-too-large");
+                }
                 continue;
             }
             Err(RequestBodyReadError::Body) => {
                 DIAG.dispatch_errors.fetch_add(1, Ordering::Relaxed);
                 let response = bad_request_response();
-                let _ = write_h3_response(&mut stream, response, drain_cap).await;
+                if let Err(err) = write_h3_response(&mut stream, response, drain_cap).await {
+                    DIAG.response_errors.fetch_add(1, Ordering::Relaxed);
+                    warn!(%err, "s2n http3 error response failed after bad-request body");
+                }
                 continue;
             }
         };
@@ -189,7 +198,13 @@ where
                     )],
                     body: Bytes::from_static(b"internal server error"),
                 };
-                let _ = write_h3_response(&mut stream, fallback, drain_cap).await;
+                if let Err(write_err) = write_h3_response(&mut stream, fallback, drain_cap).await {
+                    DIAG.response_errors.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        %write_err,
+                        "s2n http3 error response failed after dispatch error"
+                    );
+                }
             }
         }
     }

@@ -70,12 +70,12 @@ type PostClient = Client<HttpConnector, Full<bytes::Bytes>>;
 static INCOMING_CLIENT: OnceLock<ProxyClient> = OnceLock::new();
 static POST_CLIENT: OnceLock<PostClient> = OnceLock::new();
 
-pub fn build_incoming_client() -> ProxyClient {
-    INCOMING_CLIENT.get_or_init(build_hyper_client).clone()
+pub fn build_incoming_client() -> &'static ProxyClient {
+    INCOMING_CLIENT.get_or_init(build_hyper_client)
 }
 
-pub fn post_body_client() -> PostClient {
-    POST_CLIENT.get_or_init(build_hyper_client).clone()
+pub fn post_body_client() -> &'static PostClient {
+    POST_CLIENT.get_or_init(build_hyper_client)
 }
 
 fn build_hyper_client<B>() -> Client<HttpConnector, B>
@@ -97,8 +97,8 @@ where
 
 static GET_CLIENT: OnceLock<GetClient> = OnceLock::new();
 
-pub fn get_empty_body_client() -> GetClient {
-    GET_CLIENT.get_or_init(build_hyper_client).clone()
+pub fn get_empty_body_client() -> &'static GetClient {
+    GET_CLIENT.get_or_init(build_hyper_client)
 }
 
 #[cfg(test)]
@@ -229,6 +229,7 @@ mod tests {
             upstream_name: "backend".into(),
             target: format!("http://{addr}"),
             timeout: std::time::Duration::from_millis(500),
+            max_connect_retries: 1,
             host: Some(addr.ip().to_string()),
         };
         let target = UpstreamTarget::from_descriptor(&desc).unwrap();

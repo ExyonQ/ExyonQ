@@ -216,7 +216,9 @@ async fn security_rejects_duplicate_content_length() {
 #[tokio::test]
 async fn security_static_header_read_timeout() {
     let prev = std::env::var("EXYONQ_READ_TIMEOUT_MS").ok();
+    exyonq_core::server::reset_header_read_timeout_cache_for_tests();
     std::env::set_var("EXYONQ_READ_TIMEOUT_MS", "100");
+    exyonq_core::server::reset_header_read_timeout_cache_for_tests();
 
     let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/static.toml");
     let mut config = AppConfig::from_file(&config_path).expect("config");
@@ -242,6 +244,7 @@ async fn security_static_header_read_timeout() {
         Some(value) => std::env::set_var("EXYONQ_READ_TIMEOUT_MS", value),
         None => std::env::remove_var("EXYONQ_READ_TIMEOUT_MS"),
     }
+    exyonq_core::server::reset_header_read_timeout_cache_for_tests();
 }
 
 #[test]
@@ -293,7 +296,7 @@ async fn security_http3_rejects_post() {
     let response = serve_http3_request(
         ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -828,11 +831,15 @@ async fn security_reload_invalid_config_keeps_snapshot() {
     assert!(reload::reload_from_path(
         &config_path,
         &shared,
-        &proxy_client,
+        proxy_client,
         &tls_acceptor,
         &tls_cache,
     )
     .await
     .is_err());
     assert_eq!(reload::read_state(&shared).generation, gen_before);
+    assert_eq!(
+        reload::active_runtime_generation(),
+        reload::read_state(&shared).generation
+    );
 }

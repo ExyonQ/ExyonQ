@@ -28,15 +28,32 @@ pub enum WirePlanDecision {
 }
 
 /// Raw-head WebSocket upgrade — must use Hyper (proxy wire is GET-response only).
+/// Cap031 LA-002: Connection is a comma-separated token list (e.g. `close, Upgrade`).
 fn wire_head_is_websocket_upgrade(head: &[u8]) -> bool {
     let h = head.to_ascii_lowercase();
-    h.windows(b"upgrade: websocket".len())
+    if !h
+        .windows(b"upgrade: websocket".len())
         .any(|w| w == b"upgrade: websocket")
-        && (h
-            .windows(b"connection: upgrade".len())
-            .any(|w| w == b"connection: upgrade")
-            || h.windows(b"connection: keep-alive, upgrade".len())
-                .any(|w| w == b"connection: keep-alive, upgrade"))
+    {
+        return false;
+    }
+    for line in h.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r".as_slice()).unwrap_or(line);
+        let Some(rest) = line.strip_prefix(b"connection:") else {
+            continue;
+        };
+        let Ok(val) = std::str::from_utf8(rest) else {
+            continue;
+        };
+        if val
+            .split(',')
+            .map(str::trim)
+            .any(|token| token == "upgrade")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Classify wire path from pinned generation view and header bytes only.
@@ -55,13 +72,15 @@ pub fn plan_wire_decision(
         return Ok(WirePlanDecision::Hyper);
     }
 
-    if !view.modules_enabled {
-        if proxy_wire::might_use_proxy_wire(head) {
-            return Ok(WirePlanDecision::Proxy);
-        }
-        if view.site_static_slot.is_some() && static_wire::might_use_static_wire(head) {
-            return Ok(WirePlanDecision::Static);
-        }
+    // Cap067 wire-cheap: ratelimit/metrics do NOT force Hyper here.
+    // Compression uses early AE gate in plan_wire_after_headers / handler
+    // (`modules_require_hyper_for_request_head`), not this planner.
+    // OpenMetrics scrape stays Hyper via `tokio_accept_required` / path.
+    if proxy_wire::might_use_proxy_wire(head) {
+        return Ok(WirePlanDecision::Proxy);
+    }
+    if view.site_static_slot.is_some() && static_wire::might_use_static_wire(head) {
+        return Ok(WirePlanDecision::Static);
     }
 
     Ok(WirePlanDecision::Hyper)
@@ -83,11 +102,30 @@ mod tests {
     }
 
     #[test]
-    fn ps1c_planner_static_for_site_wire() {
+    fn ps1c_planner_static_for_health_wire() {
+        ensure_wire_hooks_installed();
+        let head = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
+        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        assert_eq!(decision, WirePlanDecision::Static);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ps1c_planner_static_for_ordinary_site_asset_when_sendfile_auto() {
         ensure_wire_hooks_installed();
         let head = b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n";
         let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        // Cap067: ordinary static GET is Wire Static so WAF→sendfile divert can run.
         assert_eq!(decision, WirePlanDecision::Static);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn ps1c_planner_hyper_for_ordinary_site_asset_on_non_linux() {
+        ensure_wire_hooks_installed();
+        let head = b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n";
+        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        assert_eq!(decision, WirePlanDecision::Hyper);
     }
 
     #[test]
@@ -107,12 +145,41 @@ mod tests {
     }
 
     #[test]
-    fn ps1c_planner_hyper_when_modules_enabled() {
+    fn cap031_planner_websocket_connection_close_upgrade_uses_hyper() {
         ensure_wire_hooks_installed();
+        // LA-CAP031-002: token list form must not fall through to GET-only proxy wire.
+        let head = b"GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: close, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        assert_eq!(decision, WirePlanDecision::Hyper);
+    }
+
+    #[test]
+    fn cap031_planner_websocket_connection_keep_alive_upgrade_no_space_uses_hyper() {
+        ensure_wire_hooks_installed();
+        let head = b"GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive,Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        assert_eq!(decision, WirePlanDecision::Hyper);
+    }
+
+    #[test]
+    fn wire_cheap_modules_enabled_still_allows_proxy_and_static() {
+        ensure_wire_hooks_installed();
+        // modules_enabled=true alone must not force Hyper (Cap067 wire-cheap).
         let view = GenerationView::pinned(1, true, Some(0));
-        let head = b"GET /site/index.html HTTP/1.1\r\nHost: x\r\n\r\n";
+        let site = b"GET /site/index.html HTTP/1.1\r\nHost: x\r\n\r\n";
+        let api = b"GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";
         assert_eq!(
-            plan_wire_decision(&view, head).expect("plan"),
+            plan_wire_decision(&view, api).expect("plan"),
+            WirePlanDecision::Proxy
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            plan_wire_decision(&view, site).expect("plan"),
+            WirePlanDecision::Static
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(
+            plan_wire_decision(&view, site).expect("plan"),
             WirePlanDecision::Hyper
         );
     }

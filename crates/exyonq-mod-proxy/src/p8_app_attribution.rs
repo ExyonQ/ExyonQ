@@ -203,7 +203,9 @@ fn ensure_dumper() {
         std::thread::Builder::new()
             .name("p8-app-attr-dump".into())
             .spawn(move || loop {
-                let _ = fs::write(&path, snapshot_json());
+                if let Err(err) = fs::write(&path, snapshot_json()) {
+                    eprintln!("p8-app-attr-dump: write {}: {err}", path.display());
+                }
                 std::thread::sleep(Duration::from_secs(2));
             })
             .ok();

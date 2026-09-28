@@ -55,7 +55,7 @@ async fn h3_request_dispatch_does_not_increment_lifecycle() {
     let shared = exyonq_core::reload::wrap_state(state);
     let ctx = ConnectionContext {
         state: exyonq_core::reload::read_state(&shared),
-        proxy_client: proxy,
+        proxy_client: proxy.clone(),
         x_forwarded_for: http::HeaderValue::from_static("127.0.0.1"),
         ops: Arc::clone(&ops),
     };
@@ -66,13 +66,26 @@ async fn h3_request_dispatch_does_not_increment_lifecycle() {
     assert_eq!(ops.active_connections(), 0);
 
     ops.start_drain();
-    let ctx2 = ConnectionContext {
+    // Cap040: /health and /live remain answerable after drain (probe-before-drain).
+    let ctx_probe = ConnectionContext {
         state: exyonq_core::reload::read_state(&shared),
-        proxy_client: exyonq_mod_proxy::build_incoming_client(),
+        proxy_client: exyonq_mod_proxy::build_incoming_client().clone(),
         x_forwarded_for: http::HeaderValue::from_static("127.0.0.1"),
         ops: Arc::clone(&ops),
     };
-    let req2 = Request::get("/health").body(()).unwrap();
+    let req_probe = Request::get("/health").body(()).unwrap();
+    let resp_probe = serve_http3_request(ctx_probe, req_probe).await;
+    assert_eq!(resp_probe.status(), StatusCode::OK);
+    assert_eq!(ops.active_connections(), 0);
+
+    // Non-probe product path must fail closed with 503 while draining.
+    let ctx2 = ConnectionContext {
+        state: exyonq_core::reload::read_state(&shared),
+        proxy_client: exyonq_mod_proxy::build_incoming_client().clone(),
+        x_forwarded_for: http::HeaderValue::from_static("127.0.0.1"),
+        ops: Arc::clone(&ops),
+    };
+    let req2 = Request::get("/api/health").body(()).unwrap();
     let resp2 = serve_http3_request(ctx2, req2).await;
     assert_eq!(resp2.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(ops.active_connections(), 0);
@@ -413,7 +426,11 @@ mod native {
             .await
             .expect("state");
         let shared = exyonq_core::reload::wrap_state(state);
-        let dispatch = Arc::new(CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops)));
+        let dispatch = Arc::new(CoreHttp3Dispatcher::new(
+            shared,
+            proxy.clone(),
+            Arc::clone(&ops),
+        ));
 
         let tls = ephemeral_tls();
         let listen = ephemeral_udp_addr();

@@ -60,6 +60,7 @@ async fn sse_progressive_read_without_full_buffer() {
         target: format!("http://127.0.0.1:{port}"),
         timeout: Duration::from_secs(5),
         host: Some("127.0.0.1".into()),
+        max_connect_retries: 1,
     };
     let upstream = UpstreamTarget::from_descriptor(&desc).unwrap();
     let metrics = Arc::new(ProxyHyperMetrics::default());

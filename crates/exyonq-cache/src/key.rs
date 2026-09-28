@@ -9,7 +9,7 @@ pub struct CacheKeyParts {
     pub site_id: u64,
     /// Backend namespace id ([`crate::CacheNamespace`] as u16; 0 = unset / Plan 12).
     pub namespace: u16,
-    /// Canonical [`exyonq_runtime_plan::BackendId`] index for FPC keys.
+    /// Canonical runtime-plan `BackendId` index for FPC keys.
     pub backend_id: u32,
     pub runtime_generation: u64,
     pub policy_generation: u64,
@@ -56,10 +56,22 @@ fn fold_key(parts: &CacheKeyParts) -> u64 {
 
 pub fn normalize_host(host: Option<&str>) -> String {
     host.map(|h| {
-        let lower = h.to_ascii_lowercase();
+        let lower = h.trim_end_matches('.').to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix('[') {
+            if let Some(end) = rest.find(']') {
+                return lower[..=end].to_string();
+            }
+            return lower;
+        }
         lower
-            .split_once(':')
-            .map(|(name, _)| name.to_string())
+            .rsplit_once(':')
+            .and_then(|(name, port)| {
+                if !name.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
+            })
             .unwrap_or(lower)
     })
     .unwrap_or_default()

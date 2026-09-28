@@ -112,22 +112,54 @@ mod tests {
         let bench = GenerationView::pinned(1, false, Some(0));
         let modules = GenerationView::pinned(1, true, Some(0));
 
+        let health = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
         let site = b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n";
         let api = b"GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";
         let unknown = b"GET /unknown HTTP/1.1\r\nHost: x\r\n\r\n";
 
         assert_eq!(
-            plan_wire_decision(&bench, site).expect("plan"),
+            plan_wire_decision(&bench, health).expect("plan"),
             WirePlanDecision::Static
         );
+        // Cap067 Linux: ordinary static GET is Wire Static when site_static_slot is pinned.
+        // Non-Linux: might_use_static_wire is ops-probe only → Hyper for ordinary paths.
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(
+                plan_wire_decision(&bench, site).expect("plan"),
+                WirePlanDecision::Static
+            );
+            assert_eq!(
+                plan_wire_decision(&bench, unknown).expect("plan"),
+                WirePlanDecision::Static
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(
+                plan_wire_decision(&bench, site).expect("plan"),
+                WirePlanDecision::Hyper
+            );
+            assert_eq!(
+                plan_wire_decision(&bench, unknown).expect("plan"),
+                WirePlanDecision::Hyper
+            );
+        }
         assert_eq!(
             plan_wire_decision(&bench, api).expect("plan"),
             WirePlanDecision::Proxy
         );
+        // Wire-cheap: modules_enabled alone does not force Hyper.
         assert_eq!(
-            plan_wire_decision(&bench, unknown).expect("plan"),
-            WirePlanDecision::Hyper
+            plan_wire_decision(&modules, api).expect("plan"),
+            WirePlanDecision::Proxy
         );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            plan_wire_decision(&modules, site).expect("plan"),
+            WirePlanDecision::Static
+        );
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(
             plan_wire_decision(&modules, site).expect("plan"),
             WirePlanDecision::Hyper
@@ -141,17 +173,21 @@ mod tests {
         ensure_wire_hooks_installed();
         use crate::server::wire_dispatch::tokio_accept_required;
 
-        // Transport hint ≠ WirePlanDecision: sendfile sizes force Tokio accept even for /site/.
+        // Cap067: site GETs are wire/sendfile candidates (not Tokio-forced).
         assert!(tokio_accept_required(b"GET /api/health HTTP/1.1\r\n"));
-        assert!(tokio_accept_required(b"GET /site/64k.bin HTTP/1.1\r\n"));
-        assert!(tokio_accept_required(b"GET /site/1m.bin HTTP/1.1\r\n"));
+        assert!(!tokio_accept_required(b"GET /site/64k.bin HTTP/1.1\r\n"));
+        assert!(!tokio_accept_required(b"GET /site/1m.bin HTTP/1.1\r\n"));
         assert!(!tokio_accept_required(b"GET /site/1k.bin HTTP/1.1\r\n"));
+        assert!(!tokio_accept_required(b"GET /health HTTP/1.1\r\n"));
 
         let bench = GenerationView::pinned(1, false, Some(0));
-        // Planner still says Static for 1k site; accept hint for 64k is transport-only.
         assert_eq!(
             plan_wire_decision(&bench, b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n")
                 .expect("plan"),
+            WirePlanDecision::Static
+        );
+        assert_eq!(
+            plan_wire_decision(&bench, b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n").expect("plan"),
             WirePlanDecision::Static
         );
     }

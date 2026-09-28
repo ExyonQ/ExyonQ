@@ -43,6 +43,8 @@ fn serve_proxy_wire_hook(
 ) -> proxy_wire::ProxyWireServeFuture {
     let xff = hyper::header::HeaderValue::from_str(&x_forwarded_for)
         .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("0.0.0.0"));
+    #[cfg(target_os = "linux")]
+    let peer_fd = crate::wire_stream::peer_tcp_fd_of(&stream);
     Box::pin(async move {
         wire_conn::serve(
             cluster_id,
@@ -51,6 +53,8 @@ fn serve_proxy_wire_hook(
             head,
             rest,
             xff,
+            #[cfg(target_os = "linux")]
+            peer_fd,
         )
         .await
     })

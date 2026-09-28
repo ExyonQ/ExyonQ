@@ -16,7 +16,7 @@
 //! **INTERNAL WORKSPACE CONTRACT — NOT STABLE PUBLIC API**
 //!
 //! Minimal platform→core productive serve entry (PS1C-FACADE).
-//! Opaque handle over [`crate::server::connection_executor::CoreConnectionExecutor`].
+//! Opaque handle over `CoreConnectionExecutor` (Linux `connection_executor`; not a stable public path).
 //! Construction: composition root inside `exyonq-core` only (`pub(crate)`).
 
 use crate::kernel::epoll_attach::{
@@ -57,7 +57,7 @@ impl PlatformConnectionEntry {
         Self { inner }
     }
 
-    /// Non-Linux stub for workspace `cargo check` (no productive serve path).
+    /// Non-Linux host-unavailable constructor for workspace `cargo check` (no productive serve path).
     #[cfg(not(target_os = "linux"))]
     #[allow(dead_code)]
     pub(crate) fn unavailable() -> Self {

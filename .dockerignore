@@ -29,6 +29,12 @@ graphify-out
 benchmarks/results
 benchmarks/results-dev
 benchmarks/tools
+!benchmarks/tools/
+benchmarks/tools/*
+!benchmarks/tools/http3-loadgen/
+!benchmarks/tools/http3-loadgen/**
+!benchmarks/tools/http-loadgen/
+!benchmarks/tools/http-loadgen/**
 benchmarks/rivals-cache
 benchmarks/reports
 benchmarks/p1-anton
@@ -42,12 +48,25 @@ benchmarks/baselines
 benchmarks/pingora-reference
 benchmarks/scripts
 benchmarks/modern-rivals
-!benchmarks/docker/**
-!benchmarks/configs/**
-!benchmarks/scenarios/fixtures/**
-!benchmarks/scenarios/payloads/**
-!benchmarks/exyonq-bench/**
-!benchmarks/mock-upstream/**
+# TLS fixtures are generated at container start; never send ambient PEMs.
+benchmarks/scenarios/fixtures/tls
+# Directory COPY of www/ must not pick up ambient extras — allowlist bins only.
+benchmarks/scenarios/payloads/www/*
+!benchmarks/scenarios/payloads/www/1k.bin
+!benchmarks/scenarios/payloads/www/64k.bin
+!benchmarks/scenarios/payloads/www/64k.txt
+!benchmarks/scenarios/payloads/www/1m.bin
+# Allowlist only the tracked docker scripts COPY'd into the ExyonQ image.
+benchmarks/docker/**
+!benchmarks/docker/Dockerfile.exyonq
+!benchmarks/docker/Dockerfile.upstream
+!benchmarks/docker/Dockerfile.bench-runner
+!benchmarks/docker/Dockerfile.bench-tls
+!benchmarks/docker/docker-compose.bench.yml
+!benchmarks/docker/exyonq-entrypoint.sh
+!benchmarks/docker/exyonq-env.sh
+!benchmarks/docker/init-bench-tls.sh
+!tools/upstream/**
 
 # Never ship local release packets / stamps / secrets into context
 **/p14v040/**

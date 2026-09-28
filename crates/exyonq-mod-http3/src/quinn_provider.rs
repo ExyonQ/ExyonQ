@@ -25,6 +25,7 @@ use h3::error::Code;
 use h3_quinn::Connection as H3QuinnConnection;
 use http::{Request, Response, StatusCode};
 use quinn::{Endpoint, ServerConfig as QuinnServerConfig, VarInt};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -33,6 +34,14 @@ use crate::Http3Settings;
 
 /// Cap discarded request-body bytes before aborting with H3_NO_ERROR (DoS bound).
 const H3_REQUEST_DRAIN_MAX_BYTES: usize = 64 * 1024;
+
+/// Process-local count of failed H3 response / error-response writes (Quinn legacy).
+static RESPONSE_WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot of Quinn-legacy response write failures (test / ops observation).
+pub(crate) fn response_write_errors() -> u64 {
+    RESPONSE_WRITE_ERRORS.load(Ordering::Relaxed)
+}
 
 pub(crate) async fn serve<LC>(
     settings: Http3Settings,
@@ -68,7 +77,7 @@ where
                 }
             };
             let Ok(lease) = lifecycle.try_enter_connection() else {
-                let _ = conn.close(VarInt::from_u32(0), b"draining");
+                conn.close(VarInt::from_u32(0), b"draining");
                 return;
             };
             if let Err(err) = serve_quic_connection(conn, dispatch, lease).await {
@@ -100,18 +109,27 @@ where
             Ok(req) => req,
             Err(RequestBodyReadError::TooLarge) => {
                 let response = payload_too_large_response();
-                let _ = write_h3_response(&mut stream, response).await;
+                // Required error-response write: failure is authoritative for emission,
+                // never treated as a successfully emitted 413.
+                if let Err(err) = write_h3_response(&mut stream, response).await {
+                    RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    warn!(%err, "http3 error response failed after payload-too-large");
+                }
                 continue;
             }
             Err(RequestBodyReadError::Body) => {
                 let response = bad_request_response();
-                let _ = write_h3_response(&mut stream, response).await;
+                if let Err(err) = write_h3_response(&mut stream, response).await {
+                    RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    warn!(%err, "http3 error response failed after bad-request body");
+                }
                 continue;
             }
         };
         match dispatch.dispatch(req, peer_ip).await {
             Ok(response) => {
                 if let Err(err) = write_h3_response(&mut stream, response).await {
+                    RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
                     warn!(%err, "http3 response failed");
                 }
             }
@@ -125,7 +143,13 @@ where
                     )],
                     body: Bytes::from_static(b"internal server error"),
                 };
-                let _ = write_h3_response(&mut stream, fallback).await;
+                if let Err(write_err) = write_h3_response(&mut stream, fallback).await {
+                    RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        %write_err,
+                        "http3 error response failed after dispatch error"
+                    );
+                }
             }
         }
     }

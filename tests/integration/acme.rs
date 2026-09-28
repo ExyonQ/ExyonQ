@@ -52,6 +52,8 @@ fn redirect_config() -> AppConfig {
         static_section: Default::default(),
         full_page_cache: Default::default(),
         http3: Default::default(),
+        waf: Default::default(),
+        logging: Default::default(),
     }
 }
 
@@ -71,7 +73,7 @@ async fn acme_renew_with_http_redirect_active() {
 
     let config = redirect_config();
     let proxy_client = build_incoming_client();
-    assert!(ServerState::new(config, proxy_client).await.is_ok());
+    assert!(ServerState::new(config, proxy_client.clone()).await.is_ok());
 }
 
 #[tokio::test]
@@ -93,7 +95,7 @@ async fn acme_unknown_token_falls_through_to_redirect() {
     let response = serve_http3_request(
         ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },

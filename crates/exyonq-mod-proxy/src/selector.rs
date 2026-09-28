@@ -136,22 +136,48 @@ impl EndpointSelector {
 
     /// Smooth WRR within the first non-empty eligible band (bands pre-filtered).
     pub fn select(&self) -> SelectionOutcome {
+        self.select_filtered(|_| true)
+    }
+
+    /// Cap045 / LA-CAP045-001: smooth WRR among members that pass `live`.
+    ///
+    /// Cap024 unhealthy and Cap021 request-local exclusion must not burn WRR
+    /// credits on skipped peers or fall through to first-match scan. Non-live
+    /// band members keep `current` cleared so recovery does not inherit a
+    /// stale accumulator spike.
+    pub fn select_filtered<F>(&self, mut live: F) -> SelectionOutcome
+    where
+        F: FnMut(usize) -> bool,
+    {
         for band in self.bands.iter() {
             if band.members.is_empty() || band.total_weight <= 0 {
                 continue;
             }
             let mut current = band.current.lock().expect("selector band poisoned");
-            let mut best = 0usize;
+            let mut live_local: Vec<usize> = Vec::new();
+            let mut live_total: i64 = 0;
+            for (i, &endpoint_index) in band.members.iter().enumerate() {
+                if live(endpoint_index) {
+                    live_local.push(i);
+                    live_total = live_total.saturating_add(band.weights[i]);
+                } else {
+                    // Drop stale credit while peer is not selectable this request.
+                    current[i] = 0;
+                }
+            }
+            if live_local.is_empty() || live_total <= 0 {
+                continue;
+            }
+            let mut best = live_local[0];
             let mut best_val = i64::MIN;
-            for (i, w) in band.weights.iter().enumerate() {
-                // Saturating add avoids overflow panic; weights normalized at build.
-                current[i] = current[i].saturating_add(*w);
+            for &i in &live_local {
+                current[i] = current[i].saturating_add(band.weights[i]);
                 if current[i] > best_val {
                     best_val = current[i];
                     best = i;
                 }
             }
-            current[best] = current[best].saturating_sub(band.total_weight);
+            current[best] = current[best].saturating_sub(live_total);
             drop(current);
             let endpoint_index = band.members[best];
             let priority = self.endpoints[endpoint_index].priority;
@@ -276,6 +302,38 @@ mod tests {
         let b = counts["b"] as f64;
         let ratio = (a / b - 1.0).abs();
         assert!(ratio < 0.05, "a={a} b={b} ratio_err={ratio}");
+    }
+
+    #[test]
+    fn filtered_skips_heavy_peer_preserves_equal_wrr() {
+        // LA-CAP045-001: heavy peer filtered → remaining equal weights stay ~1:1.
+        let s = EndpointSelector::build(
+            1,
+            FailoverMode::None,
+            vec![
+                ep("heavy", "http://10.0.0.1:80", 100, 0, true),
+                ep("b", "http://10.0.0.2:80", 1, 0, true),
+                ep("c", "http://10.0.0.3:80", 1, 0, true),
+            ],
+        );
+        let n = 200;
+        let mut counts = HashMap::new();
+        for _ in 0..n {
+            match s.select_filtered(|idx| s.endpoints()[idx].endpoint_id != "heavy") {
+                SelectionOutcome::Selected { endpoint_index, .. } => {
+                    let id = s.endpoints()[endpoint_index].endpoint_id.clone();
+                    *counts.entry(id).or_insert(0usize) += 1;
+                }
+                SelectionOutcome::NoEligibleEndpoint => panic!("expected selection"),
+            }
+        }
+        assert_eq!(counts.get("heavy").copied().unwrap_or(0), 0);
+        let b = counts["b"];
+        let c = counts["c"];
+        assert_eq!(b + c, n);
+        // Exact SWWR equal-weight cycle → 100:100 over 200.
+        assert_eq!(b, 100, "b={b} c={c}");
+        assert_eq!(c, 100, "b={b} c={c}");
     }
 
     #[test]

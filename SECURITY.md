@@ -22,12 +22,20 @@ bash scripts/verify-release-audit.sh X.Y.Z
 cargo xtask security pre-release --version X.Y.Z
 ```
 
-Until a `v0.4.3` audit is owner-authorized and signed off:
+Until a release audit is owner-authorized and signed off for a given version, that version remains unpublished.
+
+For **v0.4.4**:
 
 ```text
-CURRENT_RELEASE_AUDIT = NOT_EXECUTED
-PUBLICATION_STATUS = FORBIDDEN
+PUBLICATION_STATUS = PRIVATE_V044_RELEASE_COMPLETE
+PUBLIC_RELEASE = v0.4.4
+RELEASE_AUTHORITY = exyonq-github
+WASMTIME = 49.0.1
+CARGO_AUDIT = no known vulnerabilities
+RUSTSEC_2026_0222 = not applicable to Wasmtime 49.0.1
 ```
+
+v0.4.3 remains the previous private release. Its Wasmtime 45.0.2 waiver expired for review at v0.4.4 and is not carried forward.
 
 Canonical security SoT index: [`docs/security/README.md`](docs/security/README.md).
 

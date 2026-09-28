@@ -24,6 +24,7 @@ cargo test --workspace
 
 Or: `cargo run -p xtask -- ci`
 
+Disparar Bugbot antes de merge: comentario `bugbot run` (o `@cursor review`) en el PR. Trigger **manual only** — no asumir revisión automática.
 
 ## Scope discipline
 
@@ -54,5 +55,3 @@ Imperative subject line, body explains why. Example: `Add spike proxy integratio
 ExyonQ is licensed under the [Apache License, Version 2.0](LICENSE).
 
 By submitting a contribution to ExyonQ, you agree that your contribution is licensed under the Apache License, Version 2.0. See [NOTICE](NOTICE).
-
-Request human review before merge.

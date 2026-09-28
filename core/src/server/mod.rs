@@ -33,9 +33,16 @@ pub mod epoll_start;
 pub mod io_uring_start;
 #[cfg(target_os = "linux")]
 pub mod os_worker_guard;
+pub mod runtime_parallelism;
+#[cfg(target_os = "linux")]
+pub mod sdp_start;
 pub mod state;
 pub mod sync_accept_start;
 mod wire_dispatch;
+
+pub use wire_dispatch::install_static_wire_access_bridge;
+pub use wire_dispatch::wire_reject_response_write_errors;
+pub use wire_dispatch::wire_waf_reject_response_write_errors;
 
 #[cfg(all(test, target_os = "linux"))]
 mod ps2_iu2_tests;
@@ -46,13 +53,22 @@ pub use epoll_start::{epoll_listen_env_enabled, epoll_static_env_enabled};
 #[cfg(target_os = "linux")]
 pub use epoll_start::{
     register_epoll_keepalive_enqueue, register_epoll_keepalive_prepare,
-    register_epoll_keepalive_stop, register_epoll_listen_start,
+    register_epoll_keepalive_signal_stop, register_epoll_keepalive_stop,
+    register_epoll_listen_start,
 };
+pub use io::header_read_timeout;
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub use io::reset_header_read_timeout_cache_for_tests;
 pub use io_uring_start::io_uring_env_enabled;
 #[cfg(target_os = "linux")]
 pub use io_uring_start::register_io_uring_start;
 #[cfg(target_os = "linux")]
 pub use os_worker_guard::OsWorkerGuard;
+pub use runtime_parallelism::{
+    default_runtime_parallelism, resolve_accept_workers, resolve_epoll_pool_threads,
+    resolve_tokio_worker_threads, MAX_WORKERS, MIN_WORKERS,
+};
 #[cfg(target_os = "linux")]
 pub use sync_accept_start::register_sync_accept_start;
 pub use sync_accept_start::sync_accept_env_enabled;
@@ -110,23 +126,12 @@ async fn bind_tuned(addr: SocketAddr) -> std::io::Result<TcpListener> {
 }
 
 fn accept_workers() -> usize {
-    if let Ok(raw) = std::env::var("EXYONQ_ACCEPT_WORKERS") {
-        if raw.eq_ignore_ascii_case("auto") {
-            return std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-                .clamp(1, 16);
-        }
-        if let Ok(n) = raw.parse::<usize>() {
-            return n.clamp(1, 16);
-        }
-    }
-    1
+    crate::server::runtime_parallelism::resolve_accept_workers()
 }
 
 async fn serve_hyper<S>(
     mut stream: S,
-    state: Arc<ServerState>,
+    shared: reload::SharedServerState,
     proxy_client: ProxyClient,
     x_forwarded_for: HeaderValue,
     ops: Arc<LifecycleState>,
@@ -148,8 +153,10 @@ async fn serve_hyper<S>(
     };
     let io = TokioIo::new(stream);
     let ops_for_service = Arc::clone(&ops);
+    // Cap057 LA-CAP057-002: refresh live SharedServerState per request (mirror H3).
+    // Accept-time Arc pin made FPC HITs survive reload disable / live purge on keep-alive.
     let service = hyper::service::service_fn(move |req| {
-        let conn_state = Arc::clone(&state);
+        let conn_state = reload::read_state(&shared);
         let proxy_client = proxy_client.clone();
         let x_forwarded_for = x_forwarded_for.clone();
         let ops = Arc::clone(&ops_for_service);
@@ -186,13 +193,15 @@ async fn serve_hyper<S>(
 }
 
 fn wire_dispatch_ctx(
-    state: Arc<ServerState>,
+    shared: reload::SharedServerState,
     proxy_client: ProxyClient,
     x_forwarded_for: HeaderValue,
     ops: Arc<LifecycleState>,
 ) -> WireDispatchContext {
+    let state = reload::read_state(&shared);
     let pinned_generation = state.generation;
     WireDispatchContext {
+        shared,
         state,
         proxy_client,
         x_forwarded_for,
@@ -235,22 +244,23 @@ async fn accept_loop(
         let proxy_client = proxy_client.clone();
         let x_forwarded_for = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"));
-        let acceptor = tls_acceptor.snapshot();
+        let acceptor = tls_acceptor.snapshot().acceptor();
         let ops_conn = Arc::clone(&ops);
 
         tokio::spawn(async move {
             if let Some(acceptor) = acceptor {
                 match acceptor.accept(stream).await {
                     Ok(tls_stream) => {
-                        let state = reload::read_state(&conn_state);
                         let alpn = tls_stream.get_ref().1.alpn_protocol();
                         let ctx = wire_dispatch_ctx(
-                            state,
+                            reload::SharedServerState::clone(&conn_state),
                             proxy_client,
                             x_forwarded_for,
                             ops_conn.clone(),
                         );
-                        if !ctx.state.modules_enabled()
+                        // Wire-cheap modules (ratelimit/metrics) keep Cap067/wire;
+                        // compression (or h2 / drain) still forces Hyper.
+                        if !ctx.state.hyper_required_for_modules()
                             && alpn != Some(b"h2")
                             && !ops_conn.is_draining()
                         {
@@ -258,7 +268,7 @@ async fn accept_loop(
                         } else {
                             serve_hyper(
                                 tls_stream,
-                                ctx.state,
+                                reload::SharedServerState::clone(&ctx.shared),
                                 ctx.proxy_client,
                                 ctx.x_forwarded_for,
                                 ops_conn,
@@ -270,10 +280,9 @@ async fn accept_loop(
                 }
                 return;
             }
-            let state = reload::read_state(&conn_state);
             dispatch_tcp(
                 stream,
-                wire_dispatch_ctx(state, proxy_client, x_forwarded_for, ops_conn),
+                wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
             )
             .await;
         });
@@ -296,6 +305,13 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     kernel_control_port::mark_process_started();
     let shared = reload::wrap_state(state);
     let ops = LifecycleState::new();
+    // Cap031: tunnel tasks must keep active_connections > 0 after Hyper upgrade handoff.
+    {
+        let ops_ws = Arc::clone(&ops);
+        exyonq_module_api::websocket_lifecycle::install_websocket_tunnel_hold(Arc::new(
+            move || Some(Box::new(ops_ws.extend_for_upgraded_tunnel()) as Box<dyn Send>),
+        ));
+    }
 
     let kernel_port: Arc<dyn exyonq_module_api::kernel_control::KernelControlPort> =
         Arc::new(CoreKernelControlPort {
@@ -314,17 +330,91 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     });
 
     #[cfg(unix)]
-    if let Ok(socket_path) = std::env::var("EXYONQ_CONTROL_SOCKET") {
-        if let Ok(config_path) = std::env::var("EXYONQ_CONFIG") {
-            if let Some(control_plane) = control_plane_service() {
-                control_plane.spawn_unix_control_socket(
-                    std::path::PathBuf::from(socket_path),
+    // Cap063: preserve OS path bytes. Non-empty CONTROL_SOCKET requires CONFIG +
+    // registered control plane — fail closed (LA-CAP063-004).
+    if let Some(socket_os) = std::env::var_os("EXYONQ_CONTROL_SOCKET") {
+        if !socket_os.is_empty() {
+            let config_path = std::env::var("EXYONQ_CONFIG").map_err(|_| {
+                anyhow::anyhow!(
+                    "EXYONQ_CONTROL_SOCKET is set but EXYONQ_CONFIG is missing; \
+                     refuse to start without a bindable control socket config path"
+                )
+            })?;
+            let control_plane = control_plane_service().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "EXYONQ_CONTROL_SOCKET is set but no control plane service is registered"
+                )
+            })?;
+            control_plane
+                .spawn_unix_control_socket(
+                    std::path::PathBuf::from(socket_os),
                     std::path::PathBuf::from(config_path),
                     kernel_port.clone(),
-                );
-            }
+                )
+                .map_err(|err| anyhow::anyhow!("control socket bind failed: {err}"))?;
         }
     }
+
+    let _control_api_handle = {
+        let api_socket = std::env::var("EXYONQ_API_SOCKET").ok();
+        let api_tcp = std::env::var("EXYONQ_API_TCP").ok();
+        if api_socket.is_some() || api_tcp.is_some() {
+            match (
+                std::env::var("EXYONQ_CONFIG"),
+                std::env::var("EXYONQ_SERVER_TOKEN"),
+            ) {
+                (Ok(config_path), Ok(token)) => {
+                    let unix_socket = api_socket.map(std::path::PathBuf::from);
+                    let control_socket = std::env::var_os("EXYONQ_CONTROL_SOCKET")
+                        .filter(|v| !v.is_empty())
+                        .map(std::path::PathBuf::from);
+                    if unix_socket.as_ref().is_some()
+                        && unix_socket.as_ref() == control_socket.as_ref()
+                    {
+                        return Err(anyhow::anyhow!(
+                            "EXYONQ_API_SOCKET must differ from EXYONQ_CONTROL_SOCKET"
+                        ));
+                    } else {
+                        let tcp_addr = match api_tcp {
+                            Some(raw) => match raw.parse::<SocketAddr>() {
+                                Ok(addr) => Some(addr),
+                                Err(err) => {
+                                    return Err(anyhow::anyhow!("invalid EXYONQ_API_TCP: {err}"));
+                                }
+                            },
+                            None => None,
+                        };
+                        match exyonq_control_api::spawn_control_api(
+                            kernel_port.clone(),
+                            exyonq_control_api::ControlApiSpawnConfig {
+                                config_path: std::path::PathBuf::from(config_path),
+                                unix_socket,
+                                tcp_addr,
+                                token,
+                            },
+                        )
+                        .await
+                        {
+                            Ok(handle) => {
+                                info!(tasks = handle.task_count(), "http control api started");
+                                Some(handle)
+                            }
+                            Err(err) => {
+                                return Err(anyhow::anyhow!("http control api not started: {err}"));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "EXYONQ_API_SOCKET/EXYONQ_API_TCP set but EXYONQ_CONFIG or EXYONQ_SERVER_TOKEN missing"
+                    ));
+                }
+            }
+        } else {
+            None
+        }
+    };
 
     #[cfg(unix)]
     if let Ok(purge_path) = std::env::var("EXYONQ_CACHE_PURGE_SOCKET") {
@@ -386,7 +476,7 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     }
 
     let workers = accept_workers();
-    let tls_on_listen = shared_tls.snapshot().is_some();
+    let tls_on_listen = shared_tls.snapshot().is_loaded();
     #[cfg(target_os = "linux")]
     let use_io_uring = io_uring_start::io_uring_env_enabled(tls_on_listen);
     #[cfg(not(target_os = "linux"))]
@@ -405,9 +495,18 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     #[cfg(not(target_os = "linux"))]
     let use_sync_accept = false;
     #[cfg(target_os = "linux")]
-    let epoll_keepalive_active = epoll_keepalive && !use_epoll && !use_io_uring;
+    // Cap067 P5 KEEP (WouldBlock→Hyper) sends unread accepts to Tokio. Static must still
+    // reach Cap067 sendfile via register_sendfile_from_tokio_first — that requires the
+    // divert/keepalive pool even when EPOLL_LISTEN owns accept. Without it, P1 falls to
+    // Hyper (~140k vs ~280k Cap067). geom4: 4 listen + 4 pool is intentional (not 8+8).
+    let epoll_keepalive_active = epoll_keepalive && !use_io_uring;
     #[cfg(not(target_os = "linux"))]
     let epoll_keepalive_active = false;
+    #[cfg(target_os = "linux")]
+    let use_sdp = !tls_on_listen && sdp_start::env_enabled();
+    #[cfg(not(target_os = "linux"))]
+    let use_sdp = false;
+
     info!(
         %listen,
         workers,
@@ -416,6 +515,7 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         epoll_static = use_epoll,
         epoll_keepalive = epoll_keepalive_active,
         io_uring = use_io_uring,
+        sdp_p1 = use_sdp,
         "exyonq listening"
     );
 
@@ -446,12 +546,32 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         None
     };
 
+    // Cap067 divert pool: Tokio→OS-thread handoff for sendfile after Hyper wire plan.
+    // Also required under EPOLL_LISTEN=1 so WouldBlock→Hyper static can divert (P1).
     #[cfg(target_os = "linux")]
-    if epoll_keepalive_active || use_epoll {
+    if epoll_keepalive_active {
         epoll_start::prepare_registered_keepalive_pool(
             workers,
             Arc::clone(platform_entry.as_ref().expect("platform entry for epoll")),
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    if use_sdp {
+        // Exclusive accept: do not start Tokio/epoll/io_uring listeners on this bind.
+        let sdp = sdp_start::start_sdp(
+            listen,
+            reload::SharedServerState::clone(&shared),
+            proxy_client.clone(),
+            Arc::clone(&ops),
+            tokio::runtime::Handle::current(),
+        )?;
+        LifecycleState::wait_for_shutdown(&ops).await;
+        info!("shutdown requested, stopping sdp-p1 listener");
+        sdp.signal_stop();
+        finalize_graceful_shutdown(&ops).await;
+        sdp.join();
+        return Ok(());
     }
 
     #[cfg(target_os = "linux")]
@@ -460,6 +580,9 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         let workers_handle = io_uring_start::start_registered_io_uring(listen, workers, entry)?;
         LifecycleState::wait_for_shutdown(&ops).await;
         info!("shutdown requested, stopping listener");
+        workers_handle.signal_stop();
+        epoll_start::signal_registered_keepalive_pool_stop();
+        finalize_graceful_shutdown(&ops).await;
         workers_handle.stop();
         epoll_start::stop_registered_keepalive_pool();
         return Ok(());
@@ -471,6 +594,9 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         let workers_handle = epoll_start::start_registered_epoll_listen(listen, workers, entry)?;
         LifecycleState::wait_for_shutdown(&ops).await;
         info!("shutdown requested, stopping listener");
+        workers_handle.signal_stop();
+        epoll_start::signal_registered_keepalive_pool_stop();
+        finalize_graceful_shutdown(&ops).await;
         workers_handle.stop();
         epoll_start::stop_registered_keepalive_pool();
         return Ok(());
@@ -484,6 +610,9 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
                 sync_accept_start::start_registered_sync_accept(listen, workers, entry)?;
             LifecycleState::wait_for_shutdown(&ops).await;
             info!("shutdown requested, stopping listener");
+            sync_workers.signal_stop();
+            epoll_start::signal_registered_keepalive_pool_stop();
+            finalize_graceful_shutdown(&ops).await;
             sync_workers.stop();
             epoll_start::stop_registered_keepalive_pool();
             return Ok(());
@@ -508,13 +637,41 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
 
     LifecycleState::wait_for_shutdown(&ops).await;
     info!("shutdown requested, stopping listener");
-    for task in tasks {
+    for task in &tasks {
         task.abort();
+    }
+    #[cfg(target_os = "linux")]
+    epoll_start::signal_registered_keepalive_pool_stop();
+    finalize_graceful_shutdown(&ops).await;
+    for task in tasks {
+        let _ = task.await;
     }
     #[cfg(target_os = "linux")]
     epoll_start::stop_registered_keepalive_pool();
 
     Ok(())
+}
+
+/// Cap041: stop Cap024 health probes, then wait for admitted connections (bounded).
+async fn finalize_graceful_shutdown(ops: &Arc<LifecycleState>) {
+    exyonq_mod_proxy::try_shutdown_health();
+    let drained = LifecycleState::wait_for_drain_complete(
+        ops,
+        LifecycleState::DEFAULT_GRACEFUL_SHUTDOWN_WAIT,
+    )
+    .await;
+    if drained {
+        info!(
+            active_connections = ops.active_connections(),
+            "graceful shutdown: drain complete"
+        );
+    } else {
+        warn!(
+            active_connections = ops.active_connections(),
+            wait_secs = LifecycleState::DEFAULT_GRACEFUL_SHUTDOWN_WAIT.as_secs(),
+            "graceful shutdown: wait timed out; proceeding to process exit"
+        );
+    }
 }
 
 async fn maybe_bootstrap_acme(

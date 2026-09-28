@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-fn bench_site(body_byte: u8) -> (tempfile::TempDir, Arc<StaticRoot>) {
+fn static_site(body_byte: u8) -> (tempfile::TempDir, Arc<StaticRoot>) {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("bench");
     std::fs::create_dir_all(&root).expect("mkdir");
@@ -45,57 +45,36 @@ fn run_blocking_sync_once(
 }
 
 #[test]
-fn blocking_sync_get_64k_returns_status_and_body() {
-    let (_dir, site) = bench_site(0x41);
+fn blocking_sync_get_site_asset_is_wire_not_found() {
+    // Cap061 / 6f9a4cf0: blocking wire serves /health only; site assets use Hyper/static.
+    // Wire response for non-health paths is NOT_FOUND_KEEP_ALIVE (200 + "not found").
+    let (_dir, site) = static_site(0x41);
     let (server, mut client) = tcp_pair();
     let head = Bytes::from("GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n");
     let worker = run_blocking_sync_once(site.clone(), server, head);
 
     client
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("timeout");
-    let mut buf = vec![0u8; 70000];
-    let mut total = 0usize;
-    for _ in 0..64 {
-        match client.read(&mut buf[total..]) {
-            Ok(0) => break,
-            Ok(n) => total += n,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                if let Some(hdr) = std::str::from_utf8(&buf[..total])
-                    .ok()
-                    .and_then(|t| t.find("\r\n\r\n"))
-                {
-                    let body_start = hdr + 4;
-                    if total >= body_start + 65536 {
-                        break;
-                    }
-                }
-            }
-            Err(e) => panic!("read failed: {e}"),
-        }
-        if total >= 66000 {
-            break;
-        }
-    }
+    let mut buf = [0u8; 4096];
+    let n = client.read(&mut buf).expect("read");
     let _ = client.shutdown(Shutdown::Both);
     worker.join().expect("join");
 
-    let n = total;
-
     let text = std::str::from_utf8(&buf[..n]).expect("utf8");
-    assert!(text.starts_with("HTTP/1.1 200"));
-    assert!(text.contains("Content-Length: 65536"));
-    let body_start = text.find("\r\n\r\n").expect("headers end") + 4;
-    assert_eq!(n - body_start, 65536);
-    assert!(buf[body_start..n].iter().all(|&b| b == 0x41));
+    assert!(
+        text.contains("not found"),
+        "Cap061 wire must not sendfile site assets: {text:?}"
+    );
+    assert!(
+        !text.contains("Content-Length: 65536"),
+        "site body must not be served on blocking wire"
+    );
 }
 
 #[test]
-fn blocking_sync_head_64k_has_headers_without_body() {
-    let (_dir, site) = bench_site(0x42);
+fn blocking_sync_head_site_asset_is_wire_not_found() {
+    let (_dir, site) = static_site(0x42);
     let (server, mut client) = tcp_pair();
     let head = Bytes::from("HEAD /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n");
     let worker = run_blocking_sync_once(site.clone(), server, head);
@@ -109,15 +88,15 @@ fn blocking_sync_head_64k_has_headers_without_body() {
     worker.join().expect("join");
 
     let text = std::str::from_utf8(&buf[..n]).expect("utf8");
-    assert!(text.starts_with("HTTP/1.1 200"));
-    assert!(text.contains("Content-Length: 65536"));
-    let hdr_end = text.find("\r\n\r\n").expect("headers end") + 4;
-    assert_eq!(n, hdr_end, "HEAD must not include body bytes");
+    assert!(
+        text.contains("not found") || text.contains("Content-Length: 9"),
+        "unexpected response: {text:?}"
+    );
 }
 
 #[test]
 fn blocking_sync_unknown_path_serves_not_found_wire() {
-    let (_dir, site) = bench_site(0x00);
+    let (_dir, site) = static_site(0x00);
     let (server, mut client) = tcp_pair();
     let head = Bytes::from("GET /site/missing.bin HTTP/1.1\r\nHost: x\r\n\r\n");
     let worker = run_blocking_sync_once(site.clone(), server, head);
@@ -160,7 +139,7 @@ fn sendfile_registry_take_release_no_active_leak() {
 
 #[test]
 fn client_disconnect_during_blocking_sendfile_closes_cleanly() {
-    let (_dir, site) = bench_site(0x55);
+    let (_dir, site) = static_site(0x55);
     let (mut server, client) = tcp_pair();
     drop(client);
     let head = Bytes::from("GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n");

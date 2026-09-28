@@ -17,7 +17,6 @@ http.workspace = true
 http-body-util.workspace = true
 semver.workspace = true
 serde.workspace = true
-thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt"] }
 
 [dev-dependencies]

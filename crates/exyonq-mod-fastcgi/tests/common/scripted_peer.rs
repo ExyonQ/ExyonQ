@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static PEER_BIND_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use exyonq_mod_fastcgi::{
-    encode_record_frame, parse_record, FastcgiRecordTransport, MockFpmConfig, MockFpmTransport,
-    END_REQUEST_BODY_LEN, FCGI_END_REQUEST, FCGI_PARAMS, FCGI_REQUEST_COMPLETE, FCGI_STDIN,
+    encode_record_frame, parse_record, FastcgiRecordTransport, ScriptedFpmConfig,
+    ScriptedFpmTransport, END_REQUEST_BODY_LEN, FCGI_END_REQUEST, FCGI_PARAMS,
+    FCGI_REQUEST_COMPLETE, FCGI_STDIN,
 };
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -106,7 +107,7 @@ fn rand_suffix() -> u32 {
 }
 
 fn serve_connection(stream: &mut dyn ReadWrite, config: &PeerConfig) {
-    let mock = MockFpmTransport::new(MockFpmConfig {
+    let peer = ScriptedFpmTransport::new(ScriptedFpmConfig {
         request_id: config.request_id,
         stdout_body: config.stdout_body.clone(),
         app_status: config.app_status,
@@ -156,7 +157,7 @@ fn serve_connection(stream: &mut dyn ReadWrite, config: &PeerConfig) {
                 }
             }
 
-            if mock.submit_frame(&frame).is_err() {
+            if peer.submit_frame(&frame).is_err() {
                 return;
             }
 
@@ -164,7 +165,7 @@ fn serve_connection(stream: &mut dyn ReadWrite, config: &PeerConfig) {
                 if config.mode == PeerMode::SlowRead {
                     thread::sleep(config.slow_delay);
                 }
-                if let Ok(frames) = mock.take_response() {
+                if let Ok(frames) = peer.take_response() {
                     if config.mode == PeerMode::OmitEndRequest {
                         for f in &frames {
                             if f.get(1) != Some(&FCGI_END_REQUEST) {

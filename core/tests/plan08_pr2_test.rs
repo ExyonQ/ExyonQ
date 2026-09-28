@@ -54,7 +54,7 @@ async fn plan08_ctx() -> ConnectionContext {
         .expect("server state");
     ConnectionContext {
         state,
-        proxy_client,
+        proxy_client: proxy_client.clone(),
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     }

@@ -63,6 +63,30 @@ pub struct ProxyCompiledEndpoint {
     pub admin_enabled: bool,
 }
 
+/// Cap024 active HTTP health-check parameters compiled into the proxy slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyHealthCheckCompiled {
+    pub enabled: bool,
+    pub interval: Duration,
+    pub timeout: Duration,
+    pub path: String,
+    pub healthy_threshold: u32,
+    pub unhealthy_threshold: u32,
+}
+
+impl Default for ProxyHealthCheckCompiled {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval: Duration::from_millis(5_000),
+            timeout: Duration::from_millis(1_000),
+            path: "/health".into(),
+            healthy_threshold: 2,
+            unhealthy_threshold: 3,
+        }
+    }
+}
+
 /// Compiled proxy cluster metadata in snapshot (slot-only in core after KD3.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyCompiledSlot {
@@ -73,6 +97,8 @@ pub struct ProxyCompiledSlot {
     /// Populated for single-endpoint executable clusters; multi uses `endpoints`.
     pub target: String,
     pub timeout: Duration,
+    /// Cap021: max connect-only retries (0..=1 in v1). Bound per generation.
+    pub max_connect_retries: u8,
     /// True when exactly one eligible endpoint is productively executable.
     pub single_endpoint_executable: bool,
     /// True when N≥2 endpoints are retained and productive WRR selection is authorized (P2B).
@@ -83,6 +109,8 @@ pub struct ProxyCompiledSlot {
     pub failover_priority_bands: bool,
     /// Full desired endpoint set (may include ineligible rows for generation identity).
     pub endpoints: Box<[ProxyCompiledEndpoint]>,
+    /// Cap024: active health check (default disabled).
+    pub health_check: ProxyHealthCheckCompiled,
 }
 
 impl ProxyCompiledSlot {
@@ -100,6 +128,7 @@ impl ProxyCompiledSlot {
             upstream_name,
             target: target.clone(),
             timeout,
+            max_connect_retries: 1,
             single_endpoint_executable: true,
             multi_endpoint_executable: false,
             endpoint_count: 1,
@@ -111,6 +140,7 @@ impl ProxyCompiledSlot {
                 priority: 0,
                 admin_enabled: true,
             }]),
+            health_check: ProxyHealthCheckCompiled::default(),
         }
     }
 }
@@ -191,6 +221,8 @@ pub struct ProxyMetricsSnapshot {
     pub responses_502: u64,
     pub responses_503: u64,
     pub responses_504: u64,
+    /// Cap021: connect-only retries that were actually issued.
+    pub connect_retries: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
 }

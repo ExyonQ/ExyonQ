@@ -45,7 +45,7 @@ default_ttl_seconds = 30
 async fn state(fpc_enabled: bool) -> Arc<ServerState> {
     let config = minimal_static_config(fpc_enabled);
     let proxy = exyonq_mod_proxy::build_incoming_client();
-    ServerState::new_with_generation(7, config, proxy)
+    ServerState::new_with_generation(7, config, proxy.clone())
         .await
         .expect("state")
 }

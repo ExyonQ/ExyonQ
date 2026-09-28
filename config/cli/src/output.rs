@@ -30,19 +30,27 @@ pub struct ToolResult {
 }
 
 pub fn emit_result(result: &ToolResult) -> ExitCode {
+    let mut io_failed = false;
     if !result.stdout.is_empty() {
-        let _ = io::stdout().write_all(result.stdout.as_bytes());
-        if !result.stdout.ends_with('\n') {
-            let _ = writeln!(io::stdout());
-        }
+        io_failed |= write_stream_with_trailing_newline(&mut io::stdout(), &result.stdout);
     }
     if !result.stderr.is_empty() {
-        let _ = io::stderr().write_all(result.stderr.as_bytes());
-        if !result.stderr.ends_with('\n') {
-            let _ = writeln!(io::stderr());
-        }
+        io_failed |= write_stream_with_trailing_newline(&mut io::stderr(), &result.stderr);
+    }
+    if io_failed && result.exit == CliExit::Ok {
+        return CliExit::DiagnosticError.into();
     }
     result.exit.into()
+}
+
+fn write_stream_with_trailing_newline(stream: &mut impl Write, text: &str) -> bool {
+    if stream.write_all(text.as_bytes()).is_err() {
+        return true;
+    }
+    if !text.ends_with('\n') && writeln!(stream).is_err() {
+        return true;
+    }
+    false
 }
 
 /// Strip ASCII control chars (except tab/newline) from human diagnostic text.

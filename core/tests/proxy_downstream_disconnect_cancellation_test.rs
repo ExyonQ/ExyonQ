@@ -211,17 +211,16 @@ async fn test_cancel_002_known_large_cl_disconnect_stops_upstream_polling() {
     assert_upstream_stops_after_drop(&probe, frames_at_drop, total_chunks).await;
 }
 
-/// TEST-CANCEL-003 — small-CL probe exceeds → ClassifyPrefixThenBody streaming.
+/// TEST-CANCEL-003 — small declared Content-Length still streams (Cap030; no materialize).
 #[tokio::test]
-async fn test_cancel_003_prefix_then_body_disconnect_stops_remainder_polling() {
+async fn test_cancel_003_small_cl_disconnect_stops_upstream_polling() {
     let probe = BodyProbe::new();
-    // Probe bound = declared CL = 2. First chunk "ab" accepted; second starts overflow.
-    let mut chunks = vec![Bytes::from_static(b"ab"), Bytes::from_static(b"cd")];
-    let remainder_chunks = 48usize;
-    for _ in 0..remainder_chunks {
+    let total_chunks = 64usize;
+    let mut chunks = Vec::with_capacity(total_chunks);
+    chunks.push(Bytes::from_static(b"ab"));
+    for _ in 1..total_chunks {
         chunks.push(Bytes::from(vec![b'z'; 64]));
     }
-    let total_upstream_chunks = chunks.len();
 
     let response = Response::builder()
         .status(200)
@@ -231,29 +230,22 @@ async fn test_cancel_003_prefix_then_body_disconnect_stops_remainder_polling() {
 
     let outcome = classify_hyper_response(response, "/api/data", ProxyMethod::Get).await;
     let ProxyDispatchOutcome::Streaming { stream, .. } = outcome else {
-        panic!("expected Streaming fallback after false small CL, got {outcome:?}");
+        panic!("expected Streaming for small CL, got {outcome:?}");
     };
 
-    // Probe already consumed "ab"+"cd". Reminder body still holds many chunks.
-    let frames_after_classify = probe.frames.load(Ordering::SeqCst);
-    assert!(
-        frames_after_classify >= 2,
-        "probe must have polled overflow chunks"
+    // Cap030: classify must not pre-consume the upstream body.
+    assert_eq!(
+        probe.frames.load(Ordering::SeqCst),
+        0,
+        "classify must not poll body before take_streaming"
     );
 
     let mut resp = take_streaming(stream).expect("handle");
-    // Consume prefix / first_chunk from ClassifyPrefixThenBody (no remainder poll required).
-    let _ = resp.body_mut().frame().await;
+    let _ = resp.body_mut().frame().await.expect("first").expect("ok");
     drop(resp);
 
     let frames_at_drop = probe.frames.load(Ordering::SeqCst);
-    assert_upstream_stops_after_drop(&probe, frames_at_drop, total_upstream_chunks).await;
-
-    // Remainder must not have been fully drained after disconnect.
-    assert!(
-        probe.frames.load(Ordering::SeqCst) < total_upstream_chunks,
-        "remainder drained fully"
-    );
+    assert_upstream_stops_after_drop(&probe, frames_at_drop, total_chunks).await;
 }
 
 /// TEST-CANCEL-004 — SSE /api/stream forced streaming path.

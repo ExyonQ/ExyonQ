@@ -1,18 +1,20 @@
 [package]
 name = "exyonq-compression"
-description = "Gzip compression module (Fase 2)"
+description = "Gzip, Deflate (zlib), Brotli, and Zstandard response compression module"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+brotli.workspace = true
 bytes.workspace = true
 exyonq-addon-sdk.workspace = true
 exyonq-module-api.workspace = true
 flate2.workspace = true
 http.workspace = true
 http-body-util.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

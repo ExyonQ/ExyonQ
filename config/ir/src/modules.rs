@@ -18,6 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModulesConfig {
     #[serde(default)]
     pub metrics: MetricsConfig,
@@ -28,6 +29,7 @@ pub struct ModulesConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -35,6 +37,10 @@ pub struct MetricsConfig {
     pub path: String,
     #[serde(default = "default_health_path")]
     pub health_path: String,
+    /// Required when metrics is enabled and any `server.listen` is non-loopback
+    /// (LA-CAP054-008). Optional on loopback-only binds (Cap054 E2E).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrape_bearer_token: Option<String>,
 }
 
 impl Default for MetricsConfig {
@@ -43,11 +49,13 @@ impl Default for MetricsConfig {
             enabled: false,
             path: default_metrics_path(),
             health_path: default_health_path(),
+            scrape_bearer_token: None,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompressionConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -69,6 +77,7 @@ impl Default for CompressionConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimitConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -97,7 +106,9 @@ fn default_metrics_path() -> String {
 }
 
 fn default_health_path() -> String {
-    "/health".to_string()
+    // Cap054: core `handle_request` owns GET /health as liveness body "ok" (WS5).
+    // Metrics JSON health must not collide with that probe path.
+    "/exyonq-metrics-health".to_string()
 }
 
 fn default_min_bytes() -> usize {

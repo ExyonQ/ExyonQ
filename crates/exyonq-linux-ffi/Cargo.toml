@@ -1,0 +1,16 @@
+[package]
+name = "exyonq-linux-ffi"
+description = "ADR-045 Linux FFI capsule — Safe wrappers over epoll-adjacent syscalls (Tokio-free by default)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+# Optional: Tokio ReadBuf assume_init helper for product-plane adapters (not CFD).
+tokio-io = ["dep:tokio"]
+
+[dependencies]
+libc = "0.2"
+tokio = { workspace = true, optional = true }

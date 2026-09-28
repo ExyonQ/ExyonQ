@@ -17,6 +17,11 @@ TRACKING = force-tracked under /docs/security/** (see .gitignore exceptions)
 Root policy entry: [`SECURITY.md`](../../SECURITY.md).
 
 ```text
-PRODUCTION_SIGNING_EXECUTED = NO  (signing design lives under security/signing/)
-PUBLICATION_STATUS = FORBIDDEN until release owner ceremony
+PRODUCTION_SIGNING_EXECUTED = YES  (v0.4.3 private release; design under security/signing/)
+PUBLICATION_STATUS = PRIVATE_V043_RELEASE_COMPLETE
+PUBLIC_RELEASE = v0.4.3
+RUSTSEC_2026_0222_EXCEPTION_STATUS = ACTIVE_WAIVER
+VULNERABILITY_FIXED = NO
+WAIVED_FOR_V043 = YES
+EXPIRY_REVIEW = v0.4.4
 ```

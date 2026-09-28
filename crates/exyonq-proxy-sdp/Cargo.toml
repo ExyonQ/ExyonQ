@@ -1,0 +1,20 @@
+[package]
+name = "exyonq-proxy-sdp"
+description = "SDP-P1 specialized H1 proxy dataplane — mio TPC shards (internal)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+arc-swap.workspace = true
+exyonq-runtime-plan = { workspace = true }
+exyonq-waf-api = { workspace = true }
+httparse = "1.10"
+mio = { version = "1", features = ["net", "os-poll"] }
+socket2 = { version = "0.6", features = ["all"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -23,7 +23,7 @@ use exyonq_module_api::static_epoll::{
 };
 #[cfg(target_os = "linux")]
 use exyonq_module_api::static_wire::BlockingAdmission;
-use exyonq_module_api::static_wire::{self, StaticWireBenchHooks, StaticWireEligibilityHooks};
+use exyonq_module_api::static_wire::{self, StaticWireEligibilityHooks};
 use std::sync::Arc;
 
 /// Register all stable kernel hooks after `StaticRuntime` is constructed.
@@ -33,18 +33,11 @@ pub fn install_kernel_hooks(_runtime: Arc<StaticRuntime>) {
 
     let _ = static_wire::install_wire_eligibility_hooks(StaticWireEligibilityHooks {
         epoll_keep_alive_eligible: crate::wire_eligibility::epoll_keep_alive_eligible,
-        is_sendfile_bench_head: crate::wire_eligibility::is_sendfile_bench_head,
         epoll_sendfile_eligible: crate::wire_eligibility::epoll_sendfile_eligible,
         static_wire_use_blocking_pool: crate::wire_eligibility::static_wire_use_blocking_pool,
         static_sendfile_use_blocking_pool:
             crate::wire_eligibility::static_sendfile_use_blocking_pool,
-        static_one_m_sendfile_use_blocking:
-            crate::wire_eligibility::static_one_m_sendfile_use_blocking,
         might_use_static_wire: crate::wire_eligibility::might_use_static_wire,
-    });
-
-    let _ = static_wire::install_wire_bench_hooks(StaticWireBenchHooks {
-        p1_bench_wire_rodata: crate::wire::p1_bench_wire_rodata,
     });
 
     #[cfg(target_os = "linux")]
@@ -62,31 +55,35 @@ pub fn install_kernel_hooks(_runtime: Arc<StaticRuntime>) {
 
         let _ = static_epoll::install_epoll_fsm_hooks(StaticEpollFsmHooks {
             is_head_wire_request: |head| crate::StaticRoot::is_head_wire_request(head),
-            match_bench_sendfile: crate::epoll_session::match_bench_sendfile,
+            match_sendfile_asset: crate::epoll_session::match_sendfile_asset,
+            sendfile_miss_http_wire: crate::epoll_session::sendfile_miss_http_wire,
             begin_sendfile_session: crate::epoll_session::begin_sendfile_session,
             pump_sendfile_session: |fd, session| {
                 map_pump(crate::epoll_session::pump_sendfile_session(fd, session))
             },
             clear_sendfile_session: crate::epoll_session::clear_sendfile_session,
+            release_sendfile_handle: crate::epoll_session::release_sendfile_handle,
         });
 
-        let _ = static_epoll::install_epoll_bench_hooks(static_epoll::StaticEpollBenchHooks {
-            try_write_bench_response: |site_slot, fd, head, p1_wire, write_fn| {
-                match crate::epoll_bench::try_write_bench_response(
-                    site_slot, fd, head, p1_wire, write_fn,
-                ) {
-                    crate::epoll_bench::EpollBenchWriteResult::Written => {
-                        static_epoll::StaticEpollBenchWriteResult::Written
+        let _ = static_epoll::install_epoll_inline_wire_hooks(
+            static_epoll::StaticEpollInlineWireHooks {
+                try_write_inline_wire_response: |site_slot, fd, head, write_fn| {
+                    match crate::epoll_inline_wire::try_write_inline_wire_response(
+                        site_slot, fd, head, write_fn,
+                    ) {
+                        crate::epoll_inline_wire::EpollInlineWireResult::Written => {
+                            static_epoll::StaticEpollInlineWireResult::Written
+                        }
+                        crate::epoll_inline_wire::EpollInlineWireResult::Handoff => {
+                            static_epoll::StaticEpollInlineWireResult::Handoff
+                        }
+                        crate::epoll_inline_wire::EpollInlineWireResult::NoMatch => {
+                            static_epoll::StaticEpollInlineWireResult::NoMatch
+                        }
                     }
-                    crate::epoll_bench::EpollBenchWriteResult::Handoff => {
-                        static_epoll::StaticEpollBenchWriteResult::Handoff
-                    }
-                    crate::epoll_bench::EpollBenchWriteResult::NoMatch => {
-                        static_epoll::StaticEpollBenchWriteResult::NoMatch
-                    }
-                }
+                },
             },
-        });
+        );
 
         let _ = static_epoll::install_epoll_metrics_hooks(StaticEpollMetricsHooks {
             note_complete: crate::sendfile_metrics::note_complete,
@@ -176,7 +173,7 @@ fn try_spawn_blocking_static_hook(
 #[cfg(target_os = "linux")]
 fn shed_blocking_admission_hook(
     stream: std::net::TcpStream,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send>> {
     let tokio_stream = std_to_tokio(stream);
     Box::pin(crate::wire_conn::shed_blocking_admission(tokio_stream))
 }

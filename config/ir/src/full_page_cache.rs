@@ -33,6 +33,7 @@ fn default_fpc_namespace() -> u16 {
 
 /// `[full_page_cache]` — public FPC L1 (WC2B lookup + WC2C insert).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FullPageCacheConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -56,6 +57,7 @@ pub struct FullPageCacheConfig {
 
 /// `[full_page_cache.distributed_cache]` — WC7B1/B2/WC7D coordination flags.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributedCacheConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -84,6 +86,7 @@ pub struct DistributedCacheConfig {
 
 /// `[full_page_cache.distributed_cache.redis]` — WC7B2/WC7D; no secrets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributedCacheRedisConfig {
     /// `redis://host:port/` — password via `EXYONQ_REDIS_COORD_PASSWORD` only.
     #[serde(default)]
@@ -104,6 +107,7 @@ pub struct DistributedCacheRedisConfig {
 
 /// `[full_page_cache.distributed_cache.security]` — WC7D; paths only, no secret bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributedCacheSecurityConfig {
     #[serde(default)]
     pub active_key_id: String,

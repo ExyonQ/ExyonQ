@@ -10,10 +10,13 @@ test-utils = ["exyonq-module-api/test-utils"]
 
 [dependencies]
 bytes.workspace = true
+brotli.workspace = true
+flate2.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 memmap2.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 async-trait.workspace = true

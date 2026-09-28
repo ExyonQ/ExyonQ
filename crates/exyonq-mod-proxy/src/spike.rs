@@ -39,7 +39,7 @@ async fn forward_spike_request(
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
 ) -> Response<BoxBody> {
-    hyper_forward::forward_request(
+    hyper_forward::forward_request_complete(
         client,
         upstream,
         req,
@@ -60,19 +60,17 @@ pub async fn run_spike_proxy(listen: SocketAddr, upstream: Uri) -> anyhow::Resul
     loop {
         let (stream, peer) = listener.accept().await?;
         let upstream = upstream.clone();
-        let client = client.clone();
         let xff = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"));
 
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
             let service = service_fn(move |req: Request<Incoming>| {
-                let client = client.clone();
                 let upstream = upstream.clone();
                 let xff = xff.clone();
                 async move {
                     Ok::<_, Infallible>(
-                        forward_spike_request(&client, &upstream, req, Some(&xff)).await,
+                        forward_spike_request(client, &upstream, req, Some(&xff)).await,
                     )
                 }
             });

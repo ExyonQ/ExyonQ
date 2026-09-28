@@ -17,28 +17,32 @@ hyper-util.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-exyonq-addon-api = { workspace = true }
 exyonq-module-api = { path = "../module-api" }
 exyonq-cache = { workspace = true }
 exyonq-mod-proxy = { workspace = true }
+exyonq-proxy-sdp = { workspace = true }
 exyonq-mod-static = { workspace = true }
 exyonq-config-ir = { workspace = true }
+exyonq-control-api = { workspace = true }
 exyonq-runtime-plan = { workspace = true }
 exyonq-module-pipeline = { workspace = true }
 exyonq-mod-tls = { workspace = true }
 # Provider selected via [features]; workspace dep has default-features=false.
 exyonq-mod-http3 = { workspace = true }
+exyonq-waf-api = { workspace = true }
+arc-swap.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+exyonq-linux-ffi = { path = "../crates/exyonq-linux-ffi" }
 
 [dev-dependencies]
 tempfile = "3"
-sha1 = "0.10"
-base64 = "0.22"
+sha1 = "0.11"
+base64 = "0.23"
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 exyonq-mod-static = { workspace = true, features = ["test-utils"] }
-exyonq-mod-proxy = { workspace = true }
+exyonq-mod-proxy = { workspace = true, features = ["test-utils"] }
 exyonq-mod-fastcgi = { workspace = true }
 exyonq-mod-htaccess = { workspace = true }
 exyonq-metrics = { workspace = true }
@@ -55,7 +59,7 @@ default = ["http3-provider-s2n"]
 http3-provider-quinn-legacy = ["exyonq-mod-http3/http3-provider-quinn-legacy"]
 http3-provider-s2n = ["exyonq-mod-http3/http3-provider-s2n"]
 http3-provider-quiche = ["exyonq-mod-http3/http3-provider-quiche"]
-test-utils = []
+test-utils = ["exyonq-mod-static/test-utils", "exyonq-mod-proxy/test-utils"]
 p8-app-attribution = ["exyonq-mod-proxy/p8-app-attribution"]
 p8-transport-diag = ["exyonq-mod-proxy/p8-transport-diag"]
 p8t-fix-baseline = ["exyonq-mod-proxy/p8t-fix-baseline"]

@@ -10,6 +10,8 @@ anyhow.workspace = true
 async-trait.workspace = true
 exyonq-cache = { workspace = true }
 exyonq-module-api = { path = "../../module-api" }
+exyonq-linux-ffi = { path = "../exyonq-linux-ffi" }
+getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -80,7 +80,7 @@ connections = 100
 duration = "30s"
 status = "active"
 exyonq = "run"
-note = "SSE proxy pass-through to mock upstream"
+note = "SSE proxy pass-through to upstream peer"
 
 [p9]
 label = "Large payload gzip"
@@ -128,4 +128,4 @@ status = "active"
 exyonq = "http3"
 scheme = "https"
 port = 8444
-note = "QUIC/HTTP/3 on UDP 8444 (exyonq-only smoke; rivals skipped)"
+note = "QUIC/HTTP/3 on UDP 8444 (exyonq-only protocol probe; rivals skipped)"

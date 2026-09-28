@@ -68,7 +68,7 @@ max_ttl_seconds = 300
     FpcCtx {
         ctx: Arc::new(ConnectionContext {
             state,
-            proxy_client,
+            proxy_client: proxy_client.clone(),
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         }),

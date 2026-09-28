@@ -25,8 +25,6 @@ use exyonq_mod_static::StaticRuntime;
 use exyonq_module_api::static_dispatch::{
     StaticCompiledSlot, StaticDispatchService, StaticRegisterError,
 };
-#[cfg(target_os = "linux")]
-use exyonq_module_api::static_dispatch::{StaticDispatchBody, StaticDispatchRequest};
 use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -51,6 +49,7 @@ fn register_runtime_with_root() -> (
             route_prefix: "/assets".into(),
             index_file: None,
             route_name: "assets".into(),
+            route_host: None,
             preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
             preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
             preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
@@ -172,11 +171,10 @@ async fn reload_generation_invalidates_stale_sendfile_handles() {
     let (_dir, runtime, _guard) = register_runtime_with_root();
     let handle = runtime.sendfile_handle_registry().issue(
         1,
-        Arc::new(exyonq_mod_static::sendfile::SendfileAsset {
-            file: Arc::new(std::fs::File::open("/etc/hosts").unwrap()),
-            header: Arc::new(bytes::Bytes::new()),
-            body_len: 0,
-        }),
+        Arc::new(
+            exyonq_mod_static::sendfile::SendfileAsset::open(std::path::Path::new("/etc/hosts"), 0)
+                .expect("open hosts for stale-handle test"),
+        ),
     );
     bind_static_compiled_slots(2, &[]);
     assert!(runtime.take_sendfile_handle(handle).is_none());
@@ -185,52 +183,17 @@ async fn reload_generation_invalidates_stale_sendfile_handles() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn sendfile_handle_taken_exactly_once() {
-    use exyonq_module_api::static_dispatch::StaticDispatchService;
-
+    // Cap067: Hyper dispatch no longer returns SendfileHandle (try_sendfile_outcome = None).
+    // Take-once semantics are owned by the handle registry used by the epoll FSM.
     let (_dir, runtime, _guard) = register_runtime_with_root();
-    let bench_dir = tempdir().unwrap();
-    fs::create_dir_all(bench_dir.path().join("public")).unwrap();
-    let root = bench_dir.path().join("bench");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("64k.bin"), vec![0u8; 65536]).unwrap();
-    bind_static_compiled_slots(
-        2,
-        &[
-            StaticCompiledSlot {
-                filesystem_root: bench_dir.path().join("public"),
-                route_prefix: "/assets".into(),
-                index_file: None,
-                route_name: "assets".into(),
-                preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
-                preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
-                preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
-            },
-            StaticCompiledSlot {
-                filesystem_root: root,
-                route_prefix: "/site".into(),
-                index_file: None,
-                route_name: "site".into(),
-                preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
-                preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
-                preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
-            },
-        ],
-    );
-
-    let outcome = runtime
-        .dispatch(StaticDispatchRequest {
-            root_slot: 1,
-            method: StaticMethod::Get,
-            request_path: Arc::from("/site/64k.bin"),
-            headers: Vec::new(),
-            materialization_budget_bytes: None,
-        })
-        .await;
-    assert_eq!(outcome.status, 200);
-    let handle = match outcome.body {
-        StaticDispatchBody::SendfileHandle(h) => h,
-        other => panic!("expected sendfile handle, got {other:?}"),
-    };
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("64k.bin");
+    fs::write(&path, vec![0u8; 65536]).unwrap();
+    let asset =
+        Arc::new(exyonq_mod_static::sendfile::SendfileAsset::open(&path, 65536).expect("open 64k"));
+    let handle = runtime
+        .sendfile_handle_registry()
+        .issue(runtime.generation(), asset);
     assert!(runtime.take_sendfile_handle(handle).is_some());
     assert!(runtime.take_sendfile_handle(handle).is_none());
     runtime.release_sendfile_handle(handle);

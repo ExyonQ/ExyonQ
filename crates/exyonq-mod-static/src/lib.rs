@@ -20,7 +20,10 @@ mod wire_eligibility_tests;
 
 mod body;
 mod bounded_read;
+mod byte_range;
 pub mod cache_serve;
+mod conditional;
+pub mod encoding_cache;
 #[cfg(target_os = "linux")]
 mod fd_io;
 pub mod identity;
@@ -31,14 +34,20 @@ pub mod static_cache;
 pub mod wire;
 
 #[cfg(target_os = "linux")]
-mod epoll_bench;
+mod epoll_inline_wire;
 #[cfg(target_os = "linux")]
 mod epoll_session;
 mod kernel_hooks;
 mod outcome;
 pub mod runtime;
 #[cfg(target_os = "linux")]
-pub mod sendfile_fsm;
+mod sendfile_fd_cache;
+#[cfg(target_os = "linux")]
+mod sendfile_fsm;
+/// Test/Miri helper (ADR-045 M08/M09) — crate-root re-export; module stays private.
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use sendfile_fsm::reset_epoll_sendfile_enabled_cache_for_tests;
 mod sendfile_handle;
 #[cfg(target_os = "linux")]
 pub mod sendfile_metrics;
@@ -62,17 +71,64 @@ pub use static_cache::{
     reset_metrics_for_tests as reset_static_cache_metrics_for_tests, revalidation_failure_total,
     revalidation_success_total, snapshot_from_identity, snapshot_matches_current,
 };
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub use wire_io::reset_header_read_timeout_cache_for_tests;
 #[cfg(target_os = "linux")]
 pub mod epoll_bridge;
+pub use encoding_cache::{
+    effective_config as encoding_cache_effective_config, feature_enabled as encoding_cache_enabled,
+    install_encoding_cache_config, CacheCoding, EncodingCacheConfig,
+};
 pub use kernel_hooks::install_kernel_hooks;
+#[cfg(target_os = "linux")]
+pub use epoll_session::static_slot_owns_request;
 pub use sendfile_handle::SendfileHandleRegistry;
+
+#[cfg(all(test, target_os = "linux"))]
+#[doc(hidden)]
+pub fn epoll_session_pin_for_tests(rt: std::sync::Arc<StaticRuntime>) {
+    epoll_session::pin_runtime(rt);
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[doc(hidden)]
+pub fn epoll_match_sendfile_for_tests(
+    site_slot: u32,
+    head: &[u8],
+) -> Option<exyonq_module_api::static_dispatch::SendfileHandle> {
+    epoll_session::match_sendfile_asset(site_slot, head)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[doc(hidden)]
+pub fn fd_cache_reset_for_tests() {
+    sendfile_fd_cache::clear_local();
+    sendfile_fd_cache::reset_metrics_for_tests();
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[doc(hidden)]
+pub fn fd_cache_hits_for_tests() -> u64 {
+    sendfile_fd_cache::hits()
+}
 
 use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper::{Response, StatusCode};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+
+pub use byte_range::{
+    decide_range, range_header_from_raw_head, range_header_value, range_response_headers,
+    RangeDecision, SelectedRange,
+};
+pub use conditional::{
+    decide_conditional, header_from_raw_head as conditional_header_from_raw_head,
+    not_modified_headers, single_header_value, ConditionalDecision, PreparedStaticWire,
+    StaticValidators, ValidatorIdentity,
+};
 use thiserror::Error;
 
 type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
@@ -157,6 +213,37 @@ pub fn read_file_bytes_with_budget(
         }
     };
     Ok((bytes, content_type))
+}
+
+/// Cap019: read an inclusive byte interval without materializing the whole file.
+///
+/// `length` must be `end - start + 1` and fit in `usize` on this platform.
+pub fn read_file_range(
+    path: &Path,
+    start: u64,
+    length: u64,
+) -> Result<(Vec<u8>, &'static str), StaticError> {
+    let len_usize = usize::try_from(length).map_err(|_| {
+        StaticError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "range length exceeds platform usize",
+        ))
+    })?;
+    let mut file = File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(StaticError::NotFound);
+    }
+    if start.saturating_add(length) > meta.len() {
+        return Err(StaticError::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "range exceeds file length",
+        )));
+    }
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = vec![0u8; len_usize];
+    file.read_exact(&mut buf)?;
+    Ok((buf, content_type_for(path)))
 }
 
 pub fn serve_head_sync(path: &Path) -> Result<Response<BoxBody>, StaticError> {
