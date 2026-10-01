@@ -24,16 +24,19 @@ cargo xtask security pre-release --version X.Y.Z
 
 Until a release audit is owner-authorized and signed off for a given version, that version remains unpublished.
 
-For **v0.4.4**:
+For **v0.4.4**, the audit artifact is [`docs/security/audit-v0.4.4.md`](docs/security/audit-v0.4.4.md).
 
 ```text
-PUBLICATION_STATUS = PRIVATE_V044_RELEASE_COMPLETE
+PUBLICATION_STATUS = TAG_PUSHED_WORKFLOW_BLOCKED
 PUBLIC_RELEASE = v0.4.4
-RELEASE_AUTHORITY = exyonq-github
+GITHUB_RELEASE = NOT_PUBLISHED
+GHCR = NOT_PUBLISHED
+TAGGED_COMMIT_BLOCKED = 1ce0a7007171d4af6d1f9f4510137298783575ee
 WASMTIME = 49.0.1
-CARGO_AUDIT = no known vulnerabilities
-RUSTSEC_2026_0222 = not applicable to Wasmtime 49.0.1
+RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.1
 ```
+
+That audit records a local `cargo audit` and `cargo deny check advisories bans sources` on the lockfix tree. It does not authorize replacing tag `v0.4.4`, creating the GitHub Release, or pushing the image.
 
 v0.4.3 remains the previous private release. Its Wasmtime 45.0.2 waiver expired for review at v0.4.4 and is not carried forward.
 
