@@ -55,7 +55,7 @@ docker exec nodelayab-exyonq-1 sha256sum /usr/local/bin/exyonq /bench/bench-modu
 docker exec nodelayab-exyonq-1 sh -c 'grep -A3 modules.metrics /bench/bench-modules.toml; grep -A4 modules.ratelimit /bench/bench-modules.toml' | tee "$EV/config-in-container.txt"
 
 # Causal: metrics endpoint must be live with bearer (P12 proof)
-docker exec nodelay-wrk sh -c 'wget -T 5 -S -O /tmp/met http://exyonq:8080/metrics --header="Authorization: Bearer bench-p12-metrics-token" 2>&1 | head -20; echo body=$(wc -c </tmp/met); head -5 /tmp/met' | tee "$EV/causal-metrics.txt"
+docker exec nodelay-wrk sh -c 'SCHEME=Bearer; TOKEN=bench-p12-metrics-token; wget -T 5 -S -O /tmp/met http://exyonq:8080/metrics --header="Authorization: ${SCHEME} ${TOKEN}" 2>&1 | head -20; echo body=$(wc -c </tmp/met); head -5 /tmp/met' | tee "$EV/causal-metrics.txt"
 # Causal: /api/ still 1024
 docker exec nodelay-wrk sh -c 'wget -T 5 -S -O /tmp/api http://exyonq:8080/api/ 2>&1 | head -12; echo body=$(wc -c </tmp/api)' | tee "$EV/causal-api.txt"
 
@@ -138,7 +138,7 @@ for sc in P4 P10 P12; do
 done
 
 # After load: metrics still serving and growing
-docker exec nodelay-wrk sh -c 'wget -T 5 -q -O /tmp/met2 http://exyonq:8080/metrics --header="Authorization: Bearer bench-p12-metrics-token"; wc -c </tmp/met2; grep -c exyonq_ /tmp/met2 || true' | tee "$EV/causal-metrics-after.txt"
+docker exec nodelay-wrk sh -c 'SCHEME=Bearer; TOKEN=bench-p12-metrics-token; wget -T 5 -q -O /tmp/met2 http://exyonq:8080/metrics --header="Authorization: ${SCHEME} ${TOKEN}"; wc -c </tmp/met2; grep -c exyonq_ /tmp/met2 || true' | tee "$EV/causal-metrics-after.txt"
 
 python3 - <<'PY' | tee "$EV/SCOREBOARD.txt"
 import os, re, statistics, pathlib

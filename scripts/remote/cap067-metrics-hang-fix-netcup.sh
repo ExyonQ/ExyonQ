@@ -63,7 +63,7 @@ docker exec nodelayab-exyonq-1 sha256sum /usr/local/bin/exyonq /bench/bench-modu
 # Prefer curl — nodelay-wrk may be stopped between suites.
 set +e
 docker exec nodelayab-exyonq-1 sh -c \
-  'curl -sS -m 5 -D - -o /tmp/met -H "Authorization: Bearer bench-p12-metrics-token" http://127.0.0.1:8080/metrics; echo EXIT=$?; echo body=$(wc -c </tmp/met 2>/dev/null || echo 0); head -8 /tmp/met' \
+  'SCHEME=Bearer; TOKEN=bench-p12-metrics-token; curl -sS -m 5 -D - -o /tmp/met -H "Authorization: ${SCHEME} ${TOKEN}" http://127.0.0.1:8080/metrics; echo EXIT=$?; echo body=$(wc -c </tmp/met 2>/dev/null || echo 0); head -8 /tmp/met' \
   | tee "$EV/causal-metrics.txt"
 docker exec nodelayab-exyonq-1 sh -c \
   'curl -sS -m 5 -D - -o /tmp/api http://127.0.0.1:8080/api/; echo EXIT=$?; echo body=$(wc -c </tmp/api 2>/dev/null || echo 0)' \

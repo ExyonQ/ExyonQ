@@ -121,7 +121,7 @@ docker exec nodelayab-exyonq-1 sh -c 'grep -A3 modules.metrics /bench/bench-modu
 
 # Causal: /metrics must complete under EPOLL ON (hang regression gate)
 docker exec nodelayab-exyonq-1 sh -c \
-  'curl -sS -m 5 -D - -o /tmp/met -H "Authorization: Bearer bench-p12-metrics-token" http://127.0.0.1:8080/metrics; echo EXIT=$?; echo body=$(wc -c </tmp/met); head -5 /tmp/met' \
+  'SCHEME=Bearer; TOKEN=bench-p12-metrics-token; curl -sS -m 5 -D - -o /tmp/met -H "Authorization: ${SCHEME} ${TOKEN}" http://127.0.0.1:8080/metrics; echo EXIT=$?; echo body=$(wc -c </tmp/met); head -5 /tmp/met' \
   | tee "$EV/causal-metrics.txt"
 docker exec nodelayab-exyonq-1 sh -c \
   'curl -sS -m 5 -D - -o /tmp/api http://127.0.0.1:8080/api/; echo EXIT=$?; echo body=$(wc -c </tmp/api)' \
@@ -130,11 +130,11 @@ docker exec nodelayab-exyonq-1 sh -c \
 # Path oracle: Cap054 counters must move after wire /api/ (wire_record_response).
 # Hyper Service must NOT be the only path — metrics scrape stays Hyper (LA-CAP054-008).
 docker exec nodelayab-exyonq-1 sh -c \
-  'curl -sS -m 5 -H "Authorization: Bearer bench-p12-metrics-token" http://127.0.0.1:8080/metrics | grep -E "exyonq_http_requests_total|exyonq_http_responses" | head -20' \
+  'SCHEME=Bearer; TOKEN=bench-p12-metrics-token; curl -sS -m 5 -H "Authorization: ${SCHEME} ${TOKEN}" http://127.0.0.1:8080/metrics | grep -E "exyonq_http_requests_total|exyonq_http_responses" | head -20' \
   | tee "$EV/oracle-metrics-before.txt"
 docker exec nodelay-wrk wrk -t2 -c50 -d 3s http://exyonq:8080/api/ >/dev/null 2>&1 || true
 docker exec nodelayab-exyonq-1 sh -c \
-  'curl -sS -m 5 -H "Authorization: Bearer bench-p12-metrics-token" http://127.0.0.1:8080/metrics | grep -E "exyonq_http_requests_total|exyonq_http_responses" | head -20' \
+  'SCHEME=Bearer; TOKEN=bench-p12-metrics-token; curl -sS -m 5 -H "Authorization: ${SCHEME} ${TOKEN}" http://127.0.0.1:8080/metrics | grep -E "exyonq_http_requests_total|exyonq_http_responses" | head -20' \
   | tee "$EV/oracle-metrics-after-wire.txt"
 # Stack sample under load: prefer proxy_wire / epoll over hyper::service for /api/
 (
@@ -228,7 +228,7 @@ for sc in P4 P10 P12; do
 done
 
 docker exec nodelayab-exyonq-1 sh -c \
-  'curl -sS -m 5 -o /tmp/met2 -H "Authorization: Bearer bench-p12-metrics-token" http://127.0.0.1:8080/metrics; wc -c </tmp/met2; grep -c exyonq_ /tmp/met2 || true' \
+  'SCHEME=Bearer; TOKEN=bench-p12-metrics-token; curl -sS -m 5 -o /tmp/met2 -H "Authorization: ${SCHEME} ${TOKEN}" http://127.0.0.1:8080/metrics; wc -c </tmp/met2; grep -c exyonq_ /tmp/met2 || true' \
   | tee "$EV/causal-metrics-after.txt"
 
 python3 - <<'PY' | tee "$EV/SCOREBOARD.txt"
