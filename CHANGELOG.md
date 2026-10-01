@@ -25,18 +25,21 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- Follow-up after privately published **`0.4.4`** (`v0.4.4`).
+- Tag `v0.4.4` is on origin at `1ce0a70`. The GitHub Release and `ghcr.io/exyonq/exyonq:0.4.4` were not published: `release.yml` failed on that commit.
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
 
-## [0.4.4] — private release (published on exyonq-github)
+## [0.4.4] — private release (tag pushed; Release and image not published)
 
 ```text
-PUBLICATION_STATUS = PRIVATE_V044_RELEASE_COMPLETE
+PUBLICATION_STATUS = TAG_PUSHED_WORKFLOW_BLOCKED
 PUBLIC_OPENING = NO
 PUBLIC_RELEASE = v0.4.4
+GITHUB_RELEASE = NOT_PUBLISHED
+GHCR = NOT_PUBLISHED
 LATEST_CHANGED = NO
+TAGGED_COMMIT_BLOCKED = 1ce0a7007171d4af6d1f9f4510137298783575ee
 ```
 
 ### Changed
@@ -48,10 +51,18 @@ LATEST_CHANGED = NO
 - `instant-acme` stays on the published 0.8.5 API. `third_party/instant-acme` is that release with `base64` 0.23, because 0.9.0 is not on crates.io.
 - Dataplane fixes reproduced by independent Netcup oracles: static host routing, epoll inline access and request id, wire metrics, proxy upstream body completion, WAF challenge host, compression and rate-limit exemptions.
 
+### Fixed
+
+- `Cargo.lock` on the tagged commit still said `0.4.3` and still listed `exyonq-bench`, so `cargo build --locked` could not run. The lock now matches workspace `0.4.4` and no longer lists `exyonq-bench`.
+- Release manifest allowlist now accepts `0.4.4`. `generate-release-manifest.sh` rejected it before.
+- Added `docs/security/audit-v0.4.4.md` and `docs/release/v0.4.4.md`, which `release.yml` requires before it publishes. `.gitignore` now tracks `docs/release/` so that body file can be committed.
+- Removed unused `write_raw_proxy_response`. `release.yml` builds with `-Dwarnings`, and that dead function was the warning.
+
 ### Not in this publication
 
 - Benchmark suites, development HTML, and local evidence packs stay out of this tree.
-- No claim that a public official benchmark or a `latest` tag was updated.
+- No GitHub Release, no `ghcr.io/exyonq/exyonq:0.4.4`, and no `:latest` tag.
+- No claim that a public official benchmark was updated.
 
 ---
 

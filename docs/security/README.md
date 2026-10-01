@@ -17,6 +17,14 @@ TRACKING = force-tracked under /docs/security/** (see .gitignore exceptions)
 Root policy entry: [`SECURITY.md`](../../SECURITY.md).
 
 ```text
+V044_AUDIT = docs/security/audit-v0.4.4.md
+V044_PUBLICATION_STATUS = TAG_PUSHED_WORKFLOW_BLOCKED
+V044_GITHUB_RELEASE = NOT_PUBLISHED
+V044_GHCR = NOT_PUBLISHED
+V044_TAGGED_COMMIT_BLOCKED = 1ce0a7007171d4af6d1f9f4510137298783575ee
+```
+
+```text
 PRODUCTION_SIGNING_EXECUTED = YES  (v0.4.3 private release; design under security/signing/)
 PUBLICATION_STATUS = PRIVATE_V043_RELEASE_COMPLETE
 PUBLIC_RELEASE = v0.4.3

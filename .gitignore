@@ -19,6 +19,9 @@ rust-project.json
 !/docs/governance/**
 !/docs/releases/
 !/docs/releases/**
+# release.yml github-release body_path is docs/release/vX.Y.Z.md
+!/docs/release/
+!/docs/release/**
 !/docs/adr/
 !/docs/adr/**
 !/docs/architecture/

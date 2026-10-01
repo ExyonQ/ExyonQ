@@ -361,51 +361,6 @@ fn push_u64_decimal(buf: &mut Vec<u8>, mut n: u64) {
     buf.extend_from_slice(&tmp[i..]);
 }
 
-/// Cap034 framing for [`crate::raw_upstream::RawGetResponse`] (known-length only).
-async fn write_raw_proxy_response<S: AsyncWrite + Unpin>(
-    stream: &mut S,
-    raw: &crate::raw_upstream::RawGetResponse,
-    client_close: bool,
-) -> Result<WireWriteOutcome> {
-    let mut wire = Vec::with_capacity(128usize.saturating_add(raw.body.len()));
-    wire.extend_from_slice(b"HTTP/1.1 ");
-    push_u64_decimal(&mut wire, u64::from(raw.status));
-    if !raw.reason.is_empty() {
-        wire.push(b' ');
-        wire.extend_from_slice(&raw.reason);
-    }
-    wire.extend_from_slice(b"\r\n");
-    for (name, value) in &raw.passthrough_headers {
-        wire.extend_from_slice(name);
-        wire.extend_from_slice(b": ");
-        wire.extend_from_slice(value);
-        wire.extend_from_slice(b"\r\n");
-    }
-    let outcome = if client_close {
-        wire.extend_from_slice(b"Content-Length: ");
-        push_u64_decimal(&mut wire, raw.content_length);
-        wire.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
-        WireWriteOutcome::Close
-    } else {
-        wire.extend_from_slice(b"Content-Length: ");
-        push_u64_decimal(&mut wire, raw.content_length);
-        wire.extend_from_slice(b"\r\nConnection: keep-alive\r\n\r\n");
-        WireWriteOutcome::KeepAlive
-    };
-    // Single write for small known-length bodies (P4 1 KiB): headers+body one syscall.
-    if !raw.body.is_empty() && raw.body.len() <= 16 * 1024 {
-        wire.extend_from_slice(&raw.body);
-        wire_io::write_all_async(stream, &wire).await?;
-    } else {
-        wire_io::write_all_async(stream, &wire).await?;
-        if !raw.body.is_empty() {
-            wire_io::write_all_async(stream, &raw.body).await?;
-        }
-    }
-    stream.flush().await?;
-    Ok(outcome)
-}
-
 /// Legacy encoder retained for byte-equivalence tests only.
 #[cfg(test)]
 fn encode_proxy_response_head_format_legacy(
