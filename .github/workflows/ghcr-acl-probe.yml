@@ -1,0 +1,40 @@
+name: GHCR ACL probe
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "acl-probe"
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push a scratch image without provenance
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d)"
+          printf 'FROM scratch\nLABEL org.opencontainers.image.source=https://github.com/ExyonQ/ExyonQ\n' > "$dir/Dockerfile"
+          docker buildx build --push --provenance=false --sbom=false \
+            -t ghcr.io/exyonq/exyonq:acl-probe \
+            "$dir"
+      - name: Push a scratch image with provenance mode=max
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d)"
+          printf 'FROM scratch\nLABEL org.opencontainers.image.source=https://github.com/ExyonQ/ExyonQ\n' > "$dir/Dockerfile"
+          docker buildx build --push --provenance=mode=max --sbom=true \
+            -t ghcr.io/exyonq/exyonq:acl-probe-prov \
+            "$dir"
