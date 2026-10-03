@@ -25,6 +25,11 @@ Requires a recent Rust toolchain (see `rust-toolchain.toml`) and, for optional H
 - HTTP/3 provider: s2n (optional quiche; quinn-legacy rollback feature)
 - Mimalloc is not a product feature
 
+## Contact
+
+- contact@exyonq.org
+- security@exyonq.org
+
 ## License
 
 Apache License 2.0 — see `LICENSE` and `NOTICE`.
