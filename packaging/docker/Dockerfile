@@ -22,6 +22,7 @@ ARG EXYONQ_OFFICIAL_RELEASE=0
 # Map OCI label arg into the cargo build-script env (same SHA for amd64/arm64).
 ENV EXYONQ_SOURCE_REVISION=${EXYONQ_GIT_REVISION}
 ENV EXYONQ_OFFICIAL_RELEASE=${EXYONQ_OFFICIAL_RELEASE}
+ENV EXYONQ_ARTIFACT_VERSION=0.4.4.1
 WORKDIR /app
 # Fail closed before compile when building an official release image without a real SHA.
 RUN set -eu; \
