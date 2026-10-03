@@ -7,7 +7,7 @@ AUTHORITY = SOLE inventory of documentation roles for this worktree
 LAST_UPDATED = 2026-10-03
 BRANCH = main
 PUBLIC_RELEASE = v0.4.4.1
-HEAD = 5b1451d43bad4c7128a6ec9236803e8d8c7f0d60
+HEAD = 99bd7c547cb4d7c7821a1e131dfca5cf8d8db987
 ```
 
 Companions: [`PROJECT_STATUS.md`](PROJECT_STATUS.md) · [`ROADMAP.md`](ROADMAP.md)
