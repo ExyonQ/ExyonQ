@@ -14,7 +14,7 @@ Proves Cap054 (does not reopen Cap038/032/031/048/…):
   - content-type + cache-control + POST→405
   - concurrent scrapes remain valid
   - reload does not reset process-lifetime counters
-  - health JSON version reflects package 0.4.3
+  - health JSON version reflects package 0.4.4
   - proxy 502 path increments 5xx when upstream down
 
 Cap056/057 cache metrics: NOT closed here.
@@ -446,7 +446,7 @@ def main() -> int:
         health = body.decode("utf-8", errors="replace")
         mark(
             "health_version_0_4_3",
-            code == 200 and '"version":"0.4.3"' in health and '"status":"ok"' in health,
+            code == 200 and '"version":"0.4.4"' in health and '"status":"ok"' in health,
             {"http_code": code, "body": health[:200]},
         )
 

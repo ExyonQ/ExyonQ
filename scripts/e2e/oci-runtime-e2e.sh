@@ -56,7 +56,7 @@ echo "oci-runtime-e2e: building $TAG plat=$PLAT rev=$REV"
 set +e
 docker buildx build -f "$ROOT/packaging/docker/Dockerfile" \
   --platform "$PLAT" --load \
-  --build-arg EXYONQ_VERSION=0.4.3 \
+  --build-arg EXYONQ_VERSION=0.4.4 \
   --build-arg "EXYONQ_GIT_REVISION=$REV" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t "$TAG" "$ROOT" >"$EV/build.log" 2>&1
