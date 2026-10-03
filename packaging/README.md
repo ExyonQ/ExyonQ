@@ -100,18 +100,21 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.4 \
+  --build-arg EXYONQ_VERSION=0.4.4.1 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
 
 # Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
+# Runtime stage is scratch. Debian is used only to copy CA certificates and is not shipped.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.4 \
+  --provenance=mode=max \
+  --sbom=true \
+  --build-arg EXYONQ_VERSION=0.4.4.1 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t ghcr.io/exyonq/exyonq:0.4.4 .
+  -t ghcr.io/exyonq/exyonq:0.4.4.1 .
 ```
 
 ## CI

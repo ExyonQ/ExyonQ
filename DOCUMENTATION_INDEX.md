@@ -4,9 +4,10 @@
 DOCUMENT = DOCUMENTATION_INDEX.md
 DOCUMENT_ROLE = CANONICAL_DOCUMENTATION_MAP
 AUTHORITY = SOLE inventory of documentation roles for this worktree
-LAST_UPDATED = 2026-08-03
-BRANCH = release/v0.4.3-integration
-HEAD = (see git after GRC-R5 remediation commits)
+LAST_UPDATED = 2026-10-03
+BRANCH = main
+PUBLIC_RELEASE = v0.4.4.1
+HEAD = 5b1451d43bad4c7128a6ec9236803e8d8c7f0d60
 ```
 
 Companions: [`PROJECT_STATUS.md`](PROJECT_STATUS.md) · [`ROADMAP.md`](ROADMAP.md)
