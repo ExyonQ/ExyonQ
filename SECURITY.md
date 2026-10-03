@@ -4,7 +4,8 @@
 
 | Version   | Supported |
 |-----------|-----------|
-| 0.4.x     | Yes (integration / pre-release staging) |
+| 0.4.4.1   | Yes, current published release |
+| 0.4.4     | Yes, previous published release |
 | 0.3.x     | Security fixes only until superseded |
 | < 0.3     | No |
 
@@ -22,29 +23,24 @@ bash scripts/verify-release-audit.sh X.Y.Z
 cargo xtask security pre-release --version X.Y.Z
 ```
 
-Until a release audit is owner-authorized and signed off for a given version, that version remains unpublished.
-
-For **v0.4.4**, the audit artifact is [`docs/security/audit-v0.4.4.md`](docs/security/audit-v0.4.4.md).
+For **v0.4.4.1**, the audit artifact is [`docs/security/audit-v0.4.4.1.md`](docs/security/audit-v0.4.4.1.md).
 
 ```text
-PUBLICATION_STATUS = TAG_PUSHED_WORKFLOW_BLOCKED
-PUBLIC_RELEASE = v0.4.4
-GITHUB_RELEASE = NOT_PUBLISHED
-GHCR = NOT_PUBLISHED
-TAGGED_COMMIT_BLOCKED = 1ce0a7007171d4af6d1f9f4510137298783575ee
+PUBLICATION_STATUS = PUBLISHED
+PUBLIC_RELEASE = v0.4.4.1
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.4.1
+GHCR = ghcr.io/exyonq/exyonq:0.4.4.1
 WASMTIME = 49.0.1
 RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.1
 ```
 
-That audit records a local `cargo audit` and `cargo deny check advisories bans sources` on the lockfix tree. It does not authorize replacing tag `v0.4.4`, creating the GitHub Release, or pushing the image.
-
-v0.4.3 remains the previous private release. Its Wasmtime 45.0.2 waiver expired for review at v0.4.4 and is not carried forward.
+v0.4.4 remains published. v0.4.3 remains the previous private release. Its Wasmtime 45.0.2 waiver expired for review at v0.4.4 and is not carried forward.
 
 Canonical security SoT index: [`docs/security/README.md`](docs/security/README.md).
 
 ## Reporting a vulnerability
 
-Email security reports to the maintainers (see repository contacts). Do not open public issues for exploitable vulnerabilities.
+Email security reports to security@exyonq.org. General contact is contact@exyonq.org. Do not open public issues for exploitable vulnerabilities.
 
 Include:
 

@@ -16,7 +16,7 @@
       "type": "application",
       "bom-ref": "path+file:///root/exyonq-p14v041/cli/exyonq#0.4.1",
       "name": "exyonq",
-      "version": "0.4.1",
+      "version": "0.4.4.1",
       "description": "ExyonQ server CLI",
       "scope": "required",
       "licenses": [

@@ -12,7 +12,7 @@
 #   OFFICIAL_RELEASE_BUILD_WITHOUT_REVISION = FAIL_CLOSED
 # Pass EXYONQ_GIT_REVISION=<40-hex> and EXYONQ_OFFICIAL_RELEASE=1 for official images.
 
-ARG EXYONQ_VERSION=0.4.4
+ARG EXYONQ_VERSION=0.4.4.1
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 
@@ -60,19 +60,31 @@ RUN sed -i '\|  "benchmarks/exyonq-bench",|d' Cargo.toml
 RUN apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/*
 RUN bash scripts/release/build-production.sh
 
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime
+# Runtime is scratch. The production binaries are static musl, so the image
+# does not ship Debian. Debian bookworm-slim carried Perl, pcre2 and hundreds
+# of copyleft packages that are not used by the proxy.
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS certs
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    rm -rf /var/lib/apt/lists/*; \
+    useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin exyonq; \
+    mkdir -p /rootfs/tmp /rootfs/etc/ssl/certs /rootfs/usr/local/bin /rootfs/usr/share/doc/exyonq /rootfs/etc/exyonq; \
+    chmod 1777 /rootfs/tmp; \
+    cp /etc/passwd /etc/group /rootfs/etc/; \
+    cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ca-certificates.crt
+
+FROM scratch AS runtime
 ARG EXYONQ_VERSION
 ARG EXYONQ_GIT_REVISION
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin exyonq
+COPY --from=certs /rootfs/ /
 COPY --from=builder /app/target/release/exyonq /usr/local/bin/exyonq
 COPY --from=builder /app/target/release/exyonqctl /usr/local/bin/exyonqctl
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md sbom.cdx.json /usr/share/doc/exyonq/
 COPY packaging/config/config.toml.example /etc/exyonq/config.toml
 ENV EXYONQ_CONFIG=/etc/exyonq/config.toml
 ENV EXYONQ_CONTROL_SOCKET=/tmp/exyonq.sock
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 LABEL org.opencontainers.image.title="ExyonQ" \
       org.opencontainers.image.version="${EXYONQ_VERSION}" \
       org.opencontainers.image.revision="${EXYONQ_GIT_REVISION}" \

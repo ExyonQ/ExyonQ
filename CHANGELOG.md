@@ -10,8 +10,8 @@ P14CLEAN_GITHUB_INITIAL_VERSION = v0.4.0
 P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
-PUBLICATION_STATUS = PRIVATE_ONLY
-PUBLIC_OPENING = NOT_AUTHORIZED
+PUBLICATION_STATUS = PUBLISHED
+PUBLIC_RELEASE = v0.4.4.1
 LATEST_CHANGED = NO
 ```
 
@@ -25,21 +25,25 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- Tag `v0.4.4` is on origin at `1ce0a70`. The GitHub Release and `ghcr.io/exyonq/exyonq:0.4.4` were not published: `release.yml` failed on that commit.
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
 
-## [0.4.4] — private release (tag pushed; Release and image not published)
+## [0.4.4.1] — 2026-10-03
+
+Published release. Scratch runtime image for `linux/amd64` and `linux/arm64`, plus the matching static musl tarballs. Contact: contact@exyonq.org. Security: security@exyonq.org.
+
+---
+
+## [0.4.4] — published release
 
 ```text
-PUBLICATION_STATUS = TAG_PUSHED_WORKFLOW_BLOCKED
-PUBLIC_OPENING = NO
+PUBLICATION_STATUS = PUBLISHED
 PUBLIC_RELEASE = v0.4.4
-GITHUB_RELEASE = NOT_PUBLISHED
-GHCR = NOT_PUBLISHED
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.4
+GHCR = ghcr.io/exyonq/exyonq:0.4.4
 LATEST_CHANGED = NO
-TAGGED_COMMIT_BLOCKED = 1ce0a7007171d4af6d1f9f4510137298783575ee
+TAGGED_COMMIT = 8f3336f783dc546bdaad4a60b5501568bf688b3a
 ```
 
 ### Changed
