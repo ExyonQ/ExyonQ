@@ -603,7 +603,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_request_stamps_duration_recorded_in_on_response() {
-        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.4.4.1", None);
+        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.4.4", None);
         let before = PROCESS_HTTP.duration_count.load(Ordering::Relaxed);
         let sum_before = PROCESS_HTTP.duration_sum_us.load(Ordering::Relaxed);
         let mut req = Request::builder()
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn sub_millisecond_duration_still_increments_sum() {
-        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.4.4.1", None);
+        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.4.4", None);
         let before = PROCESS_HTTP.duration_sum_us.load(Ordering::Relaxed);
         module.record_duration_ms(0.25);
         let after = PROCESS_HTTP.duration_sum_us.load(Ordering::Relaxed);
@@ -667,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_rejects_post() {
-        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.4.4.1", None);
+        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.4.4", None);
         let req = Request::builder()
             .method(http::Method::POST)
             .uri("http://127.0.0.1/metrics")
@@ -682,7 +682,7 @@ mod tests {
         let module = MetricsModule::new(
             "/metrics",
             "/exyonq-metrics-health",
-            "0.4.4.1",
+            "0.4.4",
             Some("test-token-la008".into()),
         );
         let no_auth = Request::builder()
