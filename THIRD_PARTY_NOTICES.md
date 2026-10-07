@@ -5291,7 +5291,6 @@ Used by:
 - exyonq-compression 0.4.1
 - exyonq-metrics 0.4.1
 - exyonq-ratelimit 0.4.1
-- exyonq-integration-tests 0.0.0
 - exyonq-wasm-host 0.4.1
 - xtask 0.4.1
 - allocator-api2 0.2.21 — https://github.com/zakarumych/allocator-api2

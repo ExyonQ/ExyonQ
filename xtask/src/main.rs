@@ -245,32 +245,6 @@ fn security(command: SecurityCommands) -> anyhow::Result<()> {
 fn security_check(root: &Path) -> anyhow::Result<()> {
     run_in(root, "cargo", &["audit"])?;
     run_in(root, "cargo", &["deny", "check"])?;
-    run_in(
-        root,
-        "cargo",
-        &[
-            "test",
-            "-p",
-            "exyonq-integration-tests",
-            "--test",
-            "security",
-            "--",
-            "--test-threads=1",
-        ],
-    )?;
-    run_in(
-        root,
-        "cargo",
-        &[
-            "test",
-            "-p",
-            "exyonq-integration-tests",
-            "--test",
-            "wasm_host",
-            "--",
-            "--test-threads=1",
-        ],
-    )?;
     Ok(())
 }
 

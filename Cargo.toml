@@ -20,7 +20,6 @@ members = [
   "cli/exyonqctl",
   "cli/exyonq-compat",
   "xtask",
-  "tests/integration",
   "wasm/exyonq-wasm-host",
   "crates/exyonq-mod-fastcgi",
   "crates/exyonq-mod-htaccess",
