@@ -2,9 +2,9 @@
 Contributors: exyonq
 Tags: cache, purge, performance, exyonq
 Requires at least: 6.0
-Tested up to: 6.7
+Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 0.1.0
+Stable tag: 0.2.0
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -39,6 +39,10 @@ Only in a PHP `define()` (typically `wp-config.php`). Never in the database.
 WordPress continues normally. Purge failures are non-fatal.
 
 == Changelog ==
+
+= 0.2.0 =
+* Admin screen with purge statistics and a purge button.
+* Reads the purge socket, token file, and site index when wp-config constants are absent.
 
 = 0.1.0 =
 * Initial WC4 minimal purge client.
