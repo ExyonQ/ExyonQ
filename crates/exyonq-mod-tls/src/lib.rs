@@ -18,8 +18,10 @@
 use exyonq_module_api::tls_runtime::TlsListenerBinding;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::server::ServerSessionMemoryCache;
+use rustls::server::{ClientHello, ResolvesServerCert, ServerSessionMemoryCache};
+use rustls::sign::CertifiedKey;
 use rustls::ServerConfig;
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -258,6 +260,39 @@ impl SharedTlsAcceptor {
         Ok(TlsAcceptor::from(Arc::new(config)))
     }
 
+    /// Several certificates on one listener. The first certificate is the fallback
+    /// for a ClientHello whose name is not listed. Names are matched case-insensitively.
+    pub fn prepare_sni_reload(
+        &self,
+        identities: &[TlsSniCertificate],
+        session_cache: &TlsSessionCache,
+        alpn: &[&[u8]],
+        force_fresh_epoch: bool,
+    ) -> io::Result<PreparedTlsReload> {
+        let base = self.capture_publication_base(session_cache)?;
+        let (config_without_storage, cert_chain_der) = build_sni_material(identities, alpn, None)?;
+        let _ = config_without_storage;
+        let material_changed = base.cert_chain_der.as_ref() != Some(&cert_chain_der);
+        let epoch = if force_fresh_epoch || material_changed {
+            TlsSessionCacheEpoch {
+                storage: ServerSessionMemoryCache::new(session_cache.inner.capacity),
+                storage_identity: base
+                    .generation
+                    .checked_add(1)
+                    .ok_or_else(publication_generation_exhausted_io)?,
+            }
+        } else {
+            base.epoch
+        };
+        let (config, _) = build_sni_material(identities, alpn, Some(epoch.as_arc()))?;
+        Ok(PreparedTlsReload {
+            acceptor: Some(TlsAcceptor::from(Arc::new(config))),
+            cert_chain_der: Some(cert_chain_der),
+            epoch,
+            expected_publication_generation: base.generation,
+        })
+    }
+
     /// Prepare a reload candidate from one material read.
     ///
     /// A fresh session epoch is selected when explicitly required or when the
@@ -429,6 +464,89 @@ fn publication_io_error(err: TlsPublicationError) -> io::Error {
 pub struct TlsSettings {
     pub cert_path: PathBuf,
     pub key_path: PathBuf,
+}
+
+/// One certificate and the names that select it during the TLS handshake.
+#[derive(Debug, Clone)]
+pub struct TlsSniCertificate {
+    pub names: Vec<String>,
+    pub settings: TlsSettings,
+}
+
+struct SniResolver {
+    by_name: HashMap<String, Arc<CertifiedKey>>,
+    default: Arc<CertifiedKey>,
+}
+
+impl std::fmt::Debug for SniResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SniResolver")
+            .field("names", &self.by_name.len())
+            .finish()
+    }
+}
+
+impl ResolvesServerCert for SniResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        if let Some(name) = client_hello.server_name() {
+            if let Some(key) = self.by_name.get(&name.to_ascii_lowercase()) {
+                return Some(Arc::clone(key));
+            }
+        }
+        Some(Arc::clone(&self.default))
+    }
+}
+
+fn build_sni_material(
+    identities: &[TlsSniCertificate],
+    alpn: &[&[u8]],
+    storage: Option<Arc<ServerSessionMemoryCache>>,
+) -> io::Result<(ServerConfig, Vec<Vec<u8>>)> {
+    if identities.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no tls certificates",
+        ));
+    }
+    let mut by_name = HashMap::new();
+    let mut cert_chain_der = Vec::new();
+    let mut default = None;
+    for (index, identity) in identities.iter().enumerate() {
+        let (certs, key) = load_tls_material(&identity.settings)?;
+        let chain = certs.iter().map(|cert| cert.as_ref().to_vec()).collect::<Vec<_>>();
+        cert_chain_der.extend(chain);
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key).map_err(|err| {
+            io::Error::new(io::ErrorKind::InvalidData, err.to_string())
+        })?;
+        let certified = Arc::new(CertifiedKey::new(certs, signing_key));
+        if index == 0 {
+            default = Some(Arc::clone(&certified));
+        }
+        for name in &identity.names {
+            let normalized = name.trim_end_matches('.').to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            if by_name.insert(normalized, Arc::clone(&certified)).is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("duplicate tls server name {name}"),
+                ));
+            }
+        }
+    }
+    let default = default.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "no default tls certificate")
+    })?;
+    let mut config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(SniResolver { by_name, default }));
+    config.alpn_protocols = alpn.iter().map(|proto| proto.to_vec()).collect();
+    if let Some(storage) = storage {
+        config.session_storage = storage;
+    }
+    Ok((config, cert_chain_der))
 }
 
 impl From<&TlsListenerBinding> for TlsSettings {

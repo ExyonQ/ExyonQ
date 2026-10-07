@@ -100,7 +100,7 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.6 \
+  --build-arg EXYONQ_VERSION=0.4.7 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
@@ -111,10 +111,10 @@ docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
   --provenance=mode=max \
   --sbom=true \
-  --build-arg EXYONQ_VERSION=0.4.6 \
+  --build-arg EXYONQ_VERSION=0.4.7 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t ghcr.io/exyonq/exyonq:0.4.6 .
+  -t ghcr.io/exyonq/exyonq:0.4.7 .
 ```
 
 ## CI
@@ -130,11 +130,11 @@ OCI publish (`docker` job) encodes the canonical contract explicitly:
 - revision/version/source via build-args + OCI labels
 
 
-WordPress and SQLite, after the scratch image exists locally as `exyonq:0.4.6`:
+WordPress and SQLite, after the scratch image exists locally as `exyonq:0.4.7`:
 
 ```bash
-docker build -f packaging/docker/wordpress/Dockerfile -t ghcr.io/exyonq/exyonq-wordpress:0.4.6 .
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.6
+docker build -f packaging/docker/wordpress/Dockerfile -t ghcr.io/exyonq/exyonq-wordpress:0.4.7 .
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.7
 ```
 
 Signing (cosign/minisign) is optional follow-up when infra is ready.

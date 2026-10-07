@@ -25,7 +25,7 @@ ExyonQ is a modular reverse proxy. This clean publication tree contains the comp
 
 ## Release
 
-Current product version: **v0.4.6**. The production container is a scratch image: the `exyonq` and `exyonqctl` binaries are static musl, and the image carries CA certificates plus the example config. It does not ship a Debian userland.
+Current product version: **v0.4.7**. The production container is a scratch image: the `exyonq` and `exyonqctl` binaries are static musl, and the image carries CA certificates plus the example config. It does not ship a Debian userland.
 
 ## Contact
 

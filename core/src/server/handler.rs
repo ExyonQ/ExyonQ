@@ -1117,7 +1117,7 @@ async fn dispatch_core(
     match crate::structural_route_rules::evaluate_route_structural_rules(route) {
         exyonq_module_api::RouteRuleOutcome::NoChange => {}
         exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
-            return redirect_response_parts(status, location);
+            return redirect_for_request(status, location, host.as_deref(), path.as_str(), uri.query());
         }
         exyonq_module_api::RouteRuleOutcome::InternalRewrite { path: rewritten } => {
             // Fail closed: never rematch/proxy with path≠uri after a parse failure.
@@ -1137,7 +1137,13 @@ async fn dispatch_core(
                 exyonq_module_api::RouteRuleOutcome::NoChange => {}
                 exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
                     // Rematch landed on a redirect-only route (Cap036 surface).
-                    return redirect_response_parts(status, location);
+                    return redirect_for_request(
+                        status,
+                        location,
+                        host.as_deref(),
+                        path.as_str(),
+                        uri.query(),
+                    );
                 }
                 exyonq_module_api::RouteRuleOutcome::InternalRewrite { .. } => {
                     // Bound: do not chain structural rewrites.
@@ -2409,6 +2415,42 @@ fn empty_head_response(status: StatusCode) -> Response<BoxBody> {
                 .boxed(),
         )
         .expect("valid head response")
+}
+
+fn redirect_for_request(
+    status: u16,
+    location: &str,
+    host: Option<&str>,
+    path: &str,
+    query: Option<&str>,
+) -> Response<BoxBody> {
+    let Ok(location) = expand_redirect_location(location, host, path, query) else {
+        return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
+    };
+    redirect_response_parts(status, &location)
+}
+
+/// `{host}` and `{path}` expand from the request. `{path}` keeps the query.
+/// A location without those markers is sent unchanged.
+fn expand_redirect_location(
+    location: &str,
+    host: Option<&str>,
+    path: &str,
+    query: Option<&str>,
+) -> Result<String, ()> {
+    if !location.contains("{host}") && !location.contains("{path}") {
+        return Ok(location.to_string());
+    }
+    let Some(host) = host.filter(|value| !value.is_empty()) else {
+        return Err(());
+    };
+    let path_and_query = match query {
+        Some(query) if !query.is_empty() => format!("{path}?{query}"),
+        _ => path.to_string(),
+    };
+    Ok(location
+        .replace("{host}", host)
+        .replace("{path}", &path_and_query))
 }
 
 fn redirect_response_parts(status: u16, location: &str) -> Response<BoxBody> {

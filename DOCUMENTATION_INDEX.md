@@ -6,7 +6,7 @@ DOCUMENT_ROLE = CANONICAL_DOCUMENTATION_MAP
 AUTHORITY = SOLE inventory of documentation roles for this worktree
 LAST_UPDATED = 2026-10-03
 BRANCH = main
-PUBLIC_RELEASE = v0.4.6
+PUBLIC_RELEASE = v0.4.7
 HEAD = 99bd7c547cb4d7c7821a1e131dfca5cf8d8db987
 ```
 
