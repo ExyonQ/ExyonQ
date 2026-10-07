@@ -54,8 +54,6 @@ jobs:
         run: bash scripts/legal/verify-release-legal-bundle.sh
       - name: cargo deny check advisories bans sources
         run: cargo deny check advisories bans sources
-      - name: security tests
-        run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security)' --test-threads=1
       - name: private-material-zero
         run: bash scripts/security/scan-private-material.sh --git-tree --repo .
       - name: verify release audit

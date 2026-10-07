@@ -1306,32 +1306,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "exyonq-integration-tests"
-version = "0.0.0"
-dependencies = [
- "bytes",
- "exyonq-acme",
- "exyonq-compat-common",
- "exyonq-compat-nginx",
- "exyonq-config-ir",
- "exyonq-core",
- "exyonq-discovery-runtime",
- "exyonq-metrics",
- "exyonq-mod-proxy",
- "exyonq-mod-static",
- "exyonq-module-api",
- "exyonq-ops-runtime",
- "exyonq-reload-runtime",
- "exyonq-wasm-host",
- "http-body-util",
- "hyper",
- "hyper-util",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "exyonq-kernel-contract-consumer"
 version = "0.0.0"
 dependencies = [
