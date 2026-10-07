@@ -18,6 +18,13 @@ PRIVATE_PREFIXES=(
   scripts/r3/
   scripts/reality/
   scripts/smoke/
+  scripts/soak/
+  scripts/allocator/
+  scripts/architecture/
+  scripts/integrity/
+  scripts/fault/
+  scripts/operations/
+  scripts/dev/
   tests/integration/
   tools/r3-p4-mock/
 )
