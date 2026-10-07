@@ -1,2 +1,0 @@
-// 7-B selftest fixture — PhpFpmClient forbidden until Plan 08 impl gate.
-pub struct PhpFpmClient;
