@@ -35,7 +35,7 @@ use std::process::ExitCode;
 const CTL_VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     "\nproduct_version=",
-    "0.4.4.1",
+    env!("CARGO_PKG_VERSION"),
     "\nartifact_version=",
     env!("EXYONQ_ARTIFACT_VERSION"),
     "\nsource_revision=",

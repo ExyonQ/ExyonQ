@@ -26,6 +26,7 @@ final class ExyonQ_Cache_Client {
 		'purge_attempt'       => 0,
 		'purge_success'       => 0,
 		'purge_failure'       => 0,
+		'purge_empty'         => 0,
 		'purge_fallback_site' => 0,
 		'purge_deduplicated'  => 0,
 	);
@@ -36,22 +37,21 @@ final class ExyonQ_Cache_Client {
 	public function is_configured(): bool {
 		return $this->socket_path() !== ''
 			&& $this->token() !== ''
-			&& $this->site_id() > 0;
+			&& $this->site_id_decimal() !== '';
 	}
 
 	public function socket_path(): string {
-		if ( ! defined( 'EXYONQ_CACHE_PURGE_SOCKET' ) ) {
-			return '';
+		if ( defined( 'EXYONQ_CACHE_PURGE_SOCKET' ) ) {
+			return $this->sanitize_socket_path( (string) EXYONQ_CACHE_PURGE_SOCKET );
 		}
-		$path = (string) EXYONQ_CACHE_PURGE_SOCKET;
-		return $this->sanitize_socket_path( $path );
+		return $this->sanitize_socket_path( '/run/exyonq/cache-purge.sock' );
 	}
 
 	public function token(): string {
-		if ( ! defined( 'EXYONQ_CACHE_PURGE_TOKEN' ) ) {
-			return '';
+		if ( defined( 'EXYONQ_CACHE_PURGE_TOKEN' ) ) {
+			return (string) EXYONQ_CACHE_PURGE_TOKEN;
 		}
-		return (string) EXYONQ_CACHE_PURGE_TOKEN;
+		return $this->token_from_file();
 	}
 
 	/**
@@ -80,6 +80,35 @@ final class ExyonQ_Cache_Client {
 	}
 
 	/**
+	 * Decimal site id for the purge line. Reads `<socket>.sites` when no constant is set.
+	 * PHP must not recompute the Rust site id.
+	 */
+	public function site_id_decimal(): string {
+		if ( defined( 'EXYONQ_CACHE_SITE_ID' ) ) {
+			$id = $this->site_id();
+			return $id > 0 ? (string) $id : '';
+		}
+		return $this->site_id_from_index();
+	}
+
+	/**
+	 * Safe fields for the admin screen. Never includes the token.
+	 *
+	 * @return array{socket:string,socket_present:bool,token_present:bool,site_id:string,configured:bool}
+	 */
+	public function public_status(): array {
+		$socket = $this->socket_path();
+		$site   = $this->site_id_decimal();
+		return array(
+			'socket'         => $socket,
+			'socket_present' => $socket !== '' && file_exists( $socket ),
+			'token_present'  => $this->token() !== '',
+			'site_id'        => $site,
+			'configured'     => $this->is_configured(),
+		);
+	}
+
+	/**
 	 * @return array{ok:bool,error?:string,purged_entries?:int,purged_bytes?:int,command?:string}
 	 */
 	public function purge_url( string $scheme, string $host, string $path, string $query = '' ): array {
@@ -98,12 +127,12 @@ final class ExyonQ_Cache_Client {
 			return $this->fail( 'invalid_url' );
 		}
 
-		$site = $this->site_id();
+		$site = $this->site_id_decimal();
 		$tok  = $this->token();
 		if ( $query === '' ) {
-			$line = sprintf( 'purge url %d %s %s %s %s', $site, $scheme, $host, $path, $tok );
+			$line = sprintf( 'purge url %s %s %s %s %s', $site, $scheme, $host, $path, $tok );
 		} else {
-			$line = sprintf( 'purge url %d %s %s %s %s %s', $site, $scheme, $host, $path, $query, $tok );
+			$line = sprintf( 'purge url %s %s %s %s %s %s', $site, $scheme, $host, $path, $query, $tok );
 		}
 		return $this->send_line( $line );
 	}
@@ -112,7 +141,7 @@ final class ExyonQ_Cache_Client {
 	 * @return array{ok:bool,error?:string,purged_entries?:int,purged_bytes?:int,command?:string}
 	 */
 	public function purge_site(): array {
-		$line = sprintf( 'purge site %d %s', $this->site_id(), $this->token() );
+		$line = sprintf( 'purge site %s %s', $this->site_id_decimal(), $this->token() );
 		return $this->send_line( $line );
 	}
 
@@ -127,7 +156,7 @@ final class ExyonQ_Cache_Client {
 		if ( $generation < 0 ) {
 			return $this->fail( 'invalid_generation' );
 		}
-		$line = sprintf( 'purge generation %d %d %s', $this->site_id(), $generation, $this->token() );
+		$line = sprintf( 'purge generation %s %d %s', $this->site_id_decimal(), $generation, $this->token() );
 		return $this->send_line( $line );
 	}
 
@@ -263,15 +292,26 @@ final class ExyonQ_Cache_Client {
 			'purged_bytes'   => isset( $decoded['purged_bytes'] ) ? (int) $decoded['purged_bytes'] : 0,
 		);
 		if ( ! $ok ) {
-			$out['error'] = isset( $decoded['error'] ) ? (string) $decoded['error'] : 'purge_failed';
-			$this->bump( 'purge_failure' );
-			$this->last_result = 'fail:' . $out['error'];
-			$this->debug_log( 'purge failed: ' . $out['error'] );
+			$error = isset( $decoded['error'] ) ? (string) $decoded['error'] : 'purge_failed';
+			if ( ! preg_match( '/^[a-z0-9_]{1,64}$/', $error ) ) {
+				$error = 'purge_failed';
+			}
+			$out['error'] = $error;
+			if ( $error === 'not_found' ) {
+				$this->bump( 'purge_empty' );
+				$this->last_result = 'empty:not_found';
+			} else {
+				$this->bump( 'purge_failure' );
+				$this->last_result = 'fail:' . $error;
+			}
+			$this->persist_outcome( false, $error, 0, 0, $out['command'] );
+			$this->debug_log( 'purge failed: ' . $error );
 			return $out;
 		}
 
 		$this->bump( 'purge_success' );
 		$this->last_result = 'ok:' . ( $out['command'] ?: 'purge' );
+		$this->persist_outcome( true, '', $out['purged_entries'], $out['purged_bytes'], $out['command'] );
 		return $out;
 	}
 
@@ -281,6 +321,7 @@ final class ExyonQ_Cache_Client {
 	private function fail( string $error ): array {
 		$this->bump( 'purge_failure' );
 		$this->last_result = 'fail:' . $error;
+		$this->persist_outcome( false, $error, 0, 0, '' );
 		$this->debug_log( 'purge failed: ' . $error );
 		return array(
 			'ok'    => false,
@@ -302,6 +343,105 @@ final class ExyonQ_Cache_Client {
 		if ( function_exists( 'error_log' ) ) {
 			error_log( '[exyonq-cache] ' . $message );
 		}
+	}
+
+	private function persist_outcome( bool $ok, string $error, int $entries, int $bytes, string $command ): void {
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) ) {
+			return;
+		}
+		$stats = get_option( 'exyonq_cache_stats', array() );
+		if ( ! is_array( $stats ) ) {
+			$stats = array();
+		}
+		$stats['attempts'] = (int) ( $stats['attempts'] ?? 0 ) + 1;
+		if ( $ok ) {
+			$stats['success']    = (int) ( $stats['success'] ?? 0 ) + 1;
+			$stats['last_ok']    = 1;
+			$stats['last_error'] = '';
+		} elseif ( $error === 'not_found' ) {
+			$stats['empty']      = (int) ( $stats['empty'] ?? 0 ) + 1;
+			$stats['last_ok']    = 2;
+			$stats['last_error'] = 'not_found';
+		} else {
+			$stats['failure']    = (int) ( $stats['failure'] ?? 0 ) + 1;
+			$stats['last_ok']    = 0;
+			$stats['last_error'] = $error;
+		}
+		$stats['last_at']      = time();
+		$stats['last_entries'] = $entries;
+		$stats['last_bytes']   = $bytes;
+		$stats['last_command'] = $command;
+		update_option( 'exyonq_cache_stats', $stats, false );
+	}
+
+	private function token_file(): string {
+		if ( defined( 'EXYONQ_CACHE_PURGE_TOKEN_FILE' ) ) {
+			return $this->sanitize_socket_path( (string) EXYONQ_CACHE_PURGE_TOKEN_FILE );
+		}
+		return '/run/exyonq/cache-purge.token';
+	}
+
+	private function token_from_file(): string {
+		$path = $this->token_file();
+		if ( $path === '' || ! is_readable( $path ) ) {
+			return '';
+		}
+		$raw = file_get_contents( $path );
+		if ( ! is_string( $raw ) ) {
+			return '';
+		}
+		$raw = trim( $raw );
+		if ( ! preg_match( '/^[A-Za-z0-9._~+-]+$/', $raw ) ) {
+			return '';
+		}
+		return $raw;
+	}
+
+	private function route_name(): string {
+		if ( defined( 'EXYONQ_CACHE_ROUTE' ) ) {
+			$route = (string) EXYONQ_CACHE_ROUTE;
+			if ( preg_match( '/^[A-Za-z0-9._~+-]+$/', $route ) ) {
+				return $route;
+			}
+		}
+		return 'wordpress';
+	}
+
+	private function site_id_from_index(): string {
+		$socket = $this->socket_path();
+		if ( $socket === '' ) {
+			return '';
+		}
+		$path = $socket . '.sites';
+		if ( ! is_readable( $path ) ) {
+			return '';
+		}
+		$raw = file_get_contents( $path );
+		if ( ! is_string( $raw ) ) {
+			return '';
+		}
+		$want = $this->route_name();
+		$lines = preg_split( "/\r\n|\n|\r/", $raw );
+		if ( ! is_array( $lines ) ) {
+			return '';
+		}
+		foreach ( $lines as $line ) {
+			$line = trim( $line );
+			if ( $line === '' || ! str_contains( $line, "\t" ) ) {
+				continue;
+			}
+			$pair = explode( "\t", $line, 2 );
+			$name = $pair[0];
+			$id   = trim( $pair[1] ?? '' );
+			if ( $name !== $want ) {
+				continue;
+			}
+			if ( ! preg_match( '/^[1-9][0-9]{0,19}$/', $id ) ) {
+				return '';
+			}
+			return $id;
+		}
+		return '';
 	}
 
 	private function sanitize_socket_path( string $path ): string {

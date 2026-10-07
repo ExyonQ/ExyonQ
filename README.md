@@ -4,18 +4,18 @@ ExyonQ is a modular reverse proxy written in Rust.
 
 This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark suites, methodology docs, and evidence packs are intentionally not included.
 
-Current product version: **v0.4.5**. Release: https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.5. No `:latest` tag.
+Current product version: **v0.4.6**. Release: https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.6. No `:latest` tag.
 
 ## Container images
 
 Public. No GitHub login.
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.4.5
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.5
+docker pull ghcr.io/exyonq/exyonq:0.4.6
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.6
 ```
 
-`exyonq` is the server image. `exyonq-wordpress` is the WordPress image. Both are `linux/amd64` and `linux/arm64`.
+`exyonq` is the server image. `exyonq-wordpress` is the WordPress image. Both are `linux/amd64` and `linux/arm64`. The release also has the Linux binaries.
 
 https://github.com/ExyonQ/ExyonQ/packages
 

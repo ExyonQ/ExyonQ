@@ -22,7 +22,9 @@ fn main() {
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=EXYONQ_PROFILE={profile}");
 
-    let artifact = std::env::var("EXYONQ_ARTIFACT_VERSION").unwrap_or_else(|_| "0.4.4.1".to_string());
+    let artifact = std::env::var("EXYONQ_ARTIFACT_VERSION").unwrap_or_else(|_| {
+        std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.4.6".to_string())
+    });
     println!("cargo:rustc-env=EXYONQ_ARTIFACT_VERSION={artifact}");
 
     println!("cargo:rerun-if-changed=../../.git/HEAD");

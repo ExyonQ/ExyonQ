@@ -1,0 +1,23 @@
+# Two images: ExyonQ alone, and ExyonQ with WordPress plus SQLite.
+# The WordPress image copies the binary from exyonq:0.4.6, so build that
+# image first (the exyonq service below), then:
+#   docker compose -f packaging/docker/wordpress/docker-compose.yml up --build
+
+services:
+  exyonq:
+    build:
+      context: ../../..
+      dockerfile: packaging/docker/Dockerfile
+    image: exyonq:0.4.6
+    ports:
+      - "8080:8080"
+
+  wordpress:
+    build:
+      context: ../../..
+      dockerfile: packaging/docker/wordpress/Dockerfile
+      args:
+        EXYONQ_VERSION: "0.4.6"
+    image: exyonq-wordpress:0.4.6
+    ports:
+      - "8081:8080"
