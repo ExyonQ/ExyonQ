@@ -23,6 +23,12 @@ docs
 study
 fuzz
 integrations
+!integrations/
+integrations/*
+!integrations/wordpress/
+integrations/wordpress/*
+!integrations/wordpress/exyonq-cache/
+!integrations/wordpress/exyonq-cache/**
 graphify-out
 
 # Heavy benchmark evidence (keep only paths needed by bench Dockerfiles)
