@@ -16,7 +16,7 @@ ARG EXYONQ_GIT_REVISION=unknown
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=exyonqbin /exyonq /usr/local/bin/exyonq
+COPY --from=exyonqbin /usr/local/bin/exyonq /usr/local/bin/exyonq
 COPY packaging/release/conf/wordpress.toml /etc/exyonq/wordpress.toml
 COPY packaging/docker/wordpress/entrypoint.sh /usr/local/bin/exyonq-wordpress-entrypoint
 RUN chmod 0755 /usr/local/bin/exyonq /usr/local/bin/exyonq-wordpress-entrypoint \
