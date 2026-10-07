@@ -78,23 +78,23 @@ does not invent the site id. The scratch image does not run this cache.
 Static ExyonQ, scratch, port 8080:
 
 ```bash
-docker build -f packaging/docker/Dockerfile -t exyonq:0.4.6 .
-docker run --rm -p 8080:8080 exyonq:0.4.6
+docker build -f packaging/docker/Dockerfile -t exyonq:0.4.7 .
+docker run --rm -p 8080:8080 exyonq:0.4.7
 ```
 
 WordPress and SQLite, PHP-FPM plus that same static binary. Build the
 scratch image first; this Dockerfile copies `/exyonq` out of it.
 
 ```bash
-docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.4.6 .
-docker run --rm -p 8080:8080 exyonq-wordpress:0.4.6
+docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.4.7 .
+docker run --rm -p 8080:8080 exyonq-wordpress:0.4.7
 ```
 
 Published images, linux/amd64 and linux/arm64:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.4.6
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.6
+docker pull ghcr.io/exyonq/exyonq:0.4.7
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.7
 ```
 
 Open `http://localhost:8080/` and finish the WordPress installer. The

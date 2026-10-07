@@ -421,20 +421,46 @@ pub fn prepare_tls_acceptor(
     }
 }
 
+fn tls_identities_on_primary_listen(config: &AppConfig) -> Vec<exyonq_mod_tls::TlsSniCertificate> {
+    let listen = config.primary_server().listen.as_str();
+    config
+        .servers
+        .iter()
+        .filter(|server| server.listen == listen)
+        .filter_map(|server| {
+            let tls = server.tls.as_ref()?;
+            Some(exyonq_mod_tls::TlsSniCertificate {
+                names: server.server_name_list(),
+                settings: TlsSettings {
+                    cert_path: tls.cert.clone(),
+                    key_path: tls.key.clone(),
+                },
+            })
+        })
+        .collect()
+}
+
 fn prepare_tcp_tls(
     config: &AppConfig,
     tls_acceptor: &SharedTlsAcceptor,
     tls_session_cache: &TlsSessionCache,
     fresh_epoch: bool,
 ) -> anyhow::Result<PreparedTcpTls> {
-    if let Some(tls) = &config.primary_server().tls {
-        let settings = TlsSettings {
-            cert_path: tls.cert.clone(),
-            key_path: tls.key.clone(),
-        };
+    let identities = tls_identities_on_primary_listen(config);
+    if identities.len() > 1 {
+        let acceptor = tls_acceptor
+            .prepare_sni_reload(&identities, tls_session_cache, &[b"h2", b"http/1.1"], fresh_epoch)
+            .map_err(|err| {
+                anyhow::anyhow!("EXY-RELOAD-0004: TCP TLS prepare failed (KEEP_OLD): {err}")
+            })?;
+        return Ok(PreparedTcpTls {
+            publication: acceptor,
+        });
+    }
+    if let Some(identity) = identities.first() {
         let acceptor = tls_acceptor
             .prepare_reload(
-                &settings,
+                &identity.settings,
                 tls_session_cache,
                 &[b"h2", b"http/1.1"],
                 fresh_epoch,
