@@ -1,0 +1,59 @@
+# WordPress on ExyonQ. PHP-FPM is a separate process on the Unix socket.
+# Page cache is on. HTML without a cookie is kept for 300s. Publishing purges it.
+# The admin timeout is 120s so a core update is not cut at 30s.
+# `/wp-content` and `/wp-includes` are files. `.php` there is denied.
+# `/` executes PHP. Existing files are static. Everything else is `/index.php`.
+
+config_version = 2
+
+[logging]
+level = "info"
+format = "text"
+
+[logging.console]
+enabled = true
+stream = "stdout"
+
+[logging.access]
+enabled = true
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["wp-includes", "wp-content", "wordpress"]
+
+[[route]]
+name = "wp-includes"
+match = { path = "/wp-includes" }
+root = "/var/www/html/wp-includes"
+
+[[route]]
+name = "wp-content"
+match = { path = "/wp-content" }
+root = "/var/www/html/wp-content"
+
+[[route]]
+name = "wordpress"
+match = { path = "/" }
+root = "/var/www/html"
+fastcgi = "php"
+front_controller = "/index.php"
+htaccess = "overlay"
+
+[[fcgi_pool]]
+name = "php"
+address = "unix:/run/php/php-fpm.sock"
+transport = "unix"
+document_root = "/var/www/html"
+max_concurrency = 16
+idle_timeout_ms = 30000
+total_timeout_ms = 120000
+checkout_timeout_ms = 5000
+
+[full_page_cache]
+enabled = true
+default_ttl_seconds = 300
+max_ttl_seconds = 3600
+max_object_bytes = 4194304
+max_total_bytes = 67108864
+max_entries = 10000
+namespace = 4

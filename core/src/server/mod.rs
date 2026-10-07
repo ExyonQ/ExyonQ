@@ -417,30 +417,60 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     };
 
     #[cfg(unix)]
-    if let Ok(purge_path) = std::env::var("EXYONQ_CACHE_PURGE_SOCKET") {
-        match std::env::var("EXYONQ_CACHE_PURGE_TOKEN") {
-            Ok(token) if !token.is_empty() => {
-                if let Some(control_plane) = control_plane_service() {
-                    let purge_port = crate::lab_coord_hooks::build_lab_or_default_purge_port(
-                        reload::SharedServerState::clone(&shared),
-                    );
-                    control_plane.spawn_unix_cache_purge_socket(
-                        exyonq_module_api::CachePurgeSocketConfig {
-                            socket_path: std::path::PathBuf::from(purge_path),
-                            token: std::sync::Arc::<[u8]>::from(token.into_bytes()),
-                        },
-                        purge_port,
-                    );
-                    crate::lab_coord_hooks::start_lab_subscriber_if_any(
-                        reload::SharedServerState::clone(&shared),
-                    );
-                }
-            }
-            _ => {
+    {
+        let state = reload::read_state(&shared);
+        let purge_env = std::env::var("EXYONQ_CACHE_PURGE_SOCKET")
+            .ok()
+            .filter(|path| !path.is_empty());
+        if !state.snapshot.full_page_cache.enabled {
+            if purge_env.is_some() {
                 tracing::warn!(
-                    "EXYONQ_CACHE_PURGE_SOCKET set but EXYONQ_CACHE_PURGE_TOKEN missing/empty; purge socket not started"
+                    "EXYONQ_CACHE_PURGE_SOCKET is set but full_page_cache is disabled; purge socket not started"
                 );
             }
+        } else if let Some(purge_path) = purge_env {
+            if state.config.routes.len() != state.snapshot.full_page_cache.route_site_ids.len() {
+                return Err(anyhow::anyhow!(
+                    "full_page_cache site ids do not match the route table"
+                ));
+            }
+            let token = match std::env::var("EXYONQ_CACHE_PURGE_TOKEN") {
+                Ok(token) if !token.is_empty() => token,
+                _ => crate::cache_purge_port::generate_purge_token().map_err(|err| {
+                    anyhow::anyhow!("purge token was not provided and could not be generated: {err}")
+                })?,
+            };
+            let sites: Vec<(&str, u64)> = state
+                .config
+                .routes
+                .iter()
+                .zip(state.snapshot.full_page_cache.route_site_ids.iter())
+                .map(|(route, id)| (route.name.as_str(), *id))
+                .collect();
+            crate::cache_purge_port::publish_purge_sidecars(
+                std::path::Path::new(&purge_path),
+                &token,
+                &sites,
+            )
+            .map_err(|err| anyhow::anyhow!("purge socket files were not written: {err}"))?;
+            let control_plane = control_plane_service().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "full_page_cache is enabled and EXYONQ_CACHE_PURGE_SOCKET is set, but no control plane is registered"
+                )
+            })?;
+            let purge_port = crate::lab_coord_hooks::build_lab_or_default_purge_port(
+                reload::SharedServerState::clone(&shared),
+            );
+            control_plane.spawn_unix_cache_purge_socket(
+                exyonq_module_api::CachePurgeSocketConfig {
+                    socket_path: std::path::PathBuf::from(&purge_path),
+                    token: std::sync::Arc::<[u8]>::from(token.into_bytes()),
+                },
+                purge_port,
+            );
+            crate::lab_coord_hooks::start_lab_subscriber_if_any(
+                reload::SharedServerState::clone(&shared),
+            );
         }
     }
 

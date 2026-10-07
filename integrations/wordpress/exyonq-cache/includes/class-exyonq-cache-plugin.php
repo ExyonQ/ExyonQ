@@ -35,6 +35,9 @@ final class ExyonQ_Cache_Plugin {
 
 	public function boot(): void {
 		$this->hooks->register();
+		if ( function_exists( 'add_action' ) && class_exists( 'ExyonQ_Cache_Admin' ) ) {
+			ExyonQ_Cache_Admin::register( $this );
+		}
 	}
 
 	public function client(): ExyonQ_Cache_Client {
@@ -71,8 +74,15 @@ final class ExyonQ_Cache_Plugin {
 				$this->purge_site_once( 'fanout' );
 				return;
 			}
+			$miss = false;
 			foreach ( $urls as $url ) {
-				$this->purge_one_url( $url );
+				if ( $this->purge_one_url( $url ) ) {
+					$miss = true;
+				}
+			}
+			if ( $miss ) {
+				$this->client->note_fallback_site();
+				$this->purge_site_once( 'url_miss' );
 			}
 		} catch ( Throwable $e ) {
 			// Fail-open WordPress.
@@ -114,10 +124,13 @@ final class ExyonQ_Cache_Plugin {
 		}
 	}
 
-	private function purge_one_url( string $url ): void {
+	/**
+	 * @return bool True when ExyonQ had no stored copy, or rejected the URL key.
+	 */
+	private function purge_one_url( string $url ): bool {
 		$parts = $this->parse_public_url( $url );
 		if ( $parts === null ) {
-			return;
+			return false;
 		}
 		$key = implode(
 			'|',
@@ -131,15 +144,18 @@ final class ExyonQ_Cache_Plugin {
 		);
 		if ( isset( $this->dedupe[ $key ] ) ) {
 			$this->client->note_deduplicated();
-			return;
+			return false;
 		}
 		$this->dedupe[ $key ] = true;
-		$this->client->purge_url(
+		// Cached pages are keyed without a query. A functional query is not a stored object.
+		$result = $this->client->purge_url(
 			$parts['scheme'],
 			$parts['host'],
 			$parts['path'],
-			$parts['query']
+			''
 		);
+		$error = isset( $result['error'] ) ? (string) $result['error'] : '';
+		return $error === 'not_found' || $error === 'invalid_key';
 	}
 
 	/**

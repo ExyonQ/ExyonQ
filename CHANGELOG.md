@@ -11,7 +11,7 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.4.1
+PUBLIC_RELEASE = v0.4.5
 LATEST_CHANGED = NO
 ```
 
@@ -26,6 +26,14 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 ### Notes
 
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
+
+---
+
+## [0.4.5] — 2026-10-07
+
+Scratch image `ghcr.io/exyonq/exyonq:0.4.5` and WordPress image `ghcr.io/exyonq/exyonq-wordpress:0.4.5`, both `linux/amd64` and `linux/arm64`. No `:latest` tag.
+
+The WordPress image turns the page cache on. Anonymous HTML is kept for 300 seconds. At startup ExyonQ creates `/run/exyonq/cache-purge.sock`, the token file, and the site index. Publishing a post sends `purge site` and that purge is accepted.
 
 ---
 
