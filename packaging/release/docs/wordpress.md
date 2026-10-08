@@ -9,7 +9,7 @@ process, or a file on the volume. ExyonQ does not run PHP inside its binary.
 | File | Use |
 | --- | --- |
 | `conf/exyonq.toml` | Static site. Serves `html/`. |
-| `conf/php-fpm.toml` | One PHP application. `root` plus `front_controller = "/index.php"`. |
+| `conf/php-fpm.toml` | One PHP application. `root`, `fastcgi`, and `htaccess = "overlay"`. The front controller comes from the application's `.htaccess`, not from a TOML field. |
 | `conf/wordpress.toml` | WordPress. Static `/wp-includes` and `/wp-content`. PHP on `/`. |
 
 `root` on a route is the directory of that prefix. In nginx that is `alias`,
@@ -78,23 +78,23 @@ does not invent the site id. The scratch image does not run this cache.
 Static ExyonQ, scratch, port 8080:
 
 ```bash
-docker build -f packaging/docker/Dockerfile -t exyonq:0.4.7 .
-docker run --rm -p 8080:8080 exyonq:0.4.7
+docker build -f packaging/docker/Dockerfile -t exyonq:0.4.8 .
+docker run --rm -p 8080:8080 exyonq:0.4.8
 ```
 
 WordPress and SQLite, PHP-FPM plus that same static binary. Build the
-scratch image first; this Dockerfile copies `/exyonq` out of it.
+scratch image first; this Dockerfile copies `/usr/local/bin/exyonq` out of it.
 
 ```bash
-docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.4.7 .
-docker run --rm -p 8080:8080 exyonq-wordpress:0.4.7
+docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.4.8 .
+docker run --rm -p 8080:8080 exyonq-wordpress:0.4.8
 ```
 
 Published images, linux/amd64 and linux/arm64:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.4.7
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.7
+docker pull ghcr.io/exyonq/exyonq:0.4.8
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.8
 ```
 
 Open `http://localhost:8080/` and finish the WordPress installer. The

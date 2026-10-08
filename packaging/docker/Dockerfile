@@ -12,7 +12,7 @@
 #   OFFICIAL_RELEASE_BUILD_WITHOUT_REVISION = FAIL_CLOSED
 # Pass EXYONQ_GIT_REVISION=<40-hex> and EXYONQ_OFFICIAL_RELEASE=1 for official images.
 
-ARG EXYONQ_VERSION=0.4.7
+ARG EXYONQ_VERSION=0.4.8
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 
@@ -22,7 +22,7 @@ ARG EXYONQ_OFFICIAL_RELEASE=0
 # Map OCI label arg into the cargo build-script env (same SHA for amd64/arm64).
 ENV EXYONQ_SOURCE_REVISION=${EXYONQ_GIT_REVISION}
 ENV EXYONQ_OFFICIAL_RELEASE=${EXYONQ_OFFICIAL_RELEASE}
-ENV EXYONQ_ARTIFACT_VERSION=0.4.7
+ENV EXYONQ_ARTIFACT_VERSION=0.4.8
 WORKDIR /app
 # Fail closed before compile when building an official release image without a real SHA.
 RUN set -eu; \
@@ -70,8 +70,9 @@ RUN set -eu; \
     apt-get install -y --no-install-recommends ca-certificates; \
     rm -rf /var/lib/apt/lists/*; \
     useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin exyonq; \
-    mkdir -p /rootfs/tmp /rootfs/etc/ssl/certs /rootfs/usr/local/bin /rootfs/usr/share/doc/exyonq /rootfs/etc/exyonq; \
+    mkdir -p /rootfs/tmp /rootfs/etc/ssl/certs /rootfs/usr/local/bin /rootfs/usr/share/doc/exyonq /rootfs/etc/exyonq /rootfs/var/www/exyonq; \
     chmod 1777 /rootfs/tmp; \
+    chmod 755 /rootfs/var /rootfs/var/www /rootfs/var/www/exyonq; \
     cp /etc/passwd /etc/group /rootfs/etc/; \
     cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ca-certificates.crt
 
@@ -81,8 +82,9 @@ ARG EXYONQ_GIT_REVISION
 COPY --from=certs /rootfs/ /
 COPY --from=builder /app/target/release/exyonq /usr/local/bin/exyonq
 COPY --from=builder /app/target/release/exyonqctl /usr/local/bin/exyonqctl
+COPY packaging/docker/www/index.html /var/www/exyonq/index.html
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md sbom.cdx.json /usr/share/doc/exyonq/
-COPY packaging/config/config.toml.example /etc/exyonq/config.toml
+COPY packaging/docker/default.toml /etc/exyonq/config.toml
 ENV EXYONQ_CONFIG=/etc/exyonq/config.toml
 ENV EXYONQ_CONTROL_SOCKET=/tmp/exyonq.sock
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt

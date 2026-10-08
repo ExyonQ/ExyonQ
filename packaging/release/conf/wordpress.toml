@@ -34,14 +34,12 @@ root = "/var/www/html/wp-content"
 [[route]]
 name = "wordpress"
 match = { path = "/" }
-root = "/var/www/html"
 fastcgi = "php"
-front_controller = "/index.php"
 htaccess = "overlay"
 
 [[fcgi_pool]]
 name = "php"
-address = "unix:/run/php/php-fpm.sock"
+address = "/run/php/php-fpm.sock"
 transport = "unix"
 document_root = "/var/www/html"
 max_concurrency = 16
