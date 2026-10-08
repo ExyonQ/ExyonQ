@@ -1,0 +1,42 @@
+# Default configuration for the official image. `docker run` serves this page.
+config_version = 1
+
+[logging]
+level = "info"
+format = "text"
+queue_capacity = 8192
+
+[logging.console]
+enabled = true
+stream = "stdout"
+
+[logging.file]
+enabled = false
+
+[logging.syslog]
+enabled = false
+
+[logging.journald]
+enabled = false
+
+[logging.otel]
+enabled = false
+
+[logging.access]
+enabled = true
+
+[logging.audit]
+enabled = true
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www/exyonq"
+index = "index.html"
+
+[modules.metrics]
+enabled = false

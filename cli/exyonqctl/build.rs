@@ -23,7 +23,7 @@ fn main() {
     println!("cargo:rustc-env=EXYONQ_PROFILE={profile}");
 
     let artifact = std::env::var("EXYONQ_ARTIFACT_VERSION").unwrap_or_else(|_| {
-        std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.4.7".to_string())
+        std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.4.8".to_string())
     });
     println!("cargo:rustc-env=EXYONQ_ARTIFACT_VERSION={artifact}");
 

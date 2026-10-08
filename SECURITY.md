@@ -4,7 +4,8 @@
 
 | Version   | Supported |
 |-----------|-----------|
-| 0.4.7     | Yes, current published release |
+| 0.4.8     | Yes, current published release |
+| 0.4.7     | Yes |
 | 0.4.6     | Yes |
 | 0.4.4.1   | Yes |
 | 0.4.4     | Yes, previous published release |
@@ -29,9 +30,9 @@ For **v0.4.4.1**, the audit artifact is [`docs/security/audit-v0.4.4.1.md`](docs
 
 ```text
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.7
-GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.7
-GHCR = ghcr.io/exyonq/exyonq:0.4.7
+PUBLIC_RELEASE = v0.4.8
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.8
+GHCR = ghcr.io/exyonq/exyonq:0.4.8
 WASMTIME = 49.0.1
 RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.1
 ```

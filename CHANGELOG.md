@@ -11,7 +11,7 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.7
+PUBLIC_RELEASE = v0.4.8
 LATEST_CHANGED = NO
 ```
 
@@ -28,6 +28,12 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
+
+## [0.4.8] — 2026-10-08
+
+Product version 0.4.8. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.8` and `ghcr.io/exyonq/exyonq-wordpress:0.4.8`, both `linux/amd64` and `linux/arm64`. No `:latest` tag.
+
+The official server image serves a default page on port 8080. The WordPress image starts with a configuration the server accepts, and `/` reaches the WordPress installer. `exyonq --version` reports Cargo, product, and artifact version `0.4.8`.
 
 ## [0.4.7] — 2026-10-07
 
