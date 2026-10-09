@@ -48,10 +48,13 @@ mod tests {
         let raw = include_str!("../../../tests/fixtures/minimal.toml");
         let config: AppConfig = raw.parse().expect("minimal config");
         let proxy_client = build_incoming_client();
-        let state =
-            crate::server::state::ServerState::new_with_generation(42, config, proxy_client)
-                .await
-                .expect("state");
+        let state = crate::server::state::ServerState::new_with_generation(
+            42,
+            config,
+            proxy_client.clone(),
+        )
+        .await
+        .expect("state");
         let cache = SyncBenchCache::from_state(state.as_ref());
         assert_eq!(cache.generation, 42);
     }

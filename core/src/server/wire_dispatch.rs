@@ -1003,7 +1003,6 @@ mod tests {
             exyonq_mod_proxy::install_kernel_hooks(proxy_rt);
         });
     }
-    use std::time::Duration;
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
     /// Process-global write-error counter is shared; serialize these two tests.
@@ -1145,7 +1144,7 @@ mod tests {
         exyonq_mod_static::install_kernel_hooks(runtime);
         ensure_wire_hooks();
         let proxy_client = build_incoming_client();
-        let state = ServerState::new_with_generation(1, config, proxy_client)
+        let state = ServerState::new_with_generation(1, config, proxy_client.clone())
             .await
             .expect("server state");
         (state, static_guard)
@@ -1455,6 +1454,7 @@ mod tests {
     /// SUB-LET-WIRE-REJECT-WRITE: TE on wire → Reject → real 400 write succeeds;
     /// must not increment write-error counter (no false failure).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn wire_reject_te_emits_400_without_write_error() {
         use std::time::Duration;
         use tokio::io::AsyncReadExt;
@@ -1483,7 +1483,7 @@ mod tests {
             let ctx = super::WireDispatchContext {
                 shared,
                 state: state_accept,
-                proxy_client,
+                proxy_client: proxy_client.clone(),
                 x_forwarded_for: hyper::header::HeaderValue::from_str(&peer.ip().to_string())
                     .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
                 ops,
@@ -1520,6 +1520,7 @@ mod tests {
     /// SUB-LET-WIRE-REJECT-WRITE: after Reject is selected, a real peer RST makes
     /// write_all fail; failure must be observed (counter++) — not silent success.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn wire_reject_write_failure_observed_on_real_rst() {
         use std::os::fd::AsRawFd;
         use std::time::Duration;
@@ -1592,6 +1593,7 @@ mod tests {
     /// SUB-LET-PROTOCOL-WRITE-MISC / LET-059: WAF reject on wire → write succeeds;
     /// must not increment WAF write-error counter.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn wire_waf_reject_emits_429_without_write_error() {
         use crate::waf::WafRuntimeBinding;
         use exyonq_waf_api::{NopWafEngine, WafAbuseGate, WafDecision, WafPhase};
@@ -1631,7 +1633,7 @@ mod tests {
             let ctx = super::WireDispatchContext {
                 shared,
                 state: state_accept,
-                proxy_client,
+                proxy_client: proxy_client.clone(),
                 x_forwarded_for: hyper::header::HeaderValue::from_str(&peer.ip().to_string())
                     .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
                 ops,
@@ -1669,6 +1671,7 @@ mod tests {
     /// SUB-LET-PROTOCOL-WRITE-MISC / LET-059: after WAF reject is selected, a real peer
     /// RST makes write_all fail; failure must be observed — not silent waf_* delivery.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn wire_waf_reject_write_failure_observed_on_real_rst() {
         use crate::waf::WafRuntimeBinding;
         use exyonq_waf_api::{NopWafEngine, WafAbuseGate, WafDecision, WafPhase};

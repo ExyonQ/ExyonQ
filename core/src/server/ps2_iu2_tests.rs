@@ -104,7 +104,7 @@ fn ps2_iu2_workers_survive_idle_header_read_timeout() {
     let addr = listener.local_addr().expect("addr");
     let executor = Arc::new(CoreConnectionExecutor::new(
         shared,
-        proxy,
+        proxy.clone(),
         Arc::clone(&ops),
         rt.handle().clone(),
     ));

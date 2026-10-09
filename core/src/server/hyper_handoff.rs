@@ -118,6 +118,7 @@ fn handoff_worker_count_default() -> usize {
 }
 
 impl HandoffBridge {
+    #[allow(clippy::result_large_err)]
     fn try_enqueue(&self, handoff: HyperHandoff) -> Result<(), HyperHandoff> {
         let HyperHandoff {
             stream,
@@ -433,7 +434,7 @@ mod tests {
         spawn_hyper_handoff(
             HyperHandoff::new(stream, peer, None, bench_cache, token),
             &shared,
-            proxy,
+            proxy.clone(),
             &ops,
             rt.handle(),
         )

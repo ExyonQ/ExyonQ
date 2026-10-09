@@ -310,6 +310,7 @@ pub fn insert(
 ///
 /// `source_file_path` is the Cap004 source path (for `fstatat` revalidation);
 /// `source_identity` is the source identity that produced the coded object.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_coded(
     generation: u64,
     site_slot: u32,
@@ -332,6 +333,7 @@ pub fn insert_coded(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_with_coding(
     generation: u64,
     site_slot: u32,

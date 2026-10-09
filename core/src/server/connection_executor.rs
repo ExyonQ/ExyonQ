@@ -239,10 +239,11 @@ impl CoreConnectionExecutor {
         // - while structural reload is in progress, always load ServerState (LA-CAP067-R3-001)
         // - re-sample published flag after reload_in_progress so a concurrent WAF-enable
         //   cannot complete between the two loads and skip inspect (LA-CAP067-R3-002)
-        if !reload::waf_wire_inspection_active_published() {
-            if !reload::reload_in_progress() && !reload::waf_wire_inspection_active_published() {
-                return None;
-            }
+        if !reload::waf_wire_inspection_active_published()
+            && !reload::reload_in_progress()
+            && !reload::waf_wire_inspection_active_published()
+        {
+            return None;
         }
         let state = reload::read_state(&self.shared);
         // Cap015: when WAF is active this still runs on every keepalive request.
@@ -434,8 +435,12 @@ mod tests {
                     .expect("state"),
             )
         });
-        let exec =
-            CoreConnectionExecutor::new(shared, proxy, Arc::clone(&ops), rt.handle().clone());
+        let exec = CoreConnectionExecutor::new(
+            shared,
+            proxy.clone(),
+            Arc::clone(&ops),
+            rt.handle().clone(),
+        );
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let client = TcpStream::connect(addr).unwrap();
@@ -470,7 +475,7 @@ mod tests {
         });
         let exec = Arc::new(CoreConnectionExecutor::new(
             shared,
-            proxy,
+            proxy.clone(),
             Arc::clone(&ops),
             rt.handle().clone(),
         ));
