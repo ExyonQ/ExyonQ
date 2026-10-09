@@ -30,6 +30,7 @@ use exyonq_mod_tls::TlsSettings;
 use exyonq_module_api::http3_runtime::{
     Http3DispatchError, Http3DispatchService, Http3MaterializedResponse,
 };
+use h3::error::Code;
 use h3_quinn::Connection as H3QuinnConnection;
 use http::Request;
 use quinn::{ClientConfig, Endpoint};
@@ -286,7 +287,7 @@ async fn s2n_error_response_write_failure_is_observed() {
         .await
         .expect("handshake");
 
-    let (mut _h3_conn, mut send) = h3::client::new(H3QuinnConnection::new(quic_conn.clone()))
+    let (mut _h3_conn, mut send) = h3::client::new(H3QuinnConnection::new(quic_conn))
         .await
         .expect("h3 client");
 
@@ -303,10 +304,11 @@ async fn s2n_error_response_write_failure_is_observed() {
         .send_data(oversized)
         .await
         .expect("send oversized body chunk");
-    // Abort the QUIC connection while the server is still on the 413 write.
-    // finish()/stop_sending leave an open DATA frame; h3 then panics in poll_next
-    // and the write error is never counted.
-    quic_conn.close(quinn::VarInt::from_u32(0), b"abort");
+    // Cancel the response while the server is still draining the open DATA frame.
+    // The server must not call poll_next on that frame (h3 panics); the 413 write
+    // then fails and is counted.
+    stream.stop_sending(Code::H3_REQUEST_CANCELLED);
+    stream.stop_stream(Code::H3_REQUEST_CANCELLED);
 
     let mut observed = before;
     for _ in 0..200 {
