@@ -307,7 +307,7 @@ where
             }
             Ok(None) => break,
             Err(err) => {
-                let _ = stream.stop_sending(Code::H3_NO_ERROR);
+                stream.stop_sending(Code::H3_NO_ERROR);
                 // The required error response was not written. Counted by the caller.
                 anyhow::bail!("request reset before the error response was written: {err}");
             }
