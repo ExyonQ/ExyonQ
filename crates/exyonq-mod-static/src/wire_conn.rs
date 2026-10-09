@@ -949,12 +949,18 @@ mod tests {
         use tokio::io::AsyncReadExt;
         use tokio::runtime::Runtime;
 
-        const STATIC_NOT_FOUND_RESPONSE: &[u8] = b"HTTP/1.1 404 Not Found\r\n\
-Content-Type: text/plain; charset=utf-8\r\n\
-Content-Length: 9\r\n\
-Connection: keep-alive\r\n\
-\r\n\
-not found";
+        const STATIC_NOT_FOUND_RESPONSE: &[u8] = concat!(
+            "HTTP/1.1 404 Not Found\r\n",
+            "Server: ExyonQ/",
+            env!("EXYONQ_ARTIFACT_VERSION"),
+            "\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "Content-Length: 9\r\n",
+            "Connection: keep-alive\r\n",
+            "\r\n",
+            "not found"
+        )
+        .as_bytes();
         const ADMISSION_REJECTED_RESPONSE: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
 Content-Type: text/plain\r\n\
 Content-Length: 11\r\n\

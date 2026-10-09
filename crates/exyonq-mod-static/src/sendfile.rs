@@ -719,10 +719,17 @@ mod cause2_request_count_tests {
         }
         let out_fd = writer.as_raw_fd();
         let in_fd = asset.file.as_raw_fd();
+        // The reader must run while sendfile writes. A blocking pair whose
+        // buffer cannot hold 1 MiB deadlocks if the read starts only after
+        // the write returns.
+        let reader_thread = std::thread::spawn(move || {
+            let mut got = Vec::new();
+            reader.read_to_end(&mut got)?;
+            Ok::<Vec<u8>, io::Error>(got)
+        });
         write_sendfile_fd(out_fd, in_fd, asset.header.as_ref(), asset.body_len)?;
         drop(writer);
-        let mut got = Vec::new();
-        reader.read_to_end(&mut got)?;
+        let got = reader_thread.join().expect("reader thread")?;
         assert!(got.starts_with(b"HTTP/1.1 200"));
         let sep = got.windows(4).position(|w| w == b"\r\n\r\n").expect("hdr");
         let body = &got[sep + 4..];
