@@ -65,10 +65,14 @@ exyonq-waf-api = { workspace = true }
 exyonq-ratelimit = { workspace = true }
 tokio.workspace = true
 tracing.workspace = true
-exyonq-observability = { workspace = true, features = ["full"] }
+exyonq-observability = { workspace = true, features = ["file", "journald", "otel"] }
 exyonq-cfd-control = { path = "../../crates/exyonq-cfd-control" }
 # Optional process-wide Rust allocator (compile-time only; not a glibc substitute).
 tikv-jemallocator = { version = "0.7", optional = true }
+
+# syslog 7.0.0 does not compile on Windows (ErrorKind is not imported).
+[target.'cfg(unix)'.dependencies]
+exyonq-observability = { workspace = true, features = ["syslog"] }
 
 [package.metadata.cargo-machete]
 ignored = ["exyonq-mod-http3"]
