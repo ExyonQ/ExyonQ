@@ -30,7 +30,6 @@ use exyonq_mod_tls::TlsSettings;
 use exyonq_module_api::http3_runtime::{
     Http3DispatchError, Http3DispatchService, Http3MaterializedResponse,
 };
-use h3::error::Code;
 use h3_quinn::Connection as H3QuinnConnection;
 use http::Request;
 use quinn::{ClientConfig, Endpoint};
@@ -304,12 +303,10 @@ async fn s2n_error_response_write_failure_is_observed() {
         .send_data(oversized)
         .await
         .expect("send oversized body chunk");
-    // End request body so the server finishes TooLarge handling and attempts 413 write.
-    let _ = stream.finish().await;
-    // Peer STOP_SENDING on the response direction is a real H3 condition that makes
-    // the server's error-response write fail (not a mock transport).
-    stream.stop_sending(Code::H3_REQUEST_CANCELLED);
-    stream.stop_stream(Code::H3_REQUEST_CANCELLED);
+    // Abort the QUIC connection while the server is still on the 413 write.
+    // finish()/stop_sending leave an open DATA frame; h3 then panics in poll_next
+    // and the write error is never counted.
+    quic_conn.close(quinn::VarInt::from_u32(0), b"abort");
 
     let mut observed = before;
     for _ in 0..200 {
