@@ -56,7 +56,10 @@ fn stock_wordpress_emits_product_toml() {
         .find(|route| route.name == "wp-includes")
         .expect("wp-includes");
     assert_eq!(
-        includes.root.as_deref().map(|path| path.to_string_lossy().into_owned()),
+        includes
+            .root
+            .as_deref()
+            .map(|path| path.to_string_lossy().into_owned()),
         Some("/var/www/html/wp-includes".to_string())
     );
     let pool = cfg.pools_fcgi.get("php").expect("php pool");
@@ -87,7 +90,9 @@ server {
         out.exit_code_for_profile(MigrateProfile::Wordpress, false),
         0
     );
-    assert!(out.config.contains("address = \"/run/php/php8.3-fpm.sock\""));
+    assert!(out
+        .config
+        .contains("address = \"/run/php/php8.3-fpm.sock\""));
     assert!(out.config.contains("listen = \"127.0.0.1:8080\""));
 }
 

@@ -10,6 +10,7 @@ type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
 
 pub use exyonq_module_pipeline::inject_client_ip;
 
+#[allow(clippy::result_large_err)]
 pub async fn pipeline_handle_incoming<F, Fut>(
     pipeline: &CrossCuttingPipeline,
     req: Request<Incoming>,

@@ -271,8 +271,8 @@ pub fn purge_token_acceptable(token: &str) -> bool {
 pub fn generate_purge_token() -> Result<String, String> {
     use std::io::Read;
     let mut bytes = [0u8; 32];
-    let mut urandom = std::fs::File::open("/dev/urandom")
-        .map_err(|err| format!("open /dev/urandom: {err}"))?;
+    let mut urandom =
+        std::fs::File::open("/dev/urandom").map_err(|err| format!("open /dev/urandom: {err}"))?;
     urandom
         .read_exact(&mut bytes)
         .map_err(|err| format!("read /dev/urandom: {err}"))?;
@@ -328,9 +328,8 @@ pub fn publish_purge_sidecars(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o750)).map_err(
-            |err| format!("chmod purge directory {}: {err}", parent.display()),
-        )?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o750))
+            .map_err(|err| format!("chmod purge directory {}: {err}", parent.display()))?;
     }
     let index = render_purge_site_index(sites)?;
     let token_path = parent.join("cache-purge.token");

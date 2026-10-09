@@ -277,53 +277,50 @@ async fn accept_loop(
         tokio::spawn(async move {
             CONN_LOCAL
                 .scope((tls_for_conn, port_for_conn), async move {
-            if let Some(acceptor) = acceptor {
-                match acceptor.accept(stream).await {
-                    Ok(tls_stream) => {
-                        let alpn = tls_stream.get_ref().1.alpn_protocol();
-                        let ctx = wire_dispatch_ctx(
-                            reload::SharedServerState::clone(&conn_state),
-                            proxy_client,
-                            x_forwarded_for,
-                            ops_conn.clone(),
-                        );
-                        // Wire-cheap modules (ratelimit/metrics) keep Cap067/wire;
-                        // compression (or h2 / drain) still forces Hyper.
-                        if !ctx.state.hyper_required_for_modules()
-                            && alpn != Some(b"h2")
-                            && !ops_conn.is_draining()
-                        {
-                            dispatch_stream(tls_stream, ctx).await;
-                        } else {
-                            serve_hyper(
-                                tls_stream,
-                                reload::SharedServerState::clone(&ctx.shared),
-                                ctx.proxy_client,
-                                ctx.x_forwarded_for,
-                                ops_conn,
-                            )
-                            .await;
+                    if let Some(acceptor) = acceptor {
+                        match acceptor.accept(stream).await {
+                            Ok(tls_stream) => {
+                                let alpn = tls_stream.get_ref().1.alpn_protocol();
+                                let ctx = wire_dispatch_ctx(
+                                    reload::SharedServerState::clone(&conn_state),
+                                    proxy_client,
+                                    x_forwarded_for,
+                                    ops_conn.clone(),
+                                );
+                                // Wire-cheap modules (ratelimit/metrics) keep Cap067/wire;
+                                // compression (or h2 / drain) still forces Hyper.
+                                if !ctx.state.hyper_required_for_modules()
+                                    && alpn != Some(b"h2")
+                                    && !ops_conn.is_draining()
+                                {
+                                    dispatch_stream(tls_stream, ctx).await;
+                                } else {
+                                    serve_hyper(
+                                        tls_stream,
+                                        reload::SharedServerState::clone(&ctx.shared),
+                                        ctx.proxy_client,
+                                        ctx.x_forwarded_for,
+                                        ops_conn,
+                                    )
+                                    .await;
+                                }
+                            }
+                            Err(err) => warn!(%err, "tls accept failed"),
                         }
+                        return;
                     }
-                    Err(err) => warn!(%err, "tls accept failed"),
-                }
-                return;
-            }
-            dispatch_tcp(
-                stream,
-                wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
-            )
-            .await;
+                    dispatch_tcp(
+                        stream,
+                        wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
+                    )
+                    .await;
                 })
                 .await;
         });
     }
 }
 
-async fn run_with_binds(
-    binds: Vec<(SocketAddr, bool)>,
-    config: AppConfig,
-) -> anyhow::Result<()> {
+async fn run_with_binds(binds: Vec<(SocketAddr, bool)>, config: AppConfig) -> anyhow::Result<()> {
     let listen = binds
         .first()
         .map(|(addr, _)| *addr)
@@ -474,7 +471,9 @@ async fn run_with_binds(
             let token = match std::env::var("EXYONQ_CACHE_PURGE_TOKEN") {
                 Ok(token) if !token.is_empty() => token,
                 _ => crate::cache_purge_port::generate_purge_token().map_err(|err| {
-                    anyhow::anyhow!("purge token was not provided and could not be generated: {err}")
+                    anyhow::anyhow!(
+                        "purge token was not provided and could not be generated: {err}"
+                    )
                 })?,
             };
             let sites: Vec<(&str, u64)> = state
@@ -505,9 +504,9 @@ async fn run_with_binds(
                 },
                 purge_port,
             );
-            crate::lab_coord_hooks::start_lab_subscriber_if_any(
-                reload::SharedServerState::clone(&shared),
-            );
+            crate::lab_coord_hooks::start_lab_subscriber_if_any(reload::SharedServerState::clone(
+                &shared,
+            ));
         }
     }
 

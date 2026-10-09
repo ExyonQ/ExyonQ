@@ -525,11 +525,7 @@ pub async fn forward_request_complete(
             let bytes = collected.to_bytes();
             if let Some(expected) = declared {
                 if bytes.len() as u64 != expected {
-                    warn!(
-                        expected,
-                        got = bytes.len(),
-                        "upstream body collect error"
-                    );
+                    warn!(expected, got = bytes.len(), "upstream body collect error");
                     note_502(metrics);
                     return bad_gateway();
                 }
@@ -541,9 +537,7 @@ pub async fn forward_request_complete(
             );
             Response::from_parts(
                 parts,
-                Full::new(bytes)
-                    .map_err(|never| match never {})
-                    .boxed(),
+                Full::new(bytes).map_err(|never| match never {}).boxed(),
             )
         }
         Err(err) => {

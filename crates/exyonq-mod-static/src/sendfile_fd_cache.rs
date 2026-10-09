@@ -153,15 +153,7 @@ pub fn try_hit(
     request_path: &str,
     root: &StaticRoot,
 ) -> Option<Arc<SendfileAsset>> {
-    try_hit_with_coding(
-        generation,
-        site_slot,
-        request_path,
-        None,
-        root,
-        true,
-        false,
-    )
+    try_hit_with_coding(generation, site_slot, request_path, None, root, true, false)
 }
 
 /// Same as [`try_hit`], but a confirmed identity is reused for one millisecond.
@@ -171,15 +163,7 @@ pub fn try_hit_hot(
     request_path: &str,
     root: &StaticRoot,
 ) -> Option<Arc<SendfileAsset>> {
-    try_hit_with_coding(
-        generation,
-        site_slot,
-        request_path,
-        None,
-        root,
-        true,
-        true,
-    )
+    try_hit_with_coding(generation, site_slot, request_path, None, root, true, true)
 }
 
 /// Look up a reusable **coded** sendfile asset (ADR-046).

@@ -44,10 +44,10 @@ pub fn spawn_watcher(
                         EventKind::Create(_)
                         | EventKind::Modify(_)
                         | EventKind::Remove(_)
-                        | EventKind::Any => {
-                            if event_touches_htaccess(&event.paths) {
-                                let _ = tx.send(());
-                            }
+                        | EventKind::Any
+                            if event_touches_htaccess(&event.paths) =>
+                        {
+                            let _ = tx.send(());
                         }
                         _ => {}
                     }
@@ -195,7 +195,9 @@ mod tests {
         assert!(!event_touches_htaccess(&[PathBuf::from(
             "/var/www/wp-content/database/.ht.sqlite"
         )]));
-        assert!(event_touches_htaccess(&[PathBuf::from("/var/www/.htaccess")]));
+        assert!(event_touches_htaccess(&[PathBuf::from(
+            "/var/www/.htaccess"
+        )]));
         assert!(event_touches_htaccess(&[
             PathBuf::from("/var/www/wp-content/database/.ht.sqlite"),
             PathBuf::from("/var/www/wp-admin/.htaccess"),

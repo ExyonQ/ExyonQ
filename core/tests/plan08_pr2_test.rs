@@ -46,7 +46,7 @@ async fn plan08_ctx() -> ConnectionContext {
         std::env::set_var("EXYONQ_FCGI_DOCUMENT_ROOT", dir.path());
         dir
     });
-    let raw = include_str!("../../scripts/architecture/fixtures/plan08/minimal-fcgi.toml");
+    let raw = include_str!("fixtures/minimal-fcgi.toml");
     let config: AppConfig = raw.parse().expect("plan08 fixture");
     let proxy_client = exyonq_mod_proxy::build_incoming_client();
     let state = ServerState::new_with_generation(1, config, proxy_client.clone())

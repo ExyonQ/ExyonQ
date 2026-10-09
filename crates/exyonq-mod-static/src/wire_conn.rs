@@ -148,7 +148,6 @@ fn content_length_for_discard(head: &[u8]) -> Option<usize> {
     found.or(Some(0))
 }
 
-
 /// Linux: bounded OS thread pool for blocking static keep-alive.
 #[cfg(target_os = "linux")]
 const STATIC_BLOCKING_QUEUE_DEFAULT: usize = 256;

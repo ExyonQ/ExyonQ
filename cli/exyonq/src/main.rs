@@ -493,6 +493,12 @@ fn is_serverfile(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "exy")
 }
 
+#[cfg(not(unix))]
+fn resolve_fcgi_registration(_app_config: &AppConfig) -> Option<FcgiRuntimeRegistration> {
+    None
+}
+
+#[cfg(unix)]
 fn resolve_fcgi_registration(app_config: &AppConfig) -> Option<FcgiRuntimeRegistration> {
     if app_config.pools_fcgi.is_empty() {
         return None;

@@ -55,8 +55,7 @@ fn path_in_limit(prefix: &str, path: &str) -> bool {
     if request_path == prefix {
         return true;
     }
-    request_path.starts_with(prefix)
-        && request_path.as_bytes().get(prefix.len()) == Some(&b'/')
+    request_path.starts_with(prefix) && request_path.as_bytes().get(prefix.len()) == Some(&b'/')
 }
 
 static RATELIMIT_DESCRIPTOR: std::sync::LazyLock<AddonDescriptor> =

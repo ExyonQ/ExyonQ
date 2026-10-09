@@ -71,18 +71,9 @@ pub fn emit(analyzed: &AnalyzedConfig, report: &mut CompatibilityReport) -> Opti
         }
     }
 
-    let listen = match one_listen(server, report) {
-        Some(listen) => listen,
-        None => return None,
-    };
-    let root = match one_root(server, report) {
-        Some(root) => root,
-        None => return None,
-    };
-    let socket = match one_socket(server, analyzed, report) {
-        Some(socket) => socket,
-        None => return None,
-    };
+    let listen = one_listen(server, report)?;
+    let root = one_root(server, report)?;
+    let socket = one_socket(server, analyzed, report)?;
     if !has_front_controller(server, report) {
         return None;
     }
@@ -275,7 +266,10 @@ fn one_root(server: &ParsedServer, report: &mut CompatibilityReport) -> Option<S
         .iter()
         .filter(|directive| directive.name == "root")
     {
-        match plain_absolute("root", directive.args.first().map(String::as_str).unwrap_or("")) {
+        match plain_absolute(
+            "root",
+            directive.args.first().map(String::as_str).unwrap_or(""),
+        ) {
             Ok(path) => {
                 if root.is_some() {
                     report.push(
@@ -422,7 +416,11 @@ fn has_front_controller(server: &ParsedServer, report: &mut CompatibilityReport)
     found && !report.has_errors()
 }
 
-fn classify_try_files(location: &ParsedLocation, report: &mut CompatibilityReport, found: &mut bool) {
+fn classify_try_files(
+    location: &ParsedLocation,
+    report: &mut CompatibilityReport,
+    found: &mut bool,
+) {
     for directive in location
         .directives
         .iter()

@@ -448,7 +448,12 @@ fn prepare_tcp_tls(
     let identities = tls_identities_on_primary_listen(config);
     if identities.len() > 1 {
         let acceptor = tls_acceptor
-            .prepare_sni_reload(&identities, tls_session_cache, &[b"h2", b"http/1.1"], fresh_epoch)
+            .prepare_sni_reload(
+                &identities,
+                tls_session_cache,
+                &[b"h2", b"http/1.1"],
+                fresh_epoch,
+            )
             .map_err(|err| {
                 anyhow::anyhow!("EXY-RELOAD-0004: TCP TLS prepare failed (KEEP_OLD): {err}")
             })?;

@@ -873,7 +873,10 @@ fn validate_response_header(header: &ResponseHeaderConfig) -> Result<(), ConfigE
     }
     let value_ok = !header.value.is_empty()
         && header.value.len() <= 1024
-        && !header.value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0);
+        && !header
+            .value
+            .bytes()
+            .any(|b| b == b'\r' || b == b'\n' || b == 0);
     if !value_ok {
         return Err(ConfigError::Parse(format!(
             "response header `{name}` has an empty or illegal value"

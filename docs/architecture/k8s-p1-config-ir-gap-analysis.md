@@ -30,7 +30,7 @@ ACTIVE_GO_RECOMMENDATIONS_REMAINING = 0
 
 P2A close: EndpointSet IR gaps addressed for foundation (no silent truncation; full set in plan; execution gated). Remaining productive multi-endpoint / WRR execution and fuzz coverage tracked as P2A-OPEN-001 / K8S-P2B.
 
-Evidence collected only from `/Volumes/Lexar/Cursor/exyonq-lab-wt-k8s-wedge`.
+Evidence collected only from `exyonq-lab-wt-k8s-wedge`.
 
 Note: user inspection path `crates/exyonq-config-ir/` does **not** exist; package `exyonq-config-ir` is at `config/ir/`.
 

@@ -28,9 +28,11 @@ use crate::encode::{
 use crate::parser::{parse_record, ParseError};
 use crate::record::{FCGI_END_REQUEST, FCGI_STDOUT, RECORD_HEADER_LEN};
 use crate::transport::TransportError;
+#[cfg(unix)]
 use crate::unix_transport::UnixFpmTransport;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
@@ -74,9 +76,17 @@ impl WireTransport {
     ) -> Result<ForwardResponse, WireError> {
         match &self.endpoint {
             WireEndpoint::Unix(path) => {
-                let transport =
-                    UnixFpmTransport::new(path.clone(), self.request_id, FCGI_CONNECT_TIMEOUT);
-                transport.forward_once(params, stdin)
+                #[cfg(unix)]
+                {
+                    let transport =
+                        UnixFpmTransport::new(path.clone(), self.request_id, FCGI_CONNECT_TIMEOUT);
+                    transport.forward_once(params, stdin)
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = path;
+                    Err(WireError::ConnectionFailed)
+                }
             }
             WireEndpoint::Tcp { host, port } => self.forward_once_tcp(host, *port, params, stdin),
         }
@@ -128,6 +138,7 @@ impl WireTransport {
 }
 
 enum WireStream {
+    #[cfg(unix)]
     #[allow(dead_code)]
     Unix(UnixStream),
     Tcp(TcpStream),
@@ -136,6 +147,7 @@ enum WireStream {
 impl Read for WireStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
+            #[cfg(unix)]
             WireStream::Unix(s) => s.read(buf),
             WireStream::Tcp(s) => s.read(buf),
         }
@@ -145,6 +157,7 @@ impl Read for WireStream {
 impl Write for WireStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
+            #[cfg(unix)]
             WireStream::Unix(s) => s.write(buf),
             WireStream::Tcp(s) => s.write(buf),
         }
@@ -152,6 +165,7 @@ impl Write for WireStream {
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
+            #[cfg(unix)]
             WireStream::Unix(s) => s.flush(),
             WireStream::Tcp(s) => s.flush(),
         }

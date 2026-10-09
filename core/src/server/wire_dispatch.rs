@@ -234,10 +234,7 @@ fn head_matches_htaccess_route(state: &ServerState, head: &[u8]) -> bool {
     let Some(path) = parse_wire_origin_path(head) else {
         return false;
     };
-    let Some((route_idx, _)) = state
-        .route_index
-        .match_route_index_with_host(path, None)
-    else {
+    let Some((route_idx, _)) = state.route_index.match_route_index_with_host(path, None) else {
         return false;
     };
     state

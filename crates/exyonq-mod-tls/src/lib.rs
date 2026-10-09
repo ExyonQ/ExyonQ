@@ -514,11 +514,13 @@ fn build_sni_material(
     let mut default = None;
     for (index, identity) in identities.iter().enumerate() {
         let (certs, key) = load_tls_material(&identity.settings)?;
-        let chain = certs.iter().map(|cert| cert.as_ref().to_vec()).collect::<Vec<_>>();
+        let chain = certs
+            .iter()
+            .map(|cert| cert.as_ref().to_vec())
+            .collect::<Vec<_>>();
         cert_chain_der.extend(chain);
-        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key).map_err(|err| {
-            io::Error::new(io::ErrorKind::InvalidData, err.to_string())
-        })?;
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
         let certified = Arc::new(CertifiedKey::new(certs, signing_key));
         if index == 0 {
             default = Some(Arc::clone(&certified));
@@ -536,9 +538,8 @@ fn build_sni_material(
             }
         }
     }
-    let default = default.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "no default tls certificate")
-    })?;
+    let default = default
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no default tls certificate"))?;
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(SniResolver { by_name, default }));

@@ -233,10 +233,7 @@ pub fn identity_q_zero_without_other_coding(accept_encoding: Option<&str>) -> bo
     }
     for part in raw.split(',') {
         let name = part.split(';').next().unwrap_or("").trim();
-        if name.is_empty()
-            || name.eq_ignore_ascii_case("identity")
-            || name == "*"
-        {
+        if name.is_empty() || name.eq_ignore_ascii_case("identity") || name == "*" {
             continue;
         }
         if coding_q(raw, name).unwrap_or(0.0) > 0.0 {

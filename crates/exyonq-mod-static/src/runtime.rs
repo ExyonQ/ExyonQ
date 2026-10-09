@@ -174,7 +174,11 @@ impl StaticRuntime {
     /// Hostless routes match any Host. A named host beats a hostless route of the
     /// same prefix, and an exact host beats a wildcard, matching route ranking.
     #[cfg(target_os = "linux")]
-    pub(crate) fn slot_for_request_path(&self, path: &str, request_host: Option<&str>) -> Option<u32> {
+    pub(crate) fn slot_for_request_path(
+        &self,
+        path: &str,
+        request_host: Option<&str>,
+    ) -> Option<u32> {
         let roots = self.roots.read().expect("static roots poisoned");
         let mut best: Option<(u32, usize, u8)> = None;
         for (idx, root) in roots.slots.iter().enumerate() {

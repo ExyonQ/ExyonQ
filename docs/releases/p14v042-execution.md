@@ -46,13 +46,13 @@ P14V042_BASE_HEAD =
   25dcb4e9b323bbb2163c5f28f600175bfe725295
 
 P14V042_BRANCH = release/p14v042
-P14V042_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v042-scope
+P14V042_WORKTREE = exyonq-lab-wt-p14v042-scope
 P14V042_HEAD = 0b4db19cc2848ea5b72de254b0a4388b5296063e
 P14V042_VERSION_FINALIZE_COMMIT = 634b849ac8dc57f99eecbb902b192016479dec43
 
-P14V042_AMBIENT_LAB = /Volumes/Lexar/Cursor/exyonq-lab
-P14V042_V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
-P14V042_GITHUB_STAGING = /Volumes/Lexar/Cursor/exyonq-github
+P14V042_AMBIENT_LAB = exyonq-lab
+P14V042_V041_WORKTREE = exyonq-lab-wt-p14v041
+P14V042_GITHUB_STAGING = exyonq-github
 ```
 
 Ambient lab / v0.4.1 worktree / github staging: **not modified** by P14V042 implementation.

@@ -11,7 +11,7 @@ P14V042_RELEASE_AUTHORIZED = NO
 
 P14V042_BASE_HEAD = 25dcb4e9b323bbb2163c5f28f600175bfe725295
 P14V042_BRANCH = audit/p14v042-scope
-P14V042_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v042-scope
+P14V042_WORKTREE = exyonq-lab-wt-p14v042-scope
 P14V042_TREE_CLEAN = YES
 
 P14V042_PROPOSED_KIND =
@@ -34,7 +34,7 @@ Canonical closed release: `v0.4.1` → `43805eb` (tag); ledger tip `25dcb4e` (do
 Historical worktree (do not use for future product work; retain until owner confirms dispose):
 
 ```text
-P14V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-lab-wt-p14v041
+P14V041_WORKTREE = exyonq-lab-wt-p14v041
 P14V041_TRACKED_TREE_CLEAN = YES
 P14V041_PROPOSAL_PRESERVED_SHA256 =
   d0da05b6e288443a537290f0617a8972efa077b190897fb3d1ecc6adfa4317cf
