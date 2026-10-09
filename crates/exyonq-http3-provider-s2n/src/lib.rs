@@ -297,13 +297,16 @@ where
                 discarded = discarded.saturating_add(chunk.remaining());
                 if discarded > drain_cap {
                     stream.stop_sending(Code::H3_NO_ERROR);
-                    break;
+                    // h3 panics in poll_next while a DATA frame is still open.
+                    // recv_trailers is that poll. Stop here and let the 413 write
+                    // observe a real send error instead of aborting the task.
+                    return;
                 }
             }
             Ok(None) => break,
             Err(_) => {
                 stream.stop_sending(Code::H3_NO_ERROR);
-                break;
+                return;
             }
         }
     }
