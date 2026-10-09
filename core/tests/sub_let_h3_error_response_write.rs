@@ -299,14 +299,14 @@ async fn s2n_error_response_write_failure_is_observed() {
         .body(())
         .unwrap();
     let mut stream = send.send_request(req).await.expect("send");
-    let oversized = Bytes::from(vec![b'x'; body_cap + 2048]);
+    // Exactly the cap: the server accepts this chunk and waits for the rest.
+    // Resetting then makes the required error response fail.
+    let filled = Bytes::from(vec![b'x'; body_cap]);
     stream
-        .send_data(oversized)
+        .send_data(filled)
         .await
-        .expect("send oversized body chunk");
-    // Cancel the response while the server is still draining the open DATA frame.
-    // The server must not call poll_next on that frame (h3 panics); the 413 write
-    // then fails and is counted.
+        .expect("send body up to the cap");
+    sleep(Duration::from_millis(200)).await;
     stream.stop_sending(Code::H3_REQUEST_CANCELLED);
     stream.stop_stream(Code::H3_REQUEST_CANCELLED);
 
