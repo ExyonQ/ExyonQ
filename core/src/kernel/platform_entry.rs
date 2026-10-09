@@ -294,7 +294,7 @@ mod tests {
         });
         let entry = PlatformConnectionEntry::from_executor(Arc::new(CoreConnectionExecutor::new(
             shared,
-            proxy,
+            proxy.clone(),
             Arc::clone(&ops),
             rt.handle().clone(),
         )));

@@ -15,21 +15,26 @@ pub struct EntryMetadata {
 }
 
 impl EntryMetadata {
+    // libc file-type constants are `u16` on Darwin and `u32` on Linux.
+    #[allow(clippy::useless_conversion)]
     #[must_use]
     pub fn is_directory(self) -> bool {
         self.mode & u32::from(libc::S_IFMT) == u32::from(libc::S_IFDIR)
     }
 
+    #[allow(clippy::useless_conversion)]
     #[must_use]
     pub fn is_regular(self) -> bool {
         self.mode & u32::from(libc::S_IFMT) == u32::from(libc::S_IFREG)
     }
 
+    #[allow(clippy::useless_conversion)]
     #[must_use]
     pub fn is_socket(self) -> bool {
         self.mode & u32::from(libc::S_IFMT) == u32::from(libc::S_IFSOCK)
     }
 
+    #[allow(clippy::useless_conversion)]
     #[must_use]
     pub fn is_symlink(self) -> bool {
         self.mode & u32::from(libc::S_IFMT) == u32::from(libc::S_IFLNK)
@@ -60,6 +65,7 @@ pub fn effective_uid() -> u32 {
 }
 
 /// Inspect one directory entry without following its final symlink.
+#[allow(clippy::unnecessary_cast)] // `st_dev` / `st_mode` widths differ between Darwin and Linux.
 pub fn metadata_at_nofollow(directory: BorrowedFd<'_>, name: &CStr) -> io::Result<EntryMetadata> {
     validate_component(name)?;
     let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();

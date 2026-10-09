@@ -336,7 +336,7 @@ mod linux {
             );
             PlatformConnectionEntry::from_executor(Arc::new(CoreConnectionExecutor::new(
                 shared,
-                proxy,
+                proxy.clone(),
                 ops,
                 tokio::runtime::Handle::current(),
             )))
