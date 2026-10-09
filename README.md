@@ -10,12 +10,24 @@ Current product version: **v0.4.9**. Release: https://github.com/ExyonQ/ExyonQ/r
 
 Public. No GitHub login.
 
+GitHub Container Registry:
+
 ```bash
 docker pull ghcr.io/exyonq/exyonq:0.4.9
 docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.9
 ```
 
+Docker Hub:
+
+```bash
+docker pull exyonq/exyonq:0.4.9
+docker pull exyonq/exyonq-wordpress:0.4.9
+```
+
 `exyonq` is the server image. `exyonq-wordpress` is the WordPress image. Both are `linux/amd64` and `linux/arm64`. The release also has the Linux binaries.
+
+https://hub.docker.com/r/exyonq/exyonq
+https://hub.docker.com/r/exyonq/exyonq-wordpress
 
 https://github.com/ExyonQ/ExyonQ/packages
 

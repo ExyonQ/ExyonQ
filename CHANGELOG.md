@@ -31,7 +31,7 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ## [0.4.9] — 2026-10-09
 
-Product version 0.4.9. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.9` and `ghcr.io/exyonq/exyonq-wordpress:0.4.9`, both `linux/amd64` and `linux/arm64`. No `:latest` tag.
+Product version 0.4.9. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.9`, `ghcr.io/exyonq/exyonq-wordpress:0.4.9`, `exyonq/exyonq:0.4.9`, and `exyonq/exyonq-wordpress:0.4.9`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
 
 A static route denies `.php`, `.phtml`, `.phar`, and dotfile names. `.well-known` stays reachable. `allow_sensitive = true` on that route is the opt-in. The stock WordPress `.htaccess` compiles, including `E=HTTP_AUTHORIZATION`, and `GET /` uses `index.php` when that file is the front controller and `DirectoryIndex` is absent. `Authorization` is passed to PHP as `HTTP_AUTHORIZATION`. The `.htaccess` watcher recompiles only when a file named `.htaccess` changes. A comment purges that post URL. A menu purges the tag `menu`. A URL that is not cached does not empty the site. `Server` and `exyonq --version` use `EXYONQ_ARTIFACT_VERSION`.
 
