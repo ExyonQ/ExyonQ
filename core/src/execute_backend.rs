@@ -745,6 +745,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn host_with_nonstandard_port_sets_server_name_and_port() {
+        let headers = [("Host".to_string(), "localhost:5006".to_string())];
+        let (name, port) = server_name_port_from_headers(&headers, 80);
+        assert_eq!(name, "localhost");
+        assert_eq!(port, 5006);
+    }
+
+    #[test]
+    fn host_without_port_uses_the_listen_port() {
+        let headers = [("Host".to_string(), "localhost".to_string())];
+        let (name, port) = server_name_port_from_headers(&headers, 5006);
+        assert_eq!(name, "localhost");
+        assert_eq!(port, 5006);
+    }
+
     #[tokio::test]
     async fn fastcgi_without_service_returns_501() {
         let _guard = FcgiDispatchTestGuard::force_absent();

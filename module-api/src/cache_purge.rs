@@ -35,7 +35,7 @@ pub enum CachePurgeOp {
         site_id: u64,
         generation: u64,
     },
-    /// Product tag purge is deferred until FPC inserts write tags.
+    /// Drop entries stored with this tag for one site.
     Tag {
         site_id: u64,
         tag: String,

@@ -498,7 +498,7 @@ where
 
     // Wire-cheap Cap055: admit before WAF / upstream (same process limiter as Hyper).
     let client_ip = x_forwarded_for.to_str().unwrap_or("127.0.0.1");
-    match exyonq_module_api::wire_admit(client_ip) {
+    match exyonq_module_api::wire_admit_for_path(client_ip, path) {
         exyonq_module_api::WireAdmit::Allow => {}
         exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
             let started = Instant::now();
@@ -1091,6 +1091,7 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         };
         let api = RouteConfig {
             name: "api".into(),
@@ -1106,6 +1107,7 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1121,6 +1123,7 @@ mod tests {
                 routes: vec!["site".into(), "api".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![site, api],
             upstreams,
@@ -1885,6 +1888,7 @@ mod ws_tunnel_tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1900,6 +1904,7 @@ mod ws_tunnel_tests {
                 routes: vec!["api".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![api],
             upstreams,

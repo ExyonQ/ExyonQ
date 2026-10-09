@@ -30,7 +30,7 @@ pub fn static_error_outcome(err: StaticError) -> StaticDispatchOutcome {
             headers: Vec::new(),
             body: StaticDispatchBody::Inline(b"not found".to_vec()),
         },
-        StaticError::PathTraversal => StaticDispatchOutcome {
+        StaticError::PathTraversal | StaticError::Forbidden => StaticDispatchOutcome {
             status: 403,
             headers: Vec::new(),
             body: StaticDispatchBody::Inline(b"forbidden".to_vec()),

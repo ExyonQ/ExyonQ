@@ -123,6 +123,7 @@ pub fn map_to_ir(
             routes: route_names,
             tls: None,
             http3_listen: None,
+            response_headers: Vec::new(),
         });
     }
 
@@ -393,6 +394,7 @@ fn map_location(
                         fastcgi: None,
                         htaccess: Default::default(),
                         cache: None,
+                        allow_sensitive: false,
                     });
                 }
             }
@@ -444,6 +446,7 @@ fn map_location(
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         });
     }
 
@@ -562,6 +565,7 @@ fn map_proxy(
         fastcgi: None,
         htaccess: Default::default(),
         cache: None,
+        allow_sensitive: false,
     })
 }
 
@@ -642,6 +646,7 @@ fn map_fastcgi(
             fastcgi: Some(pool_name),
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         });
     }
 
@@ -706,6 +711,7 @@ fn map_fastcgi(
                 fastcgi: Some(pool_name),
                 htaccess: Default::default(),
                 cache: None,
+                allow_sensitive: false,
             });
         }
         report.push(
@@ -741,6 +747,7 @@ fn map_fastcgi(
             fastcgi: Some(pool_name),
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         });
     }
 
@@ -872,6 +879,7 @@ fn map_return(
                 fastcgi: None,
                 htaccess: Default::default(),
                 cache: None,
+                allow_sensitive: false,
             })
         }
         404 => {
@@ -966,6 +974,7 @@ fn server_default_route(
         fastcgi: None,
         htaccess: Default::default(),
         cache: None,
+        allow_sensitive: false,
     })
 }
 

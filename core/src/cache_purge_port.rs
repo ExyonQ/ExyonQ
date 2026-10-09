@@ -60,9 +60,35 @@ impl CoreCachePurgePort {
         };
 
         match op {
-            CachePurgeOp::Tag { site_id, .. } => {
-                note_fpc_purge_rejected("unsupported_operation");
-                CachePurgeOutcome::fail("purge.tag", site_id, generation, "unsupported_operation")
+            CachePurgeOp::Tag { site_id, tag } => {
+                if !acceptable_tag(&tag) {
+                    note_fpc_purge_rejected("invalid_key");
+                    return CachePurgeOutcome::fail(
+                        "purge.tag",
+                        site_id,
+                        generation,
+                        "invalid_key",
+                    );
+                }
+                if Self::resolve_route_for_site(&state, site_id).is_none() {
+                    note_fpc_purge_rejected("unauthorized");
+                    return CachePurgeOutcome::fail(
+                        "purge.tag",
+                        site_id,
+                        generation,
+                        "unauthorized",
+                    );
+                }
+                let stats = cache.invalidate_site_tag(site_id, &tag);
+                let us = started.elapsed().as_micros() as u64;
+                note_fpc_purge_success(stats.purged_entries, stats.purged_bytes, us);
+                CachePurgeOutcome::success(
+                    "purge.tag",
+                    site_id,
+                    stats.purged_entries,
+                    stats.purged_bytes,
+                    generation,
+                )
             }
             CachePurgeOp::Site { site_id } => {
                 if Self::resolve_route_for_site(&state, site_id).is_none() {
@@ -188,6 +214,18 @@ impl CoreCachePurgePort {
             }
         }
     }
+}
+
+fn acceptable_tag(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if tag.len() > 32 || !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+        return false;
+    }
+    tag.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 impl CachePurgePort for CoreCachePurgePort {

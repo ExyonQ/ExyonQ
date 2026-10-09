@@ -165,7 +165,7 @@ pub use route_rules::{
 pub use tls_runtime::{TlsAlpnProfile, TlsListenerBinding};
 pub use wire_module_hooks::{
     install_wire_module_hooks, rate_limit_reject_wire, wire_admit, wire_admit_active,
-    wire_record_exchange, wire_record_response, WireAdmit, WireModuleHooks,
+    wire_admit_for_path, wire_record_exchange, wire_record_response, WireAdmit, WireModuleHooks,
 };
 
 pub type BoxError = Box<dyn Error + Send + Sync>;

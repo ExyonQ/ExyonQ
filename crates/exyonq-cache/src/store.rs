@@ -308,6 +308,29 @@ impl ResponseCache {
         self.purge_keys(&keys)
     }
 
+    /// Hard-delete entries for one site that were stored with `tag`.
+    pub fn invalidate_site_tag(&self, site_id: u64, tag: &str) -> PurgeStats {
+        let keys: Vec<CacheKey> = {
+            let inner = self.inner.read().expect("cache read");
+            inner
+                .tag_index
+                .get(tag)
+                .map(|keys| {
+                    keys.iter()
+                        .filter(|key| {
+                            inner
+                                .entries
+                                .get(*key)
+                                .is_some_and(|entry| entry.site_id == site_id)
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        self.purge_keys(&keys)
+    }
+
     /// Hard-delete entries for `site_id` with matching `runtime_generation` (WC3).
     pub fn invalidate_site_runtime_generation(&self, site_id: u64, generation: u64) -> PurgeStats {
         let keys: Vec<CacheKey> = {

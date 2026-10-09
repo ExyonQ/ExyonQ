@@ -203,3 +203,49 @@ fn child_override_replaces_parent_front_controller() {
         Some("/app.php")
     );
 }
+
+#[test]
+fn stock_wordpress_htaccess_compiles_and_indexes_index_php() {
+    let htaccess = r#"
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+"#;
+    let out = compile_htaccess(htaccess);
+    assert!(
+        out.report.errors.is_empty(),
+        "{:?}",
+        out.report.errors
+    );
+    let entry = root_fc(&out);
+    assert_eq!(
+        entry
+            .front_controller
+            .as_ref()
+            .map(|fc| fc.target_uri.as_ref()),
+        Some("/index.php")
+    );
+    let index = entry.directory_index.as_ref().expect("default index");
+    assert_eq!(index.as_ref(), ["index.php".to_string()]);
+}
+
+#[test]
+fn explicit_directory_index_is_kept() {
+    let htaccess = r"
+RewriteEngine On
+DirectoryIndex index.html
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+";
+    let out = compile_htaccess(htaccess);
+    assert!(out.report.errors.is_empty());
+    let index = root_fc(&out).directory_index.as_ref().expect("index");
+    assert_eq!(index.as_ref(), ["index.html".to_string()]);
+}

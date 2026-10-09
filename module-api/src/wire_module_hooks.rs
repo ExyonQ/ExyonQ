@@ -34,6 +34,8 @@ pub enum WireAdmit {
 pub struct WireModuleHooks {
     /// Pre-request admit keyed by peer / client IP (never request XFF).
     pub admit: fn(client_ip: &str) -> WireAdmit,
+    /// Same admit, but a configured path limit counts only that path.
+    pub admit_path: fn(client_ip: &str, path: &str) -> WireAdmit,
     /// False when admit cannot reject, so callers skip formatting the peer IP.
     pub admit_active: fn() -> bool,
     /// Post-response counter bump (status class only — no scrape).
@@ -58,6 +60,15 @@ fn hooks() -> Option<&'static WireModuleHooks> {
 pub fn wire_admit(client_ip: &str) -> WireAdmit {
     match hooks() {
         Some(h) => (h.admit)(client_ip),
+        None => WireAdmit::Allow,
+    }
+}
+
+/// Admit using the request path. A path-scoped limiter ignores other paths.
+#[inline]
+pub fn wire_admit_for_path(client_ip: &str, path: &str) -> WireAdmit {
+    match hooks() {
+        Some(h) => (h.admit_path)(client_ip, path),
         None => WireAdmit::Allow,
     }
 }

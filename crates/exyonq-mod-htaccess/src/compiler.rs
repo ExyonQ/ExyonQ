@@ -76,8 +76,7 @@ pub fn compile_from_discovered(
         .into_iter()
         .map(|(directory, state)| OverlayEntry {
             directory: NormalizedDirectory(directory),
-            directory_index: state
-                .directory_index
+            directory_index: directory_index_or_front_controller_default(&state)
                 .map(|v| Arc::<[String]>::from(v.into_boxed_slice())),
             redirect_rules: Arc::from(state.redirects.into_boxed_slice()),
             rewrite_redirects: Arc::from(state.rewrite_redirects.into_boxed_slice()),
@@ -398,9 +397,32 @@ fn parse_internal_rewrite_flags(flags: &str) -> Result<bool, String> {
         {
             return Ok(false);
         }
-        return Err(format!("unsupported RewriteRule flag `{flag}`"));
+        if is_setenv_flag(flag) {
+            continue;
+        }
+        // An unknown flag must not discard the rest of the file.
+        return Ok(false);
     }
     Ok(true)
+}
+
+fn is_setenv_flag(flag: &str) -> bool {
+    let flag = flag.trim_matches(|c| c == '[' || c == ']');
+    let bytes = flag.as_bytes();
+    bytes.len() >= 2 && bytes[0].eq_ignore_ascii_case(&b'e') && bytes[1] == b'='
+}
+
+fn directory_index_or_front_controller_default(state: &DirState) -> Option<Vec<String>> {
+    if let Some(index) = &state.directory_index {
+        return Some(index.clone());
+    }
+    let target = state.front_controller.as_ref()?.target_uri.as_ref();
+    let name = target.trim_start_matches('/');
+    if name.eq_ignore_ascii_case("index.php") {
+        Some(vec!["index.php".to_string()])
+    } else {
+        None
+    }
 }
 
 fn parse_redirect_args(d: &ParsedDirective) -> Result<(u16, String, String), String> {
@@ -480,7 +502,8 @@ fn parse_rewrite_flags(flags: &str) -> Result<(u16, bool), String> {
         if flag.eq_ignore_ascii_case("last") || flag.eq_ignore_ascii_case("break") {
             return Ok((302, false));
         }
-        return Err(format!("unsupported RewriteRule flag `{flag}`"));
+        // E= and any other unknown flag are ignored so they cannot refuse the file.
+        continue;
     }
     Ok((status, has_redirect))
 }

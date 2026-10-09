@@ -53,6 +53,7 @@ fn register_runtime_with_root() -> (
             preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
             preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
             preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
+            allow_sensitive: false,
         }],
     );
     (dir, runtime, guard)

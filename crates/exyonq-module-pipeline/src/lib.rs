@@ -58,6 +58,7 @@ pub struct CrossCuttingPipeline {
     wire_ratelimit_enabled: bool,
     wire_ratelimit_requests_per_second: u32,
     wire_ratelimit_burst: u32,
+    wire_ratelimit_path: Option<String>,
     wire_metrics_enabled: bool,
 }
 
@@ -71,6 +72,7 @@ impl CrossCuttingPipeline {
         // no-op vs active behavior without replacing the module-api hook table.
         let _ = exyonq_module_api::install_wire_module_hooks(exyonq_module_api::WireModuleHooks {
             admit: RateLimitModule::wire_admit_client_ip,
+            admit_path: RateLimitModule::wire_admit_client_ip_for_path,
             admit_active: RateLimitModule::wire_admit_active,
             record_response: MetricsModule::wire_record_response,
             record_exchange: MetricsModule::wire_record_exchange,
@@ -101,6 +103,7 @@ impl CrossCuttingPipeline {
             wire_ratelimit_enabled: config.ratelimit.enabled,
             wire_ratelimit_requests_per_second: config.ratelimit.requests_per_second,
             wire_ratelimit_burst: config.ratelimit.burst,
+            wire_ratelimit_path: config.ratelimit.path.clone(),
             wire_metrics_enabled: config.metrics.enabled,
         })
     }
@@ -111,6 +114,7 @@ impl CrossCuttingPipeline {
             self.wire_ratelimit_enabled,
             self.wire_ratelimit_requests_per_second,
             self.wire_ratelimit_burst,
+            self.wire_ratelimit_path.as_deref(),
         );
         MetricsModule::set_wire_enabled(self.wire_metrics_enabled);
     }
@@ -272,6 +276,7 @@ mod tests {
                 enabled: true,
                 requests_per_second: 10,
                 burst: 10,
+                path: None,
             },
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
@@ -304,6 +309,7 @@ mod tests {
                 enabled: true,
                 requests_per_second: 1_000_000,
                 burst: 1_000_000,
+                path: None,
             },
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
@@ -376,6 +382,7 @@ mod tests {
             wire_ratelimit_enabled: false,
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
+            wire_ratelimit_path: None,
             wire_metrics_enabled: false,
         };
 
@@ -652,6 +659,7 @@ mod tests {
             wire_ratelimit_enabled: false,
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
+            wire_ratelimit_path: None,
             wire_metrics_enabled: false,
         };
 

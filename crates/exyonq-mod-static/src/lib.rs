@@ -142,6 +142,10 @@ pub enum StaticError {
     #[error("path traversal blocked")]
     PathTraversal,
 
+    /// PHP source, a PHP archive, or a dotfile name on a static route.
+    #[error("sensitive static name")]
+    Forbidden,
+
     #[error("file not found")]
     NotFound,
 
@@ -279,6 +283,36 @@ pub(crate) fn strip_route_prefix(route_prefix: &str, request_path: &str) -> Opti
     None
 }
 
+/// PHP source and hidden names are not static files.
+///
+/// `.well-known` is the one dotfile segment that stays reachable. A `.php`
+/// under it is still refused.
+pub fn path_is_sensitive_static(request_path: &str) -> bool {
+    let path = request_path.split(['?', '#']).next().unwrap_or(request_path);
+    for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+        if segment == "." || segment == ".." || segment.eq_ignore_ascii_case(".well-known") {
+            continue;
+        }
+        if segment.as_bytes().first() == Some(&b'.') {
+            return true;
+        }
+        if let Some((_, ext)) = segment.rsplit_once('.') {
+            if ext_is(ext, "php") || ext_is(ext, "phtml") || ext_is(ext, "phar") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn ext_is(ext: &str, expected: &str) -> bool {
+    ext.len() == expected.len()
+        && ext
+            .bytes()
+            .zip(expected.bytes())
+            .all(|(got, want)| got.to_ascii_lowercase() == want)
+}
+
 pub fn relative_as_safe_path(relative: &str) -> Result<PathBuf, StaticError> {
     let path = Path::new(relative);
     let mut safe = PathBuf::new();
@@ -380,5 +414,71 @@ mod tests {
         let second = service.serve_request("/site/1k.bin").unwrap();
         assert_eq!(first.status(), second.status());
         assert_eq!(service.cache_len(), 2);
+    }
+
+    #[test]
+    fn preloaded_body_is_not_served_after_the_file_changes() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("public");
+        fs::create_dir_all(&root).unwrap();
+        let css = root.join("app.css");
+        fs::write(&css, b"old-css").unwrap();
+
+        let mut service = StaticRoot::new(&root, "/site", None).unwrap();
+        service.preload_tree().unwrap();
+        assert!(service.serve_request("/site/app.css").is_ok());
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&css, b"new-css-after-update").unwrap();
+
+        let err = service.serve_request("/site/app.css").unwrap_err();
+        assert!(matches!(err, StaticError::NotFound));
+        let err = service.serve_head_request("/site/app.css").unwrap_err();
+        assert!(matches!(err, StaticError::NotFound));
+        assert!(service.lookup_h3_static("/site/app.css").is_none());
+    }
+
+    #[test]
+    fn php_and_dotfiles_are_not_served_from_a_static_root() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("wp-content");
+        fs::create_dir_all(root.join("database")).unwrap();
+        fs::create_dir_all(root.join(".well-known")).unwrap();
+        fs::write(root.join("load.php"), "<?php echo 1;").unwrap();
+        fs::write(root.join("database").join(".ht.sqlite"), "sqlite").unwrap();
+        fs::write(root.join(".well-known").join("ok.txt"), "ok").unwrap();
+        fs::write(root.join("style.css"), "body{}").unwrap();
+
+        let err = resolve_path(&root, "/wp-content", "/wp-content/load.php", None).unwrap_err();
+        assert!(matches!(err, StaticError::Forbidden));
+        let err = resolve_path(
+            &root,
+            "/wp-content",
+            "/wp-content/database/.ht.sqlite",
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, StaticError::Forbidden));
+        let known = resolve_path(
+            &root,
+            "/wp-content",
+            "/wp-content/.well-known/ok.txt",
+            None,
+        )
+        .unwrap();
+        assert!(known.ends_with("ok.txt"));
+
+        let mut service = StaticRoot::new(&root, "/wp-content", None).unwrap();
+        service.preload_tree().unwrap();
+        assert!(matches!(
+            service.serve_request("/wp-content/load.php").unwrap_err(),
+            StaticError::Forbidden
+        ));
+        assert!(service.serve_request("/wp-content/style.css").is_ok());
+        service.set_allow_sensitive(true);
+        service.preload_tree().unwrap();
+        assert!(service
+            .resolve_path_sync("/wp-content/load.php")
+            .is_ok());
     }
 }

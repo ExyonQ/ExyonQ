@@ -102,11 +102,30 @@ use tokio::net::{TcpListener, TcpSocket};
 use tracing::{info, warn};
 use wire_dispatch::{dispatch_stream, dispatch_tcp, WireDispatchContext};
 
-/// Run the configured HTTP listener until shutdown.
+tokio::task_local! {
+    static CONN_LOCAL: (bool, u16);
+}
+
+pub(crate) fn connection_is_tls(fallback: bool) -> bool {
+    CONN_LOCAL.try_with(|value| value.0).unwrap_or(fallback)
+}
+
+pub(crate) fn connection_local_port(fallback: u16) -> u16 {
+    CONN_LOCAL.try_with(|value| value.1).unwrap_or(fallback)
+}
+
+/// Run every distinct listen address in the config until shutdown.
 pub async fn run(config: AppConfig) -> anyhow::Result<()> {
     install_rustls_provider();
-    let listen = config.primary_listen_addr()?;
-    run_on(listen, config).await
+    let binds = config.listen_endpoints()?;
+    run_with_binds(binds, config).await
+}
+
+/// Run on an explicit listen address (used in tests).
+pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
+    install_rustls_provider();
+    let tls = config.primary_server().tls.is_some();
+    run_with_binds(vec![(listen, tls)], config).await
 }
 
 async fn bind_tuned(addr: SocketAddr) -> std::io::Result<TcpListener> {
@@ -216,6 +235,8 @@ async fn accept_loop(
     proxy_client: ProxyClient,
     tls_acceptor: SharedTlsAcceptor,
     ops: Arc<LifecycleState>,
+    tls_enabled: bool,
+    local_port: u16,
 ) {
     let mut shutdown_rx = ops.shutdown_rx();
     loop {
@@ -244,10 +265,18 @@ async fn accept_loop(
         let proxy_client = proxy_client.clone();
         let x_forwarded_for = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"));
-        let acceptor = tls_acceptor.snapshot().acceptor();
+        let acceptor = if tls_enabled {
+            tls_acceptor.snapshot().acceptor()
+        } else {
+            None
+        };
         let ops_conn = Arc::clone(&ops);
+        let tls_for_conn = tls_enabled;
+        let port_for_conn = local_port;
 
         tokio::spawn(async move {
+            CONN_LOCAL
+                .scope((tls_for_conn, port_for_conn), async move {
             if let Some(acceptor) = acceptor {
                 match acceptor.accept(stream).await {
                     Ok(tls_stream) => {
@@ -285,12 +314,20 @@ async fn accept_loop(
                 wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
             )
             .await;
+                })
+                .await;
         });
     }
 }
 
-/// Run on an explicit listen address (used in tests).
-pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
+async fn run_with_binds(
+    binds: Vec<(SocketAddr, bool)>,
+    config: AppConfig,
+) -> anyhow::Result<()> {
+    let listen = binds
+        .first()
+        .map(|(addr, _)| *addr)
+        .ok_or_else(|| anyhow::anyhow!("no listen address"))?;
     let proxy_client = build_incoming_client();
     let mut config = config;
     config = discovery_overlay::apply_env_discovery_overlay(config);
@@ -537,6 +574,12 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     #[cfg(not(target_os = "linux"))]
     let use_sdp = false;
 
+    if binds.len() > 1 && (use_epoll || use_sync_accept || use_io_uring || use_sdp) {
+        return Err(anyhow::anyhow!(
+            "more than one listen address uses the default accept loop; unset EXYONQ_EPOLL_LISTEN, EXYONQ_SYNC_ACCEPT, EXYONQ_IO_URING, and EXYONQ_SDP"
+        ));
+    }
+
     info!(
         %listen,
         workers,
@@ -649,20 +692,24 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         }
     }
 
-    let mut tasks = Vec::with_capacity(workers);
-    for _ in 0..workers {
-        let listener = bind_tuned(listen).await?;
-        let state = reload::SharedServerState::clone(&shared);
-        let proxy_client = proxy_client.clone();
-        let acceptor = shared_tls.clone();
-        let ops_worker = Arc::clone(&ops);
-        tasks.push(tokio::spawn(accept_loop(
-            listener,
-            state,
-            proxy_client,
-            acceptor,
-            ops_worker,
-        )));
+    let mut tasks = Vec::with_capacity(workers.saturating_mul(binds.len()));
+    for (addr, tls_enabled) in &binds {
+        for _ in 0..workers {
+            let listener = bind_tuned(*addr).await?;
+            let state = reload::SharedServerState::clone(&shared);
+            let proxy_client = proxy_client.clone();
+            let acceptor = shared_tls.clone();
+            let ops_worker = Arc::clone(&ops);
+            tasks.push(tokio::spawn(accept_loop(
+                listener,
+                state,
+                proxy_client,
+                acceptor,
+                ops_worker,
+                *tls_enabled,
+                addr.port(),
+            )));
+        }
     }
 
     LifecycleState::wait_for_shutdown(&ops).await;

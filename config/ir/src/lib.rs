@@ -148,6 +148,14 @@ fn default_http3_drain_cap() -> u64 {
     64 * 1024
 }
 
+/// One response header set on every response from the server that lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseHeaderConfig {
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
@@ -160,6 +168,9 @@ pub struct ServerConfig {
     pub tls: Option<TlsConfig>,
     #[serde(default)]
     pub http3_listen: Option<String>,
+    /// Headers added to every response from this listener (HSTS, CSP, frame options).
+    #[serde(default)]
+    pub response_headers: Vec<ResponseHeaderConfig>,
 }
 
 impl ServerConfig {
@@ -234,6 +245,10 @@ pub struct RouteConfig {
     pub htaccess: HtaccessMode,
     #[serde(default)]
     pub cache: Option<String>,
+    /// When true, this static route may serve `.php`, `.phtml`, `.phar`, and dotfiles.
+    /// Default is deny. `.well-known` stays reachable either way.
+    #[serde(default)]
+    pub allow_sensitive: bool,
 }
 
 /// Plan 12 v0 — response cache policy (compile-time only).
@@ -724,6 +739,9 @@ impl AppConfig {
             if let Some(tls) = &server.tls {
                 validate_tls_acme(tls)?;
             }
+            for header in &server.response_headers {
+                validate_response_header(header)?;
+            }
         }
 
         for route in &routes {
@@ -816,6 +834,21 @@ impl AppConfig {
         parse_listen(listen)
     }
 
+    /// One socket per distinct `listen`. The bool is true when that socket speaks TLS.
+    pub fn listen_endpoints(&self) -> Result<Vec<(SocketAddr, bool)>, ConfigError> {
+        let mut out: Vec<(SocketAddr, bool)> = Vec::new();
+        for server in &self.servers {
+            let addr = parse_listen(&server.listen)?;
+            let tls = server.tls.is_some();
+            if let Some(slot) = out.iter_mut().find(|(existing, _)| *existing == addr) {
+                slot.1 |= tls;
+            } else {
+                out.push((addr, tls));
+            }
+        }
+        Ok(out)
+    }
+
     /// Migrate v1 IR to v2 (adds empty includes, preserves semantics).
     pub fn migrate_v1_to_v2(mut self) -> Self {
         if self.config_version == CONFIG_VERSION_V1 {
@@ -823,6 +856,30 @@ impl AppConfig {
         }
         self
     }
+}
+
+fn validate_response_header(header: &ResponseHeaderConfig) -> Result<(), ConfigError> {
+    let name = header.name.as_str();
+    let name_ok = !name.is_empty()
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !name.eq_ignore_ascii_case("content-length")
+        && !name.eq_ignore_ascii_case("transfer-encoding")
+        && !name.eq_ignore_ascii_case("connection")
+        && !name.eq_ignore_ascii_case("host");
+    if !name_ok {
+        return Err(ConfigError::Parse(format!(
+            "response header name `{name}` is not allowed"
+        )));
+    }
+    let value_ok = !header.value.is_empty()
+        && header.value.len() <= 1024
+        && !header.value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0);
+    if !value_ok {
+        return Err(ConfigError::Parse(format!(
+            "response header `{name}` has an empty or illegal value"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_ratelimit_config(rl: &RateLimitConfig) -> Result<(), ConfigError> {
@@ -838,6 +895,13 @@ fn validate_ratelimit_config(rl: &RateLimitConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::Parse(
             "modules.ratelimit.burst must be >= 1 when enabled".into(),
         ));
+    }
+    if let Some(path) = &rl.path {
+        if !path.starts_with('/') || path.contains('?') || path.contains(' ') {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.path must be an absolute path without a query".into(),
+            ));
+        }
     }
     Ok(())
 }

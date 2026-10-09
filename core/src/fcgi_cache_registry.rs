@@ -17,6 +17,7 @@ pub fn prepare_fcgi_cache_load(
     max_object_bytes: usize,
     request_headers: &[(String, String)],
 ) -> CacheLoadOutcome {
+    let invalidation_tags = html_menu_tag(&headers);
     if body.len() > max_object_bytes {
         return CacheLoadOutcome {
             status,
@@ -25,7 +26,7 @@ pub fn prepare_fcgi_cache_load(
             store: false,
             rejection: Some(CacheRejection::BodyTooLarge),
             static_identity: None,
-            invalidation_tags: std::sync::Arc::from([]),
+            invalidation_tags,
         };
     }
     let assessment = assess_cacheability(
@@ -43,7 +44,24 @@ pub fn prepare_fcgi_cache_load(
         store: assessment.is_ok(),
         rejection: assessment.err(),
         static_identity: None,
-        invalidation_tags: std::sync::Arc::from([]),
+        invalidation_tags,
+    }
+}
+
+fn html_menu_tag(headers: &[(String, String)]) -> std::sync::Arc<[String]> {
+    let html = headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("content-type")
+            && value
+                .split(';')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .eq_ignore_ascii_case("text/html")
+    });
+    if html {
+        std::sync::Arc::from([String::from("menu")])
+    } else {
+        std::sync::Arc::from([])
     }
 }
 

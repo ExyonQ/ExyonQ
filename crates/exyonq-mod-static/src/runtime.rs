@@ -124,6 +124,7 @@ impl StaticRuntime {
             ) {
                 Ok(mut root) => {
                     root.set_route_host(slot.route_host.clone());
+                    root.set_allow_sensitive(slot.allow_sensitive);
                     root
                 }
                 Err(err) => {

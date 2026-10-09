@@ -111,6 +111,10 @@ $proc = start_purge_peer_server( $sock, $token, true );
 $client = new ExyonQ_Cache_Client();
 $ok     = $client->purge_url( 'http', 'example.test', '/hello/' );
 assert_true( ! empty( $ok['ok'] ), 'valid token purge succeeds' );
+$tagged = $client->purge_tag( 'menu' );
+assert_true( ! empty( $tagged['ok'] ), 'menu tag purge succeeds' );
+$bad_tag = $client->purge_tag( 'post:1' );
+assert_true( ( $bad_tag['error'] ?? '' ) === 'invalid_key', 'tag with a colon is rejected' );
 assert_true( ( $ok['purged_entries'] ?? 0 ) === 1, 'purged_entries reported' );
 
 if ( ! function_exists( 'home_url' ) ) {
