@@ -156,8 +156,18 @@ fn docker(args: &[&str]) -> std::process::Output {
             }
             Ok(None) if start.elapsed() >= limit => {
                 let _ = child.kill();
-                let _ = child.wait();
-                return docker_failed("docker timed out");
+                // A pull stuck in an uninterruptible network wait does not die
+                // on SIGKILL. Do not block the suite on wait().
+                let kill_start = Instant::now();
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_)) | Err(_) => return docker_failed("docker timed out"),
+                        Ok(None) if kill_start.elapsed() >= Duration::from_secs(2) => {
+                            return docker_failed("docker timed out");
+                        }
+                        Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    }
+                }
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(err) => return docker_failed(&format!("docker wait failed: {err}")),
