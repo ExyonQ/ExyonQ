@@ -86,6 +86,7 @@ use crate::reload;
 use exyonq_mod_proxy::{build_incoming_client, ProxyClient};
 use exyonq_mod_tls::{install_rustls_provider, SharedTlsAcceptor, TlsSessionCache, TlsSettings};
 use exyonq_module_api::acme_integration::acme_integration_service;
+#[cfg(unix)]
 use exyonq_module_api::kernel_control::control_plane_service;
 use exyonq_module_api::reload_runtime::reload_runtime_service;
 use handler::{serve_connection, ConnectionContext};

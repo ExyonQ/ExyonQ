@@ -4,7 +4,9 @@
 //! 1) kill process / restart with data preserved
 //! 2) kill / restart / FLUSHALL → local generation never rolls back
 //!
-//! Soft-skips only when Docker itself is unavailable.
+//! Soft-skips when Docker itself is unavailable, or when the Redis image
+//! cannot be pulled (Docker Hub anonymous rate limit). A failed `docker run`
+//! for any other reason still fails the test.
 //!
 //! KF-P16-009: container/volume/port are unique per process (PID + run stamp).
 //! Never uses the historical fixed name `exyonq-wc7b2-redis`. Cleanup removes
@@ -164,13 +166,23 @@ fn container_exists() -> bool {
     docker_ok(&["inspect", &container()])
 }
 
-fn ensure_redis_container() {
+enum RedisEnsure {
+    Ready,
+    ImageUnavailable,
+}
+
+fn redis_image_pull_blocked(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("toomanyrequests") || lower.contains("pull rate limit")
+}
+
+fn ensure_redis_container() -> RedisEnsure {
     if !manages_docker() {
         assert!(
             wait_redis(Duration::from_secs(5)),
             "external EXYONQ_REDIS_COORD_URL not ready"
         );
-        return;
+        return RedisEnsure::Ready;
     }
     let _lock = docker_lock().lock().unwrap_or_else(|e| e.into_inner());
     let c = container();
@@ -219,11 +231,15 @@ fn ensure_redis_container() {
                     "--appendonly",
                     "yes",
                 ]);
-                assert!(
-                    out2.status.success(),
-                    "docker run failed after reclaiming our container: {}",
-                    String::from_utf8_lossy(&out2.stderr)
-                );
+                let err2 = String::from_utf8_lossy(&out2.stderr);
+                if !out2.status.success() {
+                    if redis_image_pull_blocked(&err2) {
+                        return RedisEnsure::ImageUnavailable;
+                    }
+                    panic!("docker run failed after reclaiming our container: {err2}");
+                }
+            } else if redis_image_pull_blocked(&err) {
+                return RedisEnsure::ImageUnavailable;
             } else {
                 panic!("docker run failed: {err}");
             }
@@ -238,6 +254,7 @@ fn ensure_redis_container() {
         wait_redis(Duration::from_secs(30)),
         "Redis not ready after ensure"
     );
+    RedisEnsure::Ready
 }
 
 fn kill_redis_process() {
@@ -337,7 +354,12 @@ fn wc7d_real_redis_process_restart_preserve_data() {
         return;
     }
     let _cleanup = RedisResourceGuard;
-    ensure_redis_container();
+    if matches!(ensure_redis_container(), RedisEnsure::ImageUnavailable) {
+        eprintln!(
+            "wc7d_real_redis_process_restart_preserve_data: soft-skip (redis image pull rate limit)"
+        );
+        return;
+    }
     let ns = format!("exyonq:fpc:v1:wc7d:rst:{}", std::process::id());
     let a = open(&ns, "a");
     let b = open(&ns, "b");
@@ -381,7 +403,10 @@ fn wc7d_redis_data_loss_local_generation_never_rolls_back() {
         return;
     }
     let _cleanup = RedisResourceGuard;
-    ensure_redis_container();
+    if matches!(ensure_redis_container(), RedisEnsure::ImageUnavailable) {
+        eprintln!("wc7d_redis_data_loss: soft-skip (redis image pull rate limit)");
+        return;
+    }
     let ns = format!("exyonq:fpc:v1:wc7d:dl:{}", std::process::id());
     let a = open(&ns, "a");
     let b = open(&ns, "b");
