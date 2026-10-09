@@ -1137,17 +1137,48 @@ mod tests {
     async fn state_for(
         config: AppConfig,
     ) -> (Arc<ServerState>, execute_backend::StaticDispatchTestGuard) {
+        ensure_wire_hooks();
         let runtime = Arc::new(exyonq_mod_static::StaticRuntime::new());
+        let slots = static_slots_for_test(&config);
+        if !slots.is_empty() {
+            // The Linux planner asks the pinned runtime, not only ServerState.
+            // An empty pin would downgrade a real static GET to Hyper.
+            runtime.bind_compiled_slots(1, &slots);
+        }
         let service: Arc<dyn exyonq_module_api::static_dispatch::StaticDispatchService> =
             runtime.clone();
         let static_guard = execute_backend::StaticDispatchTestGuard::install(service);
+        // install_kernel_hooks pins this Arc. It must run after ensure_wire_hooks,
+        // which pins an empty runtime on its first call.
         exyonq_mod_static::install_kernel_hooks(runtime);
-        ensure_wire_hooks();
         let proxy_client = build_incoming_client();
         let state = ServerState::new_with_generation(1, config, proxy_client.clone())
             .await
             .expect("server state");
         (state, static_guard)
+    }
+
+    fn static_slots_for_test(
+        config: &AppConfig,
+    ) -> Vec<exyonq_module_api::static_dispatch::StaticCompiledSlot> {
+        config
+            .routes
+            .iter()
+            .filter_map(|route| {
+                let root = route.root.clone()?;
+                Some(exyonq_module_api::static_dispatch::StaticCompiledSlot {
+                    filesystem_root: root,
+                    route_prefix: route.r#match.path.clone(),
+                    index_file: route.index.clone(),
+                    route_name: route.name.clone(),
+                    route_host: route.r#match.host.clone(),
+                    preload_max_file_bytes: 0,
+                    preload_max_total_bytes: 0,
+                    preload_max_entries: 0,
+                    allow_sensitive: route.allow_sensitive,
+                })
+            })
+            .collect()
     }
 
     /// `/site/*` wire heads must match route `"site"` and resolve to `Backend::Static` offline.

@@ -13,22 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! KD4.9 — control plane and operations runtime.
+//! Hosts without Unix sockets have no control-plane listener.
+//! Registration is a no-op so the process can still start. The server only
+//! binds `EXYONQ_CONTROL_SOCKET` and the purge socket on Unix.
 
-#![forbid(unsafe_code)]
+use exyonq_module_api::kernel_control::ControlPlaneRegisterError;
 
-#[cfg(unix)]
-mod control_socket;
-#[cfg(unix)]
-mod purge_socket;
-#[cfg(unix)]
-mod service;
-#[cfg(not(unix))]
-mod unsupported;
-
-#[cfg(unix)]
-pub use purge_socket::{constant_time_eq, parse_purge_line, ParsedPurge};
-#[cfg(unix)]
-pub use service::{register_control_plane, ControlPlane};
-#[cfg(not(unix))]
-pub use unsupported::register_control_plane;
+pub fn register_control_plane() -> Result<(), ControlPlaneRegisterError> {
+    Ok(())
+}
