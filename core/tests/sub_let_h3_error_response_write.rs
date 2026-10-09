@@ -286,7 +286,7 @@ async fn s2n_error_response_write_failure_is_observed() {
         .await
         .expect("handshake");
 
-    let (mut _h3_conn, mut send) = h3::client::new(H3QuinnConnection::new(quic_conn))
+    let (mut _h3_conn, mut send) = h3::client::new(H3QuinnConnection::new(quic_conn.clone()))
         .await
         .expect("h3 client");
 
