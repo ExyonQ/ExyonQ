@@ -58,7 +58,7 @@ None.
 
 - [x] Static path resolver
 - [x] Config parse (new `allow_sensitive` field, default deny)
-- [ ] HTTP/1.1 raw static loop
+- [x] HTTP/1.1 raw static loop (epoll returns 403 for Forbidden; does not open the file)
 - [ ] Hyper proxy path
 - [ ] Reverse proxy headers
 - [ ] Config reload + control socket

@@ -391,8 +391,9 @@ pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandl
 /// off / head not sendfile-eligible) — caller may Hyper-fallback without re-registering
 /// sendfile.
 ///
-/// Security: PathTraversal → 403; containment/open failures → 404. Never discloses
-/// out-of-root secret bytes. Does not reopen a less-restrictive Hyper static path.
+/// Security: PathTraversal and Forbidden → 403; containment/open failures → 404.
+/// Never discloses out-of-root secret bytes or a denied static body. Does not
+/// reopen a less-restrictive Hyper static path.
 pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Bytes> {
     let _ = site_slot;
     if !crate::sendfile_fsm::epoll_sendfile_enabled() {
@@ -432,7 +433,9 @@ pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Byt
             return Some(not_found(client_close));
         };
         match root.resolved_file_path(path) {
-            Err(crate::StaticError::PathTraversal) => Some(forbidden(client_close)),
+            Err(crate::StaticError::PathTraversal | crate::StaticError::Forbidden) => {
+                Some(forbidden(client_close))
+            }
             Err(crate::StaticError::NotFound) | Err(crate::StaticError::BudgetExceeded) => {
                 Some(not_found(client_close))
             }
