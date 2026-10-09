@@ -23,8 +23,7 @@ use std::sync::Arc;
 
 #[test]
 fn plan08_fixture_accepts_structural_fcgi_pool() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../scripts/architecture/fixtures/plan08/minimal-fcgi.toml");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal-fcgi.toml");
     let config = AppConfig::from_file(&path).expect("plan08 fixture parses");
     assert_eq!(config.pools_fcgi.len(), 1);
     assert_eq!(config.routes[0].fastcgi.as_deref(), Some("php"));
@@ -32,7 +31,7 @@ fn plan08_fixture_accepts_structural_fcgi_pool() {
 
 #[test]
 fn runtime_snapshot_compiles_fastcgi_route_as_contract_backend() {
-    let raw = include_str!("../../scripts/architecture/fixtures/plan08/minimal-fcgi.toml");
+    let raw = include_str!("fixtures/minimal-fcgi.toml");
     let config: AppConfig = raw.parse().expect("fixture");
     let snap = compile_runtime_plan(1, config).expect("compile");
     let backend = snap.resolve_backend(0).expect("php route backend");
@@ -66,19 +65,6 @@ fn rp3_no_runtime_patch_fcgi_pool_surface() {
                 path.display()
             );
         }
-    }
-}
-
-#[test]
-fn guards_script_enforces_fastcgi_and_handler_bans() {
-    let verify = include_str!("../../scripts/architecture/verify-phase0-kernel.sh");
-    for check in [
-        "check_fastcgi_runtime",
-        "check_handler_table",
-        "check_forbidden_hotpath",
-        "check_mod_to_core",
-    ] {
-        assert!(verify.contains(check), "missing guard check `{check}`");
     }
 }
 

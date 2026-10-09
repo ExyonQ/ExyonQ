@@ -141,10 +141,7 @@ pub async fn get_known_length(
     // timeout_ms = 0 is already elapsed. A zero tokio timeout still polls the
     // future first and a localhost upstream can answer before the timer wins.
     if target.timeout.is_zero() {
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "upstream timeout",
-        ));
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout"));
     }
     match tokio::time::timeout(
         target.timeout,
@@ -153,10 +150,7 @@ pub async fn get_known_length(
     .await
     {
         Ok(result) => result,
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "upstream timeout",
-        )),
+        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout")),
     }
 }
 
@@ -176,10 +170,7 @@ where
     C: AsyncWrite + Unpin,
 {
     if target.timeout.is_zero() {
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "upstream timeout",
-        ));
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout"));
     }
     let (key, host, port) = endpoint_key(target)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "upstream missing authority"))?;
@@ -204,10 +195,7 @@ where
             Ok(status)
         }
         Ok(Err(err)) => Err(err),
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "upstream timeout",
-        )),
+        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout")),
     }
 }
 
@@ -326,7 +314,16 @@ where
             Ok((status, true))
         }
         UpstreamBodyMode::Chunked => {
-            write_response_head(client, status, &reason, &passthrough, None, client_close, b"").await?;
+            write_response_head(
+                client,
+                status,
+                &reason,
+                &passthrough,
+                None,
+                client_close,
+                b"",
+            )
+            .await?;
             stream_chunked(upstream, &mut pending, client).await?;
             Ok((status, false))
         }
@@ -373,7 +370,11 @@ async fn write_response_head<C: AsyncWrite + Unpin>(
     client.flush().await
 }
 
-async fn stream_chunked<U, C>(upstream: &mut U, pending: &mut Vec<u8>, client: &mut C) -> io::Result<()>
+async fn stream_chunked<U, C>(
+    upstream: &mut U,
+    pending: &mut Vec<u8>,
+    client: &mut C,
+) -> io::Result<()>
 where
     U: AsyncRead + Unpin,
     C: AsyncWrite + Unpin,

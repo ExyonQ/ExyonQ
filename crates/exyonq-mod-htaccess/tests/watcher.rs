@@ -73,7 +73,10 @@ fn unchanged_htaccess_does_not_republish() {
     compile_and_publish(&site, &publisher).expect("publish");
     let generation = publisher.get("site-a").expect("overlay").generation;
     compile_and_publish(&site, &publisher).expect("same bytes");
-    assert_eq!(publisher.get("site-a").expect("overlay").generation, generation);
+    assert_eq!(
+        publisher.get("site-a").expect("overlay").generation,
+        generation
+    );
     std::fs::write(tmp.path().join(".htaccess"), "Redirect 302 /a /c\n").expect("rewrite");
     compile_and_publish(&site, &publisher).expect("changed");
     assert!(publisher.get("site-a").expect("overlay").generation > generation);

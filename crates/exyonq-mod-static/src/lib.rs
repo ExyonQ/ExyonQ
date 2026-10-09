@@ -80,9 +80,9 @@ pub use encoding_cache::{
     effective_config as encoding_cache_effective_config, feature_enabled as encoding_cache_enabled,
     install_encoding_cache_config, CacheCoding, EncodingCacheConfig,
 };
-pub use kernel_hooks::install_kernel_hooks;
 #[cfg(target_os = "linux")]
 pub use epoll_session::static_slot_owns_request;
+pub use kernel_hooks::install_kernel_hooks;
 pub use sendfile_handle::SendfileHandleRegistry;
 
 #[cfg(all(test, target_os = "linux"))]
@@ -288,7 +288,10 @@ pub(crate) fn strip_route_prefix(route_prefix: &str, request_path: &str) -> Opti
 /// `.well-known` is the one dotfile segment that stays reachable. A `.php`
 /// under it is still refused.
 pub fn path_is_sensitive_static(request_path: &str) -> bool {
-    let path = request_path.split(['?', '#']).next().unwrap_or(request_path);
+    let path = request_path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(request_path);
     for segment in path.split('/').filter(|segment| !segment.is_empty()) {
         if segment == "." || segment == ".." || segment.eq_ignore_ascii_case(".well-known") {
             continue;
@@ -459,13 +462,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, StaticError::Forbidden));
-        let known = resolve_path(
-            &root,
-            "/wp-content",
-            "/wp-content/.well-known/ok.txt",
-            None,
-        )
-        .unwrap();
+        let known =
+            resolve_path(&root, "/wp-content", "/wp-content/.well-known/ok.txt", None).unwrap();
         assert!(known.ends_with("ok.txt"));
 
         let mut service = StaticRoot::new(&root, "/wp-content", None).unwrap();
@@ -477,8 +475,6 @@ mod tests {
         assert!(service.serve_request("/wp-content/style.css").is_ok());
         service.set_allow_sensitive(true);
         service.preload_tree().unwrap();
-        assert!(service
-            .resolve_path_sync("/wp-content/load.php")
-            .is_ok());
+        assert!(service.resolve_path_sync("/wp-content/load.php").is_ok());
     }
 }

@@ -423,7 +423,9 @@ pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Byt
         return Some(not_found(client_close));
     };
     with_runtime(|rt| {
-        let Some(site_slot) = rt.slot_for_request_path(path, request_host_from_head(head).as_deref()) else {
+        let Some(site_slot) =
+            rt.slot_for_request_path(path, request_host_from_head(head).as_deref())
+        else {
             // No static root owns this path. Hyper must route it (proxy, metrics
             // health). A terminal 404 would hide those routes. The planner must
             // not choose Static again for this head.
@@ -752,11 +754,7 @@ fn access_record(table: &SessionTable, session: u64) -> (Vec<u8>, std::time::Ins
     if !exyonq_module_api::static_wire::access_notices_enabled() {
         return (Vec::new(), std::time::Instant::now());
     }
-    let head = table
-        .access_head
-        .get(&session)
-        .cloned()
-        .unwrap_or_default();
+    let head = table.access_head.get(&session).cloned().unwrap_or_default();
     let started = table
         .access_started
         .get(&session)
@@ -855,7 +853,11 @@ pub fn pump_sendfile_session(fd: RawFd, session: u64) -> StaticEpollPumpResult {
             started,
         } => {
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let method = if head.starts_with(b"HEAD ") { "HEAD" } else { "GET" };
+            let method = if head.starts_with(b"HEAD ") {
+                "HEAD"
+            } else {
+                "GET"
+            };
             let path = crate::wire_eligibility::request_path_from_head(&head).unwrap_or("/");
             exyonq_module_api::wire_record_exchange(method, path, status, elapsed_ms);
             crate::wire_conn::notify_wire_access_for_hooks(&head, status, outcome, started);

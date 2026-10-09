@@ -718,6 +718,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
     .await
 }
 
+#[allow(clippy::result_large_err)]
 async fn handle_request(
     state: Arc<ServerState>,
     req: Request<Incoming>,
@@ -772,6 +773,7 @@ async fn handle_request(
     Ok(handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await)
 }
 
+#[allow(clippy::result_large_err)]
 async fn handle_request_with_modules(
     state: Arc<ServerState>,
     req: Request<Incoming>,
@@ -1131,7 +1133,13 @@ async fn dispatch_core(
     match crate::structural_route_rules::evaluate_route_structural_rules(route) {
         exyonq_module_api::RouteRuleOutcome::NoChange => {}
         exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
-            return redirect_for_request(status, location, host.as_deref(), path.as_str(), uri.query());
+            return redirect_for_request(
+                status,
+                location,
+                host.as_deref(),
+                path.as_str(),
+                uri.query(),
+            );
         }
         exyonq_module_api::RouteRuleOutcome::InternalRewrite { path: rewritten } => {
             // Fail closed: never rematch/proxy with path≠uri after a parse failure.
@@ -3167,7 +3175,7 @@ mod tests {
     }
 
     fn plan08_fcgi_config() -> AppConfig {
-        let raw = include_str!("../../../scripts/architecture/fixtures/plan08/minimal-fcgi.toml");
+        let raw = include_str!("../../tests/fixtures/minimal-fcgi.toml");
         raw.parse().expect("plan08 fixture")
     }
 

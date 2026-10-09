@@ -69,7 +69,8 @@ impl CachedEntry {
     fn body_still_current(&self) -> bool {
         match std::fs::metadata(&self.path) {
             Ok(meta) if meta.is_file() => {
-                crate::conditional::ValidatorIdentity::from_metadata(&meta) == self.prepared.identity
+                crate::conditional::ValidatorIdentity::from_metadata(&meta)
+                    == self.prepared.identity
             }
             _ => false,
         }
@@ -262,7 +263,8 @@ impl StaticRoot {
             return Some(entry);
         }
         let index_name = self.index.as_deref().unwrap_or("index.html");
-        for candidate in index_lookup_candidates(self.route_prefix.as_str(), request_path, index_name)
+        for candidate in
+            index_lookup_candidates(self.route_prefix.as_str(), request_path, index_name)
         {
             if let Some(entry) = self.cache.get(&candidate) {
                 return Some(entry);
@@ -594,7 +596,11 @@ fn load_preload_body_bounded(
     Ok(Arc::new(Bytes::from(buf)))
 }
 
-fn index_lookup_candidates(route_prefix: &str, request_path: &str, index_name: &str) -> Vec<String> {
+fn index_lookup_candidates(
+    route_prefix: &str,
+    request_path: &str,
+    index_name: &str,
+) -> Vec<String> {
     let index_name = if index_name.is_empty() {
         "index.html"
     } else {

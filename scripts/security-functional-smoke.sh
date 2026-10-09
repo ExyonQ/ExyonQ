@@ -6,8 +6,8 @@ cd "$ROOT"
 
 echo "=== Security functional smoke ==="
 
-cargo run -q -p exyonq -- validate -c benchmarks/scenarios/fixtures/tls-minimal.toml
-cargo run -q -p exyonq -- validate -c benchmarks/scenarios/fixtures/http2-http3.toml
+cargo run -q -p exyonq -- validate -c tests/fixtures/tls-minimal.toml
+cargo run -q -p exyonq -- validate -c tests/fixtures/http2-http3.toml
 
 cargo test -p exyonq-core static_files::tests::blocks_path_traversal
 

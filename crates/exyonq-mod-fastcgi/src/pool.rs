@@ -59,32 +59,49 @@ pub fn resolve_pool_capacities_with_transport(
     env_socket: Option<&str>,
     env_max_concurrency: Option<u32>,
 ) -> Vec<(u32, usize)> {
-    let endpoints = crate::adapter::resolve_pool_endpoints(
-        sorted_pool_names,
-        address_by_name,
-        transport_by_name,
-        env_socket,
-    );
-    endpoints
-        .into_iter()
-        .map(|(pool_id, _)| {
-            let name = sorted_pool_names
-                .get(pool_id as usize)
-                .map(String::as_str)
-                .unwrap_or("");
-            let configured = max_concurrency_by_name
-                .get(name)
-                .copied()
-                .unwrap_or(DEFAULT_FCGI_MAX_CONCURRENCY as u32);
-            let value = if pool_id == 0 {
-                env_max_concurrency.unwrap_or(configured)
-            } else {
-                configured
-            };
-            let capacity = validate_max_concurrency(value).unwrap_or(DEFAULT_FCGI_MAX_CONCURRENCY);
-            (pool_id, capacity)
-        })
-        .collect()
+    // FastCGI sockets are a Unix pool. Windows keeps the capacity table empty.
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            sorted_pool_names,
+            address_by_name,
+            transport_by_name,
+            max_concurrency_by_name,
+            env_socket,
+            env_max_concurrency,
+        );
+        Vec::new()
+    }
+    #[cfg(unix)]
+    {
+        let endpoints = crate::adapter::resolve_pool_endpoints(
+            sorted_pool_names,
+            address_by_name,
+            transport_by_name,
+            env_socket,
+        );
+        endpoints
+            .into_iter()
+            .map(|(pool_id, _)| {
+                let name = sorted_pool_names
+                    .get(pool_id as usize)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let configured = max_concurrency_by_name
+                    .get(name)
+                    .copied()
+                    .unwrap_or(DEFAULT_FCGI_MAX_CONCURRENCY as u32);
+                let value = if pool_id == 0 {
+                    env_max_concurrency.unwrap_or(configured)
+                } else {
+                    configured
+                };
+                let capacity =
+                    validate_max_concurrency(value).unwrap_or(DEFAULT_FCGI_MAX_CONCURRENCY);
+                (pool_id, capacity)
+            })
+            .collect()
+    }
 }
 
 /// Returns true when `address` names a unix domain socket path (re-export for callers).

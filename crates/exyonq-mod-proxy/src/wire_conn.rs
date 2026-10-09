@@ -882,7 +882,10 @@ where
         } else {
             let client_ip = x_forwarded_for.to_str().unwrap_or("127.0.0.1");
             if let exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } =
-                exyonq_module_api::wire_admit_for_path(client_ip, path_and_query.split('?').next().unwrap_or(path_and_query))
+                exyonq_module_api::wire_admit_for_path(
+                    client_ip,
+                    path_and_query.split('?').next().unwrap_or(path_and_query),
+                )
             {
                 let reject = exyonq_module_api::rate_limit_reject_wire(retry_after_secs);
                 wire_io::write_all_async(&mut stream, &reject).await?;

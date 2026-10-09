@@ -60,7 +60,7 @@ PUBLIC_OPENING_AUTHORIZED = NO
 
 ## 1. Tree inspection
 
-### 1.1 Development (`/Volumes/Lexar/Cursor/exyonq-lab`)
+### 1.1 Development (`exyonq-lab`)
 
 | Field | Value |
 |-------|-------|
@@ -76,7 +76,7 @@ PUBLIC_OPENING_AUTHORIZED = NO
 
 Local `.exyonq-local/status/p14v040-STATUS.env` still shows stale `OPEN` / Phase-2 blocked state. Authoritative close evidence is under `.exyonq-local/release/p14v040/phase5-histclean-…/evidence/phase6-final-status.env` (`PUBLICATION_STATUS=PRIVATE_V040_RELEASE_COMPLETE`). Status-file refresh is **out of scope** for this audit.
 
-### 1.2 GitHub canonical (`/Volumes/Lexar/Cursor/exyonq-github`)
+### 1.2 GitHub canonical (`exyonq-github`)
 
 | Field | Value |
 |-------|-------|

@@ -1590,7 +1590,8 @@ fn sendfile_read_and_serve(
                     renew_read_deadline(c);
                 }
                 let started = Instant::now();
-                match queue_inline_wire(epfd, fd, conns, wire, client_close, &head_owned.0, started) {
+                match queue_inline_wire(epfd, fd, conns, wire, client_close, &head_owned.0, started)
+                {
                     InlineFlush::Done => {
                         if client_close {
                             remove_conn(epfd, fd, conns);

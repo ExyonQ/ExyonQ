@@ -86,11 +86,7 @@ pub fn epoll_sendfile_eligible(head: &[u8]) -> bool {
     }
     // Origin-form extract of `/health` / `/metrics` (including absolute-form).
     // `/metrics` excluded here even though it is not an inline probe — Hyper only.
-    if path == b"/health"
-        || path == b"/live"
-        || path == b"/ready"
-        || path == b"/metrics"
-    {
+    if path == b"/health" || path == b"/live" || path == b"/ready" || path == b"/metrics" {
         return false;
     }
     // Product surface: proxy API is never a static sendfile candidate.

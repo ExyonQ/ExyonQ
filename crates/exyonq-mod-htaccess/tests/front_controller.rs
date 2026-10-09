@@ -218,11 +218,7 @@ RewriteRule . /index.php [L]
 </IfModule>
 "#;
     let out = compile_htaccess(htaccess);
-    assert!(
-        out.report.errors.is_empty(),
-        "{:?}",
-        out.report.errors
-    );
+    assert!(out.report.errors.is_empty(), "{:?}", out.report.errors);
     let entry = root_fc(&out);
     assert_eq!(
         entry

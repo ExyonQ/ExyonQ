@@ -46,14 +46,17 @@ pub mod timeout_budget;
 pub mod transport;
 #[cfg(unix)]
 pub mod unix_connect;
+#[cfg(unix)]
 pub mod unix_transport;
 pub mod wire;
 
 pub use adapter::{
     is_tcp_pool_address, is_unix_socket_path, map_client_error, map_forward_success,
-    map_transport_error, parse_cgi_stdout, parse_tcp_pool_address, resolve_pool_endpoints,
-    resolve_unix_socket_pools, FcgiModuleExecutor, ScriptedFcgiExecutor,
+    map_transport_error, parse_cgi_stdout, parse_tcp_pool_address, FcgiModuleExecutor,
+    ScriptedFcgiExecutor,
 };
+#[cfg(unix)]
+pub use adapter::{resolve_pool_endpoints, resolve_unix_socket_pools};
 #[cfg(feature = "core-bridge")]
 pub use bridge::register_with_core;
 pub use cache_metrics::{
@@ -119,6 +122,7 @@ pub use transport::{
 };
 #[cfg(unix)]
 pub use unix_connect::connect_unix_stream;
+#[cfg(unix)]
 pub use unix_transport::UnixFpmTransport;
 pub use wire::{WireEndpoint, WireError, WireTransport};
 
