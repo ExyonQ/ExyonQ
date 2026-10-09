@@ -61,6 +61,8 @@ pub struct StaticCompiledSlot {
     pub preload_max_total_bytes: u64,
     /// Tree-preload max accepted entries. `0` disables preload.
     pub preload_max_entries: u64,
+    /// Static route opt-in for PHP source and dotfiles. Default deny.
+    pub allow_sensitive: bool,
 }
 
 impl StaticCompiledSlot {

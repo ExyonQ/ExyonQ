@@ -187,6 +187,7 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         }
     }
 

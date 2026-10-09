@@ -31,6 +31,9 @@ final class ExyonQ_Cache_Hooks {
 		add_action( 'deleted_comment', array( $this, 'on_comment_change' ), 20, 1 );
 		add_action( 'wp_set_comment_status', array( $this, 'on_comment_status' ), 20, 2 );
 
+		add_action( 'wp_update_nav_menu', array( $this, 'on_menu_change' ), 20 );
+		add_action( 'wp_update_nav_menu_item', array( $this, 'on_menu_change' ), 20 );
+
 		add_action( 'created_term', array( $this, 'on_term_change' ), 20, 3 );
 		add_action( 'edited_term', array( $this, 'on_term_change' ), 20, 3 );
 		add_action( 'delete_term', array( $this, 'on_term_delete' ), 20, 4 );
@@ -121,6 +124,10 @@ final class ExyonQ_Cache_Hooks {
 	 * @param int    $comment_id Comment ID.
 	 * @param string $status     Status.
 	 */
+	public function on_menu_change(): void {
+		$this->plugin->purge_tag_once( 'menu' );
+	}
+
 	public function on_comment_status( $comment_id, $status ): void {
 		unset( $status );
 		$this->on_comment_change( $comment_id );

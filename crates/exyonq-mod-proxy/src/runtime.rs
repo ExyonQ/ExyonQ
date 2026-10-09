@@ -310,23 +310,9 @@ impl ProxyRuntime {
         request: &ProxyDispatchRequest,
         budget: std::time::Duration,
     ) -> Result<ProxyDispatchOutcome, UpstreamAttemptClass> {
-        let xff = Self::xff_from_request(request);
-        let xfp = Self::xfp_from_request(request);
-        let method = match request.method {
-            ProxyMethod::Head => Method::HEAD,
-            _ => Method::GET,
-        };
-        let response = attempt_forward_empty_body(
-            target,
-            &request.path_and_query,
-            method,
-            xff.as_ref(),
-            xfp.as_ref(),
-            &self.metrics,
-            budget,
-        )
-        .await?;
-        Ok(classify_hyper_response(response, &request.path_and_query, request.method).await)
+        // GET and HEAD must carry the same headers as POST. The empty-body
+        // fast path sent the upstream's own Host and dropped Cookie.
+        self.attempt_post_like(target, request, budget).await
     }
 
     async fn attempt_post_like(
@@ -371,10 +357,16 @@ impl ProxyRuntime {
             }
             builder = builder.header(name.as_str(), value.as_str());
         }
-        if let Some(host) = &request.host {
-            builder = builder.header("host", host.as_str());
-        } else if let Some(host) = &target.host {
-            builder = builder.header(HOST, host.clone());
+        let client_sent_host = request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("host"));
+        if !client_sent_host {
+            if let Some(host) = &request.host {
+                builder = builder.header("host", host.as_str());
+            } else if let Some(host) = &target.host {
+                builder = builder.header(HOST, host.clone());
+            }
         }
 
         let mut req = match builder.body(Full::from(body)) {
@@ -393,12 +385,14 @@ impl ProxyRuntime {
             // Strip before re-injecting intermediary identity headers so Connection
             // cannot nominate-and-wipe XFF / Host after injection.
             strip_hop_by_hop_headers(headers);
-            if let Some(host) = &request.host {
-                if let Ok(v) = HeaderValue::from_str(host.as_str()) {
-                    headers.insert(HOST, v);
+            if !client_sent_host {
+                if let Some(host) = &request.host {
+                    if let Ok(v) = HeaderValue::from_str(host.as_str()) {
+                        headers.insert(HOST, v);
+                    }
+                } else if let Some(host) = &target.host {
+                    headers.insert(HOST, host.clone());
                 }
-            } else if let Some(host) = &target.host {
-                headers.insert(HOST, host.clone());
             }
             if let Some(xff) = Self::xff_from_request(request) {
                 headers.insert("x-forwarded-for", xff);

@@ -28,7 +28,7 @@ use http::{Response, StatusCode};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 const SHARD_COUNT: usize = 64;
@@ -36,6 +36,28 @@ const SHARD_COUNT: usize = 64;
 const MAX_KEYS_PER_SHARD: usize = 2048;
 /// Idle entries at full capacity may be evicted after this.
 const IDLE_EVICT_AFTER: Duration = Duration::from_secs(300);
+
+fn current_limit_path() -> Option<String> {
+    PROCESS_LIMIT_PATH.read().ok().and_then(|slot| slot.clone())
+}
+
+fn limit_path_is_set() -> bool {
+    PROCESS_LIMIT_PATH_SET.load(Ordering::Acquire)
+}
+
+/// `/api/login` matches itself and `/api/login/...`, not `/api/login2`.
+fn path_in_limit(prefix: &str, path: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        return false;
+    }
+    let request_path = path.split('?').next().unwrap_or(path);
+    if request_path == prefix {
+        return true;
+    }
+    request_path.starts_with(prefix)
+        && request_path.as_bytes().get(prefix.len()) == Some(&b'/')
+}
 
 static RATELIMIT_DESCRIPTOR: std::sync::LazyLock<AddonDescriptor> =
     std::sync::LazyLock::new(|| {
@@ -231,6 +253,8 @@ impl ProcessModuleLimiter {
 static PROCESS_MODULE_LIMITER: LazyLock<ProcessModuleLimiter> =
     LazyLock::new(ProcessModuleLimiter::new);
 static PROCESS_WIRE_RATELIMIT_ENABLED: AtomicBool = AtomicBool::new(false);
+static PROCESS_LIMIT_PATH: RwLock<Option<String>> = RwLock::new(None);
+static PROCESS_LIMIT_PATH_SET: AtomicBool = AtomicBool::new(false);
 
 /// Limiter backend: process-global Cap055 state, or an isolated bucket (tests).
 ///
@@ -253,9 +277,22 @@ impl Default for RateLimitModule {
 }
 
 impl RateLimitModule {
-    pub fn publish_wire_config(enabled: bool, requests_per_second: u32, burst: u32) {
+    pub fn publish_wire_config(
+        enabled: bool,
+        requests_per_second: u32,
+        burst: u32,
+        path: Option<&str>,
+    ) {
         if enabled {
             PROCESS_MODULE_LIMITER.set_params(requests_per_second, burst);
+        }
+        if let Ok(mut slot) = PROCESS_LIMIT_PATH.write() {
+            let stored = path
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string);
+            PROCESS_LIMIT_PATH_SET.store(stored.is_some(), Ordering::Release);
+            *slot = stored;
         }
         PROCESS_WIRE_RATELIMIT_ENABLED.store(enabled, Ordering::Release);
     }
@@ -307,7 +344,30 @@ impl RateLimitModule {
     }
 
     /// Cap067 / proxy-wire admit using process-global Cap055 limiter (peer IP key).
+    /// A path-scoped limit does not count callers that do not know the path.
     pub fn wire_admit_client_ip(client_ip: &str) -> exyonq_module_api::WireAdmit {
+        if limit_path_is_set() {
+            return exyonq_module_api::WireAdmit::Allow;
+        }
+        Self::admit_client_ip_now(client_ip)
+    }
+
+    /// Counts the request only when no path is configured, or the path is in scope.
+    pub fn wire_admit_client_ip_for_path(
+        client_ip: &str,
+        path: &str,
+    ) -> exyonq_module_api::WireAdmit {
+        if limit_path_is_set() {
+            if let Some(prefix) = current_limit_path() {
+                if !path_in_limit(&prefix, path) {
+                    return exyonq_module_api::WireAdmit::Allow;
+                }
+            }
+        }
+        Self::admit_client_ip_now(client_ip)
+    }
+
+    fn admit_client_ip_now(client_ip: &str) -> exyonq_module_api::WireAdmit {
         if !Self::wire_admit_active() {
             return exyonq_module_api::WireAdmit::Allow;
         }
@@ -387,13 +447,22 @@ mod tests {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|err| err.into_inner());
         let previous = PROCESS_WIRE_RATELIMIT_ENABLED.load(std::sync::atomic::Ordering::Acquire);
-        RateLimitModule::publish_wire_config(false, 1, 1);
+        RateLimitModule::publish_wire_config(false, 1, 1, None);
         assert!(!RateLimitModule::wire_admit_active());
         assert!(matches!(
             RateLimitModule::wire_admit_client_ip("203.0.113.9"),
             exyonq_module_api::WireAdmit::Allow
         ));
-        RateLimitModule::publish_wire_config(previous, 1, 1);
+        RateLimitModule::publish_wire_config(previous, 1, 1, None);
+    }
+
+    #[test]
+    fn path_limit_ignores_other_paths() {
+        assert!(path_in_limit("/api/login", "/api/login"));
+        assert!(path_in_limit("/api/login", "/api/login/next"));
+        assert!(!path_in_limit("/api/login", "/api/login2"));
+        assert!(!path_in_limit("/api/login", "/"));
+        assert!(!path_in_limit("/api/login", "/logo.png"));
     }
 
     #[tokio::test]

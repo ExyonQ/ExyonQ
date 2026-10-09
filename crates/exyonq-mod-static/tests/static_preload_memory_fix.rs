@@ -218,6 +218,7 @@ async fn dispatch_serves_skipped_file_on_demand() {
             preload_max_file_bytes: 1024, // skip over.bin
             preload_max_total_bytes: 1024 * 1024,
             preload_max_entries: 64,
+            allow_sensitive: false,
         }],
     );
 
@@ -269,6 +270,7 @@ async fn reload_failure_keeps_old_snapshot() {
             preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
             preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
             preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
+            allow_sensitive: false,
         }],
     );
     assert_eq!(runtime.generation(), 1);
@@ -285,6 +287,7 @@ async fn reload_failure_keeps_old_snapshot() {
             preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
             preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
             preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
+            allow_sensitive: false,
         }],
     );
     assert_eq!(runtime.generation(), 1, "old snapshot retained");

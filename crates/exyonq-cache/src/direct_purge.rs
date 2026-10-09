@@ -56,8 +56,21 @@ impl CachePurgePort for DirectL1PurgePort {
     fn purge(&self, op: CachePurgeOp) -> CachePurgeOutcome {
         let gen = self.runtime_generation;
         match op {
-            CachePurgeOp::Tag { site_id, .. } => {
-                CachePurgeOutcome::fail("purge.tag", site_id, gen, "unsupported_operation")
+            CachePurgeOp::Tag { site_id, tag } => {
+                if !self.authorized(site_id) {
+                    return CachePurgeOutcome::fail("purge.tag", site_id, gen, "unauthorized");
+                }
+                if !acceptable_tag(&tag) {
+                    return CachePurgeOutcome::fail("purge.tag", site_id, gen, "invalid_key");
+                }
+                let stats = self.cache.invalidate_site_tag(site_id, &tag);
+                CachePurgeOutcome::success(
+                    "purge.tag",
+                    site_id,
+                    stats.purged_entries,
+                    stats.purged_bytes,
+                    gen,
+                )
             }
             CachePurgeOp::Site { site_id } => {
                 if !self.authorized(site_id) {
@@ -212,4 +225,16 @@ pub fn test_has(
         content_encoding: "identity".into(),
     });
     cache.lookup(&key).is_some()
+}
+
+fn acceptable_tag(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if tag.len() > 32 || !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+        return false;
+    }
+    tag.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }

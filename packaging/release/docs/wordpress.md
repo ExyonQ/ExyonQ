@@ -65,7 +65,9 @@ for 300 seconds, at most 4 MB per object, 64 MB and 10000 entries in
 namespace 4. A request that carries a cookie is not stored. The WordPress
 image loads the purge plugin as a must-use plugin. When a post is
 published, the plugin sends `purge site` on
-`/run/exyonq/cache-purge.sock`.
+`/run/exyonq/cache-purge.sock`. A comment purges that post's URL. A menu
+change purges the tag `menu`. A URL that is not in the cache does not
+empty the site.
 
 ExyonQ opens that socket only when the cache is enabled and
 `EXYONQ_CACHE_PURGE_SOCKET` is set. The entrypoint sets the path. ExyonQ
@@ -78,31 +80,31 @@ does not invent the site id. The scratch image does not run this cache.
 Static ExyonQ, scratch, port 8080:
 
 ```bash
-docker build -f packaging/docker/Dockerfile -t exyonq:0.4.8 .
-docker run --rm -p 8080:8080 exyonq:0.4.8
+docker build -f packaging/docker/Dockerfile -t exyonq:0.4.9 .
+docker run --rm -p 8080:8080 exyonq:0.4.9
 ```
 
 WordPress and SQLite, PHP-FPM plus that same static binary. Build the
 scratch image first; this Dockerfile copies `/usr/local/bin/exyonq` out of it.
 
 ```bash
-docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.4.8 .
-docker run --rm -p 8080:8080 exyonq-wordpress:0.4.8
+docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.4.9 .
+docker run --rm -p 8080:8080 exyonq-wordpress:0.4.9
 ```
 
 Published images, linux/amd64 and linux/arm64:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.4.8
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.8
+docker pull ghcr.io/exyonq/exyonq:0.4.9
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.9
 ```
 
 Open `http://localhost:8080/` and finish the WordPress installer. The
 database file is `wp-content/database/.ht.sqlite`. Fetching that URL, or
 `/wp-content/db.php`, must not return the file.
 
-After a WordPress core update, restart the container so preloaded CSS and
-JavaScript are read again.
+After a WordPress core update, the next request for a replaced CSS or
+JavaScript file reads the new bytes. An unchanged file stays preloaded.
 
 ## Access log
 

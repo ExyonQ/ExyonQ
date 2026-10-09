@@ -153,6 +153,18 @@ impl CoreConnectionExecutor {
             return ConnectionServeOutcome::Completed;
         }
 
+        {
+            let state = reload::read_state(&self.shared);
+            if state
+                .config
+                .servers
+                .iter()
+                .any(|server| !server.response_headers.is_empty())
+            {
+                return self.spawn_hyper(conn, Some((head, rest)), view, token);
+            }
+        }
+
         if let Some(site_slot) = view.site_static_slot {
             // Cap015 / WAF-LOGIC-P1-E: sync/epoll static must not bypass WAF.
             // ARCH-002: when WAF is disabled, skip XFF/HeaderValue + wire materialization.

@@ -369,6 +369,9 @@ enum CliMigrateProfile {
     /// Fail-closed FastCGI/PHP subset (`compat/nginx/NGINX_FASTCGI_PHP_IMPORT_MVP.md`).
     #[value(name = "fastcgi-php-mvp")]
     FastcgiPhpMvp,
+    /// WordPress product config. Not full nginx compatibility.
+    #[value(name = "wordpress")]
+    Wordpress,
 }
 
 impl From<CliMigrateProfile> for MigrateProfile {
@@ -378,6 +381,7 @@ impl From<CliMigrateProfile> for MigrateProfile {
             CliMigrateProfile::StaticMvp => MigrateProfile::StaticMvp,
             CliMigrateProfile::ReverseProxyMvp => MigrateProfile::ReverseProxyMvp,
             CliMigrateProfile::FastcgiPhpMvp => MigrateProfile::FastcgiPhpMvp,
+            CliMigrateProfile::Wordpress => MigrateProfile::Wordpress,
         }
     }
 }
@@ -833,13 +837,17 @@ fn run_migrate_nginx(
     // Fail-closed MVPs must not surface a usable IR body on reject.
     if matches!(
         mode.profile,
-        MigrateProfile::StaticMvp | MigrateProfile::ReverseProxyMvp | MigrateProfile::FastcgiPhpMvp
+        MigrateProfile::StaticMvp
+            | MigrateProfile::ReverseProxyMvp
+            | MigrateProfile::FastcgiPhpMvp
+            | MigrateProfile::Wordpress
     ) && migrate_out.exit_code_for_profile(mode.profile, mode.strict) != 0
     {
         let reason = match mode.profile {
             MigrateProfile::StaticMvp => "REFUSED_STATIC_MVP",
             MigrateProfile::ReverseProxyMvp => "REFUSED_REVERSE_PROXY_MVP",
             MigrateProfile::FastcgiPhpMvp => "REFUSED_FASTCGI_PHP_MVP",
+            MigrateProfile::Wordpress => "REFUSED_WORDPRESS",
             MigrateProfile::Full => "REFUSED",
         };
         let product = redact_product_report(ProductImportReport::from_migrate(
@@ -854,6 +862,7 @@ fn run_migrate_nginx(
             MigrateProfile::StaticMvp => "static-mvp",
             MigrateProfile::ReverseProxyMvp => "reverse-proxy-mvp",
             MigrateProfile::FastcgiPhpMvp => "fastcgi-php-mvp",
+            MigrateProfile::Wordpress => "wordpress",
             MigrateProfile::Full => "full",
         };
         eprintln!("TOTAL_COMPAT_PROMISE=FORBIDDEN profile={label} refused usable IR");

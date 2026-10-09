@@ -59,3 +59,22 @@ fn compile_and_publish_roundtrip() {
     compile_and_publish(&site, &publisher).expect("publish");
     assert!(publisher.get("site-a").is_some());
 }
+
+#[test]
+fn unchanged_htaccess_does_not_republish() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(".htaccess"), "Redirect 301 /a /b\n").expect("write");
+    std::fs::write(tmp.path().join("db.sqlite"), "not-htaccess").expect("sqlite");
+    let publisher = Arc::new(OverlayPublisher::new(1));
+    let site = HtaccessSite {
+        site_id: "site-a".into(),
+        document_root: tmp.path().to_path_buf(),
+    };
+    compile_and_publish(&site, &publisher).expect("publish");
+    let generation = publisher.get("site-a").expect("overlay").generation;
+    compile_and_publish(&site, &publisher).expect("same bytes");
+    assert_eq!(publisher.get("site-a").expect("overlay").generation, generation);
+    std::fs::write(tmp.path().join(".htaccess"), "Redirect 302 /a /c\n").expect("rewrite");
+    compile_and_publish(&site, &publisher).expect("changed");
+    assert!(publisher.get("site-a").expect("overlay").generation > generation);
+}

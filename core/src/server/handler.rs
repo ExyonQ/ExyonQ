@@ -227,7 +227,7 @@ async fn serve_http3_request_bytes(
             return serve_http3_with_modules(ctx, req).await;
         }
         if ctx.state.wire_cheap_modules_active() {
-            match exyonq_module_api::wire_admit(client_ip.as_str()) {
+            match exyonq_module_api::wire_admit_for_path(client_ip.as_str(), req.uri().path()) {
                 exyonq_module_api::WireAdmit::Allow => {}
                 exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
                     exyonq_module_api::wire_record_response(429);
@@ -537,7 +537,7 @@ pub async fn serve_connection(
             || ctx.state.path_requires_module_pipeline(req.uri().path());
         let response = if !needs_module_pipeline {
             if ctx.state.wire_cheap_modules_active() {
-                match exyonq_module_api::wire_admit(client_ip.as_str()) {
+                match exyonq_module_api::wire_admit_for_path(client_ip.as_str(), &request_path) {
                     exyonq_module_api::WireAdmit::Allow => {}
                     exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
                         let response = rate_limit_reject_response(retry_after_secs);
@@ -627,6 +627,8 @@ fn finish_hyper(
             });
         }
     }
+    let mut response = response;
+    crate::server::state::apply_published_response_headers(response.headers_mut());
     if let Some(identity) = identity {
         attach_request_id(response, &identity.internal_request_id)
     } else {
@@ -755,7 +757,7 @@ async fn handle_request(
         let client_ip = x_forwarded_for
             .and_then(|v| v.to_str().ok())
             .unwrap_or("127.0.0.1");
-        match exyonq_module_api::wire_admit(client_ip) {
+        match exyonq_module_api::wire_admit_for_path(client_ip, path) {
             exyonq_module_api::WireAdmit::Allow => {}
             exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
                 exyonq_module_api::wire_record_response(429);
@@ -824,6 +826,18 @@ async fn handle_core_request_with_body(
 ) -> Response<BoxBody> {
     let path = req.uri().path().to_string();
     let host = request_host(&req);
+    if state.wire_cheap_modules_active() {
+        let client_ip = x_forwarded_for
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("127.0.0.1");
+        match exyonq_module_api::wire_admit_for_path(client_ip, &path) {
+            exyonq_module_api::WireAdmit::Allow => {}
+            exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
+                exyonq_module_api::wire_record_response(429);
+                return rate_limit_reject_response(retry_after_secs);
+            }
+        }
+    }
     let client_ip = client_ip_from_xff(x_forwarded_for);
     let method = req.method().clone();
     let query = req.uri().query().map(str::to_string);
@@ -1402,12 +1416,13 @@ async fn execute_fastcgi_backend(
                 .path_and_query()
                 .map(|pq| pq.as_str())
                 .unwrap_or(uri_path);
-            let default_port = state
+            let fallback_port = state
                 .config
                 .primary_listen_addr()
                 .ok()
                 .map(|addr| addr.port())
                 .unwrap_or(80);
+            let default_port = super::connection_local_port(fallback_port);
 
             let pool_document_root = state.snapshot.fcgi_pool_document_root(*pool_id);
 
@@ -1585,7 +1600,7 @@ async fn fastcgi_dispatch_maybe_cached(
         return Some(response);
     }
 
-    let scheme = if state.config.primary_server().tls.is_some() {
+    let scheme = if super::connection_is_tls(state.config.primary_server().tls.is_some()) {
         "https"
     } else {
         "http"
@@ -1609,12 +1624,13 @@ async fn fastcgi_dispatch_maybe_cached(
     let request_headers = headers.clone();
     let state_gen = state.generation;
     let pool_document_root = state.snapshot.fcgi_pool_document_root(pool_id).cloned();
-    let default_port = state
+    let fallback_port = state
         .config
         .primary_listen_addr()
         .ok()
         .map(|addr| addr.port())
         .unwrap_or(80);
+    let default_port = super::connection_local_port(fallback_port);
     let fcgi_backend = Backend::Fastcgi { pool_id };
     let uri_owned = uri.clone();
     let method_owned = method.clone();
@@ -2040,7 +2056,7 @@ async fn static_dispatch_maybe_cached(
         .await;
     }
 
-    let scheme = if state.config.primary_server().tls.is_some() {
+    let scheme = if super::connection_is_tls(state.config.primary_server().tls.is_some()) {
         "https"
     } else {
         "http"
@@ -2146,7 +2162,7 @@ async fn proxy_dispatch_maybe_cached(
         .await;
     }
 
-    let scheme = if state.config.primary_server().tls.is_some() {
+    let scheme = if super::connection_is_tls(state.config.primary_server().tls.is_some()) {
         "https"
     } else {
         "http"
@@ -2213,7 +2229,7 @@ async fn proxy_contract_target(
     let Some(Backend::Proxy { cluster_id }) = state.snapshot.resolve_backend(route_idx) else {
         return bad_gateway();
     };
-    let scheme = if state.config.primary_server().tls.is_some() {
+    let scheme = if super::connection_is_tls(state.config.primary_server().tls.is_some()) {
         "https"
     } else {
         "http"
@@ -2331,7 +2347,7 @@ async fn proxy_route_target(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("127.0.0.1")
         .to_string();
-    let scheme = if state.config.primary_server().tls.is_some() {
+    let scheme = if super::connection_is_tls(state.config.primary_server().tls.is_some()) {
         "https"
     } else {
         "http"
@@ -2663,6 +2679,7 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         }
     }
 
@@ -2704,6 +2721,7 @@ mod tests {
                 routes: vec!["assets".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![assets],
             upstreams: HashMap::new(),
@@ -2748,6 +2766,7 @@ mod tests {
                 routes: vec!["assets".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![assets],
             upstreams: HashMap::new(),
@@ -2796,6 +2815,7 @@ mod tests {
                 routes: vec!["legacy".into(), "app".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![legacy, app],
             upstreams: HashMap::new(),
@@ -2847,6 +2867,7 @@ mod tests {
                 routes: vec!["assets".into(), "api".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![assets, api],
             upstreams,
@@ -2969,6 +2990,7 @@ mod tests {
                 routes: vec!["assets".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![assets],
             upstreams: HashMap::new(),
@@ -3017,6 +3039,7 @@ mod tests {
                 routes: vec!["legacy".into(), "rw".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![redir, rewrite],
             upstreams: HashMap::new(),
@@ -3051,6 +3074,7 @@ mod tests {
                 routes: vec!["site".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![site],
             upstreams: HashMap::new(),
@@ -3098,6 +3122,7 @@ mod tests {
                 routes: vec!["site".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![site],
             upstreams: HashMap::new(),

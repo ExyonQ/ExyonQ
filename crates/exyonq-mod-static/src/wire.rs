@@ -19,6 +19,9 @@ use bytes::Bytes;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+/// Same artifact version as `exyonq --version` and the hyper `Server` header.
+const SERVER_HEADER: &str = concat!("Server: ExyonQ/", env!("EXYONQ_ARTIFACT_VERSION"), "\r\n");
+
 /// HTTP status + headers only (body sent separately, e.g. Linux sendfile).
 #[derive(Clone)]
 pub struct HeaderPair {
@@ -82,6 +85,7 @@ pub fn ok_header_with_validators(
 ) -> Bytes {
     let mut s = format!(
         "HTTP/1.1 200 OK\r\n\
+{SERVER_HEADER}\
 Accept-Ranges: bytes\r\n\
 Content-Type: {content_type}\r\n\
 Content-Length: {body_len}\r\n\
@@ -110,6 +114,7 @@ pub fn ok_header_encoded_with_validators(
 ) -> Bytes {
     let mut s = format!(
         "HTTP/1.1 200 OK\r\n\
+{SERVER_HEADER}\
 Accept-Ranges: bytes\r\n\
 Content-Type: {content_type}\r\n\
 Content-Encoding: {content_encoding}\r\n\
@@ -206,6 +211,7 @@ pub fn partial_content_header_with_validators(
     let content_length = end - start + 1;
     let mut s = format!(
         "HTTP/1.1 206 Partial Content\r\n\
+{SERVER_HEADER}\
 Accept-Ranges: bytes\r\n\
 Content-Range: bytes {start}-{end}/{full_length}\r\n\
 Content-Length: {content_length}\r\n\
@@ -225,6 +231,7 @@ Content-Type: {content_type}\r\n"
 pub fn range_not_satisfiable_header(full_length: u64) -> Bytes {
     Bytes::from(format!(
         "HTTP/1.1 416 Range Not Satisfiable\r\n\
+{SERVER_HEADER}\
 Accept-Ranges: bytes\r\n\
 Content-Range: bytes */{full_length}\r\n\
 Content-Length: 0\r\n\
@@ -234,7 +241,7 @@ Content-Length: 0\r\n\
 
 /// Cap020: 304 Not Modified (wire/sendfile).
 pub fn not_modified_header(etag: &str, last_modified: Option<&str>) -> Bytes {
-    let mut s = format!("HTTP/1.1 304 Not Modified\r\nETag: {etag}\r\n");
+    let mut s = format!("HTTP/1.1 304 Not Modified\r\n{SERVER_HEADER}ETag: {etag}\r\n");
     if let Some(lm) = last_modified {
         let _ = write!(s, "Last-Modified: {lm}\r\n");
     }
@@ -246,7 +253,7 @@ fn build_header(body_len: usize, content_type: &str, client_close: bool) -> Byte
     let mut header = String::with_capacity(128);
     let _ = write!(
         header,
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\nConnection: "
+        "HTTP/1.1 200 OK\r\n{SERVER_HEADER}Content-Type: {content_type}\r\nContent-Length: {body_len}\r\nConnection: "
     );
     if client_close {
         header.push_str("close\r\n\r\n");
@@ -267,21 +274,21 @@ fn build_wire(body: &[u8], content_type: &str, client_close: bool) -> Bytes {
 pub fn not_acceptable_status_wire(client_close: bool) -> Bytes {
     let conn = if client_close { "close" } else { "keep-alive" };
     Bytes::from(format!(
-        "HTTP/1.1 406 Not Acceptable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 15\r\nConnection: {conn}\r\n\r\nNot Acceptable"
+        "HTTP/1.1 406 Not Acceptable\r\n{SERVER_HEADER}Content-Type: text/plain; charset=utf-8\r\nContent-Length: 15\r\nConnection: {conn}\r\n\r\nNot Acceptable"
     ))
 }
 
 pub fn not_acceptable_status_head_wire(client_close: bool) -> Bytes {
     let conn = if client_close { "close" } else { "keep-alive" };
     Bytes::from(format!(
-        "HTTP/1.1 406 Not Acceptable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 0\r\nConnection: {conn}\r\n\r\n"
+        "HTTP/1.1 406 Not Acceptable\r\n{SERVER_HEADER}Content-Type: text/plain; charset=utf-8\r\nContent-Length: 0\r\nConnection: {conn}\r\n\r\n"
     ))
 }
 
 pub fn not_found_status_wire(client_close: bool) -> Bytes {
     let conn = if client_close { "close" } else { "keep-alive" };
     Bytes::from(format!(
-        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\nnot found"
+        "HTTP/1.1 404 Not Found\r\n{SERVER_HEADER}Content-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\nnot found"
     ))
 }
 
@@ -289,14 +296,14 @@ pub fn not_found_status_wire(client_close: bool) -> Bytes {
 pub fn not_found_status_head_wire(client_close: bool) -> Bytes {
     let conn = if client_close { "close" } else { "keep-alive" };
     Bytes::from(format!(
-        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\n"
+        "HTTP/1.1 404 Not Found\r\n{SERVER_HEADER}Content-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\n"
     ))
 }
 
 pub fn forbidden_status_wire(client_close: bool) -> Bytes {
     let conn = if client_close { "close" } else { "keep-alive" };
     Bytes::from(format!(
-        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\nforbidden"
+        "HTTP/1.1 403 Forbidden\r\n{SERVER_HEADER}Content-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\nforbidden"
     ))
 }
 
@@ -304,7 +311,7 @@ pub fn forbidden_status_wire(client_close: bool) -> Bytes {
 pub fn forbidden_status_head_wire(client_close: bool) -> Bytes {
     let conn = if client_close { "close" } else { "keep-alive" };
     Bytes::from(format!(
-        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\n"
+        "HTTP/1.1 403 Forbidden\r\n{SERVER_HEADER}Content-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nConnection: {conn}\r\n\r\n"
     ))
 }
 

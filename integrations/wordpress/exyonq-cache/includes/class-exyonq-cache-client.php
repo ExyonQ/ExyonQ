@@ -140,6 +140,14 @@ final class ExyonQ_Cache_Client {
 	/**
 	 * @return array{ok:bool,error?:string,purged_entries?:int,purged_bytes?:int,command?:string}
 	 */
+	public function purge_tag( string $tag ): array {
+		if ( ! preg_match( '/^[a-z0-9][a-z0-9-]{0,31}$/', $tag ) ) {
+			return $this->fail( 'invalid_key' );
+		}
+		$line = sprintf( 'purge tag %s %s %s', $this->site_id_decimal(), $tag, $this->token() );
+		return $this->send_line( $line );
+	}
+
 	public function purge_site(): array {
 		$line = sprintf( 'purge site %s %s', $this->site_id_decimal(), $this->token() );
 		return $this->send_line( $line );

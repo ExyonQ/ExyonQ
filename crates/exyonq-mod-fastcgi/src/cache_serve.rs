@@ -37,6 +37,7 @@ pub fn prepare_fcgi_cache_load(
     max_object_bytes: usize,
     request_headers: &[(String, String)],
 ) -> CacheLoadOutcome {
+    let invalidation_tags = html_menu_tag(&headers);
     if body.len() > max_object_bytes {
         return CacheLoadOutcome {
             status,
@@ -45,7 +46,7 @@ pub fn prepare_fcgi_cache_load(
             store: false,
             rejection: Some(CacheRejection::BodyTooLarge),
             static_identity: None,
-            invalidation_tags: std::sync::Arc::from([]),
+            invalidation_tags,
         };
     }
     let assessment = assess_cacheability(
@@ -63,7 +64,26 @@ pub fn prepare_fcgi_cache_load(
         store: assessment.is_ok(),
         rejection: assessment.err(),
         static_identity: None,
-        invalidation_tags: std::sync::Arc::from([]),
+        invalidation_tags,
+    }
+}
+
+/// Anonymous HTML is tagged `menu` so a menu edit can drop those pages
+/// without emptying the rest of the site cache.
+fn html_menu_tag(headers: &[(String, String)]) -> std::sync::Arc<[String]> {
+    let html = headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("content-type")
+            && value
+                .split(';')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .eq_ignore_ascii_case("text/html")
+    });
+    if html {
+        std::sync::Arc::from([String::from("menu")])
+    } else {
+        std::sync::Arc::from([])
     }
 }
 
@@ -154,4 +174,30 @@ pub fn serve_fastcgi_with_cache_hook<'a>(
         )
         .await
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_fcgi_cache_load;
+    use bytes::Bytes;
+
+    #[test]
+    fn html_is_tagged_menu_and_other_types_are_not() {
+        let html = prepare_fcgi_cache_load(
+            200,
+            vec![("content-type".into(), "text/html; charset=UTF-8".into())],
+            Bytes::from_static(b"<p>hi</p>"),
+            1024,
+            &[],
+        );
+        assert_eq!(html.invalidation_tags.as_ref(), ["menu"]);
+        let css = prepare_fcgi_cache_load(
+            200,
+            vec![("content-type".into(), "text/css".into())],
+            Bytes::from_static(b"body{}"),
+            1024,
+            &[],
+        );
+        assert!(css.invalidation_tags.is_empty());
+    }
 }

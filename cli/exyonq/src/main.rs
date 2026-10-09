@@ -699,6 +699,7 @@ mod htaccess_overlay_tests {
             fastcgi: Some("php".into()),
             htaccess: exyonq_config_ir::HtaccessMode::Overlay,
             cache: None,
+            allow_sensitive: false,
         });
         config.pools_fcgi.insert(
             "php".into(),
@@ -737,6 +738,7 @@ mod htaccess_overlay_tests {
             fastcgi: Some("php".into()),
             htaccess: exyonq_config_ir::HtaccessMode::Off,
             cache: None,
+            allow_sensitive: false,
         });
         assert!(compile_htaccess_site_bindings(&config).is_empty());
     }

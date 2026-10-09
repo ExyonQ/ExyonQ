@@ -429,6 +429,7 @@ pub fn compile_runtime_plan_from_ir(
                 preload_max_file_bytes: config.static_section.preload.max_file_bytes,
                 preload_max_total_bytes: config.static_section.preload.max_total_bytes,
                 preload_max_entries: config.static_section.preload.max_entries,
+                allow_sensitive: route.allow_sensitive,
             });
         }
     }
@@ -706,6 +707,7 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            allow_sensitive: false,
         }
     }
 
@@ -750,6 +752,7 @@ mod tests {
                 routes: vec!["legacy".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![redir],
             upstreams: HashMap::new(),
@@ -788,6 +791,7 @@ mod tests {
                 routes: vec!["api".into()],
                 tls: None,
                 http3_listen: None,
+                response_headers: Vec::new(),
             }],
             routes: vec![api],
             upstreams,

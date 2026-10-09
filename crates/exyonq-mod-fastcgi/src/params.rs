@@ -282,6 +282,34 @@ mod tests {
     }
 
     #[test]
+    fn authorization_reaches_php_as_http_authorization() {
+        let mut req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        req.http_headers = vec![("Authorization".into(), "Bearer secret".into())];
+        let params = req.to_fcgi_params().expect("params");
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "HTTP_AUTHORIZATION" && v == "Bearer secret"));
+    }
+
+    #[test]
+    fn http_host_keeps_a_nonstandard_port() {
+        let mut req = MinForwardRequest::get("/", "/index.php", "/var/www/index.php");
+        req.server_name = "localhost".into();
+        req.server_port = 5006;
+        req.http_headers = vec![("Host".into(), "localhost:5006".into())];
+        let params = req.to_fcgi_params().expect("params");
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "HTTP_HOST" && v == "localhost:5006"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "SERVER_PORT" && v == "5006"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "SERVER_NAME" && v == "localhost"));
+    }
+
+    #[test]
     fn includes_gateway_interface_and_document_root() {
         let req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
         let params = req.to_fcgi_params().expect("params");

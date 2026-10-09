@@ -882,7 +882,7 @@ where
         } else {
             let client_ip = x_forwarded_for.to_str().unwrap_or("127.0.0.1");
             if let exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } =
-                exyonq_module_api::wire_admit(client_ip)
+                exyonq_module_api::wire_admit_for_path(client_ip, path_and_query.split('?').next().unwrap_or(path_and_query))
             {
                 let reject = exyonq_module_api::rate_limit_reject_wire(retry_after_secs);
                 wire_io::write_all_async(&mut stream, &reject).await?;
@@ -893,10 +893,11 @@ where
         }
 
         // Cap024/dispatch alignment: no eligible upstream (incl. all unhealthy) → 503, not 404.
-        let target = match cached_target {
-            Some(ref t) => t,
-            None => match rt.upstream_for_cluster(cluster_id) {
-                Some(t) => cached_target.insert(t),
+        if cached_target.is_none() {
+            match rt.upstream_for_cluster(cluster_id) {
+                Some(t) => {
+                    cached_target = Some(t);
+                }
                 None => {
                     write_fixed_close(
                         &mut stream,
@@ -906,7 +907,21 @@ where
                     exyonq_module_api::wire_record_response(503);
                     return Ok(503);
                 }
-            },
+            }
+        }
+        if let (Some(target), Some(raw)) = (cached_target.as_mut(), this_host.as_deref()) {
+            if let Ok(value) = HeaderValue::from_bytes(raw) {
+                target.host = Some(value);
+            }
+        }
+        let Some(target) = cached_target.as_ref() else {
+            write_fixed_close(
+                &mut stream,
+                b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
+            )
+            .await?;
+            exyonq_module_api::wire_record_response(503);
+            return Ok(503);
         };
 
         let client_close = connection_close_requested(head.as_ref());

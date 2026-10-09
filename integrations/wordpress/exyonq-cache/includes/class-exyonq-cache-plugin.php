@@ -74,15 +74,8 @@ final class ExyonQ_Cache_Plugin {
 				$this->purge_site_once( 'fanout' );
 				return;
 			}
-			$miss = false;
 			foreach ( $urls as $url ) {
-				if ( $this->purge_one_url( $url ) ) {
-					$miss = true;
-				}
-			}
-			if ( $miss ) {
-				$this->client->note_fallback_site();
-				$this->purge_site_once( 'url_miss' );
+				$this->purge_one_url( $url );
 			}
 		} catch ( Throwable $e ) {
 			// Fail-open WordPress.
@@ -107,6 +100,23 @@ final class ExyonQ_Cache_Plugin {
 		}
 	}
 
+	public function purge_tag_once( string $tag ): void {
+		try {
+			if ( ! $this->client->is_configured() ) {
+				return;
+			}
+			$key = 'tag:' . $tag;
+			if ( isset( $this->dedupe[ $key ] ) ) {
+				$this->client->note_deduplicated();
+				return;
+			}
+			$this->dedupe[ $key ] = true;
+			$this->client->purge_tag( $tag );
+		} catch ( Throwable $e ) {
+			unset( $e );
+		}
+	}
+
 	public function purge_generation_once( int $generation ): void {
 		try {
 			if ( ! $this->client->is_configured() ) {
@@ -125,12 +135,12 @@ final class ExyonQ_Cache_Plugin {
 	}
 
 	/**
-	 * @return bool True when ExyonQ had no stored copy, or rejected the URL key.
+	 * Purge one URL. A missing cache entry is not a reason to empty the site.
 	 */
-	private function purge_one_url( string $url ): bool {
+	private function purge_one_url( string $url ): void {
 		$parts = $this->parse_public_url( $url );
 		if ( $parts === null ) {
-			return false;
+			return;
 		}
 		$key = implode(
 			'|',
@@ -144,18 +154,16 @@ final class ExyonQ_Cache_Plugin {
 		);
 		if ( isset( $this->dedupe[ $key ] ) ) {
 			$this->client->note_deduplicated();
-			return false;
+			return;
 		}
 		$this->dedupe[ $key ] = true;
 		// Cached pages are keyed without a query. A functional query is not a stored object.
-		$result = $this->client->purge_url(
+		$this->client->purge_url(
 			$parts['scheme'],
 			$parts['host'],
 			$parts['path'],
 			''
 		);
-		$error = isset( $result['error'] ) ? (string) $result['error'] : '';
-		return $error === 'not_found' || $error === 'invalid_key';
 	}
 
 	/**

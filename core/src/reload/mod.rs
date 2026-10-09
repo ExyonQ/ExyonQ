@@ -403,7 +403,8 @@ pub fn prepare_tls_acceptor(
     config: &AppConfig,
     tls_session_cache: &TlsSessionCache,
 ) -> anyhow::Result<Option<TlsAcceptor>> {
-    if let Some(tls) = &config.primary_server().tls {
+    let tls = config.servers.iter().find_map(|server| server.tls.as_ref());
+    if let Some(tls) = tls {
         let acceptor = SharedTlsAcceptor::prepare(
             &TlsSettings {
                 cert_path: tls.cert.clone(),
@@ -422,11 +423,9 @@ pub fn prepare_tls_acceptor(
 }
 
 fn tls_identities_on_primary_listen(config: &AppConfig) -> Vec<exyonq_mod_tls::TlsSniCertificate> {
-    let listen = config.primary_server().listen.as_str();
     config
         .servers
         .iter()
-        .filter(|server| server.listen == listen)
         .filter_map(|server| {
             let tls = server.tls.as_ref()?;
             Some(exyonq_mod_tls::TlsSniCertificate {

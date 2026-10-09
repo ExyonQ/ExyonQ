@@ -87,6 +87,7 @@ impl ServerState {
     /// Bind proxy/static/FCGI compiled slots for this state's generation (COMMIT / startup).
     pub fn publish_compiled_module_slots(&self) -> anyhow::Result<()> {
         self.snapshot.module_state.publish_wire_module_state();
+        publish_response_headers(&self.config);
         execute_backend::bind_static_compiled_slots(self.generation, &self.snapshot.static_slots);
         execute_backend::bind_proxy_compiled_slots(
             self.generation,
@@ -131,5 +132,73 @@ impl ServerState {
     pub fn path_requires_module_pipeline(&self, path: &str) -> bool {
         let m = &self.config.modules.metrics;
         m.enabled && (path == m.path.as_str() || path == m.health_path.as_str())
+    }
+}
+
+static RESPONSE_HEADERS: std::sync::RwLock<
+    Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>,
+> = std::sync::RwLock::new(Vec::new());
+
+pub(crate) fn publish_response_headers(config: &AppConfig) {
+    let mut pairs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for server in &config.servers {
+        for header in &server.response_headers {
+            let Ok(name) = hyper::header::HeaderName::from_bytes(header.name.as_bytes()) else {
+                continue;
+            };
+            let Ok(value) = hyper::header::HeaderValue::from_str(&header.value) else {
+                continue;
+            };
+            if seen.insert(name.clone()) {
+                pairs.push((name, value));
+            }
+        }
+    }
+    if let Ok(mut slot) = RESPONSE_HEADERS.write() {
+        *slot = pairs;
+    }
+}
+
+/// Same artifact version `exyonq --version` prints. Official builds set
+/// `EXYONQ_ARTIFACT_VERSION`; otherwise this is the Cargo package version.
+pub(crate) const SERVER_PRODUCT: &str = concat!("ExyonQ/", env!("EXYONQ_ARTIFACT_VERSION"));
+
+pub(crate) fn apply_published_response_headers(headers: &mut hyper::HeaderMap) {
+    if let Ok(pairs) = RESPONSE_HEADERS.read() {
+        for (name, value) in pairs.iter() {
+            headers.insert(name.clone(), value.clone());
+        }
+    }
+    if !headers.contains_key(hyper::header::SERVER) {
+        headers.insert(
+            hyper::header::SERVER,
+            hyper::header::HeaderValue::from_static(SERVER_PRODUCT),
+        );
+    }
+}
+
+#[cfg(test)]
+mod server_header_tests {
+    #[test]
+    fn server_header_matches_the_artifact_version() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            hyper::header::SERVER,
+            hyper::header::HeaderValue::from_static("custom"),
+        );
+        super::apply_published_response_headers(&mut headers);
+        assert_eq!(headers.get(hyper::header::SERVER).unwrap(), "custom");
+
+        let mut fresh = hyper::HeaderMap::new();
+        super::apply_published_response_headers(&mut fresh);
+        let server = fresh
+            .get(hyper::header::SERVER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+        if server != "custom" {
+            assert_eq!(server, super::SERVER_PRODUCT);
+        }
+        assert!(server.starts_with("ExyonQ/"));
     }
 }
