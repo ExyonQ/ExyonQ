@@ -134,7 +134,44 @@ fn docker_available() -> bool {
 }
 
 fn docker(args: &[&str]) -> std::process::Output {
-    Command::new("docker").args(args).output().expect("docker")
+    // `docker pull` against Docker Hub can sit forever on a stalled registry
+    // connection. An unbounded wait stalls the whole nextest run.
+    let mut child = match Command::new("docker")
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => return docker_failed(&format!("docker failed to start: {err}")),
+    };
+    let start = Instant::now();
+    let limit = Duration::from_secs(25);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .unwrap_or_else(|err| docker_failed(&format!("docker output failed: {err}")));
+            }
+            Ok(None) if start.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return docker_failed("docker timed out");
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(err) => return docker_failed(&format!("docker wait failed: {err}")),
+        }
+    }
+}
+
+fn docker_failed(message: &str) -> std::process::Output {
+    use std::os::unix::process::ExitStatusExt;
+    std::process::Output {
+        status: std::process::ExitStatus::from_raw(1),
+        stdout: Vec::new(),
+        stderr: message.as_bytes().to_vec(),
+    }
 }
 
 fn docker_ok(args: &[&str]) -> bool {
@@ -183,6 +220,7 @@ fn redis_image_pull_blocked(stderr: &str) -> bool {
         || lower.contains("registry-1.docker.io")
         || lower.contains("client.timeout")
         || lower.contains("request canceled")
+        || lower.contains("timed out")
 }
 
 fn ensure_redis_container() -> RedisEnsure {
