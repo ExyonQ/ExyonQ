@@ -35,6 +35,20 @@ Only **R\*** identifiers in `ROADMAP.md` answer “what global phase is ExyonQ i
 
 ---
 
+
+```text
+PUBLICATION_STATUS = PUBLISHED
+PUBLIC_RELEASE = v0.4.10
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.10
+TAGGED_COMMIT = caf5406101a8343ffe5820909c489c12d62ff04d
+GHCR_EXYONQ = ghcr.io/exyonq/exyonq:0.4.10
+GHCR_EXYONQ_DIGEST = sha256:2ad1d1320470e5c26142d50f3f409f3b4033e83588d7f4a773e03eefa8a1b5f1
+GHCR_WORDPRESS = ghcr.io/exyonq/exyonq-wordpress:0.4.10
+GHCR_WORDPRESS_DIGEST = sha256:7e4f311beb3adcfc48baaf9c7e52f2d2a4cee742231ca22a976585f40a3308ae
+LATEST_CHANGED = NO
+START_CHECKS = PASS (exyonq GET / → 200 both arches; wordpress GET / → 302→install.php both arches)
+```
+
 ## 1. Baseline identity
 
 ```text
