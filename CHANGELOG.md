@@ -11,7 +11,7 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.9
+PUBLIC_RELEASE = v0.4.10
 LATEST_CHANGED = NO
 ```
 
@@ -28,6 +28,23 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
+
+## [0.4.10] — 2026-10-11
+
+Product version 0.4.10. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.10`, `ghcr.io/exyonq/exyonq-wordpress:0.4.10`, `exyonq/exyonq:0.4.10`, and `exyonq/exyonq-wordpress:0.4.10`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
+
+### Lineage
+
+Based on tag `v0.4.9` (`1973f35191b61ec77ce6721523e14867cefb7c6c`). Branch `release/v0.4.4-integration` tip `e7a649f` is not an ancestor of this publish line (unrelated histories); those Netcup dataplane production-hole commits were **not** merged into this cut. Do not treat integration HEAD as the 0.4.10 tag base.
+
+### Shipped mejoras (carry-forward from the 0.4.9 line, published as 0.4.10)
+
+- Static deny: `.php`, `.phtml`, `.phar`, and dotfile / `.ht*` names on static routes return **403** on the Linux epoll path. `.well-known` stays reachable. `allow_sensitive = true` is the opt-in.
+- WordPress stock `.htaccess` compiles (`E=HTTP_AUTHORIZATION`); watcher recompiles only when a file named `.htaccess` changes; `Authorization` reaches PHP as `HTTP_AUTHORIZATION`; `/` uses `index.php` when that is the front controller and `DirectoryIndex` is absent.
+- Shared product/artifact version: `Server` and `exyonq --version` use `EXYONQ_ARTIFACT_VERSION`.
+- Cache purge: a comment purges that post URL; a menu purges tag `menu`; a URL that is not cached does not empty the site.
+
+Useful capacity framing for operators: traffic + acceptable latency + error budget + saturation — not RPS alone.
 
 ## [0.4.9] — 2026-10-09
 
