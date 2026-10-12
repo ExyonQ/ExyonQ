@@ -36,6 +36,7 @@ PUBLICATION_STATUS = PUBLISHED
 PUBLIC_RELEASE = v0.4.11
 GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.11
 GHCR = ghcr.io/exyonq/exyonq:0.4.11
+DOCKER_HUB = exyonq/exyonq:0.4.11
 WASMTIME = 49.0.2
 RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.2
 AUDIT = docs/security/audit-v0.4.11.md
