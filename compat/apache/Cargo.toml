@@ -1,0 +1,10 @@
+[package]
+name = "exyonq-compat-apache"
+description = "Apache httpd → ExyonQ IR importer (static, redirect, TLS, proxy, PHP-FPM)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+exyonq-compat-common = { path = "../common" }
