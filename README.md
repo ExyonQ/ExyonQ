@@ -4,7 +4,7 @@ ExyonQ is a modular reverse proxy written in Rust.
 
 This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark suites, methodology docs, and evidence packs are intentionally not included.
 
-Current product version: **v0.4.10**. Release: https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.10. No `:latest` tag.
+Current product version: **v0.4.11**. Release: https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.11. No `:latest` tag.
 
 ## Container images
 
@@ -13,21 +13,21 @@ Public. No GitHub login.
 GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.4.10
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.10
+docker pull ghcr.io/exyonq/exyonq:0.4.11
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.11
 ```
 
 Docker Hub:
 
 ```bash
-docker pull exyonq/exyonq:0.4.10
-docker pull exyonq/exyonq-wordpress:0.4.10
+docker pull exyonq/exyonq:0.4.11
+docker pull exyonq/exyonq-wordpress:0.4.11
 ```
 
 `exyonq` is the server image. `exyonq-wordpress` is the WordPress image. Both are `linux/amd64` and `linux/arm64`. The release also has the Linux binaries.
 
-https://hub.docker.com/r/exyonq/exyonq
-https://hub.docker.com/r/exyonq/exyonq-wordpress
+https://hub.docker.com/r/exyonq/exyonq  
+https://hub.docker.com/r/exyonq/exyonq-wordpress  
 
 https://github.com/ExyonQ/ExyonQ/packages
 
@@ -38,22 +38,9 @@ cargo build -p exyonq -p exyonqctl --release --locked
 ```
 
 ```bash
-cargo check --workspace --locked
-cargo test --workspace --locked
+cargo run -p exyonq-compat -- migrate --from nginx --input nginx.conf --out exyonq.toml --report report.md
+cargo run -p exyonq-compat -- migrate --from apache --input httpd.conf --out exyonq.toml --report report.md
 ```
-
-Requires a recent Rust toolchain (see `rust-toolchain.toml`) and, for optional HTTP/3 quiche builds, host packages such as `cmake`, `clang`, and `libclang-dev`.
-
-## Defaults
-
-- Allocator: system (optional `allocator-jemalloc` feature on the `exyonq` binary)
-- HTTP/3 provider: s2n (optional quiche; quinn-legacy rollback feature)
-- Mimalloc is not a product feature
-
-## Contact
-
-- contact@exyonq.org
-- security@exyonq.org
 
 ## License
 
