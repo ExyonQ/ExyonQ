@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Version** | 0.4.11 |
-| **Commit** | `156965f36cd0d4844ef4d5c7d5232a4ee4122907` |
+| **Commit** | `52dbf9c95a5c4d86bde0f535f6030b0abbc231c4` |
 | **Date** | 2026-10-12 |
 | **Previous audit** | [`audit-v0.4.10.md`](audit-v0.4.10.md) |
 
