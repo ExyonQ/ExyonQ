@@ -45,6 +45,7 @@ Versioned release artifacts and Linux binaries are available from the [v0.4.11 r
 | Protocols | HTTP/1.1, HTTP/2, HTTP/3/QUIC and TLS |
 | Application delivery | Reverse proxy and FastCGI/PHP-FPM |
 | Routing | Hosts, routes, redirects, upstream selection, and TLS certificate selection by server name |
+| Load balancing | Smooth weighted round-robin across upstream endpoints, priority bands, and optional HTTP health checks |
 | Operations | Configuration CLI, validation, reload/drain, release binaries, and containers |
 | Platforms | Linux `amd64` and `arm64` binaries and container images |
 | WordPress | Supported WordPress image, front-controller handling, selected `.htaccess` rules, and targeted cache invalidation |
