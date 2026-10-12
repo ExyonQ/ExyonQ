@@ -4,7 +4,9 @@
 
 | Version   | Supported |
 |-----------|-----------|
-| 0.4.9     | Yes, current published release |
+| 0.4.11    | Yes, current published release |
+| 0.4.10    | Yes |
+| 0.4.9     | Yes |
 | 0.4.8     | Yes |
 | 0.4.7     | Yes |
 | 0.4.6     | Yes |
@@ -31,11 +33,12 @@ For **v0.4.4.1**, the audit artifact is [`docs/security/audit-v0.4.4.1.md`](docs
 
 ```text
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.9
-GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.9
-GHCR = ghcr.io/exyonq/exyonq:0.4.9
-WASMTIME = 49.0.1
-RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.1
+PUBLIC_RELEASE = v0.4.11
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.11
+GHCR = ghcr.io/exyonq/exyonq:0.4.11
+WASMTIME = 49.0.2
+RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.2
+AUDIT = docs/security/audit-v0.4.11.md
 ```
 
 v0.4.4 remains published. v0.4.3 remains the previous private release. Its Wasmtime 45.0.2 waiver expired for review at v0.4.4 and is not carried forward.

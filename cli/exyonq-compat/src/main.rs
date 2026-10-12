@@ -15,7 +15,9 @@
  */
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use exyonq_compat_common::MigrationReport;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(
@@ -46,54 +48,80 @@ enum Commands {
 #[derive(Debug, Clone, ValueEnum)]
 enum SourceFormat {
     Nginx,
+    Apache,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> ExitCode {
     let cli = Cli::parse();
-
     match cli.command {
         Commands::Migrate {
             from,
             input,
             out,
             report,
-        } => migrate_command(from, &input, &out, &report)?,
+        } => match migrate_command(from, &input, &out, &report) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::from(1)
+            }
+        },
     }
-
-    Ok(())
 }
 
 fn migrate_command(
     from: SourceFormat,
-    input: &PathBuf,
-    out: &PathBuf,
-    report: &PathBuf,
+    input: &Path,
+    out: &Path,
+    report_path: &Path,
 ) -> anyhow::Result<()> {
     let source = std::fs::read_to_string(input)
         .with_context(|| format!("failed reading input {}", input.display()))?;
+    let label = input
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("input.conf");
 
-    let (toml_output, migration_report) = match from {
-        SourceFormat::Nginx => exyonq_compat_nginx::migrate(&source)?,
+    let (toml_result, migration_report): (anyhow::Result<String>, MigrationReport) = match from {
+        SourceFormat::Nginx => match exyonq_compat_nginx::migrate(&source) {
+            Ok((toml, report)) => (Ok(toml), report),
+            Err(e) => (
+                Err(e),
+                MigrationReport {
+                    source: "nginx".into(),
+                    notes: vec![],
+                    unsupported: vec![],
+                },
+            ),
+        },
+        SourceFormat::Apache => {
+            exyonq_compat_apache::migrate_with_report(label, &source)
+        }
     };
 
-    std::fs::write(out, toml_output)
-        .with_context(|| format!("failed writing output {}", out.display()))?;
-
-    let report_output = if report.extension().and_then(|ext| ext.to_str()) == Some("json") {
+    let report_output = if report_path.extension().and_then(|ext| ext.to_str()) == Some("json") {
         migration_report.render_json()?
     } else {
         migration_report.render_markdown()
     };
+    std::fs::write(report_path, report_output)
+        .with_context(|| format!("failed writing report {}", report_path.display()))?;
 
-    std::fs::write(report, report_output)
-        .with_context(|| format!("failed writing report {}", report.display()))?;
+    let toml_output = toml_result.with_context(|| {
+        format!(
+            "migration refused (report written to {})",
+            report_path.display()
+        )
+    })?;
+
+    std::fs::write(out, toml_output)
+        .with_context(|| format!("failed writing output {}", out.display()))?;
 
     println!(
         "migrated {} -> {} (report: {})",
         input.display(),
         out.display(),
-        report.display()
+        report_path.display()
     );
-
     Ok(())
 }

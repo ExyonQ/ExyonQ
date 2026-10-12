@@ -11,7 +11,7 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.10
+PUBLIC_RELEASE = v0.4.11
 LATEST_CHANGED = NO
 ```
 
@@ -28,6 +28,29 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
+
+## [0.4.11] — 2026-10-12
+
+Product version 0.4.11. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.11`, `ghcr.io/exyonq/exyonq-wordpress:0.4.11`, `exyonq/exyonq:0.4.11`, and `exyonq/exyonq-wordpress:0.4.11`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
+
+### Lineage
+
+Based on `main` @ `94d9ad61ee15bf004f446e2bd5f97a85cff50b32` (post-0.4.10 docs + Wasmtime 49.0.2 line). Lab `release/v0.4.4-integration` tip is not an ancestor (unrelated histories) and was not merged into this cut.
+
+### Added
+
+- **Apache → ExyonQ equivalent importer** (`exyonq-compat-apache` / `exyonq-compat migrate --from apache`): maps VirtualHost static sites plus `Alias`, `Redirect`, safe literal `RewriteRule … [R=…]`, `SSLEngine`+certs, authority-only `ProxyPass`, and PHP-FPM (`ProxyPassMatch` / `FilesMatch`+`SetHandler`) onto existing IR. Fail-closed for Auth, `ErrorDocument`, `ProxyPassReverse`, regex rewrite, and path-bearing `ProxyPass`.
+- Phase 0 catalog / scope: `docs/compat/APACHE_DIRECTIVE_CATALOG_V1.md`, `docs/compat/compatibility-scope-v1.md`, `compat/apache/APACHE_STATIC_VHOST_MVP.md`.
+
+### Changed
+
+- Workspace product version **→ 0.4.11**.
+- Security audit artifact: `docs/security/audit-v0.4.11.md`.
+
+### Limitations (honest)
+
+- No “full Apache substitution” claim; Gate A corpus not closed.
+- `TOTAL_COMPAT_PROMISE` remains forbidden until dual-arch Gate A evidence.
 
 ## [0.4.10] — 2026-10-11
 

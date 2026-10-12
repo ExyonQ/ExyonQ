@@ -16,6 +16,7 @@ members = [
   "modules/acme",
   "compat/common",
   "compat/nginx",
+  "compat/apache",
   "cli/exyonq",
   "cli/exyonqctl",
   "cli/exyonq-compat",
@@ -55,7 +56,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.9"
+version = "0.4.11"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/ExyonQ/ExyonQ"
