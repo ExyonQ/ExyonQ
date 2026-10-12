@@ -41,6 +41,7 @@ Versioned release artifacts and Linux binaries are available from the [v0.4.11 r
 | Area | Delivered capability |
 | --- | --- |
 | Web serving | Static file serving with restrictive defaults for sensitive files |
+| Compression | gzip, deflate, Brotli, and Zstandard, negotiated from `Accept-Encoding` |
 | Protocols | HTTP/1.1, HTTP/2, HTTP/3/QUIC and TLS |
 | Application delivery | Reverse proxy and FastCGI/PHP-FPM |
 | Routing | Hosts, routes, redirects, upstream selection, and TLS certificate selection by server name |
