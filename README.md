@@ -46,6 +46,7 @@ Versioned release artifacts and Linux binaries are available from the [v0.4.11 r
 | Application delivery | Reverse proxy and FastCGI/PHP-FPM |
 | Routing | Hosts, routes, redirects, upstream selection, and TLS certificate selection by server name |
 | Load balancing | Smooth weighted round-robin across upstream endpoints, priority bands, and optional HTTP health checks |
+| Firewall | Native request WAF: built-in detectors, custom rules, IP filter, monitor or block, and optional per-IP rate limit or challenge |
 | Operations | Configuration CLI, validation, reload/drain, release binaries, and containers |
 | Platforms | Linux `amd64` and `arm64` binaries and container images |
 | WordPress | Supported WordPress image, front-controller handling, selected `.htaccess` rules, and targeted cache invalidation |
