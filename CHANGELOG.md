@@ -11,7 +11,7 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.11
+PUBLIC_RELEASE = v0.4.12
 LATEST_CHANGED = NO
 ```
 
@@ -28,6 +28,26 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
+
+## [0.4.12] — 2026-10-12
+
+Product version 0.4.12. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.12`, `ghcr.io/exyonq/exyonq-wordpress:0.4.12`, `exyonq/exyonq:0.4.12`, and `exyonq/exyonq-wordpress:0.4.12`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
+
+### Lineage
+
+Based on `main` @ `46935e068c6aeb91ed6add96f235a41ec6bf016a` (Dependabot [#40](https://github.com/ExyonQ/ExyonQ/pull/40) `wat` 1.261.0 + [#43](https://github.com/ExyonQ/ExyonQ/pull/43) `crypto-common` 0.1.7). Lab `release/v0.4.4-integration` tip is not an ancestor and was not merged into this cut.
+
+### Changed
+
+- Workspace product version **→ 0.4.12**.
+- Security audit artifact: `docs/security/audit-v0.4.12.md`.
+- WASM host pins already on `main`: `wat = "=1.261.0"`, `crypto-common = "=0.1.7"`.
+
+### Limitations (honest)
+
+- Phase 1 remains NOT_CLOSED; no production-wide “everything verified” claim.
+- No official benchmark publication for this tag.
+- Lab dataplane / soak closure work is not part of this cut.
 
 ## [0.4.11] — 2026-10-12
 

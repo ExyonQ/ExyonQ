@@ -23,7 +23,7 @@ use anyhow::{bail, Result};
 use exyonq_compat_common::{CompatLevel, CompatNote, MigrationReport};
 
 pub const IMPORTER_NAME: &str = "apache";
-pub const IMPORTER_VERSION: &str = "0.4.11";
+pub const IMPORTER_VERSION: &str = "0.4.12";
 
 #[derive(Debug, Clone)]
 struct Rejected {
