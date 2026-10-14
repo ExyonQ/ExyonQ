@@ -233,6 +233,47 @@ async fn fcgi_overlay_static_fallback_serves_index_html_when_php_missing() {
 }
 
 #[tokio::test]
+async fn fcgi_overlay_front_controller_serves_existing_css_not_php_fpm() {
+    // WordPress installer loads /wp-admin/css/*.css under the FastCGI `/` route.
+    // Those files must be static; php-fpm security.limit_extensions would 403 them.
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    struct NoCall;
+    impl FcgiBackendExecutor for NoCall {
+        fn dispatch(&self, _request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            FcgiDispatchOutcome::BadGateway
+        }
+    }
+    CALLS.store(0, Ordering::SeqCst);
+    let harness = fcgi_overlay_ctx(
+        "RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteCond %{REQUEST_FILENAME} !-d\nRewriteRule . /index.php [L]\nDirectoryIndex index.php\n",
+        |root| {
+            std::fs::create_dir_all(root.join("wp-admin/css")).expect("mkdir");
+            std::fs::write(root.join("index.php"), b"<?php").expect("php");
+            std::fs::write(root.join("wp-admin/css/install.min.css"), b"body{color:red}").expect("css");
+        },
+        Arc::new(NoCall),
+    )
+    .await;
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("http://127.0.0.1/wp-admin/css/install.min.css")
+        .body(())
+        .expect("req");
+    let response = serve_http3_request(harness.ctx, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(CALLS.load(Ordering::SeqCst), 0, "css must not hit FastCGI");
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert_eq!(body.as_ref(), b"body{color:red}");
+}
+
+#[tokio::test]
 async fn fcgi_overlay_redirect_precedes_fastcgi_dispatch() {
     let _overlay_gate = HTACCESS_OVERLAY_TEST_GATE.lock().await;
     static CALLS: AtomicUsize = AtomicUsize::new(0);

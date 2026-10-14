@@ -1456,10 +1456,35 @@ async fn execute_fastcgi_backend(
                 }
             };
 
+            // Defense in depth: existing non-PHP under a FastCGI route is static.
+            // php-fpm security.limit_extensions rejects .css/.js with 403 otherwise.
+            if !fcgi_script_name_is_php(&dispatch_request.script_name) {
+                let Some(static_method) = static_method_from_hyper(http.method) else {
+                    return Some(execute_backend::ExecuteBackendOutcome {
+                        status: 405,
+                        headers: Vec::new(),
+                        body: b"method not allowed".to_vec(),
+                    });
+                };
+                return Some(
+                    execute_backend::serve_static_resolved_path_with_budget(
+                        static_method,
+                        std::path::Path::new(&dispatch_request.script_filename),
+                        None,
+                    )
+                    .await,
+                );
+            }
+
             execute_backend::execute_backend(backend, Some(dispatch_request), None, None).await
         }
         _ => None,
     }
+}
+
+fn fcgi_script_name_is_php(script_name: &str) -> bool {
+    let lower = script_name.to_ascii_lowercase();
+    lower.ends_with(".php") || lower.ends_with(".phtml") || lower.ends_with(".phar")
 }
 
 /// Plan 08 PR2-A/PR5-B1-real: terminal response for FastCGI contract backend.
