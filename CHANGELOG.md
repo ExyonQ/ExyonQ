@@ -43,6 +43,7 @@ Product version 0.4.13. The GitHub release includes the Linux amd64 and arm64 bi
 - Workspace product version **→ 0.4.13**.
 - Security audit artifact: `docs/security/audit-v0.4.13.md`.
 - Publish gate for WordPress images requires full installer account creation and login (not only `GET /` → install.php).
+- `rustls` **0.23.45 → 0.23.46** (RUSTSEC-2026-0346 Medium and related Low advisories).
 
 ### Limitations (honest)
 
