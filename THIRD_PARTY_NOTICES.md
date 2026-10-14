@@ -4842,7 +4842,7 @@ Used by:
 - rustc_version 0.4.1 — https://github.com/djc/rustc-version-rs
 - rustix 1.1.5 — https://github.com/bytecodealliance/rustix
 - rustls-native-certs 0.8.4 — https://github.com/rustls/rustls-native-certs
-- rustls 0.23.45 — https://github.com/rustls/rustls
+- rustls 0.23.46 — https://github.com/rustls/rustls
 - scopeguard 1.2.0 — https://github.com/bluss/scopeguard
 - security-framework-sys 2.17.0 — https://github.com/kornelski/rust-security-framework
 - security-framework 3.7.0 — https://github.com/kornelski/rust-security-framework
@@ -6343,57 +6343,57 @@ limitations under the License.
 Used by:
 
 - exyonq-addon-api 1.0.0
-- exyonq-addon-sdk 0.4.12
-- exyonq 0.4.12
-- exyonq-compat-cli 0.4.12
-- exyonqctl 0.4.12
-- exyonq-compat-apache 0.4.12
-- exyonq-compat-common 0.4.12
-- exyonq-compat-nginx 0.4.12
-- exyonq-config-cli 0.4.12
-- exyonq-config-ir 0.4.12
-- exyonq-config-merge 0.4.12
-- exyonq-config-schema 0.4.12
-- exyonq-config-surface 0.4.12
-- exyonq-core 0.4.12
-- exyonq-cache 0.4.12
-- exyonq-cache-redis 0.4.12
-- exyonq-cfd-control 0.4.12
-- exyonq-cfd-dataplane 0.4.12
-- exyonq-cfd-gen 0.4.12
-- exyonq-control-api 0.4.12
-- exyonq-control-api-client 0.4.12
-- exyonq-discovery-runtime 0.4.12
-- exyonq-fastcgi-wire 0.4.12
-- exyonq-http3-provider-api 0.4.12
-- exyonq-http3-provider-quiche 0.4.12
-- exyonq-http3-provider-s2n 0.4.12
+- exyonq-addon-sdk 0.4.13
+- exyonq 0.4.13
+- exyonq-compat-cli 0.4.13
+- exyonqctl 0.4.13
+- exyonq-compat-apache 0.4.13
+- exyonq-compat-common 0.4.13
+- exyonq-compat-nginx 0.4.13
+- exyonq-config-cli 0.4.13
+- exyonq-config-ir 0.4.13
+- exyonq-config-merge 0.4.13
+- exyonq-config-schema 0.4.13
+- exyonq-config-surface 0.4.13
+- exyonq-core 0.4.13
+- exyonq-cache 0.4.13
+- exyonq-cache-redis 0.4.13
+- exyonq-cfd-control 0.4.13
+- exyonq-cfd-dataplane 0.4.13
+- exyonq-cfd-gen 0.4.13
+- exyonq-control-api 0.4.13
+- exyonq-control-api-client 0.4.13
+- exyonq-discovery-runtime 0.4.13
+- exyonq-fastcgi-wire 0.4.13
+- exyonq-http3-provider-api 0.4.13
+- exyonq-http3-provider-quiche 0.4.13
+- exyonq-http3-provider-s2n 0.4.13
 - exyonq-kernel-contract-consumer 0.0.0
-- exyonq-linux-ffi 0.4.12
-- exyonq-mod-fastcgi 0.4.12
-- exyonq-mod-htaccess 0.4.12
-- exyonq-mod-http3 0.4.12
-- exyonq-mod-proxy 0.4.12
-- exyonq-mod-static 0.4.12
-- exyonq-mod-tls 0.4.12
-- exyonq-module-pipeline 0.4.12
-- exyonq-observability 0.4.12
-- exyonq-ops-runtime 0.4.12
+- exyonq-linux-ffi 0.4.13
+- exyonq-mod-fastcgi 0.4.13
+- exyonq-mod-htaccess 0.4.13
+- exyonq-mod-http3 0.4.13
+- exyonq-mod-proxy 0.4.13
+- exyonq-mod-static 0.4.13
+- exyonq-mod-tls 0.4.13
+- exyonq-module-pipeline 0.4.13
+- exyonq-observability 0.4.13
+- exyonq-ops-runtime 0.4.13
 - exyonq-platform-boundary-spike-harness 0.0.0
 - exyonq-platform-boundary-spike-kernel 0.0.0
 - exyonq-platform-linux 0.0.0
-- exyonq-proxy-sdp 0.4.12
-- exyonq-reload-runtime 0.4.12
-- exyonq-runtime-plan 0.4.12
-- exyonq-waf 0.4.12
-- exyonq-waf-api 0.4.12
-- exyonq-module-api 0.4.12
-- exyonq-acme 0.4.12
-- exyonq-compression 0.4.12
-- exyonq-metrics 0.4.12
-- exyonq-ratelimit 0.4.12
-- exyonq-wasm-host 0.4.12
-- xtask 0.4.12
+- exyonq-proxy-sdp 0.4.13
+- exyonq-reload-runtime 0.4.13
+- exyonq-runtime-plan 0.4.13
+- exyonq-waf 0.4.13
+- exyonq-waf-api 0.4.13
+- exyonq-module-api 0.4.13
+- exyonq-acme 0.4.13
+- exyonq-compression 0.4.13
+- exyonq-metrics 0.4.13
+- exyonq-ratelimit 0.4.13
+- exyonq-wasm-host 0.4.13
+- xtask 0.4.13
 - allocator-api2 0.2.21 — https://github.com/zakarumych/allocator-api2
 - anyhow 1.0.104 — https://github.com/dtolnay/anyhow
 - async-trait 0.1.92 — https://github.com/dtolnay/async-trait
