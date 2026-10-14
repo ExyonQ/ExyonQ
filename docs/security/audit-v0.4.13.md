@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Version** | 0.4.13 |
-| **Commit** | `e309867e6b057ab361600718fc3e918f81facfb6` (pre-tag cut; tag may share this SHA) |
+| **Commit** | `886b1cadeb8737856d014cf105217bb49512b049` |
 | **Date** | 2026-10-14 |
 | **Previous audit** | [`audit-v0.4.12.md`](audit-v0.4.12.md) |
 
