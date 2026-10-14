@@ -39,6 +39,7 @@ None.
 | ID | Severity | Resolution |
 |----|----------|------------|
 | WP installer CSS/JS → php-fpm 403 | high (product usability) | Htaccess front-controller serves existing non-PHP as static; FastCGI dispatch skips non-PHP script names |
+| RUSTSEC-2026-0346 (rustls 0.23.45 Debug secrets) | medium | Bump workspace `rustls` to **0.23.46** (also clears 0347–0349 Low) |
 
 ## Waivers
 
