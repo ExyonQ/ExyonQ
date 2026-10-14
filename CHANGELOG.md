@@ -11,7 +11,7 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.12
+PUBLIC_RELEASE = v0.4.13
 LATEST_CHANGED = NO
 ```
 
@@ -28,6 +28,27 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
+
+## [0.4.13] — 2026-10-14
+
+Product version 0.4.13. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.13`, `ghcr.io/exyonq/exyonq-wordpress:0.4.13`, `exyonq/exyonq:0.4.13`, and `exyonq/exyonq-wordpress:0.4.13`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
+
+### Fixed
+
+- **WordPress installer / FastCGI static assets:** existing non-PHP files under an `htaccess = "overlay"` FastCGI route (for example `/wp-admin/css/*.css` and `/wp-admin/js/*.js`) are served from disk instead of being forwarded to php-fpm. Previously php-fpm rejected them with `403` (`security.limit_extensions`), which broke the installer UI so account creation could not complete reliably in a browser.
+- Defense in depth in the FastCGI dispatch path: resolved scripts that are not `.php` / `.phtml` / `.phar` are served statically.
+
+### Changed
+
+- Workspace product version **→ 0.4.13**.
+- Security audit artifact: `docs/security/audit-v0.4.13.md`.
+- Publish gate for WordPress images requires full installer account creation and login (not only `GET /` → install.php).
+
+### Limitations (honest)
+
+- Phase 1 remains NOT_CLOSED; no production-wide “everything verified” claim.
+- No official benchmark publication for this tag.
+- Lab dataplane / soak closure work is not part of this cut.
 
 ## [0.4.12] — 2026-10-12
 

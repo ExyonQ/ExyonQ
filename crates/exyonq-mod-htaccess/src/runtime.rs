@@ -152,6 +152,11 @@ impl HtaccessRuntimeService for HtaccessRuntime {
                         fc,
                     ) {
                         FrontControllerOutcome::Continue => {}
+                        FrontControllerOutcome::ServeStatic { filesystem_path } => {
+                            return HtaccessRouteEvaluationOutcome::ServeStaticFile {
+                                filesystem_path,
+                            };
+                        }
                         FrontControllerOutcome::RewriteToScript { script_uri } => {
                             fcgi_script_uri = Some(script_uri);
                         }
@@ -312,10 +317,18 @@ fn resolve_fcgi_directory_index(
 }
 
 enum FrontControllerOutcome {
+    /// Existing PHP (or the front-controller target) — dispatch FastCGI.
     Continue,
+    /// Existing non-PHP file — serve bytes from disk (do not send to php-fpm).
+    ServeStatic { filesystem_path: String },
     RewriteToScript { script_uri: String },
     InternalLoop,
     TargetScriptMissing,
+}
+
+fn is_fastcgi_php_script_uri(uri_path: &str) -> bool {
+    let lower = uri_path.to_ascii_lowercase();
+    lower.ends_with(".php") || lower.ends_with(".phtml") || lower.ends_with(".phar")
 }
 
 fn apply_front_controller(
@@ -340,7 +353,17 @@ fn apply_front_controller(
     match probes.probe_requested_resource(document_root, uri_path) {
         Ok(HtaccessResourceKind::File) => {
             FRONT_CONTROLLER_BYPASS_FILE.fetch_add(1, Ordering::Relaxed);
-            FrontControllerOutcome::Continue
+            // WordPress (and peers): `!-f` means existing assets stay on disk.
+            // Sending .css/.js to php-fpm hits security.limit_extensions → 403.
+            if is_fastcgi_php_script_uri(uri_path) {
+                FrontControllerOutcome::Continue
+            } else if let Some(filesystem_path) =
+                probes.probe_fcgi_directory_index_static_file(document_root, uri_path)
+            {
+                FrontControllerOutcome::ServeStatic { filesystem_path }
+            } else {
+                FrontControllerOutcome::Continue
+            }
         }
         Ok(HtaccessResourceKind::Directory) => {
             FRONT_CONTROLLER_BYPASS_DIRECTORY.fetch_add(1, Ordering::Relaxed);
@@ -532,5 +555,115 @@ mod tests {
             outcome,
             FcgiDirIndex::StaticFile { uri, .. } if uri == "/app/index.html"
         ));
+    }
+
+    struct ExistingFileProbes;
+
+    impl HtaccessRuntimeProbes for ExistingFileProbes {
+        fn probe_static_directory_index(
+            &self,
+            _root_slot: u32,
+            _dir_uri: &str,
+            _candidates: &[String],
+        ) -> Option<String> {
+            None
+        }
+
+        fn probe_fcgi_directory_index_script(
+            &self,
+            document_root: &str,
+            _dir_uri: &str,
+            candidate_uri: &str,
+        ) -> bool {
+            let root = std::path::Path::new(document_root);
+            let rel = candidate_uri.trim_start_matches('/');
+            root.join(rel).is_file()
+        }
+
+        fn probe_fcgi_directory_index_static_file(
+            &self,
+            document_root: &str,
+            child_uri: &str,
+        ) -> Option<String> {
+            let root = std::path::Path::new(document_root);
+            let rel = child_uri.trim_start_matches('/');
+            let path = root.join(rel);
+            if path.is_file() {
+                Some(path.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        }
+
+        fn probe_requested_resource(
+            &self,
+            document_root: &str,
+            uri_path: &str,
+        ) -> Result<HtaccessResourceKind, ()> {
+            let root = std::path::Path::new(document_root);
+            let rel = uri_path.trim_start_matches('/');
+            let path = root.join(rel);
+            if path.is_file() {
+                Ok(HtaccessResourceKind::File)
+            } else if path.is_dir() {
+                Ok(HtaccessResourceKind::Directory)
+            } else {
+                Ok(HtaccessResourceKind::Missing)
+            }
+        }
+
+        fn fcgi_script_resolvable(&self, document_root: &str, uri_path: &str) -> bool {
+            let root = std::path::Path::new(document_root);
+            let rel = uri_path.trim_start_matches('/');
+            root.join(rel).is_file()
+        }
+    }
+
+    #[test]
+    fn front_controller_serves_existing_css_as_static() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("wp-admin/css")).expect("mkdir");
+        std::fs::write(root.join("index.php"), b"<?php").expect("php");
+        std::fs::write(root.join("wp-admin/css/install.min.css"), b"body{}").expect("css");
+        let fc = CompiledFrontController {
+            target_uri: Arc::<str>::from("/index.php"),
+            require_not_file: true,
+            require_not_directory: true,
+            preserve_query: true,
+        };
+        let out = apply_front_controller(
+            &ExistingFileProbes,
+            &root.to_string_lossy(),
+            "/wp-admin/css/install.min.css",
+            &fc,
+        );
+        assert!(matches!(
+            out,
+            FrontControllerOutcome::ServeStatic { filesystem_path }
+                if filesystem_path.ends_with("install.min.css")
+        ));
+    }
+
+    #[test]
+    fn front_controller_keeps_existing_php_on_fastcgi() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("wp-admin")).expect("mkdir");
+        std::fs::write(root.join("index.php"), b"<?php").expect("php");
+        std::fs::write(root.join("wp-admin/install.php"), b"<?php").expect("install");
+        let fc = CompiledFrontController {
+            target_uri: Arc::<str>::from("/index.php"),
+            require_not_file: true,
+            require_not_directory: true,
+            preserve_query: true,
+        };
+        let out = apply_front_controller(
+            &ExistingFileProbes,
+            &root.to_string_lossy(),
+            "/wp-admin/install.php",
+            &fc,
+        );
+        assert!(matches!(out, FrontControllerOutcome::Continue));
     }
 }
