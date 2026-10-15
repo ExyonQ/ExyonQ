@@ -87,8 +87,8 @@ CURRENT_PRODUCT_BASELINE =
   + R2E KD3 proxy 501 metrics assert gate (2849d06f3dc1a4fbaecd412ab39a569662630eae)
     (test/harness only — product binaries remain @ 2f8e869…)
 
-Cargo.toml / Cargo.lock fingerprints at published release tree are those of
-FINAL_PUBLISHED_RELEASE_HEAD (see git tree 42f87a28…).
+The historical v0.4.3 release tree is `42f87a28…`.
+The current published release tree is FINAL_PUBLISHED_RELEASE_HEAD (`41cfb236…`, tag `v0.4.13`).
 ```
 
 ---
@@ -146,7 +146,13 @@ R6_STATUS = NOT_STARTED
 
 PROJECT_PHASE_1_STATUS = NOT_CLOSED
 PROJECT_PHASE_2_STATUS = NOT_STARTED
+
+PUBLISHED_PRODUCT = v0.4.13
+PUBLISHED_PRODUCT_HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
+WASMTIME = 49.0.2
 ```
+
+R0–R5 are closed. R6 has not started. Sections §2b and §2c stay the historical record of the private **v0.4.3** release. They do not name the current product. The current published release is **v0.4.13** (GitHub Release, GHCR, and Docker Hub; no `:latest`).
 
 ---
 
@@ -630,10 +636,10 @@ EXPIRY_REVIEW = v0.4.4
    R2E_RESULT=PASS at `9176c37`.
    Late shell notifications (including wc7d progress-check exit 127 typo) are
    STALE_IGNORE — not a reopen reason.
-6. Kubernetes P2B not integrated.  
-7. Private **v0.4.3** is **published** (`3a8af75…` / tag `v0.4.3`); R5 COMPLETE; R6 NOT_STARTED.  
+6. R4 closed the Kubernetes P2A/P2B replay and OPEN-002. P2C is not opened. That is not a shipped Kubernetes distribution.
+7. Private **v0.4.3** is published (`3a8af75…`). The current public release is **v0.4.13**. R5 is COMPLETE. R6 is NOT_STARTED.
 8. `--all-features` Clippy/check is not a valid v0.4.3 release matrix.  
-9. RUSTSEC-2026-0222 is **waived**, not fixed; Wasmtime remains 45.0.2 (expiry/review v0.4.4).
+9. RUSTSEC-2026-0222 was waived for v0.4.3 only (Wasmtime 45.0.2; review at v0.4.4). The current workspace pin is Wasmtime **49.0.2**. The v0.4.3 waiver is not active.
 10. Smoke is DIAGNOSTIC_ONLY_NON_AUTHORITATIVE; cannot close capability/release/benchmark.
 11. NO_SMOKE_R2_IMPACT = PASS_REQUIRES_ADDITIONAL_REAL_E2E (R2 historical PASS retained; NS5 real E2E later closed for core/OCI/HTTP3 POST).
 12. R3 paused-for-NO-SMOKE → BPC PASS → R3 resume → R3E PARITY → performance-compiler ACCEPT → R3 CLOSED. Prior “resume vs NO_SMOKE” contradiction is **STALE_FIXED_OR_SUPERSEDED**.
@@ -643,15 +649,15 @@ EXPIRY_REVIEW = v0.4.4
 ## 8. Explicit non-claims
 
 ```text
-No claim that RUSTSEC-2026-0222 is fixed (waived only; ACTIVE_WAIVER for v0.4.3; EXPIRY_REVIEW=v0.4.4).
+No claim that RUSTSEC-2026-0222 was fixed inside v0.4.3 (waived there only; review at v0.4.4). The current pin is Wasmtime 49.0.2.
 No claim that fixed-rate PARITY is an open-loop ceiling WIN/LOSS.
-No claim that Kubernetes is integrated.
+No claim that a Kubernetes distribution or P2C is shipped. R4 closed the P2A/P2B replay only.
 No claim that Phase 2 / R6 has started.
 No claim that smoke PASS closes a capability, release, or benchmark admission.
 No claim that OCI version-only cell proves container runtime qualification.
 No claim that GRC-P0 Critical gaps are product correctness defects.
 No claim that GRC registers / EXQ-* IDs are canonical (PROVISIONAL until GRC-P2 admission).
-No claim that `latest` was updated by v0.4.3 (LATEST_TAG_MUTATED=NO).
+No claim that `latest` was updated by v0.4.3, or by v0.4.13 (LATEST_TAG_MUTATED=NO).
 ```
 
 ---
@@ -668,12 +674,14 @@ WORKSPACE_BLOCKERS = NONE
   (mirrors fcgi_metrics_assert_guard). Darwin workspace-3 EXIT=0.
 
 SECURITY_BLOCKERS =
-  RUSTSEC-2026-0222 waived for v0.4.3 only (not fixed; Wasmtime 45.0.2)
-  no Critical/High open under waived advisory model
-  GRC release-governance gaps remain CURRENT (see §10) — separate from product PASS
+  v0.4.3 waiver of RUSTSEC-2026-0222 is historical (Wasmtime 45.0.2; not renewed)
+  current pin = Wasmtime 49.0.2
+  current release audit = docs/security/audit-v0.4.13.md
+  GRC-P0 snapshot in §10 is historical and does not override this release
 
-PACKAGING_BLOCKERS =
-  OCI multiarch index / GHCR push NOT_AUTHORIZED (local images validated @ 2f8e869…)
+PACKAGING_BLOCKERS = NONE for the published 0.4.13 images
+  GHCR + Docker Hub: exyonq and exyonq-wordpress, linux/amd64 and linux/arm64
+  LATEST_TAG_MUTATED = NO
 
 INFRASTRUCTURE_BLOCKERS = NONE for R2/R3 cells
 
@@ -733,7 +741,7 @@ R4_STATUS = COMPLETE
 R4_RESULT = PASS
 R4_CLOSED = YES
 R4_READY_TO_OPEN = N/A
-R5_OPENED = NO
+R5_OPENED = YES   # closed in §2c; the value above this packet is the pre-open snapshot
 GRC_P0_STATUS = COMPLETE
 GRC_P1_STARTED = NO
 GRC_R5_REMEDIATION_STATUS = COMPLETE
@@ -799,7 +807,7 @@ PUBLICATION_STATUS = FORBIDDEN
 
 R4 executed P2A/P2B replay onto `0fed18d`, closed OPEN-002 with eligible-count
 Single gating (`1d815fe`), and productively accepted multi-endpoint WRR on the
-canonical tip. P2C is ready to admit but **not** opened. R5 remains NOT_STARTED.
+canonical tip. P2C is ready to admit but **not** opened. The block above is the R4 open-time snapshot. R5 later closed on private v0.4.3. The current product release is v0.4.13. R6 remains NOT_STARTED.
 
 ---
 
