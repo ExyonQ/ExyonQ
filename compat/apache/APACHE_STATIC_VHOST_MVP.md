@@ -1,6 +1,6 @@
-# Apache → ExyonQ equivalent importer (0.4.11)
+# Apache → ExyonQ equivalent importer (0.4.13)
 
-**Product cut:** ExyonQ **0.4.11** (`IMPORTER_VERSION=0.4.11`)  
+**Product cut:** ExyonQ **0.4.13** (`IMPORTER_VERSION=0.4.13`)
 **CLI:** `exyonq-compat migrate --from apache --input httpd.conf --out exyonq.toml --report report.md`
 
 Maps Apache constructs onto **existing** ExyonQ IR/runtime equivalents. Fail-closed: any `REJECTED_UNSUPPORTED` refuses TOML.

@@ -4,10 +4,10 @@
 DOCUMENT = DOCUMENTATION_INDEX.md
 DOCUMENT_ROLE = CANONICAL_DOCUMENTATION_MAP
 AUTHORITY = SOLE inventory of documentation roles for this worktree
-LAST_UPDATED = 2026-10-12
+LAST_UPDATED = 2026-10-15
 BRANCH = main
-PUBLIC_RELEASE = v0.4.11
-HEAD = 37364553677fd9283bebf9e36ea514e4e157ef9a
+PUBLIC_RELEASE = v0.4.13
+HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
 ```
 
 Companions: [`PROJECT_STATUS.md`](PROJECT_STATUS.md) · [`ROADMAP.md`](ROADMAP.md)
@@ -76,7 +76,7 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
 |------|-------|------------------|------|---------------|--------|---------------------|----------------------|--------------------|---------------|--------------------|
-| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.4.11 | 2026-07 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
+| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.4.13 | 2026-10 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
 | `ARCHITECTURE.md` | Source-tree architecture | TRACKED | architecture | overview | IMPLEMENTED_REFERENCE | — | layout current | 2026-07 | README | KEEP_ACTIVE |
 | `CHANGELOG.md` | Changelog | TRACKED | release | changelog | HISTORICAL_EVIDENCE | — | partial vs HEAD | UNKNOWN | packaging | REVIEW vs Changeset A/B |
 | `CONTRIBUTING.md` | Contributing | TRACKED | process | guide | IMPLEMENTED_REFERENCE | — | process | UNKNOWN | README | KEEP_ACTIVE |

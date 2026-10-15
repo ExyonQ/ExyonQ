@@ -13,7 +13,7 @@
 | 0.4.7     | Yes |
 | 0.4.6     | Yes |
 | 0.4.4.1   | Yes |
-| 0.4.4     | Yes, previous published release |
+| 0.4.4     | Yes |
 | 0.3.x     | Security fixes only until superseded |
 | < 0.3     | No |
 

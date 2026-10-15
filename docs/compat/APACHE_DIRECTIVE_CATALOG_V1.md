@@ -1,7 +1,7 @@
 # Apache directive catalog V1 (Phase 0)
 
 **Status:** living inventory for migration — not a promise of runtime parity  
-**Importer:** `exyonq-compat-apache` equivalent map (`IMPORTER_VERSION=0.4.11`, workspace `0.4.11`)  
+**Importer:** `exyonq-compat-apache` equivalent map (`IMPORTER_VERSION=0.4.13`, workspace `0.4.13`)
 **Taxonomy:** see product target §6.1
 
 | Directive / construct | Classification | Importer | Notes |
