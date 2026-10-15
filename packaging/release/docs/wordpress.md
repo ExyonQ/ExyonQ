@@ -1,16 +1,24 @@
 # WordPress on ExyonQ
 
-ExyonQ is the HTTP server. PHP-FPM is another process. The official image is
-`FROM scratch` and does not contain PHP. SQLite or MySQL is also another
-process, or a file on the volume. ExyonQ does not run PHP inside its binary.
+Applies to **v0.4.13**.
+
+ExyonQ is the HTTP server. PHP-FPM is another process. The official server
+image is `FROM scratch` and does not contain PHP. The WordPress image is
+separate: `php:8.4-fpm-bookworm` plus that same static binary. SQLite or
+MySQL is also another process, or a file on the volume. ExyonQ does not run
+PHP inside its binary.
 
 ## Which file to use
 
 | File | Use |
 | --- | --- |
-| `conf/exyonq.toml` | Static site. Serves `html/`. |
-| `conf/php-fpm.toml` | One PHP application. `root`, `fastcgi`, and `htaccess = "overlay"`. The front controller comes from the application's `.htaccess`, not from a TOML field. |
-| `conf/wordpress.toml` | WordPress. Static `/wp-includes` and `/wp-content`. PHP on `/`. |
+| `packaging/docker/default.toml` | Official scratch image. Static page on `0.0.0.0:8080`. `config_version` 1. |
+| `packaging/release/conf/wordpress.toml` | WordPress image. `config_version` 2. Static `/wp-includes` and `/wp-content`. PHP on `/`. |
+
+This tree does not ship `conf/exyonq.toml` or `conf/php-fpm.toml`. A single PHP
+application uses the same route shape as WordPress: `root`, `fastcgi`, and
+`htaccess = "overlay"`. The front controller comes from the application's
+`.htaccess`, not from a TOML field.
 
 `root` on a route is the directory of that prefix. In nginx that is `alias`,
 not `root /var/www/html` for every location.
@@ -41,7 +49,7 @@ do not share a user or a group, PHP answers 502.
 `expose_php = Off` is set in that image so responses do not carry
 `X-Powered-By: PHP/...`.
 
-`conf/wordpress.toml` sets `total_timeout_ms` to 120000. The product
+`packaging/release/conf/wordpress.toml` sets `total_timeout_ms` to 120000. The product
 profile used in tests stays at 30000. A plugin install or a core update
 can exceed 30 seconds. A timeout from ExyonQ is 504. A dead PHP-FPM is
 502.
@@ -60,7 +68,7 @@ SQLite write does not republish the site.
 
 ## Page cache
 
-`conf/wordpress.toml` turns `full_page_cache` on. Anonymous HTML is stored
+`packaging/release/conf/wordpress.toml` turns `full_page_cache` on. Anonymous HTML is stored
 for 300 seconds, at most 4 MB per object, 64 MB and 10000 entries in
 namespace 4. A request that carries a cookie is not stored. The WordPress
 image loads the purge plugin as a must-use plugin. When a post is

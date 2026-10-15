@@ -213,7 +213,7 @@ Promotion requires: owner allowlist, secret scan, and decision whether `/docs/` 
 ## F. Owner review required
 
 1. Whether Phase 0 `study/reports` should be promoted to tracked tree or remain LOCAL_ONLY with scripts still pointing there.  
-2. Whether `CHANGELOG.md` must mention Changeset A/B before any v0.4.3 freeze.  
+2. Resolved: the v0.4.3 freeze was published. The current release notes are `CHANGELOG.md` for **v0.4.13**.
 3. Whether ignored `docs/architecture` / `docs/benchmarks` content is stale vs clean publication README claims.  
 4. Cursor plans that still look “active” vs `ROADMAP.md` R\* — close or retarget without creating parallel roadmaps.  
 

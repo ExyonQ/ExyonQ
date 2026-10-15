@@ -22,9 +22,12 @@ Vocabulary:
 
 ## Authoritative current bindings
 
+The current product release is **v0.4.13**. Rows for R5 stay the authority for that closed phase. They are not the current product release.
+
 | Claim / phase | Result | Product revision | Host / arch | Command / gate | Timestamp / run ID | Evidence location | CURRENT/HISTORICAL | Canonical? |
 |---------------|--------|------------------|-------------|----------------|--------------------|-------------------|--------------------|------------|
-| R5 private publication v0.4.3 | PASS / CLOSED | `3a8af75dd0939e5aae2f4d09b842573499e15a1c` | GitHub + GHCR | main FF + signed tag + GitHub Release + Cosign OCI | 2026-08-04 | https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.3 ; GHCR `@sha256:ab02b5ff…` | CURRENT | YES |
+| Public product release v0.4.13 | PUBLISHED | `41cfb23626cc18b0699d6c41d27e3def9d682024` | GHCR + Docker Hub, linux/amd64 and linux/arm64 | GitHub Release v0.4.13 | 2026-10-14 | [`docs/release/v0.4.13.md`](../../release/v0.4.13.md) | CURRENT | YES — current product release |
+| R5 private publication v0.4.3 | PASS / CLOSED | `3a8af75dd0939e5aae2f4d09b842573499e15a1c` | GitHub + GHCR | main FF + signed tag + GitHub Release + Cosign OCI | 2026-08-04 | https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.3 ; GHCR `@sha256:ab02b5ff…` | HISTORICAL | YES — R5 gate only |
 | Superseded release candidate | SUPERSEDED | `f25137bff3b6fc0d4fc1b7f4c6d736b100fae741` | historical | reparent / rematerialize | 2026-08-04 | `.exyonq-local/release/r5m-promote-v043/` (lab) | HISTORICAL | NO — SUPERSEDED_RELEASE_CANDIDATE |
 | R5 version bump 0.4.2→0.4.3 | PASS | `e8fa4dca9336bb8293b56ca8ad47e24bfd4fd792` | Darwin worktree | Cargo/packaging/CHANGELOG/release allowlists | 2026-08-04 | git commit `e8fa4dc` | HISTORICAL | YES (pre-publication) |
 | R5 post-bump product tip (+ OCI E2E version label) | LOCKED | `7ca6d40c45cce16c0eb480c64e2a2b29b26ae3a6` | Darwin worktree | OCI E2E `EXYONQ_VERSION=0.4.3` | 2026-08-04 | git commit `7ca6d40` | HISTORICAL | YES (pre-publication) |
@@ -33,8 +36,8 @@ Vocabulary:
 | R5 post-bump Linux arm64 | PASS | `f90761c…` | Oracle arm64 | full remote qual + version_coherence | `r5-linux-20260803T234634Z` | `.exyonq-local/release/r5-postbump-e8fa4dca9336/linux-arm64/` | HISTORICAL | YES |
 | R5 post-bump WRR protectors | PASS dual-arch | `f90761c…` | Netcup + Oracle | `p2b_linux_protectors` + perf-compiler ACCEPT | `r5-postbump-wrr-20260804T001112Z` | `.exyonq-local/release/k8s-p2b-protectors-r5-postbump-wrr-20260804T001112Z/` | HISTORICAL | YES |
 | R5 post-bump OCI dual-arch + index | PASS_REAL_E2E + INDEX | `7ca6d40…` | Netcup+Oracle local OCI | `oci-runtime-e2e` + local multiarch index | `20260804T014828Z` | `.exyonq-local/release/r5-postbump-e8fa4dca9336/oci/` | HISTORICAL | YES (local; superseded by published GHCR) |
-| R5 rematerialized sealed artifacts | PASS | `3a8af75…` | Netcup+Oracle WS6 | `exyonq-0.4.3-linux-{amd64,arm64}.tar.gz` + src + SBOM + SHA256SUMS `4a4ff337…` | 2026-08-04 | GitHub Release assets + lab `.exyonq-local/release/r5m-promote-v043/r5p2-rematerialize/artifacts/bundle/` | CURRENT | YES |
-| R5 security audit v0.4.3 | PASS (doc) / CONDITIONAL ACCEPT compiler | Commit bind `e8fa4dc…` | Darwin + Linux gates | `docs/security/audit-v0.4.3.md` | 2026-08-04 | `docs/security/audit-v0.4.3.md` | CURRENT | YES — waiver active; RUSTSEC unfixed |
+| R5 rematerialized sealed artifacts | PASS | `3a8af75…` | Netcup+Oracle WS6 | `exyonq-0.4.3-linux-{amd64,arm64}.tar.gz` + src + SBOM + SHA256SUMS `4a4ff337…` | 2026-08-04 | GitHub Release assets + lab `.exyonq-local/release/r5m-promote-v043/r5p2-rematerialize/artifacts/bundle/` | HISTORICAL | YES — v0.4.3 artifacts |
+| R5 security audit v0.4.3 | PASS (doc) / CONDITIONAL ACCEPT compiler | Commit bind `e8fa4dc…` | Darwin + Linux gates | `docs/security/audit-v0.4.3.md` | 2026-08-04 | `docs/security/audit-v0.4.3.md` | HISTORICAL | YES — waiver was v0.4.3 only; current audit is `audit-v0.4.13.md` |
 | R5 pre-bump freeze (0.4.2-labeled binaries) | HISTORICAL | `e63325d…` | dual-arch | pre-bump R5 freeze | 2026-08-03 | `.exyonq-local/release/r5-freeze-6270968/` | HISTORICAL | NO — invalidated by version bump |
 | R2 qualification close | PASS | `2f8e869…` (product); harness tip later | Darwin + Netcup amd64 + Oracle arm64 + OCI dual-arch | R2E workspace + KD3 harness | 2026-08-01 / r2e | `.exyonq-local/tmp/r2e-20260801/` | HISTORICAL | YES (pre-R4; **not** freeze tip) |
 | NO-SMOKE / BPC | PASS | reconfirmed post-bump on `7ca6d40…` | Netcup + Oracle + Darwin | `no-smoke-as-proof-gate`, BPC gate | 2026-08-04 | `.exyonq-local/tmp/bpc-20260802/`; postbump Darwin/logs | CURRENT | YES |

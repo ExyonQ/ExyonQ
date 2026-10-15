@@ -69,7 +69,12 @@ R6_STATUS = NOT_STARTED
 
 PROJECT_PHASE_1_STATUS = NOT_CLOSED
 PROJECT_PHASE_2_STATUS = NOT_STARTED
+
+PUBLISHED_PRODUCT = v0.4.13
+PUBLISHED_PRODUCT_SURFACES = GitHub Release + GHCR + Docker Hub (linux/amd64, linux/arm64, no :latest)
 ```
+
+R0–R5 are closed. R6 has not started, and Phase 1 is not closed. The R5 section below records the private **v0.4.3** publication. It is not the current product release. The current published release is **v0.4.13**.
 
 ---
 

@@ -135,6 +135,8 @@ WordPress and SQLite, after the scratch image exists locally as `exyonq:0.4.13`:
 ```bash
 docker build -f packaging/docker/wordpress/Dockerfile -t ghcr.io/exyonq/exyonq-wordpress:0.4.13 .
 docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.13
+docker pull exyonq/exyonq:0.4.13
+docker pull exyonq/exyonq-wordpress:0.4.13
 ```
 
 Signing (cosign/minisign) is optional follow-up when infra is ready.
