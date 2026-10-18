@@ -16,9 +16,7 @@
 //! Kernel control port — executes reload/drain/shutdown; ops runtime owns command surface.
 
 use crate::lifecycle::LifecycleState;
-use crate::reload::{
-    read_state, reload_from_path, reload_in_progress, ReloadDisposition, SharedServerState,
-};
+use crate::reload::{read_state, reload_from_path, reload_in_progress, SharedServerState};
 use crate::tls::{SharedTlsAcceptor, TlsSessionCache};
 use crate::VERSION;
 use async_trait::async_trait;
@@ -98,20 +96,15 @@ impl KernelControlPort for CoreKernelControlPort {
         .await
         {
             Ok(result) => {
-                let (note, detail) = match result.disposition {
-                    ReloadDisposition::NoOp => (
-                        Some("EXY-RELOAD-0008: identical config — NO_OP".into()),
-                        "identical_no_op",
-                    ),
-                    ReloadDisposition::TlsMaterialPublishedTcp => (
-                        Some(
-                            "TCP TLS material published for H1/H2; \
-                             HTTP/3 certificate unchanged"
-                                .into(),
-                        ),
-                        "tls_material_published_tcp_h1_h2",
-                    ),
-                    ReloadDisposition::RuntimeGenerationPublished => (None, "generation_published"),
+                let note = if result.identical_no_op {
+                    Some("EXY-RELOAD-0008: identical config — NO_OP".into())
+                } else {
+                    None
+                };
+                let detail = if result.identical_no_op {
+                    "identical_no_op"
+                } else {
+                    "generation_published"
                 };
                 crate::observability::emit_audit(crate::observability::AuditEvent {
                     action: "reload",

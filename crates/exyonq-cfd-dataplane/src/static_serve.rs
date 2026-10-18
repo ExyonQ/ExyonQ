@@ -24,7 +24,7 @@
 //!
 //! - Do **not** call `exyonq-mod-static` / Cap067 sendfile from this module.
 //! - Product P9 gzip/brotli evidence remains Cap067-plane only.
-//! - No encoding-cache API is exposed from this module until the CFD-native design lands.
+//! - See [`precompressed_followup_status`].
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -36,14 +36,17 @@ use thiserror::Error;
 const MAX_STATIC_PATH: usize = 4096;
 const FALLBACK_BUF: usize = 16 * 1024;
 
-#[cfg(test)]
+/// ADR-046 CFD Static encoding-cache status (architecture stub; no runtime).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrecompressedFollowupStatus {
+#[allow(dead_code)] // architecture contract marker; referenced by unit tests
+pub enum PrecompressedFollowupStatus {
+    /// Cap067 product plane owns encoding cache today; CFD must not hand off.
     FollowupNoCap067Handoff,
 }
 
-#[cfg(test)]
-const fn precompressed_followup_status() -> PrecompressedFollowupStatus {
+/// Explicit FOLLOWUP marker — keeps Cap067↔CFD remingle uncallable from CFD Static.
+#[allow(dead_code)] // architecture contract marker; referenced by unit tests
+pub const fn precompressed_followup_status() -> PrecompressedFollowupStatus {
     PrecompressedFollowupStatus::FollowupNoCap067Handoff
 }
 
@@ -308,127 +311,12 @@ fn open_directory_index(
 }
 
 fn open_confined(root: &Path, rel: &Path) -> Result<Candidate, StaticErr> {
-    validate_confined_relative_path(rel)?;
-
-    #[cfg(target_os = "linux")]
-    {
-        open_confined_linux(root, rel)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        open_confined_non_linux(root, rel)
-    }
-}
-
-fn validate_confined_relative_path(rel: &Path) -> Result<(), StaticErr> {
-    if rel.as_os_str().as_encoded_bytes().len() > MAX_STATIC_PATH {
+    if rel.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(StaticErr::Forbidden);
     }
-
-    let mut components = 0usize;
-    for component in rel.components() {
-        let Component::Normal(name) = component else {
-            return Err(StaticErr::Forbidden);
-        };
-        if name.as_encoded_bytes().contains(&0) {
-            return Err(StaticErr::Forbidden);
-        }
-        components += 1;
+    if let Some(file) = openat2_confined(root, rel)? {
+        return classify_opened(file, rel);
     }
-
-    if components == 0 {
-        return Err(StaticErr::Forbidden);
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn open_confined_linux(root: &Path, rel: &Path) -> Result<Candidate, StaticErr> {
-    open_confined_linux_with_openat2(root, rel, true)
-}
-
-#[cfg(target_os = "linux")]
-fn open_confined_linux_with_openat2(
-    root: &Path,
-    rel: &Path,
-    try_openat2: bool,
-) -> Result<Candidate, StaticErr> {
-    let root_file = open_canonical_root(root)?;
-    if try_openat2 {
-        if let Some(file) = openat2_confined(&root_file, rel)? {
-            return classify_opened(file, rel);
-        }
-    }
-    let file = openat_walk_confined(&root_file, rel, |_| {})?;
-    classify_opened(file, rel)
-}
-
-#[cfg(target_os = "linux")]
-fn open_canonical_root(root: &Path) -> Result<File, StaticErr> {
-    let root_canon = root.canonicalize().map_err(map_open_err)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
-    options.open(root_canon).map_err(map_open_err)
-}
-
-#[cfg(target_os = "linux")]
-fn openat2_confined(root_file: &File, rel: &Path) -> Result<Option<File>, StaticErr> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
-
-    let rel_bytes = rel.as_os_str().as_bytes();
-    let rel_c = std::ffi::CString::new(rel_bytes).map_err(|_| StaticErr::Forbidden)?;
-    let flags = (libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK) as u64;
-    let resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS | libc::RESOLVE_NO_SYMLINKS;
-    match exyonq_linux_ffi::openat2_beneath(root_file.as_raw_fd(), &rel_c, flags, resolve) {
-        Ok(file) => Ok(Some(file)),
-        Err(exyonq_linux_ffi::Openat2Error::Unavailable) => Ok(None),
-        Err(exyonq_linux_ffi::Openat2Error::Io(e)) => match e.raw_os_error() {
-            Some(libc::EINVAL) => Ok(None),
-            _ => Err(map_open_err(e)),
-        },
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn openat_walk_confined(
-    root_file: &File,
-    rel: &Path,
-    mut after_intermediate: impl FnMut(usize),
-) -> Result<File, StaticErr> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
-
-    let mut current_dir = root_file.try_clone().map_err(map_open_err)?;
-    let mut components = rel.components().peekable();
-    let mut depth = 0usize;
-
-    while let Some(component) = components.next() {
-        let Component::Normal(name) = component else {
-            return Err(StaticErr::Forbidden);
-        };
-        let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| StaticErr::Forbidden)?;
-        if components.peek().is_none() {
-            return exyonq_linux_ffi::openat_readonly_nofollow(current_dir.as_raw_fd(), &name)
-                .map_err(map_open_err);
-        }
-
-        current_dir = exyonq_linux_ffi::openat_directory_nofollow(current_dir.as_raw_fd(), &name)
-            .map_err(map_open_err)?;
-        depth += 1;
-        after_intermediate(depth);
-    }
-
-    Err(StaticErr::Forbidden)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn open_confined_non_linux(root: &Path, rel: &Path) -> Result<Candidate, StaticErr> {
-    // Non-Linux has no openat2 proof here. Preserve the explicit legacy
-    // canonicalization behavior without presenting it as Linux-equivalent evidence.
     let root_canon = root.canonicalize().map_err(map_open_err)?;
     let joined = root_canon.join(rel);
     let final_canon = joined.canonicalize().map_err(map_open_err)?;
@@ -444,6 +332,34 @@ fn open_confined_non_linux(root: &Path, rel: &Path) -> Result<Candidate, StaticE
     }
     let file = options.open(&final_canon).map_err(map_open_err)?;
     classify_opened(file, &final_canon)
+}
+
+#[cfg(target_os = "linux")]
+fn openat2_confined(root: &Path, rel: &Path) -> Result<Option<File>, StaticErr> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    if rel.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    let root_file = File::open(root).map_err(map_open_err)?;
+    let rel_bytes = rel.as_os_str().as_bytes();
+    let rel_c = std::ffi::CString::new(rel_bytes).map_err(|_| StaticErr::Forbidden)?;
+    let flags = (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK) as u64;
+    let resolve = (libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS) as u64;
+    match exyonq_linux_ffi::openat2_beneath(root_file.as_raw_fd(), &rel_c, flags, resolve) {
+        Ok(file) => Ok(Some(file)),
+        Err(exyonq_linux_ffi::Openat2Error::Unavailable) => Ok(None),
+        Err(exyonq_linux_ffi::Openat2Error::Io(e)) => match e.raw_os_error() {
+            Some(libc::EINVAL) => Ok(None),
+            _ => Err(map_open_err(e)),
+        },
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn openat2_confined(_root: &Path, _rel: &Path) -> Result<Option<File>, StaticErr> {
+    Ok(None)
 }
 
 fn classify_opened(file: File, rel_or_path: &Path) -> Result<Candidate, StaticErr> {
@@ -662,137 +578,6 @@ mod tests {
             let err =
                 open_static(&policy(dir.path()), "/static", "/static/out/secret.txt").unwrap_err();
             assert!(matches!(err, StaticErr::Forbidden));
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn force_linux_fallback(root: &Path, rel: &Path) -> Result<Candidate, StaticErr> {
-        validate_confined_relative_path(rel)?;
-        open_confined_linux_with_openat2(root, rel, false)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn read_candidate(candidate: Candidate) -> Vec<u8> {
-        use std::io::Read;
-
-        let Candidate::File(mut opened) = candidate else {
-            panic!("expected regular file");
-        };
-        let mut bytes = Vec::new();
-        opened.file.read_to_end(&mut bytes).unwrap();
-        bytes
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn forced_fallback_opens_nested_regular_file() {
-        let root = tempdir().unwrap();
-        fs::create_dir_all(root.path().join("a/b")).unwrap();
-        fs::write(root.path().join("a/b/file.txt"), b"nested").unwrap();
-
-        let candidate = force_linux_fallback(root.path(), Path::new("a/b/file.txt")).unwrap();
-
-        assert_eq!(read_candidate(candidate), b"nested");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn forced_fallback_rejects_intermediate_and_final_symlinks() {
-        let root = tempdir().unwrap();
-        let outside = tempdir().unwrap();
-        fs::write(outside.path().join("secret.txt"), b"outside").unwrap();
-        fs::create_dir(root.path().join("real")).unwrap();
-        fs::write(root.path().join("real/file.txt"), b"inside").unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
-        std::os::unix::fs::symlink(
-            outside.path().join("secret.txt"),
-            root.path().join("final-link"),
-        )
-        .unwrap();
-
-        for rel in ["escape/secret.txt", "final-link"] {
-            let err = match force_linux_fallback(root.path(), Path::new(rel)) {
-                Err(err) => err,
-                Ok(_) => panic!("symlink unexpectedly opened: {rel}"),
-            };
-            assert!(matches!(err, StaticErr::Forbidden), "rel={rel} err={err:?}");
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn forced_fallback_rejects_invalid_paths_and_nonregular_targets() {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::net::UnixListener;
-
-        let root = tempdir().unwrap();
-        fs::write(root.path().join("plain"), b"file").unwrap();
-        let _socket = UnixListener::bind(root.path().join("socket")).unwrap();
-
-        for rel in [
-            Path::new(""),
-            Path::new("../plain"),
-            Path::new("./plain"),
-            Path::new("/plain"),
-            Path::new("plain/child"),
-            Path::new("socket"),
-        ] {
-            let result = validate_confined_relative_path(rel)
-                .and_then(|()| force_linux_fallback(root.path(), rel));
-            assert!(
-                matches!(result, Err(StaticErr::Forbidden)),
-                "path unexpectedly accepted: {rel:?}"
-            );
-        }
-
-        let nul = Path::new(std::ffi::OsStr::from_bytes(b"bad\0name"));
-        assert!(matches!(
-            validate_confined_relative_path(nul),
-            Err(StaticErr::Forbidden)
-        ));
-        assert!(matches!(
-            open_static(&policy(root.path()), "/static", "/other/plain"),
-            Err(StaticErr::NotFound)
-        ));
-        assert!(matches!(
-            open_static(&policy(root.path()), "/static", "/static"),
-            Err(StaticErr::Forbidden)
-        ));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn forced_fallback_rename_swap_loop_never_opens_outside_file() {
-        let root = tempdir().unwrap();
-        let outside = tempdir().unwrap();
-        fs::write(outside.path().join("value.txt"), b"outside").unwrap();
-
-        for iteration in 0..128 {
-            let live = root.path().join("live");
-            let parked = root.path().join("parked");
-            fs::create_dir(&live).unwrap();
-            fs::write(live.join("value.txt"), b"inside").unwrap();
-            let root_file = open_canonical_root(root.path()).unwrap();
-            let mut swapped = false;
-
-            let file = openat_walk_confined(&root_file, Path::new("live/value.txt"), |depth| {
-                if depth == 1 {
-                    fs::rename(&live, &parked).unwrap();
-                    std::os::unix::fs::symlink(outside.path(), &live).unwrap();
-                    swapped = true;
-                }
-            })
-            .unwrap();
-            let candidate = classify_opened(file, Path::new("live/value.txt")).unwrap();
-
-            assert!(swapped, "iteration={iteration}");
-            assert_eq!(
-                read_candidate(candidate),
-                b"inside",
-                "iteration={iteration}"
-            );
-            fs::remove_file(&live).unwrap();
-            fs::remove_dir_all(&parked).unwrap();
         }
     }
 

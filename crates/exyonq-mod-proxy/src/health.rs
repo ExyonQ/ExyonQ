@@ -256,7 +256,7 @@ impl HealthSupervisor {
                         {
                             continue;
                         }
-                        let ok = probe_once(client, &http_uri, &path, timeout).await;
+                        let ok = probe_once(&client, &http_uri, &path, timeout).await;
                         view.apply_observation(&peer_key, ok);
                         cell.probe_in_flight.store(false, Ordering::Release);
                     }

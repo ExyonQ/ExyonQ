@@ -75,28 +75,38 @@ fn migrate_command(
     out: &Path,
     report_path: &Path,
 ) -> anyhow::Result<()> {
-    let source = std::fs::read_to_string(input)
-        .with_context(|| format!("failed reading input {}", input.display()))?;
-    let label = input
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("input.conf");
-
     let (toml_result, migration_report): (anyhow::Result<String>, MigrationReport) = match from {
-        SourceFormat::Nginx => match exyonq_compat_nginx::migrate(&source) {
-            Ok((toml, report)) => (Ok(toml), report),
-            Err(e) => (
-                Err(e),
-                MigrationReport {
-                    source: "nginx".into(),
-                    notes: vec![],
-                    unsupported: vec![],
-                },
-            ),
-        },
-        SourceFormat::Apache => {
-            exyonq_compat_apache::migrate_with_report(label, &source)
+        // AP-07: path-based Full migrate expands `include` from disk.
+        SourceFormat::Nginx => {
+            match exyonq_compat_nginx::migrate_file(input, &exyonq_compat_nginx::MigrateOptions::default())
+            {
+                Ok(out) => {
+                    let legacy = out.report.to_legacy(exyonq_compat_nginx::IMPORTER_NAME);
+                    (
+                        if out.config.trim().is_empty() && out.report.has_errors() {
+                            Err(anyhow::anyhow!("nginx migration refused"))
+                        } else {
+                            Ok(out.config)
+                        },
+                        MigrationReport {
+                            source: legacy.source,
+                            notes: legacy.notes,
+                            unsupported: legacy.unsupported,
+                        },
+                    )
+                }
+                Err(e) => (
+                    Err(e),
+                    MigrationReport {
+                        source: "nginx".into(),
+                        notes: vec![],
+                        unsupported: vec![],
+                    },
+                ),
+            }
         }
+        // AP-07 / ADR-053: expand Include / IncludeOptional from the entry path.
+        SourceFormat::Apache => exyonq_compat_apache::migrate_path_with_report(input),
     };
 
     let report_output = if report_path.extension().and_then(|ext| ext.to_str()) == Some("json") {

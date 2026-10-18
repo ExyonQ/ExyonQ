@@ -71,4 +71,16 @@ pub struct ParsedUpstream {
 pub struct AnalyzedConfig {
     pub servers: Vec<ParsedServer>,
     pub upstreams: Vec<ParsedUpstream>,
+    /// NG-05 / ADR-051: parsed `map $src $dst { … }` blocks.
+    pub maps: Vec<ParsedMap>,
+}
+
+/// Nginx `map` block reduced to IR-friendly fields (Exact only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedMap {
+    pub loc: crate::report::SourceLoc,
+    pub source_var: String,
+    pub dest_var: String,
+    pub default: String,
+    pub values: std::collections::HashMap<String, String>,
 }

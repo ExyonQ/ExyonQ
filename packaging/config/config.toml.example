@@ -61,7 +61,8 @@ target = "http://127.0.0.1:9000"
 timeout_ms = 30000
 
 [modules.metrics]
-enabled = false
+enabled = true
 path = "/metrics"
 health_path = "/exyonq-metrics-health"
-# Enabling metrics on a non-loopback listen requires scrape_bearer_token.
+# Required when listen is not loopback. Replace before use.
+scrape_bearer_token = "replace-this-token"

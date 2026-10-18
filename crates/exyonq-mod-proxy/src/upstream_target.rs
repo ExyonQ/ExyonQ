@@ -66,20 +66,14 @@ impl UpstreamTarget {
         })
     }
 
-    pub fn uri_for(&self, path_and_query: &str) -> Uri {
-        if let Some(uri) = self.uri_for_preseeded(path_and_query) {
-            return uri.clone();
-        }
-        build_uri(&self.base, path_and_query)
-    }
-
-    /// Borrow the configured upstream base URI (scheme/authority).
     pub fn base_uri(&self) -> &Uri {
         &self.base
     }
 
-    /// Borrow a preseeded URI (P4 `/api/` hot path) — avoids Uri clone when present.
-    pub fn uri_for_preseeded(&self, path_and_query: &str) -> Option<&Uri> {
-        self.path_uris.get(path_and_query)
+    pub fn uri_for(&self, path_and_query: &str) -> Uri {
+        if let Some(uri) = self.path_uris.get(path_and_query) {
+            return uri.clone();
+        }
+        build_uri(&self.base, path_and_query)
     }
 }

@@ -18,20 +18,15 @@
 //! Cap013 contract:
 //! - prepare (parse / TLS offline / ServerState) completes before any live publish
 //! - process-wide async mutex serializes structural reload; `reload_in_progress` while held
-//! - identical plan fingerprint without TLS → NO_OP (`EXY-RELOAD-0008`)
-//! - identical plan fingerprint with TLS → TCP H1/H2 material refresh without generation bump
+//! - identical plan fingerprint → NO_OP (`EXY-RELOAD-0008`) without generation bump
 //! - listen / http3_listen bind changes → reject (`EXY-RELOAD-0005`)
-//!
-//! TCP TLS publication does not rotate the separately owned HTTP/3 certificate.
-//! H3 certificate rotation remains a known blocker and must not be inferred from
-//! [`ReloadDisposition::TlsMaterialPublishedTcp`].
 
 use crate::config::AppConfig;
 use crate::discovery_overlay;
 use crate::server::state::ServerState;
 use crate::tls::{SharedTlsAcceptor, TlsSessionCache, TlsSettings};
 use exyonq_mod_proxy::ProxyClient;
-use exyonq_mod_tls::{PreparedTlsReload, TlsAcceptor};
+use exyonq_mod_tls::TlsAcceptor;
 use exyonq_runtime_plan::{compile_runtime_plan, load_config_for_reload};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -112,47 +107,20 @@ pub fn read_state(shared: &SharedServerState) -> Arc<ServerState> {
     Arc::clone(&*shared.read().expect("server state lock poisoned"))
 }
 
-/// Successful reload publication disposition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReloadDisposition {
-    /// Compiled plan and effective non-file material were unchanged.
-    NoOp,
-    /// TCP TLS H1/H2 material and a fresh session epoch were published only.
-    TlsMaterialPublishedTcp,
-    /// A new runtime generation was published.
-    RuntimeGenerationPublished,
-}
-
 /// Result of a live reload attempt.
 #[derive(Clone)]
 pub struct ReloadResult {
     pub state: Arc<ServerState>,
-    pub disposition: ReloadDisposition,
+    /// True when candidate fingerprint matched live state — no generation bump / swap.
+    pub identical_no_op: bool,
 }
 
 impl std::fmt::Debug for ReloadResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReloadResult")
             .field("generation", &self.state.generation)
-            .field("disposition", &self.disposition)
+            .field("identical_no_op", &self.identical_no_op)
             .finish()
-    }
-}
-
-struct PreparedTcpTls {
-    publication: PreparedTlsReload,
-}
-
-impl PreparedTcpTls {
-    fn publish(
-        self,
-        tls_acceptor: &SharedTlsAcceptor,
-        tls_session_cache: &TlsSessionCache,
-    ) -> anyhow::Result<()> {
-        tls_acceptor
-            .install_reload(self.publication, tls_session_cache)
-            .map(|_| ())
-            .map_err(|err| anyhow::anyhow!("TCP TLS publication rejected (KEEP_OLD): {err}"))
     }
 }
 
@@ -190,26 +158,14 @@ pub async fn reload_from_path(
     // Fingerprint compare uses compiled plan content (generation-independent).
     let candidate_plan = compile_runtime_plan(current.generation, config.clone())?;
     if candidate_plan.fingerprint.as_str() == current.fingerprint() {
-        if config.primary_server().tls.is_some() {
-            let prepared_tls = prepare_tcp_tls(&config, tls_acceptor, tls_session_cache, true)?;
-            prepared_tls.publish(tls_acceptor, tls_session_cache)?;
-            return Ok(ReloadResult {
-                state: current,
-                disposition: ReloadDisposition::TlsMaterialPublishedTcp,
-            });
-        }
         return Ok(ReloadResult {
             state: current,
-            disposition: ReloadDisposition::NoOp,
+            identical_no_op: true,
         });
     }
 
     // Offline TLS prepare — does not mutate the live acceptor.
-    // A TLS config/path change gets a fresh epoch. Unchanged TLS config keeps the
-    // current epoch during an unrelated runtime-generation publication.
-    let tls_config_changed = current.config.primary_server().tls != config.primary_server().tls;
-    let prepared_tls =
-        prepare_tcp_tls(&config, tls_acceptor, tls_session_cache, tls_config_changed)?;
+    let prepared_tls = prepare_tls_acceptor(&config, tls_session_cache)?;
 
     let next_generation = current.generation.saturating_add(1);
 
@@ -276,23 +232,7 @@ pub async fn reload_from_path(
         }
         return Err(err);
     }
-    if let Err(tls_err) = prepared_tls.publish(tls_acceptor, tls_session_cache) {
-        let slot_restore = current.publish_compiled_module_slots();
-        crate::waf::discard_waf_reload();
-        let observability_restore =
-            crate::observability::apply_logging_reload(&current.config.logging);
-        if let Err(restore_err) = slot_restore {
-            return Err(anyhow::anyhow!(
-                "{tls_err}; compiled module slot restore also failed: {restore_err}"
-            ));
-        }
-        if let Err(restore_err) = observability_restore {
-            return Err(anyhow::anyhow!(
-                "{tls_err}; observability restore also failed: {restore_err}"
-            ));
-        }
-        return Err(tls_err);
-    }
+    tls_acceptor.install(prepared_tls);
     // Cap067 LA-CAP067-R3-001: advertise WAF-on before shared becomes WAF-capable so Cap067
     // keepalive cannot early-exit skip while live ServerState already requires inspect.
     if state.waf_wire_inspection_active && !current.waf_wire_inspection_active {
@@ -307,7 +247,7 @@ pub async fn reload_from_path(
 
     Ok(ReloadResult {
         state,
-        disposition: ReloadDisposition::RuntimeGenerationPublished,
+        identical_no_op: false,
     })
 }
 
@@ -329,7 +269,7 @@ pub async fn reload_from_path_standalone(
 
     let mut config = load_config_for_reload(path)?;
     config = discovery_overlay::apply_env_discovery_overlay(config);
-    let prepared_tls = prepare_tcp_tls(&config, tls_acceptor, tls_session_cache, true)?;
+    let prepared_tls = prepare_tls_acceptor(&config, tls_session_cache)?;
     let next_generation = active_runtime_generation().saturating_add(1);
 
     if let Err(err) = crate::waf::prepare_waf_reload(&config) {
@@ -362,7 +302,7 @@ pub async fn reload_from_path_standalone(
         crate::waf::discard_waf_reload();
         return Err(err);
     }
-    prepared_tls.publish(tls_acceptor, tls_session_cache)?;
+    tls_acceptor.install(prepared_tls);
     publish_runtime_observe_authority(&state);
     crate::waf::commit_waf_reload(state.generation);
     exyonq_cache::global_response_cache()
@@ -403,8 +343,7 @@ pub fn prepare_tls_acceptor(
     config: &AppConfig,
     tls_session_cache: &TlsSessionCache,
 ) -> anyhow::Result<Option<TlsAcceptor>> {
-    let tls = config.servers.iter().find_map(|server| server.tls.as_ref());
-    if let Some(tls) = tls {
+    if let Some(tls) = &config.primary_server().tls {
         let acceptor = SharedTlsAcceptor::prepare(
             &TlsSettings {
                 cert_path: tls.cert.clone(),
@@ -413,88 +352,22 @@ pub fn prepare_tls_acceptor(
             tls_session_cache,
             &[b"h2", b"http/1.1"],
         )
-        .map_err(|err| {
-            anyhow::anyhow!("EXY-RELOAD-0004: TCP TLS prepare failed (KEEP_OLD): {err}")
-        })?;
+        .map_err(|err| anyhow::anyhow!("tls reload prepare: {err}"))?;
         Ok(Some(acceptor))
     } else {
         Ok(None)
     }
 }
 
-fn tls_identities_on_primary_listen(config: &AppConfig) -> Vec<exyonq_mod_tls::TlsSniCertificate> {
-    config
-        .servers
-        .iter()
-        .filter_map(|server| {
-            let tls = server.tls.as_ref()?;
-            Some(exyonq_mod_tls::TlsSniCertificate {
-                names: server.server_name_list(),
-                settings: TlsSettings {
-                    cert_path: tls.cert.clone(),
-                    key_path: tls.key.clone(),
-                },
-            })
-        })
-        .collect()
-}
-
-fn prepare_tcp_tls(
-    config: &AppConfig,
-    tls_acceptor: &SharedTlsAcceptor,
-    tls_session_cache: &TlsSessionCache,
-    fresh_epoch: bool,
-) -> anyhow::Result<PreparedTcpTls> {
-    let identities = tls_identities_on_primary_listen(config);
-    if identities.len() > 1 {
-        let acceptor = tls_acceptor
-            .prepare_sni_reload(
-                &identities,
-                tls_session_cache,
-                &[b"h2", b"http/1.1"],
-                fresh_epoch,
-            )
-            .map_err(|err| {
-                anyhow::anyhow!("EXY-RELOAD-0004: TCP TLS prepare failed (KEEP_OLD): {err}")
-            })?;
-        return Ok(PreparedTcpTls {
-            publication: acceptor,
-        });
-    }
-    if let Some(identity) = identities.first() {
-        let acceptor = tls_acceptor
-            .prepare_reload(
-                &identity.settings,
-                tls_session_cache,
-                &[b"h2", b"http/1.1"],
-                fresh_epoch,
-            )
-            .map_err(|err| {
-                anyhow::anyhow!("EXY-RELOAD-0004: TCP TLS prepare failed (KEEP_OLD): {err}")
-            })?;
-        Ok(PreparedTcpTls {
-            publication: acceptor,
-        })
-    } else {
-        let publication = tls_acceptor
-            .prepare_clear(tls_session_cache, fresh_epoch)
-            .map_err(|err| {
-                anyhow::anyhow!("EXY-RELOAD-0004: TCP TLS clear prepare failed (KEEP_OLD): {err}")
-            })?;
-        Ok(PreparedTcpTls { publication })
-    }
-}
-
-/// Immediate TCP TLS H1/H2 publish (ACME / certificate publication).
-///
-/// This does not rotate HTTP/3 certificate material.
+/// Immediate TLS publish (ACME / certificate publication). Not used by Cap013 config reload.
 pub fn reload_tls_acceptor(
     config: &AppConfig,
     tls_acceptor: &SharedTlsAcceptor,
     tls_session_cache: &TlsSessionCache,
 ) -> anyhow::Result<()> {
-    let prepared = prepare_tcp_tls(config, tls_acceptor, tls_session_cache, true)?;
-    prepared.publish(tls_acceptor, tls_session_cache)
+    let prepared = prepare_tls_acceptor(config, tls_session_cache)?;
+    tls_acceptor.install(prepared);
+    Ok(())
 }
 
 // Config load lives in `exyonq-runtime-plan` (KD4.6: compiler boundary).

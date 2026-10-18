@@ -16,11 +16,11 @@ pub use key::{
     is_tracking_query_param, normalize_host, CacheKey, CacheKeyParts,
 };
 pub use metrics::{
-    cache_bytes_current, cache_entries_current, cache_evictions_total, cache_expired_total,
-    cache_hits_total, cache_insertions_total, cache_misses_total, cache_rejections_total,
-    cache_singleflight_followers_total, cache_singleflight_leaders_total, fpc_bypass_total,
-    fpc_eviction_total, fpc_hit_total, fpc_lookup_error_total, fpc_lookup_total, fpc_miss_total,
-    fpc_purge_bytes_total, fpc_purge_duration_us_total, fpc_purge_entries_total,
+    append_fpc_prometheus, cache_bytes_current, cache_entries_current, cache_evictions_total,
+    cache_expired_total, cache_hits_total, cache_insertions_total, cache_misses_total,
+    cache_rejections_total, cache_singleflight_followers_total, cache_singleflight_leaders_total,
+    fpc_bypass_total, fpc_eviction_total, fpc_hit_total, fpc_lookup_error_total, fpc_lookup_total,
+    fpc_miss_total, fpc_purge_bytes_total, fpc_purge_duration_us_total, fpc_purge_entries_total,
     fpc_purge_rejected_total, fpc_purge_requests_total, fpc_purge_success_total,
     fpc_store_attempt_total, fpc_store_body_bytes_total, fpc_store_error_total,
     fpc_store_rejected_total, fpc_store_success_total, l2_generation_advance_total,

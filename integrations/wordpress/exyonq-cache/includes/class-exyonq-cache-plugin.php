@@ -35,9 +35,6 @@ final class ExyonQ_Cache_Plugin {
 
 	public function boot(): void {
 		$this->hooks->register();
-		if ( function_exists( 'add_action' ) && class_exists( 'ExyonQ_Cache_Admin' ) ) {
-			ExyonQ_Cache_Admin::register( $this );
-		}
 	}
 
 	public function client(): ExyonQ_Cache_Client {
@@ -100,23 +97,6 @@ final class ExyonQ_Cache_Plugin {
 		}
 	}
 
-	public function purge_tag_once( string $tag ): void {
-		try {
-			if ( ! $this->client->is_configured() ) {
-				return;
-			}
-			$key = 'tag:' . $tag;
-			if ( isset( $this->dedupe[ $key ] ) ) {
-				$this->client->note_deduplicated();
-				return;
-			}
-			$this->dedupe[ $key ] = true;
-			$this->client->purge_tag( $tag );
-		} catch ( Throwable $e ) {
-			unset( $e );
-		}
-	}
-
 	public function purge_generation_once( int $generation ): void {
 		try {
 			if ( ! $this->client->is_configured() ) {
@@ -134,9 +114,6 @@ final class ExyonQ_Cache_Plugin {
 		}
 	}
 
-	/**
-	 * Purge one URL. A missing cache entry is not a reason to empty the site.
-	 */
 	private function purge_one_url( string $url ): void {
 		$parts = $this->parse_public_url( $url );
 		if ( $parts === null ) {
@@ -157,12 +134,11 @@ final class ExyonQ_Cache_Plugin {
 			return;
 		}
 		$this->dedupe[ $key ] = true;
-		// Cached pages are keyed without a query. A functional query is not a stored object.
 		$this->client->purge_url(
 			$parts['scheme'],
 			$parts['host'],
 			$parts['path'],
-			''
+			$parts['query']
 		);
 	}
 

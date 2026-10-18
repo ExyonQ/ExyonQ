@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 /// Native engine: holds an atomically swappable immutable snapshot.
 ///
-/// Cap013: [`Self::prepare_reload_from_input`] stages a compiled snapshot; [`Self::commit_prepared`]
+/// Cap013: [`prepare_reload_from_input`] stages a compiled snapshot; [`commit_prepared`]
 /// swaps it into the live `ArcSwap`. Failed prepare / discard leaves the live snapshot
 /// unchanged.
 #[derive(Debug)]

@@ -145,7 +145,7 @@ fn generation_g1_to_g2_observed() {
     let g2 = Generation::from_route_table(2, &exyonq_cfd_gen::RouteTable::default()).unwrap();
     child.publish_generation(&g2).unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut seen = None;
     while Instant::now() < deadline {
         let (_, _, gen) = http_get(&listen, "/__exyonq_cfd/v1/foundation");
@@ -191,6 +191,8 @@ fn incompatible_schema_handshake_rejected_at_start() {
     ));
     std::fs::write(gd.generation_path(), &bytes).unwrap();
 
+    let stderr_path = dir.path().join("dataplane.stderr");
+    let stderr_file = std::fs::File::create(&stderr_path).unwrap();
     let mut child = Command::new(dataplane_bin())
         .arg("serve")
         .arg("--listen")
@@ -202,10 +204,12 @@ fn incompatible_schema_handshake_rejected_at_start() {
         .arg("--schema-version")
         .arg(SCHEMA_VERSION.to_string())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(stderr_file)
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // Under nextest parallelism + USB/slow FS, cold start can exceed 5s before
+    // fail-closed exit; keep this bounded but host-stable.
+    let deadline = Instant::now() + Duration::from_secs(20);
     let mut exited = None;
     while Instant::now() < deadline {
         if let Ok(Some(status)) = child.try_wait() {
@@ -214,10 +218,23 @@ fn incompatible_schema_handshake_rejected_at_start() {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    let _ = child.kill();
-    let _ = child.wait();
-    let status = exited.expect("dataplane must exit on incompatible gen");
-    assert!(!status.success());
+    let status = match exited {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let err = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+            let st = std::fs::read_to_string(dir.path().join("status")).unwrap_or_default();
+            panic!(
+                "dataplane did not self-exit on incompatible gen within deadline; status={st}; stderr=\n{err}"
+            );
+        }
+    };
+    assert!(
+        !status.success(),
+        "incompatible schema must fail-closed; stderr=\n{}",
+        std::fs::read_to_string(&stderr_path).unwrap_or_default()
+    );
 }
 
 #[test]
@@ -340,7 +357,7 @@ fn generation_downgrade_rejected() {
     // a valid CFDRT002/CFDCOM01 (opaque "g5" bytes never apply → header stays 1).
     let g5 = Generation::from_route_table(5, &exyonq_cfd_gen::RouteTable::default()).unwrap();
     child.publish_generation(&g5).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw5 = false;
     while Instant::now() < deadline {
         let (_, _, gen) = http_get(&listen, "/__exyonq_cfd/v1/foundation");

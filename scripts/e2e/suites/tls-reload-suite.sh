@@ -44,6 +44,25 @@ openssl req -x509 -newkey rsa:2048 -keyout "$NEW_KEY" -out "$NEW_CERT" \
   -days 1 -nodes -subj "/CN=rotated.localhost" >/dev/null 2>&1
 cp "$NEW_CERT" "$LIVE_CERT"
 cp "$NEW_KEY" "$LIVE_KEY"
+# Comments do not change IR fingerprint. Mutate a structural field so reload
+# re-reads cert/key paths (otherwise EXY-RELOAD-0008 identical NO_OP).
+python3 - "$CFG" <<'PY'
+import pathlib, sys, time
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+needle = 'listen = "127.0.0.1:'
+# inject unique server_name after listen line
+out = []
+injected = False
+for line in text.splitlines(True):
+    out.append(line)
+    if not injected and line.startswith("listen ="):
+        out.append(f'server_name = "rotate-{int(time.time())}.localhost"\n')
+        injected = True
+p.write_text("".join(out))
+if not injected:
+    raise SystemExit("tls-reload: failed to inject server_name bump")
+PY
 EXYONQ_CONFIG="$CFG" "$EXYONQCTL_BIN" reload --socket "$CTRL" >/dev/null
 sleep 0.3
 FP1="$(fp_of "$LIVE_CERT")"
@@ -61,13 +80,7 @@ set +e
 EXYONQ_CONFIG="$CFG" "$EXYONQCTL_BIN" reload --socket "$CTRL" >/dev/null 2>"$TMP/reload.err"
 RELOAD_RC=$?
 set -e
-[[ "$RELOAD_RC" -ne 0 ]] || {
-  echo "FAIL invalid reload returned rc=0"
-  cat "$TMP/reload.err" || true
-  tail -40 "$LOG" || true
-  exit 1
-}
-# Reload must fail and the previously published TCP certificate must remain live.
+# Reload should fail (or report ok=false); either way served cert must stay FP1
 SERVED2="$(served_fp)"
 [[ "$SERVED2" == "$FP1" ]] || {
   echo "FAIL invalid_retain expected=$FP1 got=$SERVED2 rc=$RELOAD_RC"

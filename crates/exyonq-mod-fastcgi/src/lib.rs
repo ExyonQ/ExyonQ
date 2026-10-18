@@ -28,6 +28,8 @@ pub mod client;
 pub mod commit;
 #[cfg(unix)]
 pub mod conn_pool;
+#[cfg(unix)]
+pub mod diagnostics;
 pub mod encode;
 #[cfg(unix)]
 pub mod fcgi_stream;
@@ -46,17 +48,14 @@ pub mod timeout_budget;
 pub mod transport;
 #[cfg(unix)]
 pub mod unix_connect;
-#[cfg(unix)]
 pub mod unix_transport;
 pub mod wire;
 
 pub use adapter::{
     is_tcp_pool_address, is_unix_socket_path, map_client_error, map_forward_success,
-    map_transport_error, parse_cgi_stdout, parse_tcp_pool_address, FcgiModuleExecutor,
-    ScriptedFcgiExecutor,
+    map_transport_error, parse_cgi_stdout, parse_tcp_pool_address, resolve_pool_endpoints,
+    resolve_unix_socket_pools, FcgiModuleExecutor, ScriptedFcgiExecutor,
 };
-#[cfg(unix)]
-pub use adapter::{resolve_pool_endpoints, resolve_unix_socket_pools};
 #[cfg(feature = "core-bridge")]
 pub use bridge::register_with_core;
 pub use cache_metrics::{
@@ -92,8 +91,10 @@ pub use exyonq_module_api::fcgi_dispatch::{
 pub use fcgi_stream::{FcgiStream, PoolEndpoint};
 #[cfg(test)]
 pub use metrics::fcgi_metric_test_gate;
+#[cfg(unix)]
+pub use diagnostics::{endpoint_display, format_saturation_message, SaturationKind};
 pub use metrics::{
-    fcgi_inflight_current, fcgi_recovery_seconds, fcgi_responses_200_total,
+    append_fcgi_prometheus, fcgi_inflight_current, fcgi_recovery_seconds, fcgi_responses_200_total,
     fcgi_responses_501_success_not_authorized_total, fcgi_responses_501_total,
     fcgi_responses_502_total, fcgi_responses_503_total, fcgi_responses_504_total,
     fcgi_saturation_rejections_total, pool_ops_snapshot, snapshot as fcgi_metrics_snapshot,
@@ -122,7 +123,6 @@ pub use transport::{
 };
 #[cfg(unix)]
 pub use unix_connect::connect_unix_stream;
-#[cfg(unix)]
 pub use unix_transport::UnixFpmTransport;
 pub use wire::{WireEndpoint, WireError, WireTransport};
 

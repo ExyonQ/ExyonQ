@@ -16,7 +16,10 @@
 //! K8S-P2B Linux performance / contention / correctness protectors (P2B-OPEN-001).
 //!
 //! Observational only. Does not change product semantics.
-//! Run: `cargo test -p exyonq-mod-proxy --test p2b_linux_protectors -- --nocapture`
+//! Opt-in: set `EXYONQ_P2B_PROTECTORS=1` (dedicated Netcup/Oracle harness).
+//! Default workspace nextest skips — microbench cliffs under host load are not product failures.
+//! Run: `scripts/remote/run-k8s-p2b-linux-protectors.sh` or
+//! `EXYONQ_P2B_PROTECTORS=1 cargo test -p exyonq-mod-proxy --test p2b_linux_protectors -- --nocapture`
 
 use exyonq_mod_proxy::{
     endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, ProxyRuntime,
@@ -322,6 +325,14 @@ fn json_escape(s: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn p2b_linux_protector_matrix() {
+    // Evidence-class microbench: only hard-fail on dedicated Linux hosts (script sets this).
+    // Contended Mac/CI nextest after 1000+ tests falsely trips throughput-cliff thresholds.
+    if std::env::var_os("EXYONQ_P2B_PROTECTORS").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        eprintln!(
+            "skip: P2B Linux protectors require EXYONQ_P2B_PROTECTORS=1 (see scripts/remote/run-k8s-p2b-linux-protectors.sh)"
+        );
+        return;
+    }
     let run_id =
         std::env::var("EXYONQ_P2B_PROTECTOR_RUN_ID").unwrap_or_else(|_| "local-unspecified".into());
     let arch = std::env::var("EXYONQ_P2B_ARCH").unwrap_or_else(|_| std::env::consts::ARCH.into());
@@ -456,24 +467,12 @@ async fn p2b_linux_protector_matrix() {
             FailoverMode::None,
             make_n(n, |_| 1),
         ));
-        let (mut ops, mut lat, mut wall, mut cont) =
-            bench_select_arc(Arc::clone(&sel), 8, BENCH_SECS);
-        // Under parallel suite/audit load the first sample can dip below 25% of
-        // the previous N; remeasure once before treating it as a real cliff.
+        let (ops, mut lat, wall, cont) = bench_select_arc(Arc::clone(&sel), 8, BENCH_SECS);
         let cliff = if prev_ops > 0.0 && ops < prev_ops * 0.25 {
-            let retry = bench_select_arc(Arc::clone(&sel), 8, BENCH_SECS);
-            ops = retry.0;
-            lat = retry.1;
-            wall = retry.2;
-            cont = retry.3;
-            if ops < prev_ops * 0.25 {
-                failures.push(format!(
-                    "unexplained_throughput_cliff n={n} ops={ops} prev={prev_ops}"
-                ));
-                true
-            } else {
-                false
-            }
+            failures.push(format!(
+                "unexplained_throughput_cliff n={n} ops={ops} prev={prev_ops}"
+            ));
+            true
         } else {
             false
         };

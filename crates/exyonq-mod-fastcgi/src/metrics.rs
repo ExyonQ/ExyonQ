@@ -286,6 +286,59 @@ pub fn fcgi_inflight_current() -> u64 {
     FCGI_INFLIGHT.load(Ordering::Relaxed)
 }
 
+/// Q-08 / ADR-060 — export FastCGI counters as `exyonq_fcgi_*` for `/metrics`.
+pub fn append_fcgi_prometheus(out: &mut String) {
+    let snap = snapshot();
+    let ops = pool_ops_snapshot();
+    out.push_str("# TYPE exyonq_fcgi_responses_total counter\n");
+    out.push_str(&format!(
+        "exyonq_fcgi_responses_total{{status=\"200\"}} {}\n",
+        snap.responses_200
+    ));
+    out.push_str(&format!(
+        "exyonq_fcgi_responses_total{{status=\"502\"}} {}\n",
+        snap.responses_502
+    ));
+    out.push_str(&format!(
+        "exyonq_fcgi_responses_total{{status=\"503\"}} {}\n",
+        snap.responses_503
+    ));
+    out.push_str(&format!(
+        "exyonq_fcgi_responses_total{{status=\"504\"}} {}\n",
+        snap.responses_504
+    ));
+    out.push_str("# TYPE exyonq_fcgi_saturation_rejections_total counter\n");
+    out.push_str(&format!(
+        "exyonq_fcgi_saturation_rejections_total {}\n",
+        snap.saturation_rejections
+    ));
+    out.push_str("# TYPE exyonq_fcgi_checkout_timeouts_total counter\n");
+    out.push_str(&format!(
+        "exyonq_fcgi_checkout_timeouts_total {}\n",
+        ops.checkout_timeouts
+    ));
+    out.push_str("# TYPE exyonq_fcgi_inflight_current gauge\n");
+    out.push_str(&format!(
+        "exyonq_fcgi_inflight_current {}\n",
+        snap.inflight_current
+    ));
+    out.push_str("# TYPE exyonq_fcgi_connections_created_total counter\n");
+    out.push_str(&format!(
+        "exyonq_fcgi_connections_created_total {}\n",
+        ops.connections_created
+    ));
+    out.push_str("# TYPE exyonq_fcgi_connections_reused_total counter\n");
+    out.push_str(&format!(
+        "exyonq_fcgi_connections_reused_total {}\n",
+        ops.connections_reused
+    ));
+    out.push_str("# TYPE exyonq_fcgi_connect_failures_total counter\n");
+    out.push_str(&format!(
+        "exyonq_fcgi_connect_failures_total {}\n",
+        ops.connect_failures
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +359,18 @@ mod tests {
             after.saturation_rejections,
             before.saturation_rejections + 1
         );
+    }
+
+    #[test]
+    fn append_fcgi_prometheus_emits_q08_series() {
+        let _gate = fcgi_metric_test_gate();
+        note_fcgi_saturation_rejection();
+        note_fcgi_checkout_timeout();
+        let mut out = String::new();
+        append_fcgi_prometheus(&mut out);
+        assert!(out.contains("exyonq_fcgi_saturation_rejections_total"));
+        assert!(out.contains("exyonq_fcgi_checkout_timeouts_total"));
+        assert!(out.contains("exyonq_fcgi_inflight_current"));
+        assert!(out.contains("exyonq_fcgi_responses_total"));
     }
 }

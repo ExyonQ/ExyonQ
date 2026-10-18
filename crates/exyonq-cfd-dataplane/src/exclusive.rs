@@ -42,7 +42,11 @@ pub fn acquire(gen_dir: &Path) -> io::Result<DataplaneLock> {
             .write(true)
             .truncate(false)
             .open(&path)?;
-        if !exyonq_linux_ffi::try_flock_exclusive(file.as_raw_fd())? {
+        // SAFETY: `file` owns the fd for the lifetime of `DataplaneLock`.
+        // LOCK_EX|LOCK_NB is advisory flock on that fd only; no other aliases.
+        // Failure means another live dataplane holds exclusivity — fail closed.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "competitive H1 dataplane lock held (exclusive ownership required)",

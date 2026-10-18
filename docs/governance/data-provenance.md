@@ -3,7 +3,7 @@
 ```text
 POLICY_ID = EXYONQ-DATA-PROVENANCE-INTEGRITY
 POLICY_STATUS = MANDATORY
-CURSOR_RULE = .cursor/rules/project-integrity-no-shortcuts-no-fake-data.mdc
+LOCAL_RULE = editor rules, not release content
 GATE = scripts/gates/data-provenance-gate.sh
 RELATED = docs/governance/project-integrity.md
 FAIL_MODE = FAIL_CLOSED

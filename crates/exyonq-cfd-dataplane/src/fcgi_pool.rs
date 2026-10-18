@@ -544,14 +544,8 @@ mod tests {
     fn generation_mismatch_discards_idle() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        // Hold accepted peer open — `let _ = accept()` would drop/FIN immediately
-        // and turn later probes into DirtyEOF under parallel scheduling.
         let _ = thread::spawn(move || {
-            let Ok((peer, _)) = listener.accept() else {
-                return;
-            };
-            thread::sleep(Duration::from_secs(2));
-            drop(peer);
+            let _ = listener.accept();
         });
         let pool_cfg = CompiledFcgiPool {
             id: 1,
@@ -669,15 +663,12 @@ mod tests {
     fn apply_timeouts_after_activate_restores_pool_read_timeout() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        // Keep the accepted peer alive for the whole activate/timeout check.
-        // `let _ = accept()` drops the peer immediately → FIN/EOF → Probe::Dirty
-        // under parallel workspace load (TOCTOU with activate_before_begin).
+        let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
         thread::spawn(move || {
-            let Ok((peer, _)) = listener.accept() else {
-                return;
-            };
-            thread::sleep(Duration::from_secs(2));
-            drop(peer);
+            // Keep the accepted peer alive: `let _ = accept()` would drop it and
+            // probe would see EOF → Dirty, which is not what this timeout test wants.
+            let (_peer, _) = listener.accept().unwrap();
+            let _ = hold_rx.recv();
         });
         let pool = CompiledFcgiPool {
             id: 1,
@@ -706,5 +697,6 @@ mod tests {
             }
             FcgiStream::Unix(_) => panic!("expected tcp"),
         }
+        let _ = hold_tx.send(());
     }
 }

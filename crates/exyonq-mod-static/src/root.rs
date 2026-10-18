@@ -63,20 +63,6 @@ struct CachedEntry {
     prepared: PreparedStaticWire,
 }
 
-impl CachedEntry {
-    /// The snapshot body is usable only while inode, length, and mtime still match.
-    /// A miss here is `NotFound` so the caller reads the live file.
-    fn body_still_current(&self) -> bool {
-        match std::fs::metadata(&self.path) {
-            Ok(meta) if meta.is_file() => {
-                crate::conditional::ValidatorIdentity::from_metadata(&meta)
-                    == self.prepared.identity
-            }
-            _ => false,
-        }
-    }
-}
-
 struct PreloadCandidate {
     path: PathBuf,
     request_path: String,
@@ -92,8 +78,6 @@ pub struct StaticRoot {
     route_host: Option<String>,
     index: Option<String>,
     preload_limits: PreloadLimits,
-    /// PHP source and dotfiles. False denies them, including names already preloaded.
-    allow_sensitive: bool,
     cache: Arc<HashMap<String, CachedEntry>>,
 }
 
@@ -119,21 +103,8 @@ impl StaticRoot {
             route_host: None,
             index: index.map(str::to_string),
             preload_limits,
-            allow_sensitive: false,
             cache: Arc::new(HashMap::new()),
         })
-    }
-
-    pub fn set_allow_sensitive(&mut self, allow: bool) {
-        self.allow_sensitive = allow;
-    }
-
-    fn reject_sensitive(&self, request_path: &str) -> Result<(), StaticError> {
-        if self.allow_sensitive || !crate::path_is_sensitive_static(request_path) {
-            Ok(())
-        } else {
-            Err(StaticError::Forbidden)
-        }
     }
 
     pub fn preload_limits(&self) -> PreloadLimits {
@@ -164,7 +135,6 @@ impl StaticRoot {
 
     /// Canonical filesystem path for a request (preload hit or on-demand resolve).
     pub fn resolved_file_path(&self, request_path: &str) -> Result<PathBuf, StaticError> {
-        self.reject_sensitive(request_path)?;
         if let Some(entry) = self.lookup_entry(request_path) {
             return Ok(entry.path.clone());
         }
@@ -205,11 +175,7 @@ impl StaticRoot {
 
     /// HTTP/3 static fast path: shared body bytes for preloaded cache assets.
     pub fn lookup_h3_static(&self, request_path: &str) -> Option<(&'static str, Arc<Bytes>)> {
-        self.reject_sensitive(request_path).ok()?;
         let entry = self.lookup_entry(request_path)?;
-        if !entry.body_still_current() {
-            return None;
-        }
         Some((
             entry.precooked.content_type,
             Arc::clone(&entry.precooked.body),
@@ -221,7 +187,6 @@ impl StaticRoot {
         &self,
         request_path: &str,
     ) -> Result<hyper::Response<BoxBody>, StaticError> {
-        self.reject_sensitive(request_path)?;
         if let Some(relative) = strip_route_prefix(&self.route_prefix, request_path) {
             let _ = relative_as_safe_path(&relative)?;
         } else {
@@ -231,9 +196,6 @@ impl StaticRoot {
         let entry = self
             .lookup_entry(request_path)
             .ok_or(StaticError::NotFound)?;
-        if !entry.body_still_current() {
-            return Err(StaticError::NotFound);
-        }
         Ok(entry.precooked.to_response())
     }
 
@@ -242,7 +204,6 @@ impl StaticRoot {
         &self,
         request_path: &str,
     ) -> Result<hyper::Response<BoxBody>, StaticError> {
-        self.reject_sensitive(request_path)?;
         if let Some(relative) = strip_route_prefix(&self.route_prefix, request_path) {
             let _ = relative_as_safe_path(&relative)?;
         } else {
@@ -252,9 +213,6 @@ impl StaticRoot {
         let entry = self
             .lookup_entry(request_path)
             .ok_or(StaticError::NotFound)?;
-        if !entry.body_still_current() {
-            return Err(StaticError::NotFound);
-        }
         Ok(entry.precooked.to_head_response())
     }
 
@@ -491,9 +449,6 @@ impl StaticRoot {
                     rel.to_string_lossy()
                 )
             };
-            if !self.allow_sensitive && crate::path_is_sensitive_static(&request_path) {
-                continue;
-            }
             out.push(PreloadCandidate {
                 path: canonical,
                 request_path,
@@ -503,7 +458,6 @@ impl StaticRoot {
     }
 
     fn resolve_path_uncached(&self, request_path: &str) -> Result<PathBuf, StaticError> {
-        self.reject_sensitive(request_path)?;
         let relative = match strip_route_prefix(&self.route_prefix, request_path) {
             Some(value) => value,
             None => return Err(StaticError::NotFound),
@@ -537,9 +491,6 @@ impl StaticRoot {
 
         if !canonical.starts_with(&self.canonical_root) {
             return Err(StaticError::PathTraversal);
-        }
-        if let Ok(rel) = canonical.strip_prefix(&self.canonical_root) {
-            self.reject_sensitive(&rel.to_string_lossy())?;
         }
         // Regular-file confirmation deferred to open(O_NOFOLLOW) at the I/O boundary.
         Ok(canonical)

@@ -16,7 +16,7 @@
 //! `PhpFpmClient` — module-local FastCGI client.
 //!
 //! Default [`InertTransport`] is fail-closed. Production uses wire/unix transports via
-//! [`crate::adapter::FcgiModuleExecutor`]. [`crate::ScriptedFpmTransport`] is for protocol unit tests.
+//! [`crate::adapter::FcgiModuleExecutor`]. [`ScriptedFpmTransport`] is for protocol unit tests.
 
 use crate::encode::{
     decode_forward_response, encode_params_frames, encode_stdin_frames, DecodeError, EncodeError,

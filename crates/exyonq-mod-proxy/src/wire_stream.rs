@@ -113,11 +113,17 @@ impl AsyncRead for BoxedWireIo {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let unfilled = buf.initialize_unfilled();
-        match Pin::new(&mut *this.0).poll_read(cx, unfilled) {
+        let rem = buf.remaining();
+        if rem == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        // Safe bridge into `ReadBuf` without `unsafe` (crate forbids unsafe_code):
+        // one copy via a temporary; hot path still owns the real TcpStream reader.
+        let mut scratch = vec![0u8; rem.min(64 * 1024)];
+        match Pin::new(&mut *this.0).poll_read(cx, &mut scratch) {
             Poll::Ready(Ok(0)) => Poll::Ready(Ok(())),
             Poll::Ready(Ok(n)) => {
-                exyonq_linux_ffi::assume_init_advance(buf, n);
+                buf.put_slice(&scratch[..n]);
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
@@ -161,8 +167,9 @@ pub(crate) fn into_async_io(stream: BoxedWireStream) -> impl AsyncRead + AsyncWr
     BoxedWireIo(stream)
 }
 
-/// Peer TCP fd from a boxed wire stream (Linux), if captured at box time.
-#[cfg(target_os = "linux")]
+/// Peer TCP fd from a boxed wire stream (Unix), if captured at box time.
+#[cfg(unix)]
+#[allow(dead_code)] // seam for cork diagnostics / future fd-aware product path
 pub(crate) fn peer_tcp_fd_of(stream: &BoxedWireStream) -> Option<RawFd> {
     stream.peer_tcp_fd()
 }

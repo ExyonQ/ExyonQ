@@ -19,13 +19,9 @@
 //!
 //! - Cap004 `openat2(RESOLVE_BENEATH)` on cache **miss** (and inode change).
 //! - On **hit**, revalidate pathname identity via `fstatat` from the generation
-//!   root dirfd (same relative path Cap004 would open). The epoll hot path
-//!   (`try_hit_hot`) repeats that `fstatat` at most once per millisecond per
-//!   entry so a stable file does not pay a syscall on every request. A direct
-//!   `try_hit` always stats. Atomic rename / delete / recreate that changes
-//!   `(dev,ino)` forces Cap004 reopen once the interval has elapsed. In-place
-//!   rewrite (same inode, new mtime/len) refreshes Cap020 wire via `fstat` on
-//!   the cached FD.
+//!   root dirfd (same relative path Cap004 would open). Atomic rename / delete /
+//!   recreate that changes `(dev,ino)` forces Cap004 reopen. In-place rewrite
+//!   (same inode, new mtime/len) refreshes Cap020 wire via `fstat` on the cached FD.
 //! - **Coded (ADR-046) entries** key on `(path, coding)` and store the *source*
 //!   identity for revalidation. Source identity drift drops the entry (no
 //!   same-inode wire refresh — coded object key includes mtime/len). Never
@@ -48,13 +44,9 @@ use std::ffi::CString;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 /// Soft cap per epoll worker. P1 hot sets are tiny; bound FD pressure.
 pub const FD_CACHE_MAX_ENTRIES: usize = 64;
-
-/// Epoll hot path: one `fstatat` per entry per this interval. Direct `try_hit` ignores it.
-const HOT_REVALIDATE_INTERVAL: Duration = Duration::from_millis(1);
 
 /// Discriminant for ADR-046 coded FD entries (must match `CacheCoding::fd_cache_tag`).
 /// `None` = identity (no Content-Encoding).
@@ -80,8 +72,6 @@ struct CacheEntry {
     generation: u64,
     /// Source (or identity-file) identity stamped at insert / last refresh.
     identity: ValidatorIdentity,
-    /// Last successful identity check. Hot hits skip `fstatat` inside [`HOT_REVALIDATE_INTERVAL`].
-    revalidated_at: Option<Instant>,
     asset: Arc<SendfileAsset>,
 }
 
@@ -153,17 +143,7 @@ pub fn try_hit(
     request_path: &str,
     root: &StaticRoot,
 ) -> Option<Arc<SendfileAsset>> {
-    try_hit_with_coding(generation, site_slot, request_path, None, root, true, false)
-}
-
-/// Same as [`try_hit`], but a confirmed identity is reused for one millisecond.
-pub fn try_hit_hot(
-    generation: u64,
-    site_slot: u32,
-    request_path: &str,
-    root: &StaticRoot,
-) -> Option<Arc<SendfileAsset>> {
-    try_hit_with_coding(generation, site_slot, request_path, None, root, true, true)
+    try_hit_with_coding(generation, site_slot, request_path, None, root, true)
 }
 
 /// Look up a reusable **coded** sendfile asset (ADR-046).
@@ -184,26 +164,6 @@ pub fn try_hit_coded(
         Some(coding_tag),
         root,
         false,
-        false,
-    )
-}
-
-/// Same as [`try_hit_coded`], with the hot-path revalidation interval.
-pub fn try_hit_coded_hot(
-    generation: u64,
-    site_slot: u32,
-    request_path: &str,
-    coding_tag: u8,
-    root: &StaticRoot,
-) -> Option<Arc<SendfileAsset>> {
-    try_hit_with_coding(
-        generation,
-        site_slot,
-        request_path,
-        Some(coding_tag),
-        root,
-        false,
-        true,
     )
 }
 
@@ -214,7 +174,6 @@ fn try_hit_with_coding(
     coding: CodingTag,
     root: &StaticRoot,
     allow_same_inode_refresh: bool,
-    coalesce: bool,
 ) -> Option<Arc<SendfileAsset>> {
     LOCAL.with(|cell| {
         let mut cache = cell.borrow_mut();
@@ -227,14 +186,6 @@ fn try_hit_with_coding(
             MISSES.fetch_add(1, Ordering::Relaxed);
             return None;
         }
-        if coalesce {
-            if let Some(at) = cache.entries[idx].revalidated_at {
-                if at.elapsed() < HOT_REVALIDATE_INTERVAL {
-                    HITS.fetch_add(1, Ordering::Relaxed);
-                    return Some(Arc::clone(&cache.entries[idx].asset));
-                }
-            }
-        }
         let stat = identity_from_c_str(cache.entries[idx].rel.as_c_str(), root.root_dir_fd());
         let now = match stat {
             Ok(id) => id,
@@ -246,7 +197,6 @@ fn try_hit_with_coding(
             }
         };
         if now == cache.entries[idx].identity {
-            cache.entries[idx].revalidated_at = Some(Instant::now());
             HITS.fetch_add(1, Ordering::Relaxed);
             return Some(Arc::clone(&cache.entries[idx].asset));
         }
@@ -268,7 +218,6 @@ fn try_hit_with_coding(
             };
             let refreshed = Arc::new(asset_refresh_meta(cache.entries[idx].asset.as_ref(), &meta));
             cache.entries[idx].identity = now;
-            cache.entries[idx].revalidated_at = Some(Instant::now());
             cache.entries[idx].asset = Arc::clone(&refreshed);
             HITS.fetch_add(1, Ordering::Relaxed);
             return Some(refreshed);
@@ -310,7 +259,6 @@ pub fn insert(
 ///
 /// `source_file_path` is the Cap004 source path (for `fstatat` revalidation);
 /// `source_identity` is the source identity that produced the coded object.
-#[allow(clippy::too_many_arguments)]
 pub fn insert_coded(
     generation: u64,
     site_slot: u32,
@@ -333,7 +281,6 @@ pub fn insert_coded(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn insert_with_coding(
     generation: u64,
     site_slot: u32,
@@ -357,7 +304,6 @@ fn insert_with_coding(
             rel,
             generation,
             identity,
-            revalidated_at: Some(Instant::now()),
             asset,
         };
         if let Some(idx) = existing {
@@ -403,10 +349,6 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    fn sendfile_fixture(byte: u8) -> Vec<u8> {
-        vec![byte; crate::sendfile::SENDFILE_MIN_BYTES]
-    }
-
     fn serial_pin() -> std::sync::MutexGuard<'static, ()> {
         crate::epoll_session::serial_runtime_pin_for_tests()
     }
@@ -433,7 +375,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root_path = dir.path().join("root");
         fs::create_dir_all(&root_path).expect("mkdir");
-        fs::write(root_path.join("a.bin"), sendfile_fixture(0)).expect("write");
+        fs::write(root_path.join("a.bin"), vec![0u8; 128]).expect("write");
 
         let root = preload_root(&root_path);
         let rt = Arc::new(StaticRuntime::new());
@@ -464,7 +406,7 @@ mod tests {
         let root_path = dir.path().join("root");
         fs::create_dir_all(&root_path).expect("mkdir");
         let path = root_path.join("a.bin");
-        fs::write(&path, sendfile_fixture(b'o')).expect("write");
+        fs::write(&path, b"old-content").expect("write");
 
         let root = preload_root(&root_path);
         let rt = Arc::new(StaticRuntime::new());
@@ -478,7 +420,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(20));
         let tmp = root_path.join("a.bin.tmp");
-        fs::write(&tmp, vec![b'n'; crate::sendfile::SENDFILE_MIN_BYTES + 1]).expect("tmp");
+        fs::write(&tmp, b"new-content!!").expect("tmp");
         fs::rename(&tmp, &path).expect("rename");
 
         let h2 = crate::epoll_session::match_sendfile_asset(0, &head).expect("match2");
@@ -504,7 +446,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root_path = dir.path().join("root");
         fs::create_dir_all(&root_path).expect("mkdir");
-        fs::write(root_path.join("a.bin"), sendfile_fixture(b'v')).expect("write");
+        fs::write(root_path.join("a.bin"), b"v1").expect("write");
 
         let root = preload_root(&root_path);
         let rt = Arc::new(StaticRuntime::new());

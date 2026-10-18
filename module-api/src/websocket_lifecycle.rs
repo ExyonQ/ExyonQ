@@ -15,7 +15,7 @@
  */
 //! Cap031: admission ownership for Hyper WebSocket tunnels that outlive the HTTP connection future.
 //!
-//! Core installs a factory that extends `active_connections` for the tunnel task duration.
+//! Core installs a factory that extends [`active_connections`] for the tunnel task duration.
 //! Proxy module acquires the hold before spawning the bidirectional copy and drops it when the
 //! tunnel ends — so drain/shutdown cannot observe zero active work while a tunnel is live.
 

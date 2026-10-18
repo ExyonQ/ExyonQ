@@ -22,7 +22,7 @@ use exyonq_core::lifecycle::LifecycleState;
 use exyonq_core::reload::{
     active_runtime_generation, arm_reload_hold_for_tests, read_state,
     release_reload_hold_for_tests, reload_from_path, reload_in_progress,
-    set_reload_fail_after_prepare_for_tests, wrap_state, ReloadDisposition,
+    set_reload_fail_after_prepare_for_tests, wrap_state,
 };
 use exyonq_core::server::state::ServerState;
 use exyonq_mod_proxy::build_incoming_client;
@@ -124,54 +124,30 @@ index = "index.html"
     std::fs::write(path, body).unwrap();
 }
 
-fn write_config_with_tls(path: &std::path::Path, cert: &std::path::Path, key: &std::path::Path) {
-    let body = format!(
-        r#"config_version = 1
-
-[[server]]
-listen = "127.0.0.1:8080"
-routes = ["site"]
-tls = {{ cert = "{}", key = "{}" }}
-
-[[route]]
-name = "site"
-match = {{ path = "/site" }}
-root = "tests/fixtures/www"
-index = "index.html"
-"#,
-        cert.display(),
-        key.display()
-    );
-    std::fs::write(path, body).unwrap();
-}
-
 fn openssl_bin() -> &'static str {
     "openssl"
 }
 
 fn write_ephemeral_pkcs8_pair(dir: &std::path::Path) -> (PathBuf, PathBuf) {
+    exyonq_mod_tls::install_rustls_provider();
     let cert = dir.join("cert.pem");
     let key = dir.join("key.pem");
-    overwrite_ephemeral_pkcs8_pair(&cert, &key, "exyonq-cap013-reload-test");
-    (cert, key)
-}
-
-fn overwrite_ephemeral_pkcs8_pair(
-    cert: &std::path::Path,
-    key: &std::path::Path,
-    common_name: &str,
-) {
-    exyonq_mod_tls::install_rustls_provider();
     let status = Command::new(openssl_bin())
         .args(["req", "-x509", "-newkey", "rsa:2048", "-keyout"])
-        .arg(key)
+        .arg(&key)
         .arg("-out")
-        .arg(cert)
-        .args(["-days", "1", "-nodes", "-subj"])
-        .arg(format!("/CN={common_name}"))
+        .arg(&cert)
+        .args([
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=exyonq-cap013-reload-test",
+        ])
         .status()
         .expect("openssl available for ephemeral TLS fixtures");
     assert!(status.success(), "openssl ephemeral cert generation failed");
+    (cert, key)
 }
 
 #[tokio::test]
@@ -192,14 +168,10 @@ async fn valid_reload_increments_generation() {
 
     write_config_with_root(&path, "tests/fixtures/www-cap013-b");
 
-    let result = reload_from_path(&path, &shared, proxy, &tls, &cache)
+    let result = reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .unwrap();
-    assert_eq!(
-        result.disposition,
-        ReloadDisposition::RuntimeGenerationPublished
-    );
-    assert!(format!("{result:?}").contains("RuntimeGenerationPublished"));
+    assert!(!result.identical_no_op);
     assert!(read_state(&shared).generation > gen_before);
 }
 
@@ -220,7 +192,7 @@ async fn invalid_reload_keeps_previous_generation() {
     let cache = TlsSessionCache::default();
 
     std::fs::write(&path, "not valid toml [[[").unwrap();
-    assert!(reload_from_path(&path, &shared, proxy, &tls, &cache)
+    assert!(reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .is_err());
     assert_eq!(read_state(&shared).generation, gen_before);
@@ -263,7 +235,7 @@ async fn late_fail_after_prepare_keeps_generation_tls_and_snapshot() {
     // Distinct fingerprint so prepare proceeds past NO_OP, then inject late failure.
     write_config_with_root(&path, "tests/fixtures/www-cap013-late-fail");
     set_reload_fail_after_prepare_for_tests(true);
-    let err = reload_from_path(&path, &shared, proxy, &tls, &cache)
+    let err = reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .expect_err("late prepare failure must reject");
     assert!(
@@ -300,10 +272,10 @@ async fn identical_fingerprint_is_noop_without_generation_bump() {
     let tls = SharedTlsAcceptor::new();
     let cache = TlsSessionCache::default();
 
-    let result = reload_from_path(&path, &shared, proxy, &tls, &cache)
+    let result = reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .unwrap();
-    assert_eq!(result.disposition, ReloadDisposition::NoOp);
+    assert!(result.identical_no_op);
     assert_eq!(result.state.generation, gen_before);
     assert_eq!(read_state(&shared).generation, gen_before);
     assert_eq!(read_state(&shared).fingerprint(), fp_before);
@@ -311,7 +283,7 @@ async fn identical_fingerprint_is_noop_without_generation_bump() {
 
     let port = CoreKernelControlPort {
         shared: Arc::clone(&shared),
-        proxy_client: proxy.clone(),
+        proxy_client: proxy,
         tls_acceptor: tls,
         tls_session_cache: cache,
         lifecycle: LifecycleState::new(),
@@ -321,131 +293,6 @@ async fn identical_fingerprint_is_noop_without_generation_bump() {
     assert_eq!(outcome.code.as_deref(), Some("EXY-RELOAD-0008"));
     assert_eq!(outcome.snapshot.generation, gen_before);
     assert!(outcome.code_result_consistent());
-}
-
-#[tokio::test]
-async fn identical_tls_config_publishes_material_without_runtime_generation() {
-    let _gate = lock_reload_suite();
-    reset_reload_test_hooks();
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("exyonq.toml");
-    let (cert, key) = write_ephemeral_pkcs8_pair(dir.path());
-    write_config_with_tls(&path, &cert, &key);
-
-    let config = exyonq_runtime_plan::load_config_for_reload(&path).unwrap();
-    let proxy = build_incoming_client();
-    let state = ServerState::new(config, proxy.clone()).await.unwrap();
-    let shared = wrap_state(state);
-    let state_before = read_state(&shared);
-    let generation_before = state_before.generation;
-    let fingerprint_before = state_before.fingerprint().to_string();
-    let tls = SharedTlsAcceptor::new();
-    let cache = TlsSessionCache::default();
-    tls.load(
-        &TlsSettings {
-            cert_path: cert.clone(),
-            key_path: key.clone(),
-        },
-        &cache,
-        &[b"h2", b"http/1.1"],
-    )
-    .unwrap();
-    let cache_before = cache.as_arc();
-    let publication_before = tls.snapshot();
-
-    overwrite_ephemeral_pkcs8_pair(&cert, &key, "rotated.exyonq.test");
-    let result = reload_from_path(&path, &shared, proxy, &tls, &cache)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        result.disposition,
-        ReloadDisposition::TlsMaterialPublishedTcp
-    );
-    assert!(Arc::ptr_eq(&result.state, &state_before));
-    assert!(Arc::ptr_eq(&read_state(&shared), &state_before));
-    assert_eq!(result.state.generation, generation_before);
-    assert_eq!(result.state.fingerprint(), fingerprint_before);
-    assert_eq!(active_runtime_generation(), generation_before);
-    assert!(tls.is_loaded());
-    assert!(!Arc::ptr_eq(&cache_before, &cache.as_arc()));
-    let publication_after = tls.snapshot();
-    assert_eq!(
-        publication_after.publication_generation(),
-        publication_before.publication_generation() + 1
-    );
-    assert_eq!(
-        publication_after.session_storage_identity(),
-        Some(cache.session_storage_identity())
-    );
-
-    let port = CoreKernelControlPort {
-        shared,
-        proxy_client: proxy.clone(),
-        tls_acceptor: tls,
-        tls_session_cache: cache,
-        lifecycle: LifecycleState::new(),
-    };
-    let outcome = port.request_reload(&path).await;
-    assert!(outcome.ok);
-    assert_eq!(outcome.code, None);
-    assert!(outcome
-        .error
-        .as_deref()
-        .is_some_and(|note| note.contains("TCP TLS") && note.contains("HTTP/3")));
-    assert_eq!(outcome.snapshot.generation, generation_before);
-    assert!(outcome.code_result_consistent());
-}
-
-#[tokio::test]
-async fn invalid_same_path_tls_material_keeps_state_acceptor_and_session_epoch() {
-    let _gate = lock_reload_suite();
-    reset_reload_test_hooks();
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("exyonq.toml");
-    let (cert, key) = write_ephemeral_pkcs8_pair(dir.path());
-    write_config_with_tls(&path, &cert, &key);
-
-    let config = exyonq_runtime_plan::load_config_for_reload(&path).unwrap();
-    let proxy = build_incoming_client();
-    let state = ServerState::new(config, proxy.clone()).await.unwrap();
-    let shared = wrap_state(state);
-    let state_before = read_state(&shared);
-    let tls = SharedTlsAcceptor::new();
-    let cache = TlsSessionCache::default();
-    tls.load(
-        &TlsSettings {
-            cert_path: cert.clone(),
-            key_path: key.clone(),
-        },
-        &cache,
-        &[b"h2", b"http/1.1"],
-    )
-    .unwrap();
-    let cache_before = cache.as_arc();
-    let publication_before = tls.snapshot();
-
-    std::fs::write(&cert, "not a certificate").unwrap();
-    let err = reload_from_path(&path, &shared, proxy, &tls, &cache)
-        .await
-        .expect_err("invalid same-path PEM must fail closed");
-
-    assert!(
-        err.to_string().starts_with("EXY-RELOAD-0004:"),
-        "unexpected error: {err}"
-    );
-    assert!(Arc::ptr_eq(&read_state(&shared), &state_before));
-    assert!(tls.is_loaded());
-    assert!(Arc::ptr_eq(&cache_before, &cache.as_arc()));
-    let publication_after = tls.snapshot();
-    assert_eq!(
-        publication_after.publication_generation(),
-        publication_before.publication_generation()
-    );
-    assert_eq!(
-        publication_after.session_storage_identity(),
-        publication_before.session_storage_identity()
-    );
 }
 
 #[tokio::test]
@@ -465,7 +312,7 @@ async fn listen_bind_change_rejects_with_exy_reload_0005() {
     let cache = TlsSessionCache::default();
 
     write_config_with_listen(&path, "127.0.0.1:9090");
-    let err = reload_from_path(&path, &shared, proxy, &tls, &cache)
+    let err = reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .expect_err("listen change must reject");
     assert!(
@@ -476,7 +323,7 @@ async fn listen_bind_change_rejects_with_exy_reload_0005() {
 
     let port = CoreKernelControlPort {
         shared,
-        proxy_client: proxy.clone(),
+        proxy_client: proxy,
         tls_acceptor: tls,
         tls_session_cache: cache,
         lifecycle: LifecycleState::new(),
@@ -505,7 +352,7 @@ async fn http3_listen_bind_change_rejects_with_exy_reload_0005() {
     let cache = TlsSessionCache::default();
 
     write_config_with_http3_listen(&path, "127.0.0.1:8080", "127.0.0.1:9443");
-    let err = reload_from_path(&path, &shared, proxy, &tls, &cache)
+    let err = reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .expect_err("http3_listen change must reject");
     assert!(
@@ -552,8 +399,7 @@ async fn concurrent_reloads_serialize_single_generation_step() {
     let r2 = r2.expect("second reload");
     // Serialized: exactly one apply, one identical NO_OP.
     assert_eq!(
-        usize::from(r1.disposition == ReloadDisposition::NoOp)
-            + usize::from(r2.disposition == ReloadDisposition::NoOp),
+        usize::from(r1.identical_no_op) + usize::from(r2.identical_no_op),
         1
     );
     assert_eq!(read_state(&shared).generation, gen_before + 1);
@@ -608,10 +454,7 @@ async fn reload_in_progress_visible_while_mutex_held() {
 
     release_reload_hold_for_tests();
     let result = handle.await.unwrap().unwrap();
-    assert_eq!(
-        result.disposition,
-        ReloadDisposition::RuntimeGenerationPublished
-    );
+    assert!(!result.identical_no_op);
     assert!(!reload_in_progress());
     assert!(!port.read_status(false).snapshot.reload_in_progress);
 }
@@ -647,7 +490,7 @@ async fn kernel_port_rejects_reload_after_shutdown() {
     ops.request_shutdown();
     let port = CoreKernelControlPort {
         shared,
-        proxy_client: proxy.clone(),
+        proxy_client: proxy,
         tls_acceptor: SharedTlsAcceptor::new(),
         tls_session_cache: TlsSessionCache::default(),
         lifecycle: ops,

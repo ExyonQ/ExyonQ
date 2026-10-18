@@ -320,8 +320,12 @@ enum FrontControllerOutcome {
     /// Existing PHP (or the front-controller target) — dispatch FastCGI.
     Continue,
     /// Existing non-PHP file — serve bytes from disk (do not send to php-fpm).
-    ServeStatic { filesystem_path: String },
-    RewriteToScript { script_uri: String },
+    ServeStatic {
+        filesystem_path: String,
+    },
+    RewriteToScript {
+        script_uri: String,
+    },
     InternalLoop,
     TargetScriptMissing,
 }

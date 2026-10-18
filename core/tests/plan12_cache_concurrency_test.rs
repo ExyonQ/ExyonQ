@@ -292,15 +292,17 @@ fn ttl_race_never_serves_expired_and_cleanup_is_safe() {
     reset_metrics_for_tests();
     let cache = ResponseCache::with_limits(10, 1024 * 1024);
     let key = test_key("/ttl");
-    insert_test(
-        &cache,
-        key.clone(),
-        Duration::from_millis(2),
-        Bytes::from_static(b"old"),
-    );
+    // Short TTLs (2ms) flake under cargo-test scheduling load: the entry can
+    // expire before the first lookup. Use a still-short but host-stable window.
+    let short_ttl = Duration::from_millis(50);
+    insert_test(&cache, key.clone(), short_ttl, Bytes::from_static(b"old"));
     let old = cache.lookup(&key).expect("initial");
     let old_id = old.entry_id();
-    std::thread::sleep(Duration::from_millis(5));
+    std::thread::sleep(short_ttl + Duration::from_millis(30));
+    assert!(
+        cache.lookup(&key).is_none(),
+        "expired entry must not remain visible"
+    );
     insert_test(
         &cache,
         key.clone(),

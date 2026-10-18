@@ -152,21 +152,10 @@ fn tokio_worker_threads() -> usize {
     exyonq_core::server::resolve_tokio_worker_threads()
 }
 
-#[cfg(target_os = "linux")]
-fn install_platform_tcp_send_hooks() {
-    let _ = exyonq_module_api::proxy_wire::install_proxy_tcp_send_hooks(
-        exyonq_module_api::proxy_wire::ProxyTcpSendHooks {
-            set_cork: exyonq_platform_linux::set_tcp_cork,
-        },
-    );
-}
-
 fn main() -> anyhow::Result<()> {
     // PS3A: composition root links `exyonq-platform-linux` → `exyonq-core` (D1).
     // Workers remain in core until authorized extraction follow-up.
     ensure_composition_link();
-    #[cfg(target_os = "linux")]
-    install_platform_tcp_send_hooks();
     // Cap061: bootstrap from env; serve path upgrades via IR `[logging]`.
     let _o11y = exyonq_observability::bootstrap_from_env()?;
 
@@ -178,35 +167,6 @@ fn main() -> anyhow::Result<()> {
     let result = rt.block_on(async_main());
     _o11y.shutdown();
     result
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod platform_composition_tests {
-    use super::install_platform_tcp_send_hooks;
-    use std::net::{TcpListener, TcpStream};
-    use std::os::fd::AsRawFd;
-
-    #[test]
-    fn cli_installs_working_platform_tcp_cork_hook() {
-        install_platform_tcp_send_hooks();
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let client = TcpStream::connect(listener.local_addr().expect("listener address"))
-            .expect("connect loopback");
-        let (server, _) = listener.accept().expect("accept loopback");
-
-        assert!(
-            exyonq_module_api::proxy_wire::try_set_tcp_cork(server.as_raw_fd(), true)
-                .expect("CLI must install TCP_CORK hook")
-                .is_ok()
-        );
-        assert!(
-            exyonq_module_api::proxy_wire::try_set_tcp_cork(server.as_raw_fd(), false)
-                .expect("CLI must install TCP_CORK hook")
-                .is_ok()
-        );
-        drop(client);
-    }
 }
 
 async fn async_main() -> anyhow::Result<()> {
@@ -350,6 +310,8 @@ async fn async_main() -> anyhow::Result<()> {
                 .map_err(|_| anyhow::anyhow!("ACME integration service already registered"))?;
             exyonq_metrics::register_observability_runtime()
                 .map_err(|_| anyhow::anyhow!("observability runtime already registered"))?;
+            // Q-04 / ADR-057: FPC counters on /metrics for `exyonqctl cache stats`.
+            exyonq_module_api::register_prometheus_appender(exyonq_core::append_fpc_prometheus);
             exyonq_reload_runtime::register_reload_runtime()
                 .map_err(|_| anyhow::anyhow!("reload runtime already registered"))?;
             l2_coord_lab::maybe_install_l2_coord_lab(&app_config)?;
@@ -378,6 +340,7 @@ async fn async_main() -> anyhow::Result<()> {
                     format: ConfigOut::Human,
                     strict: false,
                     color: true,
+                    warn: false,
                 },
             );
             emit_result(&result);
@@ -493,12 +456,6 @@ fn is_serverfile(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "exy")
 }
 
-#[cfg(not(unix))]
-fn resolve_fcgi_registration(_app_config: &AppConfig) -> Option<FcgiRuntimeRegistration> {
-    None
-}
-
-#[cfg(unix)]
 fn resolve_fcgi_registration(app_config: &AppConfig) -> Option<FcgiRuntimeRegistration> {
     if app_config.pools_fcgi.is_empty() {
         return None;
@@ -696,6 +653,8 @@ mod htaccess_overlay_tests {
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),
                 host: None,
+
+                ..Default::default()
             },
             upstream: None,
             root: None,
@@ -705,7 +664,12 @@ mod htaccess_overlay_tests {
             fastcgi: Some("php".into()),
             htaccess: exyonq_config_ir::HtaccessMode::Overlay,
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         });
         config.pools_fcgi.insert(
             "php".into(),
@@ -735,6 +699,8 @@ mod htaccess_overlay_tests {
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),
                 host: None,
+
+                ..Default::default()
             },
             upstream: None,
             root: None,
@@ -744,7 +710,12 @@ mod htaccess_overlay_tests {
             fastcgi: Some("php".into()),
             htaccess: exyonq_config_ir::HtaccessMode::Off,
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         });
         assert!(compile_htaccess_site_bindings(&config).is_empty());
     }

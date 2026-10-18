@@ -494,6 +494,33 @@ pub fn fpc_store_rejected_total(reason: &str) -> u64 {
     }
 }
 
+/// Prometheus text for FPC counters (Q-04 / ADR-057). Always emitted when registered.
+pub fn append_fpc_prometheus(out: &mut String) {
+    let lookup = fpc_lookup_total();
+    let hit = fpc_hit_total();
+    let miss = fpc_miss_total();
+    let bypass = fpc_bypass_total();
+    let store_ok = fpc_store_success_total();
+    let store_attempt = fpc_store_attempt_total();
+    out.push_str("# TYPE exyonq_fpc_lookup_total counter\n");
+    out.push_str(&format!("exyonq_fpc_lookup_total {lookup}\n"));
+    out.push_str("# TYPE exyonq_fpc_hit_total counter\n");
+    out.push_str(&format!("exyonq_fpc_hit_total {hit}\n"));
+    out.push_str("# TYPE exyonq_fpc_miss_total counter\n");
+    out.push_str(&format!("exyonq_fpc_miss_total {miss}\n"));
+    out.push_str("# TYPE exyonq_fpc_bypass_total counter\n");
+    out.push_str(&format!("exyonq_fpc_bypass_total {bypass}\n"));
+    out.push_str("# TYPE exyonq_fpc_store_attempt_total counter\n");
+    out.push_str(&format!("exyonq_fpc_store_attempt_total {store_attempt}\n"));
+    out.push_str("# TYPE exyonq_fpc_store_success_total counter\n");
+    out.push_str(&format!("exyonq_fpc_store_success_total {store_ok}\n"));
+    out.push_str("# TYPE exyonq_cache_entries_current gauge\n");
+    out.push_str(&format!(
+        "exyonq_cache_entries_current {}\n",
+        cache_entries_current()
+    ));
+}
+
 pub fn reset_metrics_for_tests() {
     CACHE_HITS.store(0, Ordering::Relaxed);
     CACHE_MISSES.store(0, Ordering::Relaxed);

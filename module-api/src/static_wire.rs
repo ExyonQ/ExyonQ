@@ -144,13 +144,6 @@ pub fn keepalive_handoff_enabled() -> bool {
 
 /// Blocking wire serve hook (sync accept / io_uring path) — no `StaticRoot` in core.
 #[cfg(target_os = "linux")]
-type ShedBlockingFuture =
-    std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send>>;
-
-#[cfg(target_os = "linux")]
-type ShedBlockingAdmission = fn(std::net::TcpStream) -> ShedBlockingFuture;
-
-#[cfg(target_os = "linux")]
 pub struct StaticWireServeHooks {
     pub serve_blocking_sync: fn(
         site_slot: u32,
@@ -164,7 +157,10 @@ pub struct StaticWireServeHooks {
         head: bytes::Bytes,
         rest: bytes::Bytes,
     ) -> BlockingAdmission,
-    pub shed_blocking_admission: ShedBlockingAdmission,
+    pub shed_blocking_admission:
+        fn(
+            std::net::TcpStream,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send>>,
 }
 
 #[cfg(target_os = "linux")]

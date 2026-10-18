@@ -28,7 +28,42 @@ rust-project.json
 !/docs/adr/**
 !/docs/architecture/
 !/docs/architecture/**
-/benchmarks/
+!/docs/waf/
+!/docs/waf/**
+!/docs/control-api/
+!/docs/control-api/**
+# Competitive scoreboard (canonical JSON + generated HTML) — tracked SoT.
+!/docs/benchmarks/
+!/docs/benchmarks/README.md
+!/docs/benchmarks/v044-p1-p14-competitive-dashboard.json
+!/docs/benchmarks/v044-p1-p14-competitive-dashboard.html
+# Ignore untracked benchmark dumps. Indexed files stay tracked.
+# `/benchmarks/` as a directory ignore blocks un-ignore of harness sources
+# (git cannot re-include a file under an excluded parent directory).
+/benchmarks/*
+!/benchmarks/scenarios/
+/benchmarks/scenarios/*
+!/benchmarks/scenarios/perf/
+/benchmarks/scenarios/perf/*
+!/benchmarks/scenarios/perf/adr_025_protector_loadgen.py
+!/benchmarks/scenarios/perf/adr_025_protector_gates.py
+!/benchmarks/scenarios/perf/adr_025_protector_consolidated.py
+# ADR-025 Docker image source (must stay Git-bound; docker COPY ≠ git index).
+!/benchmarks/docker/
+/benchmarks/docker/*
+!/benchmarks/docker/Dockerfile.exyonq
+!/benchmarks/docker/Dockerfile.upstream
+!/benchmarks/docker/docker-compose.bench.yml
+!/benchmarks/docker/exyonq-entrypoint.sh
+!/benchmarks/docker/exyonq-env.sh
+!/benchmarks/scenarios/payloads/
+/benchmarks/scenarios/payloads/*
+!/benchmarks/scenarios/payloads/health.txt
+!/benchmarks/scenarios/payloads/www/
+/benchmarks/scenarios/payloads/www/*
+!/benchmarks/scenarios/payloads/www/1k.bin
+!/benchmarks/scenarios/payloads/www/64k.bin
+!/benchmarks/scenarios/payloads/www/1m.bin
 /results/
 /raw/
 /artifacts/
@@ -76,6 +111,7 @@ GPG_PRIVATE_KEY
 
 # --- Exceptions: public examples only (private PEM never excepted) ---
 !tests/**/*.html
+!docs/benchmarks/v044-p1-p14-competitive-dashboard.html
 !**/*.env.example
 !packaging/**/*.env.example
 

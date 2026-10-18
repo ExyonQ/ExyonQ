@@ -51,6 +51,8 @@ pub fn register_observability_runtime() -> Result<(), ObservabilityRegisterError
     register_prometheus_appender(exyonq_module_api::static_epoll::append_prometheus);
 
     register_prometheus_appender(exyonq_mod_htaccess::append_htaccess_prometheus);
+    // Q-08 / ADR-060: FastCGI pool counters as exyonq_fcgi_*.
+    register_prometheus_appender(exyonq_mod_fastcgi::append_fcgi_prometheus);
 
     ensure_runtime_prometheus_hook(crate::register_runtime_prometheus_append);
     crate::touch_process_http_metrics();

@@ -32,7 +32,6 @@ mod static_mvp;
 mod try_files;
 mod upstream;
 mod variables;
-mod wordpress;
 
 use anyhow::{Context, Result};
 use exyonq_compat_common::MigrationReport;
@@ -75,18 +74,12 @@ pub enum MigrateProfile {
     ReverseProxyMvp,
     /// Fail-closed FastCGI/PHP subset — see `NGINX_FASTCGI_PHP_IMPORT_MVP.md`.
     FastcgiPhpMvp,
-    /// WordPress product config from one server, one unix PHP socket, and
-    /// `try_files` to `/index.php`. Not nginx compatibility.
-    Wordpress,
 }
 
 fn is_fail_closed_profile(profile: MigrateProfile) -> bool {
     matches!(
         profile,
-        MigrateProfile::StaticMvp
-            | MigrateProfile::ReverseProxyMvp
-            | MigrateProfile::FastcgiPhpMvp
-            | MigrateProfile::Wordpress
+        MigrateProfile::StaticMvp | MigrateProfile::ReverseProxyMvp | MigrateProfile::FastcgiPhpMvp
     )
 }
 
@@ -95,7 +88,6 @@ fn profile_must_refuse(profile: MigrateProfile, report: &CompatibilityReport) ->
         MigrateProfile::StaticMvp => static_mvp::must_refuse(report),
         MigrateProfile::ReverseProxyMvp => proxy_mvp::must_refuse(report),
         MigrateProfile::FastcgiPhpMvp => fastcgi_php_mvp::must_refuse(report),
-        MigrateProfile::Wordpress => wordpress::must_refuse(report),
         MigrateProfile::Full => false,
     }
 }
@@ -132,8 +124,7 @@ impl MigrateOutput {
         match profile {
             MigrateProfile::StaticMvp
             | MigrateProfile::ReverseProxyMvp
-            | MigrateProfile::FastcgiPhpMvp
-            | MigrateProfile::Wordpress => {
+            | MigrateProfile::FastcgiPhpMvp => {
                 if profile_must_refuse(profile, &self.report) || self.config.trim().is_empty() {
                     1
                 } else {
@@ -195,12 +186,7 @@ fn run_pipeline(
         MigrateProfile::StaticMvp => static_mvp::enforce(&config, &analyzed, report),
         MigrateProfile::ReverseProxyMvp => proxy_mvp::enforce(&config, &analyzed, report),
         MigrateProfile::FastcgiPhpMvp => fastcgi_php_mvp::enforce(&config, &analyzed, report),
-        MigrateProfile::Wordpress => {}
         MigrateProfile::Full => {}
-    }
-
-    if options.profile == MigrateProfile::Wordpress {
-        return finish_wordpress(&analyzed, report, options);
     }
 
     if is_fail_closed_profile(options.profile) && profile_must_refuse(options.profile, report) {
@@ -244,43 +230,6 @@ fn run_pipeline(
         .to_string(),
     };
 
-    Ok(MigrateOutput {
-        config: config_out,
-        report: std::mem::take(report),
-        summary,
-    })
-}
-
-fn finish_wordpress(
-    analyzed: &ast::AnalyzedConfig,
-    report: &mut CompatibilityReport,
-    options: &MigrateOptions,
-) -> Result<MigrateOutput> {
-    let Some(toml) = wordpress::emit(analyzed, report) else {
-        let summary = report.summary.clone();
-        return Ok(MigrateOutput {
-            config: String::new(),
-            report: std::mem::take(report),
-            summary,
-        });
-    };
-    if wordpress::must_refuse(report) {
-        let summary = report.summary.clone();
-        return Ok(MigrateOutput {
-            config: String::new(),
-            report: std::mem::take(report),
-            summary,
-        });
-    }
-    let summary = report.summary.clone();
-    let config_out = match options.format {
-        OutputFormat::Toml => toml.clone(),
-        OutputFormat::Json => serde_json::json!({
-            "config_toml": toml,
-            "summary": summary,
-        })
-        .to_string(),
-    };
     Ok(MigrateOutput {
         config: config_out,
         report: std::mem::take(report),

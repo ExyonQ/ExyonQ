@@ -4,9 +4,9 @@
 
 ExyonQ serves static sites, terminates TLS, proxies application traffic, runs PHP through FastCGI, and supports HTTP/1.1, HTTP/2, and HTTP/3/QUIC. It is available as Linux binaries and multi-architecture container images for `linux/amd64` and `linux/arm64`.
 
-> **Project phase:** Alpha · **Current release:** [v0.4.13](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.13) · [Documentation](DOCUMENTATION_INDEX.md) · [Release notes](CHANGELOG.md) · [Security policy](SECURITY.md)
+> **Project phase:** Alpha · **Published release:** [v0.4.13](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.13) · **Source in this tree:** 0.5.0 (not published) · [Documentation](DOCUMENTATION_INDEX.md) · [Release notes](CHANGELOG.md) · [Security policy](SECURITY.md)
 
-ExyonQ is in alpha. v0.4.13 publishes the documented scope. Later versions may change behavior and configuration.
+ExyonQ is in alpha. The published release is v0.4.13. The source in this tree is 0.5.0 and is not a release: it has no tag and no container images yet. Later versions may change behavior and configuration.
 
 ## Why ExyonQ?
 

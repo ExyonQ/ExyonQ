@@ -53,8 +53,97 @@ fn walk_http(directive: &Directive, out: &mut AnalyzedConfig, report: &mut Compa
         "server" => parse_server(directive, out, report),
         "upstream" => parse_upstream(directive, out, report),
         "include" => {}
+        "map" => parse_map(directive, out, report),
+        "if" => {
+            report.push(
+                &directive.loc,
+                "if",
+                CompatStatus::Error,
+                "nginx `if` is not supported (EXY-NG-IF / ADR-051); use match.header / map / explicit routes",
+                None,
+            );
+        }
         _ => report_unknown(directive, "http", report),
     }
+}
+
+fn parse_map(directive: &Directive, out: &mut AnalyzedConfig, report: &mut CompatibilityReport) {
+    use crate::ast::ParsedMap;
+    if directive.args.len() < 2 {
+        report.push(
+            &directive.loc,
+            "map",
+            CompatStatus::Error,
+            "map requires source and destination variables",
+            None,
+        );
+        return;
+    }
+    let source_var = directive.args[0].clone();
+    let dest_var = directive.args[1].trim_start_matches('$').to_string();
+    if !dest_var
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase())
+        || !dest_var
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        report.push(
+            &directive.loc,
+            "map",
+            CompatStatus::Unsupported,
+            format!("map destination `${dest_var}` not a valid IR map name (ADR-051)"),
+            None,
+        );
+        return;
+    }
+    let Some(block) = &directive.block else {
+        report.push(
+            &directive.loc,
+            "map",
+            CompatStatus::Error,
+            "map requires a block body",
+            None,
+        );
+        return;
+    };
+    let mut default = String::new();
+    let mut values = std::collections::HashMap::new();
+    for child in &block.directives {
+        // Inside map, "directives" are `key value;` — name=key, args=[value]
+        let key = child.name.as_str();
+        let val = child.args.first().cloned().unwrap_or_default();
+        if key == "default" {
+            default = val;
+            continue;
+        }
+        if key.starts_with('~') || key.starts_with("~*") {
+            report.push(
+                &child.loc,
+                "map",
+                CompatStatus::Unsupported,
+                format!("regex map key `{key}` not supported (ADR-051)"),
+                None,
+            );
+            return;
+        }
+        values.insert(key.to_string(), val);
+    }
+    out.maps.push(ParsedMap {
+        loc: directive.loc.clone(),
+        source_var,
+        dest_var,
+        default,
+        values,
+    });
+    report.push(
+        &directive.loc,
+        "map",
+        CompatStatus::Supported,
+        "map block accepted for IR mapping (ADR-051)",
+        None,
+    );
 }
 
 fn parse_upstream(
@@ -238,6 +327,18 @@ fn classify_server_directive(directive: &Directive, report: &mut CompatibilityRe
                 &directive.name,
                 CompatStatus::Supported,
                 "server-level directive accepted for mapping",
+                None,
+            );
+        }
+        "error_page" => {
+            // Mapping / Supported|Unsupported decided in map_server_error_pages.
+        }
+        "if" => {
+            report.push(
+                &directive.loc,
+                "if",
+                CompatStatus::Error,
+                "nginx `if` is not supported (EXY-NG-IF / ADR-051); use match.header / map / explicit routes",
                 None,
             );
         }

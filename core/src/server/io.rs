@@ -224,8 +224,8 @@ pub(crate) fn request_headers_safe_for_wire(head: &[u8]) -> bool {
 /// Unset / invalid → 30s. Mid-process env mutation is not observed —
 /// set the env before process start (or reset cache in tests).
 ///
-/// This is the core-local observation. Platform and module paths maintain
-/// equivalent layer-local caches so lower layers do not reverse-import policy.
+/// Shared by core wire I/O and the Linux epoll keepalive/sendfile deadline path
+/// so there is a single process-lifetime observation of this env.
 pub fn header_read_timeout() -> Duration {
     let cached = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {
@@ -252,8 +252,7 @@ fn parse_header_read_timeout_ms(raw: Option<&str>) -> Duration {
 /// Test-only: clear process-lifetime cache (simulates a fresh process).
 /// Also clears static/proxy wire caches used on related request paths.
 ///
-/// This cross-module reset seam is compiled only for unit tests or when the
-/// explicit `test-utils` feature is enabled by the integration-test crate.
+/// Compiled only for unit tests or when the explicit `test-utils` feature is enabled.
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub fn reset_header_read_timeout_cache_for_tests() {
@@ -339,7 +338,22 @@ pub(crate) fn read_until_headers_blocking(
 
 #[cfg(target_os = "linux")]
 pub(crate) fn write_once_fd(fd: i32, buf: &[u8]) -> io::Result<()> {
-    exyonq_linux_ffi::send_all_nosignal(fd, buf)
+    const MSG_NOSIGNAL: i32 = 0x4000;
+    let written = unsafe {
+        libc::send(
+            fd,
+            buf.as_ptr() as *const libc::c_void,
+            buf.len(),
+            MSG_NOSIGNAL,
+        )
+    };
+    if written < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if written as usize != buf.len() {
+        return write_all_fd(fd, &buf[written as usize..]);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -352,8 +366,18 @@ pub(crate) fn write_response_fd(fd: i32, buf: &[u8]) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn write_all_fd(fd: i32, buf: &[u8]) -> io::Result<()> {
-    exyonq_linux_ffi::write_all_fd(fd, buf)
+pub(crate) fn write_all_fd(fd: i32, mut buf: &[u8]) -> io::Result<()> {
+    while !buf.is_empty() {
+        let written = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
+        if written < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if written == 0 {
+            return Err(io::Error::new(io::ErrorKind::WriteZero, "write returned 0"));
+        }
+        buf = &buf[written as usize..];
+    }
+    Ok(())
 }
 
 #[cfg(test)]

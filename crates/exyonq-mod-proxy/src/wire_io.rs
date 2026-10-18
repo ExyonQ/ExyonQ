@@ -83,7 +83,6 @@ pub fn header_read_timeout() -> Duration {
 }
 
 /// Test-only: clear process-lifetime cache (simulates a fresh process).
-#[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub fn reset_header_read_timeout_cache_for_tests() {
     HEADER_READ_TIMEOUT_MS_CACHE.store(0, Ordering::Relaxed);

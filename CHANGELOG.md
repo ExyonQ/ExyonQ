@@ -12,6 +12,8 @@ P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
 PUBLIC_RELEASE = v0.4.13
+WORKSPACE_VERSION = 0.5.0
+WORKSPACE_PUBLICATION = NOT_PUBLISHED
 LATEST_CHANGED = NO
 ```
 
@@ -25,7 +27,27 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
+- Source version in this tree is **0.5.0**. It is not a GitHub release and it has no images. Tag, GHCR, Docker Hub, and binaries stay at **v0.4.13** until the Docker E2E gate passes and publication is authorized.
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
+
+---
+
+## [0.5.0] — staging (not published)
+
+Workspace product version **0.5.0** (Cargo). No tag, no GitHub Release, no container images.
+
+### Added
+
+- Route match regex and suffix, rewrite captures, `try_files` fallback, error pages, and variables / `map` / `proxy_set_headers`.
+- Operational surfaces for lint, diagnostics, htaccess fail-closed, config provenance, FastCGI metrics, WebSocket drain, reload diff, and `X-Cache`.
+- Cache header and `ExpiresByType` controls.
+- Response header rules (`add_header` / `Header set`) and rewrite variables `$uri` / `$host`.
+
+### Not in this publication
+
+- No `:latest` tag.
+- No claim that 0.5.0 images exist on GHCR or Docker Hub.
+- Phase 1 remains not closed.
 
 ---
 

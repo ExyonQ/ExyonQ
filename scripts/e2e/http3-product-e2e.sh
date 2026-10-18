@@ -197,7 +197,7 @@ HARNESS_HASH="$(sha256sum "$0" 2>/dev/null | awk '{print $1}' || shasum -a 256 "
 cargo build -q -p exyonq 2>/dev/null || cargo build -p exyonq
 export EXYONQ_CONFIG="$CFG"
 export EXYONQ_CONTROL_SOCKET="$CTRL"
-"$ROOT/target/debug/exyonq" serve -c "$CFG" >"$LOG" 2>&1 &
+cargo run -q -p exyonq -- serve -c "$CFG" >"$LOG" 2>&1 &
 SRV_PID=$!
 
 for _ in $(seq 1 100); do

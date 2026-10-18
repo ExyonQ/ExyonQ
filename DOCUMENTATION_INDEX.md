@@ -7,6 +7,8 @@ AUTHORITY = SOLE inventory of documentation roles for this worktree
 LAST_UPDATED = 2026-10-15
 BRANCH = main
 PUBLIC_RELEASE = v0.4.13
+WORKSPACE_VERSION = 0.5.0
+WORKSPACE_PUBLICATION = NOT_PUBLISHED
 HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
 ```
 
@@ -161,15 +163,9 @@ NOT_CANONICAL_UNLESS_PROMOTED = YES
 | `docs/benchmarks/**` | Benchmark methodology locals | bench | GENERATED_REPORT / UNKNOWN | KEEP_LOCAL_ONLY |
 | other `docs/*` dirs (roadmap, observability, …) | sparse / empty shells | mixed | UNKNOWN_REVIEW | REVIEW |
 
-### C3. Cursor IDE (`.cursor/**`) — LOCAL_ONLY
+### C3. Local editor configuration — LOCAL_ONLY
 
-| GROUP | COUNT (approx) | STATUS | RECOMMENDED_ACTION |
-|-------|----------------|--------|--------------------|
-| `.cursor/rules/*.mdc` | ~35 | IMPLEMENTED_REFERENCE (local governance) | KEEP_LOCAL_ONLY; not GitHub release content |
-| `.cursor/agents/*.md` | ~17 | LOCAL tooling | KEEP_LOCAL_ONLY |
-| `.cursor/plans/**` | ~50+ | mixed FUTURE_DESIGN / HISTORICAL / SUPERSEDED | KEEP_LOCAL_ONLY; do not treat as R\* |
-| `.cursor/plans/realizados/**` | archived plans | SUPERSEDED / HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
-| `.cursor/skills/**` | mem0/skills | tooling | KEEP_LOCAL_ONLY |
+Editor rules, agents, plans, and skills stay on the maintainer machine. They are not GitHub release content and they do not redefine `ROADMAP.md`.
 
 Notable FUTURE_DESIGN plans (examples; **NOT IMPLEMENTED / NOT CURRENT PRODUCT BEHAVIOR** unless separately proven): `13-distributed-discovery-p2p`, `80-admin-api-control-plane`, `90-exyapp-exyphp`, `91-wasm-h3-mtls-admin-ui`, `94-grpc-lb-ai-gateway`.
 
@@ -181,10 +177,10 @@ Notable historical/active local plans: `00-roadmap-core-modules-migration`, `08-
 |------|--------|--------------------|
 | `graphify-out/**` | GENERATED_REPORT | KEEP_LOCAL_ONLY / DELETE_LATER |
 | `benchmarks/results/**/*.md` | GENERATED_REPORT / HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
-| `waf/exyonq-waf-package-20260726/.cursor/**` | UNKNOWN_REVIEW (empty package scaffold) | REVIEW; KEEP_LOCAL_ONLY |
+| `waf/exyonq-waf-package-20260726/` editor metadata | UNKNOWN_REVIEW (empty package scaffold) | REVIEW; KEEP_LOCAL_ONLY |
 | `.pytest_cache/README.md` | GENERATED_REPORT | DELETE_LATER |
 | `dist/sim/THIRD_PARTY_NOTICES.md` | UNKNOWN_REVIEW | REVIEW |
-| `.cursor-local/incidents/**` | HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
+| local incident notes | HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
 
 ---
 
@@ -212,10 +208,10 @@ Promotion requires: owner allowlist, secret scan, and decision whether `/docs/` 
 
 ## F. Owner review required
 
-1. Whether Phase 0 `study/reports` should be promoted to tracked tree or remain LOCAL_ONLY with scripts still pointing there.  
+1. Whether Phase 0 `study/reports` should be promoted to tracked tree or remain LOCAL_ONLY with scripts still pointing there.
 2. Resolved: the v0.4.3 freeze was published. The current release notes are `CHANGELOG.md` for **v0.4.13**.
-3. Whether ignored `docs/architecture` / `docs/benchmarks` content is stale vs clean publication README claims.  
-4. Cursor plans that still look “active” vs `ROADMAP.md` R\* — close or retarget without creating parallel roadmaps.  
+3. Whether ignored `docs/architecture` / `docs/benchmarks` content is stale vs clean publication README claims.
+4. Local plans that still look active versus `ROADMAP.md` R* — close or retarget without creating parallel roadmaps.
 
 ---
 
@@ -224,15 +220,15 @@ Promotion requires: owner allowlist, secret scan, and decision whether `/docs/` 
 ```text
 DOCUMENTS_TOTAL ≈ 198 paths matching *.md/*.mdc/*.html in scoped walk
 DOCUMENTS_TRACKED = 29 (before this commit) → 32 after adding 3 canonical
-DOCUMENTS_LOCAL_ONLY ≈ 169 (incl. .cursor, study, ignored docs, graphify, waf cursor)
+DOCUMENTS_LOCAL_ONLY ≈ 169 (local editor files, study, ignored docs, graphify, waf scaffold)
 
 DOCUMENTS_CANONICAL = 3 (PROJECT_STATUS, ROADMAP, DOCUMENTATION_INDEX)
 DOCUMENTS_IMPLEMENTED_REFERENCE ≈ 20 tracked product/tooling READMEs + local rules
-DOCUMENTS_FUTURE_DESIGN ≈ Cursor plans 13/80/90/91/94 class + examples TBD
+DOCUMENTS_FUTURE_DESIGN ≈ local plans 13/80/90/91/94 class + examples TBD
 DOCUMENTS_HISTORICAL ≈ P14 ledgers + study reports + realizados plans
 DOCUMENTS_SUPERSEDED ≈ realizados/obsoleto-* + older P14 proposal vs audit
 DOCUMENTS_GENERATED ≈ graphify-out, bench result markdown, smoke packets
 DOCUMENTS_UNKNOWN ≈ WP integrations, packaging distributed-cache example, waf scaffold, ignored docs shells
 ```
 
-Exact per-file classification for every `.cursor/plans/*` name is deferred to follow-up REVIEW passes; none of those files are global-phase authorities.
+Exact per-file classification for every local plan name is deferred to follow-up REVIEW passes; none of those files are global-phase authorities.

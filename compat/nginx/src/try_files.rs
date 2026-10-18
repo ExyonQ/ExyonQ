@@ -167,6 +167,25 @@ fn classify_try_files(
         .any(|c| matches!(c, TryFilesCandidate::VariableExpression(_)))
         || matches!(tf.fallback, Some(TryFilesFallback::VariableExpression(_)));
 
+    if let Some(mapped) = map_try_files_to_fallback(tf) {
+        let note = if mapped.try_uri_dir {
+            "ADR-049 / NG-03: try_uri+try_uri_dir + fallback_rewrite (query preserved ≡ $args)"
+        } else {
+            "ADR-049 / NG-03: try_uri + fallback_rewrite"
+        };
+        return (
+            CompatStatus::Supported,
+            format!(
+                "try_files → fallback_rewrite = `{}` ({note})",
+                mapped.fallback_rewrite
+            ),
+            format!(
+                "route.fallback_rewrite={}; try_uri={}; try_uri_dir={}",
+                mapped.fallback_rewrite, mapped.try_uri, mapped.try_uri_dir
+            ),
+        );
+    }
+
     if let Some(TryFilesFallback::Uri(uri)) = &tf.fallback {
         if uri.contains('?') || has_vars {
             return (
@@ -175,22 +194,10 @@ fn classify_try_files(
                 "Requires query-string preservation and static→FastCGI internal redirect".into(),
             );
         }
-        if tf
-            .candidates
-            .iter()
-            .any(|c| matches!(c, TryFilesCandidate::Uri))
-            && tf.candidates.len() == 1
-        {
-            return (
-                CompatStatus::Partial,
-                format!("SPA fallback try_files → internal `{uri}`"),
-                "Requires internal fallback route support".into(),
-            );
-        }
         return (
             CompatStatus::Partial,
             format!("try_files internal URI fallback `{uri}`"),
-            "Requires internal fallback route support".into(),
+            "Requires ADR-049 admitted form ($uri [/$uri/] + absolute path)".into(),
         );
     }
 
@@ -222,6 +229,69 @@ fn classify_try_files(
     (
         CompatStatus::Unsupported,
         format!("try_files `{}` not mapped to IR", semantic_form(tf)),
-        "Requires internal fallback route support".into(),
+        "Requires ADR-049 admitted form ($uri [/$uri/] + absolute path)".into(),
     )
+}
+
+/// NG-03 / ADR-049 admitted try_files → IR fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappedTryFiles {
+    pub try_uri: bool,
+    pub try_uri_dir: bool,
+    pub fallback_rewrite: String,
+}
+
+/// Map SPA / WordPress try_files forms onto `fallback_rewrite`.
+pub fn map_try_files_to_fallback(tf: &TryFiles) -> Option<MappedTryFiles> {
+    let fallback_raw = match &tf.fallback {
+        Some(TryFilesFallback::Uri(u)) => u.as_str(),
+        Some(TryFilesFallback::VariableExpression(v)) => v.as_str(),
+        _ => return None,
+    };
+    let fallback_rewrite = normalize_fallback_path(fallback_raw)?;
+
+    let only_uri = tf.candidates == [TryFilesCandidate::Uri];
+    let uri_and_dir = tf.candidates.len() == 2
+        && tf.candidates[0] == TryFilesCandidate::Uri
+        && tf.candidates[1] == TryFilesCandidate::UriDirectory;
+
+    if only_uri {
+        return Some(MappedTryFiles {
+            try_uri: true,
+            try_uri_dir: false,
+            fallback_rewrite,
+        });
+    }
+    if uri_and_dir {
+        return Some(MappedTryFiles {
+            try_uri: true,
+            try_uri_dir: true,
+            fallback_rewrite,
+        });
+    }
+    None
+}
+
+/// Strip nginx query / `$is_args$args` sugar; keep Cap035 absolute path.
+fn normalize_fallback_path(raw: &str) -> Option<String> {
+    let mut path = raw;
+    if let Some(idx) = path.find('?') {
+        let q = &path[idx + 1..];
+        // Admitted: ?$args / ?$query_string meaning "preserve original query".
+        if q == "$args" || q == "$query_string" || q.is_empty() {
+            path = &path[..idx];
+        } else {
+            return None;
+        }
+    }
+    if let Some(stripped) = path.strip_suffix("$is_args$args") {
+        path = stripped;
+    }
+    if path.contains('$') {
+        return None;
+    }
+    if !path.starts_with('/') || path.starts_with("//") || path.contains('#') {
+        return None;
+    }
+    Some(path.to_string())
 }

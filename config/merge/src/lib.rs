@@ -65,6 +65,8 @@ struct RawRoot {
     #[serde(default)]
     cache_policy: Vec<CachePolicyConfig>,
     #[serde(default)]
+    map: Vec<exyonq_config_ir::MapConfig>,
+    #[serde(default)]
     modules: exyonq_config_ir::ModulesConfig,
     #[serde(default, rename = "static")]
     static_section: exyonq_config_ir::StaticSectionConfig,
@@ -171,6 +173,7 @@ fn raw_to_ir(raw: RawRoot) -> RawConfigInput {
         upstream: raw.upstream,
         fcgi_pool: raw.fcgi_pool,
         cache_policy: raw.cache_policy,
+        map: raw.map,
         modules: raw.modules,
         static_section: raw.static_section,
         full_page_cache: raw.full_page_cache,

@@ -51,6 +51,35 @@ enum UpstreamBodyMode {
 
 type ParsedResponseHead = (u16, Bytes, Vec<(Bytes, Bytes)>, UpstreamBodyMode);
 
+/// Process-wide cap on idle raw-upstream sockets (all endpoints).
+///
+/// A hard per-endpoint ceiling (formerly 256) creates a deterministic
+/// concurrency cliff when client concurrency exceeds that number (S1:
+/// C256→C384 → exactly C−256 reconnects). A finite **global** budget keeps
+/// FD use bounded without pinning the cliff to a single concurrency step.
+const RAW_IDLE_GLOBAL_BUDGET: usize = 1024;
+
+#[cfg(test)]
+static TEST_IDLE_BUDGET_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn idle_global_budget() -> usize {
+    #[cfg(test)]
+    {
+        let over = TEST_IDLE_BUDGET_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+        if over > 0 {
+            return over;
+        }
+    }
+    RAW_IDLE_GLOBAL_BUDGET
+}
+
+#[inline]
+fn pool_idle_total(guard: &HashMap<String, Vec<TcpStream>>) -> usize {
+    guard.values().map(|v| v.len()).sum()
+}
+
 fn pool() -> &'static Mutex<HashMap<String, Vec<TcpStream>>> {
     static POOL: OnceLock<Mutex<HashMap<String, Vec<TcpStream>>>> = OnceLock::new();
     POOL.get_or_init(|| Mutex::new(HashMap::new()))
@@ -124,10 +153,13 @@ async fn checkout(key: &str, host: &str, port: u16) -> io::Result<TcpStream> {
 
 fn checkin(key: String, stream: TcpStream) {
     let mut guard = pool().lock().unwrap_or_else(|e| e.into_inner());
-    let bucket = guard.entry(key).or_default();
-    if bucket.len() < 256 {
-        bucket.push(stream);
+    let idle_n = pool_idle_total(&guard);
+    // Defined eviction when the global budget is exhausted: reject the
+    // newest checkin (drop this socket). No per-endpoint hard cap.
+    if idle_n >= idle_global_budget() {
+        return;
     }
+    guard.entry(key).or_default().push(stream);
 }
 
 /// Hot-path raw GET: CL body, or finite TE decoded to CL. Errors → Hyper fallback.
@@ -815,6 +847,135 @@ fn parse_u64_digits(raw: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{UpstreamDescriptor, UpstreamTarget};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::Barrier;
+
+    /// Serialize tests that touch the process-global raw idle pool.
+    static POOL_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn pool_bucket_len(key: &str) -> usize {
+        let guard = pool().lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(key).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn pool_clear_key(key: &str) {
+        let mut guard = pool().lock().unwrap_or_else(|e| e.into_inner());
+        guard.remove(key);
+    }
+
+    fn set_test_idle_budget(n: usize) {
+        TEST_IDLE_BUDGET_OVERRIDE.store(n, Ordering::Relaxed);
+    }
+
+    fn pool_idle_sum() -> usize {
+        let guard = pool().lock().unwrap_or_else(|e| e.into_inner());
+        pool_idle_total(&guard)
+    }
+
+    /// Keep-alive upstream; `accepts` counts TCP accepts (new connections).
+    async fn spawn_ka_upstream(accepts: Arc<AtomicUsize>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    continue;
+                };
+                accepts.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let mut pending = 0usize;
+                    loop {
+                        let header_end = loop {
+                            if let Some(end) =
+                                buf[..pending].windows(4).position(|w| w == b"\r\n\r\n")
+                            {
+                                break end;
+                            }
+                            if pending >= buf.len() {
+                                return;
+                            }
+                            match stream.read(&mut buf[pending..]).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => pending += n,
+                            }
+                        };
+                        let consumed = header_end + 4;
+                        if consumed < pending {
+                            buf.copy_within(consumed..pending, 0);
+                            pending -= consumed;
+                        } else {
+                            pending = 0;
+                        }
+                        let body = b"ok";
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                            body.len()
+                        );
+                        if stream.write_all(resp.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        if stream.write_all(body).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    fn target_for(port: u16) -> UpstreamTarget {
+        let desc = UpstreamDescriptor {
+            cluster_id: 0,
+            upstream_name: "s1-falsify".into(),
+            target: format!("http://127.0.0.1:{port}"),
+            timeout: Duration::from_secs(30),
+            host: Some("127.0.0.1".into()),
+            max_connect_retries: 1,
+        };
+        UpstreamTarget::from_descriptor(&desc).unwrap()
+    }
+
+    /// Concurrent wave: all tasks checkout before any checkin, then KA GET.
+    async fn ka_hold_wave(target: &UpstreamTarget, key: &str, host: &str, port: u16, c: usize) {
+        let start = Arc::new(Barrier::new(c));
+        let held = Arc::new(Barrier::new(c));
+        let mut handles = Vec::with_capacity(c);
+        for _ in 0..c {
+            let start = Arc::clone(&start);
+            let held = Arc::clone(&held);
+            let target = target.clone();
+            let key = key.to_string();
+            let host = host.to_string();
+            handles.push(tokio::spawn(async move {
+                start.wait().await;
+                let mut stream = checkout(&key, &host, port).await.expect("checkout");
+                held.wait().await;
+                let (resp, poolable) = get_known_length_on(&mut stream, &target, "/", None)
+                    .await
+                    .expect("ka get");
+                assert_eq!(resp.status, 200);
+                assert!(poolable, "CL keep-alive must be poolable");
+                checkin(key, stream);
+            }));
+        }
+        for h in handles {
+            h.await.expect("join");
+        }
+    }
+
+    async fn mint_idle_pair(listener: &TcpListener) -> (TcpStream, TcpStream) {
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (client, server)
+    }
 
     #[test]
     fn parse_simple_200() {
@@ -903,5 +1064,94 @@ mod tests {
         assert!(parse(None));
         assert!(parse(Some("1")));
         assert!(!parse(Some("0")));
+    }
+
+    /// S1: one endpoint may retain >256 idle while under the global budget.
+    /// Mutex serializes pool mutation across async test steps (not production hot path).
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn s1_per_endpoint_may_exceed_256_under_global_budget() {
+        let _g = POOL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_test_idle_budget(0);
+        let key = "s1-unit-no-per-ep-cap";
+        pool_clear_key(key);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut peers = Vec::with_capacity(257);
+        for i in 0..257u32 {
+            let (client, server) = mint_idle_pair(&listener).await;
+            peers.push(server);
+            checkin(key.to_string(), client);
+            assert_eq!(pool_bucket_len(key), (i + 1) as usize);
+        }
+        assert_eq!(pool_bucket_len(key), 257);
+        pool_clear_key(key);
+        drop(peers);
+    }
+
+    /// S1: when the global budget is exhausted, the newest checkin is dropped.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn s1_global_budget_rejects_newest_when_full() {
+        let _g = POOL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_test_idle_budget(4);
+        let key_a = "s1-budget-a";
+        let key_b = "s1-budget-b";
+        pool_clear_key(key_a);
+        pool_clear_key(key_b);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut peers = Vec::new();
+        for key in [key_a, key_a, key_b, key_b] {
+            let (client, server) = mint_idle_pair(&listener).await;
+            peers.push(server);
+            checkin(key.to_string(), client);
+        }
+        assert_eq!(pool_idle_sum(), 4);
+        let (client, server) = mint_idle_pair(&listener).await;
+        peers.push(server);
+        checkin(key_a.to_string(), client);
+        assert_eq!(pool_idle_sum(), 4);
+        assert_eq!(pool_bucket_len(key_a), 2);
+        pool_clear_key(key_a);
+        pool_clear_key(key_b);
+        drop(peers);
+        set_test_idle_budget(0);
+    }
+
+    /// S1 repair: hold-wave C384 wave2 must not open new upstream accepts.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn s1_hold_wave_c384_no_reconnect_under_global_budget() {
+        let _g = POOL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_test_idle_budget(0);
+
+        async fn run_concurrency(c: usize) -> (usize, usize) {
+            let accepts = Arc::new(AtomicUsize::new(0));
+            let listen_port = spawn_ka_upstream(Arc::clone(&accepts)).await;
+            let target = target_for(listen_port);
+            let key = format!("127.0.0.1:{listen_port}");
+            let host = "127.0.0.1";
+            pool_clear_key(&key);
+
+            ka_hold_wave(&target, &key, host, listen_port, c).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(pool_bucket_len(&key), c, "wave1 idle depth C={c}");
+            let accepts_after_wave1 = accepts.load(Ordering::SeqCst);
+
+            let before_wave2 = accepts.load(Ordering::SeqCst);
+            ka_hold_wave(&target, &key, host, listen_port, c).await;
+            let accepts_wave2 = accepts.load(Ordering::SeqCst) - before_wave2;
+            pool_clear_key(&key);
+            (accepts_after_wave1, accepts_wave2)
+        }
+
+        let (a256_w1, a256_w2) = run_concurrency(256).await;
+        let (a384_w1, a384_w2) = run_concurrency(384).await;
+        assert_eq!(a256_w1, 256);
+        assert_eq!(a256_w2, 0, "C256 wave2 must reuse");
+        assert_eq!(a384_w1, 384);
+        assert_eq!(a384_w2, 0, "C384 wave2 must reuse under global budget");
+        eprintln!(
+            "S1 repair accepts: C256 w1={a256_w1} w2={a256_w2} | C384 w1={a384_w1} w2={a384_w2}"
+        );
     }
 }

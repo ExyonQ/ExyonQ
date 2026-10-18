@@ -86,7 +86,6 @@ use crate::reload;
 use exyonq_mod_proxy::{build_incoming_client, ProxyClient};
 use exyonq_mod_tls::{install_rustls_provider, SharedTlsAcceptor, TlsSessionCache, TlsSettings};
 use exyonq_module_api::acme_integration::acme_integration_service;
-#[cfg(unix)]
 use exyonq_module_api::kernel_control::control_plane_service;
 use exyonq_module_api::reload_runtime::reload_runtime_service;
 use handler::{serve_connection, ConnectionContext};
@@ -103,30 +102,11 @@ use tokio::net::{TcpListener, TcpSocket};
 use tracing::{info, warn};
 use wire_dispatch::{dispatch_stream, dispatch_tcp, WireDispatchContext};
 
-tokio::task_local! {
-    static CONN_LOCAL: (bool, u16);
-}
-
-pub(crate) fn connection_is_tls(fallback: bool) -> bool {
-    CONN_LOCAL.try_with(|value| value.0).unwrap_or(fallback)
-}
-
-pub(crate) fn connection_local_port(fallback: u16) -> u16 {
-    CONN_LOCAL.try_with(|value| value.1).unwrap_or(fallback)
-}
-
-/// Run every distinct listen address in the config until shutdown.
+/// Run the configured HTTP listener until shutdown.
 pub async fn run(config: AppConfig) -> anyhow::Result<()> {
     install_rustls_provider();
-    let binds = config.listen_endpoints()?;
-    run_with_binds(binds, config).await
-}
-
-/// Run on an explicit listen address (used in tests).
-pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
-    install_rustls_provider();
-    let tls = config.primary_server().tls.is_some();
-    run_with_binds(vec![(listen, tls)], config).await
+    let listen = config.primary_listen_addr()?;
+    run_on(listen, config).await
 }
 
 async fn bind_tuned(addr: SocketAddr) -> std::io::Result<TcpListener> {
@@ -236,8 +216,6 @@ async fn accept_loop(
     proxy_client: ProxyClient,
     tls_acceptor: SharedTlsAcceptor,
     ops: Arc<LifecycleState>,
-    tls_enabled: bool,
-    local_port: u16,
 ) {
     let mut shutdown_rx = ops.shutdown_rx();
     loop {
@@ -266,66 +244,53 @@ async fn accept_loop(
         let proxy_client = proxy_client.clone();
         let x_forwarded_for = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"));
-        let acceptor = if tls_enabled {
-            tls_acceptor.snapshot().acceptor()
-        } else {
-            None
-        };
+        let acceptor = tls_acceptor.snapshot();
         let ops_conn = Arc::clone(&ops);
-        let tls_for_conn = tls_enabled;
-        let port_for_conn = local_port;
 
         tokio::spawn(async move {
-            CONN_LOCAL
-                .scope((tls_for_conn, port_for_conn), async move {
-                    if let Some(acceptor) = acceptor {
-                        match acceptor.accept(stream).await {
-                            Ok(tls_stream) => {
-                                let alpn = tls_stream.get_ref().1.alpn_protocol();
-                                let ctx = wire_dispatch_ctx(
-                                    reload::SharedServerState::clone(&conn_state),
-                                    proxy_client,
-                                    x_forwarded_for,
-                                    ops_conn.clone(),
-                                );
-                                // Wire-cheap modules (ratelimit/metrics) keep Cap067/wire;
-                                // compression (or h2 / drain) still forces Hyper.
-                                if !ctx.state.hyper_required_for_modules()
-                                    && alpn != Some(b"h2")
-                                    && !ops_conn.is_draining()
-                                {
-                                    dispatch_stream(tls_stream, ctx).await;
-                                } else {
-                                    serve_hyper(
-                                        tls_stream,
-                                        reload::SharedServerState::clone(&ctx.shared),
-                                        ctx.proxy_client,
-                                        ctx.x_forwarded_for,
-                                        ops_conn,
-                                    )
-                                    .await;
-                                }
-                            }
-                            Err(err) => warn!(%err, "tls accept failed"),
+            if let Some(acceptor) = acceptor {
+                match acceptor.accept(stream).await {
+                    Ok(tls_stream) => {
+                        let alpn = tls_stream.get_ref().1.alpn_protocol();
+                        let ctx = wire_dispatch_ctx(
+                            reload::SharedServerState::clone(&conn_state),
+                            proxy_client,
+                            x_forwarded_for,
+                            ops_conn.clone(),
+                        );
+                        // Wire-cheap modules (ratelimit/metrics) keep Cap067/wire;
+                        // compression (or h2 / drain) still forces Hyper.
+                        if !ctx.state.hyper_required_for_modules()
+                            && alpn != Some(b"h2")
+                            && !ops_conn.is_draining()
+                        {
+                            dispatch_stream(tls_stream, ctx).await;
+                        } else {
+                            serve_hyper(
+                                tls_stream,
+                                reload::SharedServerState::clone(&ctx.shared),
+                                ctx.proxy_client,
+                                ctx.x_forwarded_for,
+                                ops_conn,
+                            )
+                            .await;
                         }
-                        return;
                     }
-                    dispatch_tcp(
-                        stream,
-                        wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
-                    )
-                    .await;
-                })
-                .await;
+                    Err(err) => warn!(%err, "tls accept failed"),
+                }
+                return;
+            }
+            dispatch_tcp(
+                stream,
+                wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
+            )
+            .await;
         });
     }
 }
 
-async fn run_with_binds(binds: Vec<(SocketAddr, bool)>, config: AppConfig) -> anyhow::Result<()> {
-    let listen = binds
-        .first()
-        .map(|(addr, _)| *addr)
-        .ok_or_else(|| anyhow::anyhow!("no listen address"))?;
+/// Run on an explicit listen address (used in tests).
+pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
     let proxy_client = build_incoming_client();
     let mut config = config;
     config = discovery_overlay::apply_env_discovery_overlay(config);
@@ -452,62 +417,30 @@ async fn run_with_binds(binds: Vec<(SocketAddr, bool)>, config: AppConfig) -> an
     };
 
     #[cfg(unix)]
-    {
-        let state = reload::read_state(&shared);
-        let purge_env = std::env::var("EXYONQ_CACHE_PURGE_SOCKET")
-            .ok()
-            .filter(|path| !path.is_empty());
-        if !state.snapshot.full_page_cache.enabled {
-            if purge_env.is_some() {
+    if let Ok(purge_path) = std::env::var("EXYONQ_CACHE_PURGE_SOCKET") {
+        match std::env::var("EXYONQ_CACHE_PURGE_TOKEN") {
+            Ok(token) if !token.is_empty() => {
+                if let Some(control_plane) = control_plane_service() {
+                    let purge_port = crate::lab_coord_hooks::build_lab_or_default_purge_port(
+                        reload::SharedServerState::clone(&shared),
+                    );
+                    control_plane.spawn_unix_cache_purge_socket(
+                        exyonq_module_api::CachePurgeSocketConfig {
+                            socket_path: std::path::PathBuf::from(purge_path),
+                            token: std::sync::Arc::<[u8]>::from(token.into_bytes()),
+                        },
+                        purge_port,
+                    );
+                    crate::lab_coord_hooks::start_lab_subscriber_if_any(
+                        reload::SharedServerState::clone(&shared),
+                    );
+                }
+            }
+            _ => {
                 tracing::warn!(
-                    "EXYONQ_CACHE_PURGE_SOCKET is set but full_page_cache is disabled; purge socket not started"
+                    "EXYONQ_CACHE_PURGE_SOCKET set but EXYONQ_CACHE_PURGE_TOKEN missing/empty; purge socket not started"
                 );
             }
-        } else if let Some(purge_path) = purge_env {
-            if state.config.routes.len() != state.snapshot.full_page_cache.route_site_ids.len() {
-                return Err(anyhow::anyhow!(
-                    "full_page_cache site ids do not match the route table"
-                ));
-            }
-            let token = match std::env::var("EXYONQ_CACHE_PURGE_TOKEN") {
-                Ok(token) if !token.is_empty() => token,
-                _ => crate::cache_purge_port::generate_purge_token().map_err(|err| {
-                    anyhow::anyhow!(
-                        "purge token was not provided and could not be generated: {err}"
-                    )
-                })?,
-            };
-            let sites: Vec<(&str, u64)> = state
-                .config
-                .routes
-                .iter()
-                .zip(state.snapshot.full_page_cache.route_site_ids.iter())
-                .map(|(route, id)| (route.name.as_str(), *id))
-                .collect();
-            crate::cache_purge_port::publish_purge_sidecars(
-                std::path::Path::new(&purge_path),
-                &token,
-                &sites,
-            )
-            .map_err(|err| anyhow::anyhow!("purge socket files were not written: {err}"))?;
-            let control_plane = control_plane_service().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "full_page_cache is enabled and EXYONQ_CACHE_PURGE_SOCKET is set, but no control plane is registered"
-                )
-            })?;
-            let purge_port = crate::lab_coord_hooks::build_lab_or_default_purge_port(
-                reload::SharedServerState::clone(&shared),
-            );
-            control_plane.spawn_unix_cache_purge_socket(
-                exyonq_module_api::CachePurgeSocketConfig {
-                    socket_path: std::path::PathBuf::from(&purge_path),
-                    token: std::sync::Arc::<[u8]>::from(token.into_bytes()),
-                },
-                purge_port,
-            );
-            crate::lab_coord_hooks::start_lab_subscriber_if_any(reload::SharedServerState::clone(
-                &shared,
-            ));
         }
     }
 
@@ -543,7 +476,7 @@ async fn run_with_binds(binds: Vec<(SocketAddr, bool)>, config: AppConfig) -> an
     }
 
     let workers = accept_workers();
-    let tls_on_listen = shared_tls.snapshot().is_loaded();
+    let tls_on_listen = shared_tls.snapshot().is_some();
     #[cfg(target_os = "linux")]
     let use_io_uring = io_uring_start::io_uring_env_enabled(tls_on_listen);
     #[cfg(not(target_os = "linux"))]
@@ -573,12 +506,6 @@ async fn run_with_binds(binds: Vec<(SocketAddr, bool)>, config: AppConfig) -> an
     let use_sdp = !tls_on_listen && sdp_start::env_enabled();
     #[cfg(not(target_os = "linux"))]
     let use_sdp = false;
-
-    if binds.len() > 1 && (use_epoll || use_sync_accept || use_io_uring || use_sdp) {
-        return Err(anyhow::anyhow!(
-            "more than one listen address uses the default accept loop; unset EXYONQ_EPOLL_LISTEN, EXYONQ_SYNC_ACCEPT, EXYONQ_IO_URING, and EXYONQ_SDP"
-        ));
-    }
 
     info!(
         %listen,
@@ -692,24 +619,20 @@ async fn run_with_binds(binds: Vec<(SocketAddr, bool)>, config: AppConfig) -> an
         }
     }
 
-    let mut tasks = Vec::with_capacity(workers.saturating_mul(binds.len()));
-    for (addr, tls_enabled) in &binds {
-        for _ in 0..workers {
-            let listener = bind_tuned(*addr).await?;
-            let state = reload::SharedServerState::clone(&shared);
-            let proxy_client = proxy_client.clone();
-            let acceptor = shared_tls.clone();
-            let ops_worker = Arc::clone(&ops);
-            tasks.push(tokio::spawn(accept_loop(
-                listener,
-                state,
-                proxy_client,
-                acceptor,
-                ops_worker,
-                *tls_enabled,
-                addr.port(),
-            )));
-        }
+    let mut tasks = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let listener = bind_tuned(listen).await?;
+        let state = reload::SharedServerState::clone(&shared);
+        let proxy_client = proxy_client.clone();
+        let acceptor = shared_tls.clone();
+        let ops_worker = Arc::clone(&ops);
+        tasks.push(tokio::spawn(accept_loop(
+            listener,
+            state,
+            proxy_client,
+            acceptor,
+            ops_worker,
+        )));
     }
 
     LifecycleState::wait_for_shutdown(&ops).await;

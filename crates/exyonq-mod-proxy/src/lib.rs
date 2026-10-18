@@ -27,10 +27,17 @@ pub mod health;
 pub mod hyper_client;
 pub mod hyper_forward;
 pub mod kernel_hooks;
+pub mod obs_upstream;
 pub mod proxy_cache;
 pub mod raw_upstream;
+
+pub use obs_upstream::{
+    enabled as upstream_obs_enabled, reset as reset_upstream_obs,
+    snapshot_json as upstream_obs_snapshot_json,
+};
 pub mod retry;
 pub mod runtime;
+pub mod runtime_diag;
 pub mod selector;
 pub mod spike;
 pub mod sse;
@@ -76,6 +83,10 @@ pub use proxy_cache::{
 };
 pub use runtime::{
     forward_websocket_by_cluster, global_hyper_metrics, load_get_for_cache_by_cluster, ProxyRuntime,
+};
+pub use runtime_diag::{
+    emit_map_unknown, emit_no_eligible, emit_upstream_class, RtFailCtx, EXY_RT_0001, EXY_RT_0002,
+    EXY_RT_0003, EXY_RT_0004, EXY_RT_0005,
 };
 pub use selector::{
     endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, SelectionOutcome,

@@ -5,7 +5,7 @@
 ## Test plan
 
 - [ ] Tests locales / CI verdes
-- [ ] Bugbot revisado (`bugbot run` o `@cursor review` en este PR)
+- [ ] Review requested before merge
 
 ## Bugbot
 

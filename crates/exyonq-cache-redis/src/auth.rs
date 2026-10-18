@@ -3,8 +3,7 @@
 use exyonq_module_api::{
     CoordinationError, CoordinationRejectReason, InvalidationEvent, InvalidationOperation,
 };
-use hmac::digest::KeyInit;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -190,7 +189,7 @@ pub fn sign_mac(
 ) -> Result<(String, String), CoordinationError> {
     let key_id = keys.active_key_id.clone();
     let bytes = canonical_signing_bytes(event, deployment_id, &key_id);
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&keys.active_key)
+    let mut mac = HmacSha256::new_from_slice(&keys.active_key)
         .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
     mac.update(&bytes);
     let tag = mac.finalize().into_bytes();
@@ -212,7 +211,7 @@ pub fn verify_mac(
     let expected = hex_decode(mac_hex)
         .ok_or_else(|| CoordinationError::new(CoordinationRejectReason::InvalidTarget))?;
     let bytes = canonical_signing_bytes(event, deployment_id, key_id);
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key)
+    let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|_| CoordinationError::new(CoordinationRejectReason::InternalError))?;
     mac.update(&bytes);
     mac.verify_slice(&expected)
@@ -493,7 +492,7 @@ mod tests {
     /// Proves library digest+tag bytes, not merely self-sign/self-verify.
     #[test]
     fn hmac_sha256_known_answer_vector() {
-        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(b"my secret and secure key")
+        let mut mac = HmacSha256::new_from_slice(b"my secret and secure key")
             .expect("HMAC accepts arbitrary key length");
         mac.update(b"input message");
         let tag = mac.finalize().into_bytes();
@@ -506,7 +505,7 @@ mod tests {
             "HMAC_SHA256_KNOWN_ANSWER"
         );
 
-        let mut v = <HmacSha256 as KeyInit>::new_from_slice(b"my secret and secure key").unwrap();
+        let mut v = HmacSha256::new_from_slice(b"my secret and secure key").unwrap();
         v.update(b"input message");
         v.verify_slice(&expected).expect("known vector verifies");
     }

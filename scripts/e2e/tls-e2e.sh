@@ -37,6 +37,7 @@ PID=""
 cleanup() { [[ -n "${PID:-}" ]] && kill "$PID" 2>/dev/null || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 
+# Control socket is env-only (IR deny_unknown_fields — no control_socket field).
 EXYONQ_CONFIG="$CFG" EXYONQ_CONTROL_SOCKET="$CTRL" RUST_LOG=error \
   "$EXYONQ_BIN" serve --config "$CFG" >"$TMP/ex.log" 2>&1 &
 PID=$!

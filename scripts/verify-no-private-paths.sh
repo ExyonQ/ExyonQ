@@ -12,21 +12,6 @@ PRIVATE_PREFIXES=(
   benchmarks/caos-tests/
   benchmark-dev/
   docs/benchmarks-dev/
-  # Publication boundary: lab measurement and the benchmark mock stay in the
-  # lab tree. CI and pre-push fail if any of these paths are tracked again.
-  scripts/remote/
-  scripts/r3/
-  scripts/reality/
-  scripts/smoke/
-  scripts/soak/
-  scripts/allocator/
-  scripts/architecture/
-  scripts/integrity/
-  scripts/fault/
-  scripts/operations/
-  scripts/dev/
-  tests/integration/
-  tools/r3-p4-mock/
 )
 
 fail=0

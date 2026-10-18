@@ -108,7 +108,6 @@ pub fn might_use_proxy_wire(head: &[u8]) -> bool {
     (eligibility().might_use_proxy_wire)(head)
 }
 
-/// Wire serve result: HTTP status written to the client (`Ok(status)`).
 pub type ProxyWireServeFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<u16>> + Send>>;
 

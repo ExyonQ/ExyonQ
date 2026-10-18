@@ -71,14 +71,15 @@ pub fn send_vectored_nosignal(fd: RawFd, bufs: &[&[u8]]) -> io::Result<()> {
             };
             n_iov += 1;
         }
-        // musl's libc crate hides `msghdr` padding, so a struct literal does not compile there.
-        let mut msg: libc::msghdr = unsafe {
-            // SAFETY: `msghdr` is a plain header. All-zero is a valid message with
-            // no name and no ancillary data; `msg_iov` is assigned before `sendmsg`.
-            std::mem::zeroed()
+        let msg = libc::msghdr {
+            msg_name: std::ptr::null_mut(),
+            msg_namelen: 0,
+            msg_iov: iov.as_mut_ptr(),
+            msg_iovlen: n_iov,
+            msg_control: std::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
         };
-        msg.msg_iov = iov.as_mut_ptr();
-        msg.msg_iovlen = n_iov as _;
         let n = unsafe {
             // SAFETY: `fd` is open for write; each iov points into a live `buf` slice;
             // `msg` does not carry a control buffer.

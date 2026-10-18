@@ -93,6 +93,8 @@ pub struct AppConfig {
     pub upstreams: HashMap<String, UpstreamConfig>,
     pub pools_fcgi: HashMap<String, FcgiPoolConfig>,
     pub cache_policies: HashMap<String, CachePolicyConfig>,
+    /// NG-05 / ADR-051: top-level exact equivalence tables (`[[map]]`).
+    pub maps: HashMap<String, MapConfig>,
     pub modules: ModulesConfig,
     /// `[static]` / `[static.preload]` — tree preload memory limits.
     pub static_section: StaticSectionConfig,
@@ -148,14 +150,6 @@ fn default_http3_drain_cap() -> u64 {
     64 * 1024
 }
 
-/// One response header set on every response from the server that lists it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResponseHeaderConfig {
-    pub name: String,
-    pub value: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
@@ -168,9 +162,10 @@ pub struct ServerConfig {
     pub tls: Option<TlsConfig>,
     #[serde(default)]
     pub http3_listen: Option<String>,
-    /// Headers added to every response from this listener (HSTS, CSP, frame options).
+    /// NG-04 / ADR-050: status → absolute URI path (custom error body; status preserved).
+    /// TOML keys are strings (`"404"`) for stable serde.
     #[serde(default)]
-    pub response_headers: Vec<ResponseHeaderConfig>,
+    pub error_pages: HashMap<String, String>,
 }
 
 impl ServerConfig {
@@ -237,18 +232,204 @@ pub struct RouteConfig {
     pub index: Option<String>,
     #[serde(default)]
     pub redirect: Option<RedirectConfig>,
+    /// Cap035 literal path or NG-02 patterned rewrite (ADR-048).
     #[serde(default)]
-    pub rewrite: Option<String>,
+    pub rewrite: Option<RewriteConfig>,
     #[serde(default)]
     pub fastcgi: Option<String>,
     #[serde(default)]
     pub htaccess: HtaccessMode,
     #[serde(default)]
     pub cache: Option<String>,
-    /// When true, this static route may serve `.php`, `.phtml`, `.phar`, and dotfiles.
-    /// Default is deny. `.well-known` stays reachable either way.
+    /// NG-03 / ADR-049: after static miss under `root`, rematch once to this path.
     #[serde(default)]
-    pub allow_sensitive: bool,
+    pub fallback_rewrite: Option<String>,
+    /// Probe request URI as a file before fallback (default true when fallback set).
+    #[serde(default)]
+    pub try_uri: Option<bool>,
+    /// Probe URI as directory (+ index) before fallback (default false when fallback set).
+    #[serde(default)]
+    pub try_uri_dir: Option<bool>,
+    /// NG-05 / ADR-051: outbound upstream header replacements (templates + allowlisted vars).
+    #[serde(default)]
+    pub proxy_set_headers: Vec<ProxySetHeaderConfig>,
+    /// F2 / ADR-061: outbound Cache-Control by response MIME (ExpiresByType adelanto).
+    #[serde(default)]
+    pub cache_headers: Option<CacheHeadersConfig>,
+    /// ADR-062 / F1-R19: outbound client response headers (route-scoped `add_header` / `Header set`).
+    #[serde(default)]
+    pub response_headers: Vec<ResponseHeaderConfig>,
+}
+
+/// ADR-062 / F1-R19: one outbound client response header.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseHeaderConfig {
+    pub name: String,
+    pub value: String,
+    /// When false (default): apply on 2xx/3xx only. When true: all statuses.
+    #[serde(default)]
+    pub always: bool,
+}
+
+/// F2 / ADR-061: MIME → Cache-Control max-age map on a route.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheHeadersConfig {
+    #[serde(default)]
+    pub by_mime: std::collections::BTreeMap<String, MimeCacheHeader>,
+}
+
+/// Per-MIME cache header policy.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MimeCacheHeader {
+    pub max_age: u64,
+    #[serde(default)]
+    pub immutable: bool,
+}
+
+impl CacheHeadersConfig {
+    pub const MAX_AGE_LIMIT: u64 = 315_360_000; // ~10 years
+
+    /// Lookup exact mime then `"*"`. `content_type` may include `; charset=…`.
+    pub fn lookup(&self, content_type: &str) -> Option<&MimeCacheHeader> {
+        let mime = content_type
+            .split(';')
+            .next()
+            .unwrap_or(content_type)
+            .trim();
+        if mime.is_empty() {
+            return None;
+        }
+        self.by_mime
+            .get(mime)
+            .or_else(|| self.by_mime.get("*"))
+    }
+
+    /// `Cache-Control` value for a content-type, if configured.
+    pub fn cache_control_for(&self, content_type: &str) -> Option<String> {
+        let h = self.lookup(content_type)?;
+        let mut v = format!("public, max-age={}", h.max_age);
+        if h.immutable {
+            v.push_str(", immutable");
+        }
+        Some(v)
+    }
+}
+
+/// NG-05 / ADR-051: one outbound upstream header set.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxySetHeaderConfig {
+    pub name: String,
+    pub value: String,
+}
+
+/// NG-05 / ADR-051: top-level exact `map` table.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapConfig {
+    pub name: String,
+    pub input: MapInputKind,
+    /// Required when `input = "header"`.
+    #[serde(default)]
+    pub header: Option<String>,
+    #[serde(default)]
+    pub default: String,
+    #[serde(default)]
+    pub values: HashMap<String, String>,
+}
+
+/// Map input source (ADR-051).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MapInputKind {
+    Header,
+    Host,
+    RemoteAddr,
+    RequestUri,
+    Scheme,
+}
+
+/// Cap035 literal or NG-02 patterned rewrite (ADR-048).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum RewriteConfig {
+    /// Absolute path only; rematch once (`last` semantics).
+    Literal(String),
+    Rule(RewriteRuleConfig),
+}
+
+impl RewriteConfig {
+    pub fn literal(path: impl Into<String>) -> Self {
+        Self::Literal(path.into())
+    }
+
+    pub fn literal_path(&self) -> Option<&str> {
+        match self {
+            Self::Literal(p) => Some(p.as_str()),
+            Self::Rule(_) => None,
+        }
+    }
+
+    pub fn as_rule(&self) -> Option<&RewriteRuleConfig> {
+        match self {
+            Self::Rule(r) => Some(r),
+            Self::Literal(_) => None,
+        }
+    }
+}
+
+impl From<&str> for RewriteConfig {
+    fn from(value: &str) -> Self {
+        Self::Literal(value.to_string())
+    }
+}
+
+impl From<String> for RewriteConfig {
+    fn from(value: String) -> Self {
+        Self::Literal(value)
+    }
+}
+
+/// Patterned rewrite rule (ADR-048 / NG-02).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RewriteRuleConfig {
+    pub pattern: String,
+    pub replacement: String,
+    #[serde(default)]
+    pub flag: RewriteFlagConfig,
+    #[serde(default)]
+    pub when: Vec<RewriteCondConfig>,
+}
+
+/// Rewrite flags aligned with nginx (`last`/`break`/`redirect`/`permanent`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteFlagConfig {
+    #[default]
+    Last,
+    Break,
+    Redirect,
+    Permanent,
+}
+
+/// Minimal RewriteCond equivalents (AND). ADR-048.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RewriteCondConfig {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub header: Option<String>,
+    #[serde(default)]
+    pub header_value: Option<String>,
 }
 
 /// Plan 12 v0 — response cache policy (compile-time only).
@@ -357,12 +538,105 @@ fn default_fcgi_checkout_timeout_ms() -> u64 {
     5_000
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Maximum compiled `match.regex` pattern length (bytes). ADR-047 / NG-01.
+pub const MAX_ROUTE_REGEX_BYTES: usize = 256;
+
+/// Which exclusive match arm is active (ADR-047 / NG-01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteMatchKind {
+    Prefix,
+    Suffix,
+    Regex,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RouteMatch {
+    /// Directory-prefix path (Cap033). Empty when `suffix` or `regex` is set.
+    #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub host: Option<String>,
+    /// Literal path suffix (`path.ends_with`). XOR with `path` / `regex`.
+    #[serde(default)]
+    pub suffix: Option<String>,
+    /// Rust `regex` pattern (case-sensitive). XOR with `path` / `suffix`. Compiled at plan build.
+    #[serde(default)]
+    pub regex: Option<String>,
+    /// NG-05 / ADR-051: optional request-header AND filter (not a XOR arm).
+    #[serde(default)]
+    pub header: Option<String>,
+    /// Exact value when set; if omitted with `header`, require present non-empty.
+    #[serde(default)]
+    pub header_value: Option<String>,
+}
+
+impl RouteMatch {
+    /// Prefix match helper for tests and programmatic builders.
+    pub fn prefix(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Suffix match helper.
+    pub fn with_suffix(suffix: impl Into<String>) -> Self {
+        Self {
+            suffix: Some(suffix.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Regex match helper.
+    pub fn with_regex(regex: impl Into<String>) -> Self {
+        Self {
+            regex: Some(regex.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Active exclusive kind, if exactly one arm is set.
+    pub fn kind(&self) -> Option<RouteMatchKind> {
+        let has_path = !self.path.is_empty();
+        let has_suffix = self.suffix.as_ref().is_some_and(|s| !s.is_empty());
+        let has_regex = self.regex.as_ref().is_some_and(|s| !s.is_empty());
+        match (has_path, has_suffix, has_regex) {
+            (true, false, false) => Some(RouteMatchKind::Prefix),
+            (false, true, false) => Some(RouteMatchKind::Suffix),
+            (false, false, true) => Some(RouteMatchKind::Regex),
+            _ => None,
+        }
+    }
+
+    /// Stable identity key for duplicate detection (pattern string of the active arm).
+    pub fn pattern_key(&self) -> Option<&str> {
+        match self.kind()? {
+            RouteMatchKind::Prefix => Some(self.path.trim_end_matches('/')),
+            RouteMatchKind::Suffix => self.suffix.as_deref(),
+            RouteMatchKind::Regex => self.regex.as_deref(),
+        }
+    }
+
+    /// Ranking length for Cap033+NG-01 (longer wins within kind).
+    pub fn pattern_len(&self) -> usize {
+        match self.kind() {
+            Some(RouteMatchKind::Prefix) => self.path.len(),
+            Some(RouteMatchKind::Suffix) => self.suffix.as_ref().map_or(0, String::len),
+            Some(RouteMatchKind::Regex) => self.regex.as_ref().map_or(0, String::len),
+            None => 0,
+        }
+    }
+
+    /// kind_rank: regex/suffix (3) > prefix (1) > catch-all `/` (0). ADR-047.
+    pub fn kind_rank(&self) -> u8 {
+        match self.kind() {
+            Some(RouteMatchKind::Regex) | Some(RouteMatchKind::Suffix) => 3,
+            Some(RouteMatchKind::Prefix) if self.path == "/" => 0,
+            Some(RouteMatchKind::Prefix) => 1,
+            None => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -584,6 +858,7 @@ pub struct RawConfigInput {
     pub upstream: Vec<UpstreamConfig>,
     pub fcgi_pool: Vec<FcgiPoolConfig>,
     pub cache_policy: Vec<CachePolicyConfig>,
+    pub map: Vec<MapConfig>,
     pub modules: ModulesConfig,
     pub static_section: StaticSectionConfig,
     pub full_page_cache: FullPageCacheConfig,
@@ -608,6 +883,8 @@ struct RawConfig {
     fcgi_pool: Vec<FcgiPoolConfig>,
     #[serde(default)]
     cache_policy: Vec<CachePolicyConfig>,
+    #[serde(default)]
+    map: Vec<MapConfig>,
     #[serde(default)]
     modules: RawModulesConfig,
     #[serde(default, rename = "static")]
@@ -654,6 +931,7 @@ impl AppConfig {
             upstream: raw.upstream,
             fcgi_pool: raw.fcgi_pool,
             cache_policy: raw.cache_policy,
+            map: raw.map,
             modules: raw.modules,
             static_section: raw.static_section,
             full_page_cache: raw.full_page_cache,
@@ -727,8 +1005,23 @@ impl AppConfig {
             }
         }
 
+        if raw.map.len() > MAX_MAPS {
+            return Err(ConfigError::Parse(format!(
+                "at most {MAX_MAPS} [[map]] tables allowed (ADR-051)"
+            )));
+        }
+        let mut maps = HashMap::new();
+        for map in raw.map {
+            validate_map_config(&map)?;
+            let name = map.name.clone();
+            if maps.insert(name.clone(), map).is_some() {
+                return Err(ConfigError::DuplicateName { kind: "map", name });
+            }
+        }
+
         for server in &raw.server {
             validate_listen(&server.listen)?;
+            validate_error_pages(&server.error_pages)?;
             for route_name in &server.routes {
                 if !route_names.contains(route_name) {
                     return Err(ConfigError::UnknownRoute {
@@ -739,16 +1032,16 @@ impl AppConfig {
             if let Some(tls) = &server.tls {
                 validate_tls_acme(tls)?;
             }
-            for header in &server.response_headers {
-                validate_response_header(header)?;
-            }
         }
 
         for route in &routes {
-            validate_match_path(&route.r#match.path)?;
+            validate_route_match(&route.r#match)?;
             validate_route_cache(route, &cache_policies)?;
+            validate_route_cache_headers(route)?;
             validate_route_actions(route)?;
             validate_htaccess_overlay(route, &pools_fcgi)?;
+            validate_proxy_set_headers(route, &maps)?;
+            validate_response_headers(route)?;
             if let Some(upstream) = &route.upstream {
                 if !upstreams.contains_key(upstream) {
                     return Err(ConfigError::UnknownUpstream {
@@ -762,7 +1055,7 @@ impl AppConfig {
                 validate_redirect_location(&redirect.location)?;
             }
             if let Some(rewrite) = &route.rewrite {
-                validate_rewrite_target(rewrite)?;
+                validate_rewrite_config(rewrite)?;
             }
             if let Some(pool) = &route.fastcgi {
                 if !pools_fcgi.contains_key(pool) {
@@ -812,6 +1105,7 @@ impl AppConfig {
             upstreams,
             pools_fcgi,
             cache_policies,
+            maps,
             modules: raw.modules,
             static_section: raw.static_section,
             full_page_cache: raw.full_page_cache,
@@ -834,21 +1128,6 @@ impl AppConfig {
         parse_listen(listen)
     }
 
-    /// One socket per distinct `listen`. The bool is true when that socket speaks TLS.
-    pub fn listen_endpoints(&self) -> Result<Vec<(SocketAddr, bool)>, ConfigError> {
-        let mut out: Vec<(SocketAddr, bool)> = Vec::new();
-        for server in &self.servers {
-            let addr = parse_listen(&server.listen)?;
-            let tls = server.tls.is_some();
-            if let Some(slot) = out.iter_mut().find(|(existing, _)| *existing == addr) {
-                slot.1 |= tls;
-            } else {
-                out.push((addr, tls));
-            }
-        }
-        Ok(out)
-    }
-
     /// Migrate v1 IR to v2 (adds empty includes, preserves semantics).
     pub fn migrate_v1_to_v2(mut self) -> Self {
         if self.config_version == CONFIG_VERSION_V1 {
@@ -856,33 +1135,6 @@ impl AppConfig {
         }
         self
     }
-}
-
-fn validate_response_header(header: &ResponseHeaderConfig) -> Result<(), ConfigError> {
-    let name = header.name.as_str();
-    let name_ok = !name.is_empty()
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        && !name.eq_ignore_ascii_case("content-length")
-        && !name.eq_ignore_ascii_case("transfer-encoding")
-        && !name.eq_ignore_ascii_case("connection")
-        && !name.eq_ignore_ascii_case("host");
-    if !name_ok {
-        return Err(ConfigError::Parse(format!(
-            "response header name `{name}` is not allowed"
-        )));
-    }
-    let value_ok = !header.value.is_empty()
-        && header.value.len() <= 1024
-        && !header
-            .value
-            .bytes()
-            .any(|b| b == b'\r' || b == b'\n' || b == 0);
-    if !value_ok {
-        return Err(ConfigError::Parse(format!(
-            "response header `{name}` has an empty or illegal value"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_ratelimit_config(rl: &RateLimitConfig) -> Result<(), ConfigError> {
@@ -898,13 +1150,6 @@ fn validate_ratelimit_config(rl: &RateLimitConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::Parse(
             "modules.ratelimit.burst must be >= 1 when enabled".into(),
         ));
-    }
-    if let Some(path) = &rl.path {
-        if !path.starts_with('/') || path.contains('?') || path.contains(' ') {
-            return Err(ConfigError::Parse(
-                "modules.ratelimit.path must be an absolute path without a query".into(),
-            ));
-        }
     }
     Ok(())
 }
@@ -978,21 +1223,70 @@ fn validate_metrics_config(
     Ok(())
 }
 
+fn validate_route_cache_headers(route: &RouteConfig) -> Result<(), ConfigError> {
+    let Some(ch) = &route.cache_headers else {
+        return Ok(());
+    };
+    if ch.by_mime.is_empty() {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: cache_headers.by_mime must not be empty when cache_headers is set",
+            route.name
+        )));
+    }
+    for (mime, hdr) in &ch.by_mime {
+        if mime.is_empty() {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: cache_headers.by_mime key must not be empty",
+                route.name
+            )));
+        }
+        if hdr.max_age == 0 || hdr.max_age > CacheHeadersConfig::MAX_AGE_LIMIT {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: cache_headers.by_mime[`{mime}`].max_age must be 1..={}, got {}",
+                route.name,
+                CacheHeadersConfig::MAX_AGE_LIMIT,
+                hdr.max_age
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
-    let mut actions = 0u8;
+    // ADR-048: `flag = break` co-locates with exactly one of root|upstream|fastcgi
+    // (nginx "stay in location"). Other rewrite forms remain exclusive terminals.
+    let break_colocated = matches!(
+        route.rewrite.as_ref().and_then(RewriteConfig::as_rule),
+        Some(rule) if matches!(rule.flag, RewriteFlagConfig::Break)
+    );
+
+    validate_fallback_rewrite(route)?;
+
+    let mut terminals = 0u8;
     if route.upstream.is_some() {
-        actions += 1;
+        terminals += 1;
     }
     if route.root.is_some() {
-        actions += 1;
+        terminals += 1;
     }
     if route.redirect.is_some() {
-        actions += 1;
-    }
-    if route.rewrite.is_some() {
-        actions += 1;
+        terminals += 1;
     }
     if route.fastcgi.is_some() {
+        terminals += 1;
+    }
+
+    if break_colocated {
+        if route.redirect.is_some() || terminals != 1 {
+            return Err(ConfigError::RouteConflictingActions {
+                route: route.name.clone(),
+            });
+        }
+        return Ok(());
+    }
+
+    let mut actions = terminals;
+    if route.rewrite.is_some() {
         actions += 1;
     }
     if actions == 0 {
@@ -1004,6 +1298,80 @@ fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::RouteConflictingActions {
             route: route.name.clone(),
         });
+    }
+    Ok(())
+}
+
+/// NG-03 / ADR-049: `fallback_rewrite` is a root modifier, not a 5th exclusive terminal.
+/// NG-04 / ADR-050: validate server `error_pages` map.
+fn validate_error_pages(pages: &HashMap<String, String>) -> Result<(), ConfigError> {
+    for (key, path) in pages {
+        let status: u16 = key.parse().map_err(|_| {
+            ConfigError::Parse(format!(
+                "error_pages key `{key}` must be an HTTP status integer"
+            ))
+        })?;
+        if !(400..=599).contains(&status) {
+            return Err(ConfigError::Parse(format!(
+                "error_pages status {status} must be in 400..=599"
+            )));
+        }
+        if path.starts_with('@')
+            || path.starts_with("http://")
+            || path.starts_with("https://")
+            || path.starts_with("//")
+        {
+            return Err(ConfigError::Parse(format!(
+                "error_pages target `{path}` must be an absolute path (no @named / URL redirect)"
+            )));
+        }
+        validate_rewrite_target(path)?;
+    }
+    Ok(())
+}
+
+fn validate_fallback_rewrite(route: &RouteConfig) -> Result<(), ConfigError> {
+    let has_flags = route.try_uri.is_some() || route.try_uri_dir.is_some();
+    let Some(target) = route.fallback_rewrite.as_deref() else {
+        if has_flags {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: try_uri/try_uri_dir require fallback_rewrite",
+                route.name
+            )));
+        }
+        return Ok(());
+    };
+
+    if route.root.is_none() {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: fallback_rewrite requires root",
+            route.name
+        )));
+    }
+    if route.rewrite.is_some()
+        || route.redirect.is_some()
+        || route.upstream.is_some()
+        || route.fastcgi.is_some()
+    {
+        return Err(ConfigError::RouteConflictingActions {
+            route: route.name.clone(),
+        });
+    }
+    if route.htaccess == HtaccessMode::Overlay {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: fallback_rewrite cannot combine with htaccess=overlay (ADR-049)",
+            route.name
+        )));
+    }
+    validate_rewrite_target(target)?;
+
+    let try_uri = route.try_uri.unwrap_or(true);
+    let try_uri_dir = route.try_uri_dir.unwrap_or(false);
+    if !try_uri && !try_uri_dir {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: fallback_rewrite requires try_uri and/or try_uri_dir",
+            route.name
+        )));
     }
     Ok(())
 }
@@ -1292,6 +1660,138 @@ fn validate_rewrite_target(target: &str) -> Result<(), ConfigError> {
     }
 }
 
+fn validate_rewrite_config(rewrite: &RewriteConfig) -> Result<(), ConfigError> {
+    match rewrite {
+        RewriteConfig::Literal(target) => validate_rewrite_target(target),
+        RewriteConfig::Rule(rule) => validate_rewrite_rule(rule),
+    }
+}
+
+fn validate_rewrite_rule(rule: &RewriteRuleConfig) -> Result<(), ConfigError> {
+    if rule.pattern.is_empty() {
+        return Err(ConfigError::InvalidRouteRegex {
+            detail: "rewrite.pattern empty".into(),
+        });
+    }
+    if rule.pattern.len() > MAX_ROUTE_REGEX_BYTES {
+        return Err(ConfigError::RouteRegexTooLong {
+            limit: MAX_ROUTE_REGEX_BYTES,
+            found: rule.pattern.len(),
+        });
+    }
+    regex::Regex::new(&rule.pattern).map_err(|e| ConfigError::InvalidRouteRegex {
+        detail: format!("rewrite.pattern: {e}"),
+    })?;
+    validate_rewrite_replacement_template(&rule.replacement)?;
+    // Static expansion check for literal replacements (no captures).
+    if !rule.replacement.contains('$') {
+        match rule.flag {
+            RewriteFlagConfig::Last | RewriteFlagConfig::Break => {
+                validate_rewrite_target(&rule.replacement)?;
+            }
+            RewriteFlagConfig::Redirect | RewriteFlagConfig::Permanent => {
+                validate_redirect_location(&rule.replacement)?;
+            }
+        }
+    }
+    for cond in &rule.when {
+        validate_rewrite_cond(cond)?;
+    }
+    Ok(())
+}
+
+fn validate_rewrite_replacement_template(template: &str) -> Result<(), ConfigError> {
+    // ADR-048 + ADR-062 (R07): `$1`..`$9`, `$$`, `$uri`, `$host`.
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            if i + 1 >= bytes.len() {
+                return Err(ConfigError::InvalidRewriteTarget {
+                    value: template.to_string(),
+                });
+            }
+            let n = bytes[i + 1];
+            if n == b'$' {
+                i += 2;
+                continue;
+            }
+            if (b'1'..=b'9').contains(&n) {
+                i += 2;
+                continue;
+            }
+            // Named vars: $uri / $host
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+            {
+                j += 1;
+            }
+            if j == start {
+                return Err(ConfigError::InvalidRewriteTarget {
+                    value: template.to_string(),
+                });
+            }
+            let name = std::str::from_utf8(&bytes[start..j]).unwrap_or("");
+            if !matches!(name, "uri" | "host") {
+                return Err(ConfigError::InvalidRewriteTarget {
+                    value: template.to_string(),
+                });
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn validate_rewrite_cond(cond: &RewriteCondConfig) -> Result<(), ConfigError> {
+    let set = [
+        cond.path.is_some(),
+        cond.host.is_some(),
+        cond.query.is_some(),
+        cond.header.is_some(),
+    ]
+    .iter()
+    .filter(|&&x| x)
+    .count();
+    if set == 0 {
+        return Err(ConfigError::Parse(
+            "rewrite.when entry must set path, host, query, or header".into(),
+        ));
+    }
+    if cond.header_value.is_some() && cond.header.is_none() {
+        return Err(ConfigError::Parse(
+            "rewrite.when.header_value requires header".into(),
+        ));
+    }
+    if let Some(path) = &cond.path {
+        if path.len() > MAX_ROUTE_REGEX_BYTES {
+            return Err(ConfigError::RouteRegexTooLong {
+                limit: MAX_ROUTE_REGEX_BYTES,
+                found: path.len(),
+            });
+        }
+        regex::Regex::new(path).map_err(|e| ConfigError::InvalidRouteRegex {
+            detail: format!("rewrite.when.path: {e}"),
+        })?;
+    }
+    if let Some(query) = &cond.query {
+        if query.len() > MAX_ROUTE_REGEX_BYTES {
+            return Err(ConfigError::RouteRegexTooLong {
+                limit: MAX_ROUTE_REGEX_BYTES,
+                found: query.len(),
+            });
+        }
+        regex::Regex::new(query).map_err(|e| ConfigError::InvalidRouteRegex {
+            detail: format!("rewrite.when.query: {e}"),
+        })?;
+    }
+    Ok(())
+}
+
 fn unique_names<'a, I>(names: I, kind: &'static str) -> Result<HashSet<String>, ConfigError>
 where
     I: Iterator<Item = &'a str>,
@@ -1325,6 +1825,447 @@ fn validate_match_path(path: &str) -> Result<(), ConfigError> {
         });
     }
     Ok(())
+}
+
+fn validate_route_match(m: &RouteMatch) -> Result<(), ConfigError> {
+    let Some(kind) = m.kind() else {
+        return Err(ConfigError::InvalidRouteMatchKind);
+    };
+    match kind {
+        RouteMatchKind::Prefix => validate_match_path(&m.path)?,
+        RouteMatchKind::Suffix => {
+            let suffix = m.suffix.as_deref().unwrap_or("");
+            if suffix.is_empty() {
+                return Err(ConfigError::InvalidMatchSuffix);
+            }
+        }
+        RouteMatchKind::Regex => {
+            let pattern = m.regex.as_deref().unwrap_or("");
+            if pattern.is_empty() {
+                return Err(ConfigError::InvalidRouteRegex {
+                    detail: "empty pattern".into(),
+                });
+            }
+            if pattern.len() > MAX_ROUTE_REGEX_BYTES {
+                return Err(ConfigError::RouteRegexTooLong {
+                    limit: MAX_ROUTE_REGEX_BYTES,
+                    found: pattern.len(),
+                });
+            }
+            regex::Regex::new(pattern).map_err(|e| ConfigError::InvalidRouteRegex {
+                detail: e.to_string(),
+            })?;
+        }
+    }
+    // NG-05 / ADR-051: optional header AND filter.
+    if let Some(name) = m.header.as_deref() {
+        if name.trim().is_empty() {
+            return Err(ConfigError::Parse(
+                "match.header must be a non-empty header name".into(),
+            ));
+        }
+        if name
+            .as_bytes()
+            .iter()
+            .any(|&b| b <= 0x20 || b == 0x7f || b == b':')
+        {
+            return Err(ConfigError::Parse(format!(
+                "match.header `{name}` is not a valid HTTP header name"
+            )));
+        }
+    } else if m.header_value.is_some() {
+        return Err(ConfigError::Parse(
+            "match.header_value requires match.header".into(),
+        ));
+    }
+    Ok(())
+}
+
+const MAX_MAPS: usize = 32;
+const MAX_MAP_ENTRIES: usize = 64;
+const MAX_MAP_KEY_BYTES: usize = 256;
+
+fn validate_map_config(map: &MapConfig) -> Result<(), ConfigError> {
+    if !is_map_name_ok(&map.name) {
+        return Err(ConfigError::Parse(format!(
+            "map name `{}` must match [a-z][a-z0-9_]* (ADR-051)",
+            map.name
+        )));
+    }
+    if map.values.len() > MAX_MAP_ENTRIES {
+        return Err(ConfigError::Parse(format!(
+            "map `{}`: at most {MAX_MAP_ENTRIES} values (ADR-051)",
+            map.name
+        )));
+    }
+    for (k, v) in &map.values {
+        if k.len() > MAX_MAP_KEY_BYTES || v.len() > MAX_MAP_KEY_BYTES {
+            return Err(ConfigError::Parse(format!(
+                "map `{}`: key/value exceeds {MAX_MAP_KEY_BYTES} bytes",
+                map.name
+            )));
+        }
+    }
+    if map.default.len() > MAX_MAP_KEY_BYTES {
+        return Err(ConfigError::Parse(format!(
+            "map `{}`: default exceeds {MAX_MAP_KEY_BYTES} bytes",
+            map.name
+        )));
+    }
+    match map.input {
+        MapInputKind::Header => {
+            let Some(h) = map.header.as_deref() else {
+                return Err(ConfigError::Parse(format!(
+                    "map `{}`: input=header requires header field",
+                    map.name
+                )));
+            };
+            if h.trim().is_empty() {
+                return Err(ConfigError::Parse(format!(
+                    "map `{}`: header name empty",
+                    map.name
+                )));
+            }
+        }
+        _ => {
+            if map.header.is_some() {
+                return Err(ConfigError::Parse(format!(
+                    "map `{}`: header field only valid when input=header",
+                    map.name
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_map_name_ok(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+fn validate_proxy_set_headers(
+    route: &RouteConfig,
+    maps: &HashMap<String, MapConfig>,
+) -> Result<(), ConfigError> {
+    if route.proxy_set_headers.is_empty() {
+        return Ok(());
+    }
+    if route.upstream.is_none() {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: proxy_set_headers requires upstream (ADR-051)",
+            route.name
+        )));
+    }
+    for h in &route.proxy_set_headers {
+        if h.name.trim().is_empty()
+            || h.name
+                .as_bytes()
+                .iter()
+                .any(|&b| b <= 0x20 || b == 0x7f || b == b':')
+        {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: invalid proxy_set_headers name `{}`",
+                route.name, h.name
+            )));
+        }
+        if is_hop_by_hop_denied(&h.name) {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: proxy_set_headers cannot set hop-by-hop `{}`",
+                route.name, h.name
+            )));
+        }
+        validate_header_template(&h.value, maps)?;
+    }
+    Ok(())
+}
+
+/// ADR-062: compile-time checks for `[[route.response_headers]]`.
+fn validate_response_headers(route: &RouteConfig) -> Result<(), ConfigError> {
+    if route.response_headers.is_empty() {
+        return Ok(());
+    }
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    for h in &route.response_headers {
+        if h.name.trim().is_empty()
+            || h.name
+                .as_bytes()
+                .iter()
+                .any(|&b| b <= 0x20 || b == 0x7f || b == b':')
+        {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: invalid response_headers name `{}`",
+                route.name, h.name
+            )));
+        }
+        let key = h.name.to_ascii_lowercase();
+        if seen.insert(key.clone(), ()).is_some() {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: duplicate response_headers name `{}` (ADR-062)",
+                route.name, h.name
+            )));
+        }
+        if is_response_header_denied(&h.name) {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: response_headers cannot set `{}` (ADR-062 denylist)",
+                route.name, h.name
+            )));
+        }
+        validate_response_header_template(&h.value)?;
+    }
+    Ok(())
+}
+
+fn is_response_header_denied(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if lower == "cache-control" || lower == "set-cookie" {
+        return true;
+    }
+    if lower.starts_with("proxy-") {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+/// ADR-062 response template: literals + `$host` + `$uri` only.
+pub fn validate_response_header_template(template: &str) -> Result<(), ConfigError> {
+    let mut rest = template;
+    while let Some(idx) = rest.find('$') {
+        rest = &rest[idx + 1..];
+        if rest.starts_with('$') {
+            rest = &rest[1..];
+            continue;
+        }
+        let name_len = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .count();
+        if name_len == 0 {
+            return Err(ConfigError::Parse(format!(
+                "invalid `$` in response_headers template `{template}` (ADR-062)"
+            )));
+        }
+        let name = &rest[..name_len];
+        rest = &rest[name_len..];
+        if !matches!(name, "host" | "uri") {
+            return Err(ConfigError::Parse(format!(
+                "unknown variable `${name}` in response_headers (ADR-062 allowlist: $host, $uri)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Runtime context for ADR-062 response header templates.
+#[derive(Debug, Clone, Copy)]
+pub struct ResponseHeaderExpandCtx<'a> {
+    pub host: &'a str,
+    pub uri: &'a str,
+}
+
+/// Expand ADR-062 response header template (`$host` / `$uri` / `$$`).
+pub fn expand_response_header_template(
+    template: &str,
+    ctx: &ResponseHeaderExpandCtx<'_>,
+) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(idx) = rest.find('$') {
+        out.push_str(&rest[..idx]);
+        rest = &rest[idx + 1..];
+        if rest.starts_with('$') {
+            out.push('$');
+            rest = &rest[1..];
+            continue;
+        }
+        let name_len = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .count();
+        let name = &rest[..name_len];
+        rest = &rest[name_len..];
+        match name {
+            "host" => out.push_str(ctx.host),
+            "uri" => out.push_str(ctx.uri),
+            _ => {}
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn is_hop_by_hop_denied(name: &str) -> bool {
+    // `Connection` allowed when driven by `[[map]]` (ADR-051 WebSocket-adjacent).
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+/// Compile-time check that a header value template only uses allowlisted vars / maps.
+pub fn validate_header_template(
+    template: &str,
+    maps: &HashMap<String, MapConfig>,
+) -> Result<(), ConfigError> {
+    let mut rest = template;
+    while let Some(idx) = rest.find('$') {
+        rest = &rest[idx + 1..];
+        if rest.starts_with('$') {
+            rest = &rest[1..];
+            continue;
+        }
+        let name_len = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .count();
+        if name_len == 0 {
+            return Err(ConfigError::Parse(format!(
+                "invalid `$` in header template `{template}`"
+            )));
+        }
+        let name = &rest[..name_len];
+        rest = &rest[name_len..];
+        if matches!(name, "host" | "remote_addr" | "request_uri" | "scheme") {
+            continue;
+        }
+        if !maps.contains_key(name) {
+            return Err(ConfigError::Parse(format!(
+                "unknown variable `${name}` in header template (ADR-051 allowlist / [[map]])"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Runtime expansion context for ADR-051 templates.
+#[derive(Debug, Clone, Copy)]
+pub struct HeaderExpandCtx<'a> {
+    pub host: &'a str,
+    pub remote_addr: &'a str,
+    pub request_uri: &'a str,
+    pub scheme: &'a str,
+    pub request_headers: &'a [(String, String)],
+    pub maps: &'a HashMap<String, MapConfig>,
+}
+
+/// Note from header template expansion (Q-02 / ADR-054 — unknown `$map` only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MapExpandNote {
+    /// `$name` referenced but no `[[map]]` with that name.
+    UnknownMap { name: String },
+}
+
+/// Expand an allowlisted header template (literals + `$host` / `$remote_addr` / … / `$map`).
+pub fn expand_header_template(template: &str, ctx: &HeaderExpandCtx<'_>) -> String {
+    expand_header_template_with_notes(template, ctx).0
+}
+
+/// Like [`expand_header_template`], also collecting unknown-map notes (no success-path key-miss spam).
+pub fn expand_header_template_with_notes(
+    template: &str,
+    ctx: &HeaderExpandCtx<'_>,
+) -> (String, Vec<MapExpandNote>) {
+    let mut out = String::with_capacity(template.len());
+    let mut notes = Vec::new();
+    let mut rest = template;
+    while let Some(idx) = rest.find('$') {
+        out.push_str(&rest[..idx]);
+        rest = &rest[idx + 1..];
+        if rest.starts_with('$') {
+            out.push('$');
+            rest = &rest[1..];
+            continue;
+        }
+        let name_len = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .count();
+        let name = &rest[..name_len];
+        rest = &rest[name_len..];
+        let value = match name {
+            "host" => ctx.host,
+            "remote_addr" => ctx.remote_addr,
+            "request_uri" => ctx.request_uri,
+            "scheme" => ctx.scheme,
+            other => resolve_map_var(other, ctx, &mut notes),
+        };
+        out.push_str(value);
+    }
+    out.push_str(rest);
+    (out, notes)
+}
+
+fn resolve_map_var<'a>(
+    name: &str,
+    ctx: &HeaderExpandCtx<'a>,
+    notes: &mut Vec<MapExpandNote>,
+) -> &'a str {
+    let Some(map) = ctx.maps.get(name) else {
+        notes.push(MapExpandNote::UnknownMap {
+            name: name.to_string(),
+        });
+        return "";
+    };
+    let input = match map.input {
+        MapInputKind::Host => ctx.host,
+        MapInputKind::RemoteAddr => ctx.remote_addr,
+        MapInputKind::RequestUri => ctx.request_uri,
+        MapInputKind::Scheme => ctx.scheme,
+        MapInputKind::Header => {
+            let want = map.header.as_deref().unwrap_or("");
+            ctx.request_headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(want))
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("")
+        }
+    };
+    if input.is_empty() {
+        return map.default.as_str();
+    }
+    map.values
+        .get(input)
+        .map(String::as_str)
+        .unwrap_or(map.default.as_str())
+}
+
+/// Whether a route's optional `match.header` AND constraint is satisfied.
+pub fn match_header_satisfied(m: &RouteMatch, request_headers: &[(String, String)]) -> bool {
+    let Some(want_name) = m.header.as_deref() else {
+        return true;
+    };
+    let Some((_, value)) = request_headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(want_name))
+    else {
+        return false;
+    };
+    match m.header_value.as_deref() {
+        None => !value.is_empty(),
+        Some(expected) => value == expected,
+    }
 }
 
 fn validate_tls_acme(tls: &TlsConfig) -> Result<(), ConfigError> {
@@ -1572,6 +2513,304 @@ target = "http://127.0.0.1:9000"
         assert_eq!(config.servers.len(), 1);
         assert_eq!(config.routes.len(), 1);
         assert_eq!(config.upstreams.len(), 1);
+    }
+
+    #[test]
+    fn accepts_suffix_and_regex_match() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["php", "api_ver", "root"]
+
+[[route]]
+name = "php"
+match = { suffix = ".php" }
+redirect = { status = 302, location = "http://php.example/" }
+
+[[route]]
+name = "api_ver"
+match = { regex = "^/api/v[0-9]+/" }
+redirect = { status = 302, location = "http://apiver.example/" }
+
+[[route]]
+name = "root"
+match = { path = "/" }
+redirect = { status = 302, location = "http://root.example/" }
+"#;
+        let config: AppConfig = input.parse().expect("suffix/regex config");
+        assert_eq!(
+            config.routes[0].r#match.kind(),
+            Some(RouteMatchKind::Suffix)
+        );
+        assert_eq!(config.routes[1].r#match.kind(), Some(RouteMatchKind::Regex));
+        assert_eq!(
+            config.routes[2].r#match.kind(),
+            Some(RouteMatchKind::Prefix)
+        );
+    }
+
+    #[test]
+    fn accepts_proxy_set_headers_and_map() {
+        let input = r#"
+config_version = 1
+
+[[map]]
+name = "connection_upgrade"
+input = "header"
+header = "Upgrade"
+default = "close"
+values = { "websocket" = "upgrade" }
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["app"]
+
+[[route]]
+name = "app"
+match = { path = "/", header = "X-Tenant", header_value = "acme" }
+upstream = "origin"
+proxy_set_headers = [
+  { name = "X-Real-IP", value = "$remote_addr" },
+  { name = "Connection", value = "$connection_upgrade" },
+]
+
+[[upstream]]
+name = "origin"
+target = "http://127.0.0.1:9000"
+"#;
+        let config: AppConfig = input.parse().expect("ng05");
+        assert!(config.maps.contains_key("connection_upgrade"));
+        assert_eq!(config.routes[0].r#match.header.as_deref(), Some("X-Tenant"));
+        assert_eq!(config.routes[0].proxy_set_headers.len(), 2);
+    }
+
+    #[test]
+    fn expand_unknown_map_emits_note_without_key_miss_spam() {
+        use std::collections::HashMap;
+        let maps: HashMap<String, MapConfig> = HashMap::new();
+        let ctx = HeaderExpandCtx {
+            host: "h.example",
+            remote_addr: "127.0.0.1",
+            request_uri: "/x",
+            scheme: "http",
+            request_headers: &[],
+            maps: &maps,
+        };
+        let (out, notes) = expand_header_template_with_notes("x=$missing_map", &ctx);
+        assert_eq!(out, "x=");
+        assert_eq!(
+            notes,
+            vec![MapExpandNote::UnknownMap {
+                name: "missing_map".into()
+            }]
+        );
+        // Known allowlisted vars produce no notes.
+        let (out2, notes2) = expand_header_template_with_notes("$host", &ctx);
+        assert_eq!(out2, "h.example");
+        assert!(notes2.is_empty());
+    }
+
+    #[test]
+    fn rejects_unknown_header_var() {
+        let input = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["app"]
+[[route]]
+name = "app"
+match = { path = "/" }
+upstream = "origin"
+proxy_set_headers = [ { name = "X", value = "$http_cookie" } ]
+[[upstream]]
+name = "origin"
+target = "http://127.0.0.1:9000"
+"#;
+        assert!(input.parse::<AppConfig>().is_err());
+    }
+
+    #[test]
+    fn accepts_error_pages_map() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+error_pages = { "404" = "/404.html", "500" = "/50x.html" }
+
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www"
+"#;
+        let config: AppConfig = input.parse().expect("error_pages");
+        assert_eq!(
+            config.servers[0].error_pages.get("404").map(String::as_str),
+            Some("/404.html")
+        );
+        assert_eq!(
+            config.servers[0].error_pages.get("500").map(String::as_str),
+            Some("/50x.html")
+        );
+    }
+
+    #[test]
+    fn rejects_error_pages_named_and_url() {
+        for bad in [
+            r#"error_pages = { "404" = "@named" }"#,
+            r#"error_pages = { "404" = "http://x/404" }"#,
+            r#"error_pages = { "200" = "/ok.html" }"#,
+        ] {
+            let input = format!(
+                r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+{bad}
+[[route]]
+name = "site"
+match = {{ path = "/" }}
+root = "/var/www"
+"#
+            );
+            assert!(
+                input.parse::<AppConfig>().is_err(),
+                "expected reject for {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_fallback_rewrite_with_root() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["spa"]
+
+[[route]]
+name = "spa"
+match = { path = "/" }
+root = "/var/www"
+fallback_rewrite = "/index.html"
+try_uri = true
+try_uri_dir = false
+"#;
+        let config: AppConfig = input.parse().expect("fallback_rewrite");
+        assert_eq!(
+            config.routes[0].fallback_rewrite.as_deref(),
+            Some("/index.html")
+        );
+        assert_eq!(config.routes[0].try_uri, Some(true));
+    }
+
+    #[test]
+    fn rejects_fallback_rewrite_without_root() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["bad"]
+
+[[route]]
+name = "bad"
+match = { path = "/" }
+rewrite = "/x"
+fallback_rewrite = "/index.html"
+"#;
+        // rewrite + fallback_rewrite conflict (and no root for fallback).
+        let err = input.parse::<AppConfig>().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            matches!(err, ConfigError::RouteConflictingActions { .. })
+                || msg.contains("fallback_rewrite")
+                || msg.contains("conflicting"),
+            "{err:?} / {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_fallback_rewrite_missing_root() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["bad"]
+
+[[route]]
+name = "bad"
+match = { path = "/" }
+fallback_rewrite = "/index.html"
+"#;
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(
+            err.to_string().contains("fallback_rewrite requires root"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_mixed_path_and_regex() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["bad"]
+
+[[route]]
+name = "bad"
+match = { path = "/api", regex = "^/api/" }
+redirect = { status = 302, location = "http://x/" }
+"#;
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidRouteMatchKind));
+    }
+
+    #[test]
+    fn rejects_invalid_regex_syntax() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["bad"]
+
+[[route]]
+name = "bad"
+match = { regex = "(unclosed" }
+redirect = { status = 302, location = "http://x/" }
+"#;
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidRouteRegex { .. }));
+    }
+
+    #[test]
+    fn rejects_regex_over_byte_limit() {
+        let long = "a".repeat(MAX_ROUTE_REGEX_BYTES + 1);
+        let input = format!(
+            r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["bad"]
+
+[[route]]
+name = "bad"
+match = {{ regex = "{long}" }}
+redirect = {{ status = 302, location = "http://x/" }}
+"#
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(matches!(err, ConfigError::RouteRegexTooLong { .. }));
     }
 
     #[test]
@@ -2840,5 +4079,120 @@ enabled = true
             err.contains("scrape_bearer_token") && err.contains("LA-CAP054-008"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn cache_headers_by_mime_parses_and_looks_up() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www"
+[route.cache_headers.by_mime."text/css"]
+max_age = 2592000
+immutable = true
+[route.cache_headers.by_mime."*"]
+max_age = 3600
+"#;
+        let cfg = AppConfig::parse_str(toml).expect("parse");
+        let site = cfg.routes.iter().find(|r| r.name == "site").unwrap();
+        let ch = site.cache_headers.as_ref().expect("cache_headers");
+        assert_eq!(
+            ch.cache_control_for("text/css; charset=utf-8").as_deref(),
+            Some("public, max-age=2592000, immutable")
+        );
+        assert_eq!(
+            ch.cache_control_for("application/octet-stream").as_deref(),
+            Some("public, max-age=3600")
+        );
+    }
+
+    #[test]
+    fn cache_headers_zero_max_age_rejected() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www"
+[route.cache_headers.by_mime."text/css"]
+max_age = 0
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(err.contains("max_age"), "{err}");
+    }
+
+    #[test]
+    fn response_headers_parse_and_expand() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www"
+[[route.response_headers]]
+name = "X-Frame-Options"
+value = "SAMEORIGIN"
+[[route.response_headers]]
+name = "X-Debug-Host"
+value = "h=$host;u=$uri"
+always = true
+"#;
+        let cfg = AppConfig::parse_str(toml).expect("parse");
+        let site = cfg.routes.iter().find(|r| r.name == "site").unwrap();
+        assert_eq!(site.response_headers.len(), 2);
+        assert!(site.response_headers[1].always);
+        let expanded = expand_response_header_template(
+            &site.response_headers[1].value,
+            &ResponseHeaderExpandCtx {
+                host: "app.example",
+                uri: "/page",
+            },
+        );
+        assert_eq!(expanded, "h=app.example;u=/page");
+    }
+
+    #[test]
+    fn response_headers_denylist_cache_control() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www"
+[[route.response_headers]]
+name = "Cache-Control"
+value = "no-store"
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(err.contains("denylist") || err.contains("Cache-Control"), "{err}");
+    }
+
+    #[test]
+    fn rewrite_allows_uri_and_host_vars() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["rw"]
+[[route]]
+name = "rw"
+match = { regex = "^/x$" }
+rewrite = { pattern = "^/x$", replacement = "/h/$host$uri", flag = "last" }
+"#;
+        AppConfig::parse_str(toml).expect("rewrite $host/$uri ok");
     }
 }

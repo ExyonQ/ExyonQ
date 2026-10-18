@@ -66,7 +66,7 @@ The current product release is **v0.4.13**. Rows for R5 stay the authority for t
 | Old smoke evidence / `*SMOKE*` reports | NON_AUTHORITATIVE | Rule 127 — must not close gates |
 | R2D OCI version-only cells | HISTORICAL / NOT_GATE_CLOSING | Class A version cells only |
 | GRC-P0 audit snapshot @ `8953b19` | HISTORICAL_AUDIT_SNAPSHOT | Does not override newer product/R3 state |
-| R5 amd64 initial PMZ/GRC FAIL | HISTORICAL_HARNESS_DEFECT | `.cursor`/`.git` rsync; remediate PASS is CURRENT |
+| R5 amd64 initial PMZ/GRC FAIL | HISTORICAL_HARNESS_DEFECT | editor-config and `.git` rsync; remediate PASS is CURRENT |
 | R5 arm64 initial FAIL (disk full) | HISTORICAL_INFRASTRUCTURE | Rebind PASS is CURRENT |
 
 ## Integrity invariants for this binder
