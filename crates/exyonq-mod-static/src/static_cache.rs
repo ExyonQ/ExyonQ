@@ -18,9 +18,7 @@
 //! Generic store/singleflight remain in core; this module owns static-specific
 //! identity revalidation, path canonicalization for invalidation, and metrics.
 
-#[cfg(unix)]
-use crate::identity::FileIdentity;
-use crate::identity::StaticResourceIdentity;
+use crate::identity::{FileIdentity, StaticResourceIdentity};
 use exyonq_module_api::static_dispatch::{StaticMethod, StaticResourceIdentitySnapshot};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -120,8 +118,6 @@ fn snapshot_to_identity(snapshot: &StaticResourceIdentitySnapshot) -> StaticReso
             (Some(dev), Some(ino)) => Some(FileIdentity { dev, ino }),
             _ => None,
         },
-        #[cfg(not(unix))]
-        platform_file_id: None,
     }
 }
 

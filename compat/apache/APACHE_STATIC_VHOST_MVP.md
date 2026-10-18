@@ -1,6 +1,6 @@
-# Apache → ExyonQ equivalent importer (0.4.13)
+# Apache → ExyonQ equivalent importer (0.4.11)
 
-**Product cut:** ExyonQ **0.4.13** (`IMPORTER_VERSION=0.4.13`)
+**Product cut:** ExyonQ **0.4.11** (`IMPORTER_VERSION=0.4.11`)
 **CLI:** `exyonq-compat migrate --from apache --input httpd.conf --out exyonq.toml --report report.md`
 
 Maps Apache constructs onto **existing** ExyonQ IR/runtime equivalents. Fail-closed: any `REJECTED_UNSUPPORTED` refuses TOML.
@@ -23,11 +23,11 @@ Maps Apache constructs onto **existing** ExyonQ IR/runtime equivalents. Fail-clo
 
 | Apache | Why |
 |--------|-----|
-| `ErrorDocument` | No custom error-page IR |
+| `ErrorDocument` URL/texto | ADR-050 maps path form only (`error_pages`); URL/text still rejected |
 | `AuthType` / `AuthUserFile` / `Require` | Auth module absent |
 | `ProxyPassReverse` | No response `Location` rewrite |
 | `RedirectMatch` / regex `RewriteRule` / `RewriteCond` | No regex match IR; use htaccess overlay for WP front-controller |
 | `ProxyPass` with upstream path / balancers / variables | Same fail-closed policy as NGINX proxy MVP |
-| `Include` | Expansion later |
+| `Include` / `IncludeOptional` | AP-07 / ADR-053 path expand (`EXY-AP-INCLUDE-*`) |
 
 `TOTAL_COMPAT_PROMISE = FORBIDDEN` until Gate A corpus closes on dual-arch evidence.

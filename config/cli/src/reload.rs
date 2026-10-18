@@ -1,13 +1,16 @@
 //! Reload / generation UX helpers (P1.4-WS5) — offline precheck + diff.
 //!
 //! Live publish remains core PREPARE→COMMIT→RETIRE. This module never publishes.
+//! Q-07 / ADR-056: route add/remove summary vs baseline IR or applied-routes sidecar.
 
 use crate::output::{sanitize_control_chars, CliExit, OutputFormat, ToolResult};
 use exyonq_config_ir::{
     fingerprint as ir_fingerprint, AppConfig, Diagnostic, DiagnosticCode, DiagnosticDocument,
+    RouteConfig, RouteMatchKind,
 };
 use exyonq_config_merge::load_with_includes;
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 /// Operator-facing change class (P1.4: no DYNAMIC_INPLACE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +37,114 @@ pub struct DiffEntry {
     pub kind: String,
     pub class: ChangeClass,
     pub detail: String,
+}
+
+/// Q-07: stable operator-facing route identity (name + match arm).
+pub fn route_identity(route: &RouteConfig) -> String {
+    let host = route.r#match.host.as_deref().unwrap_or("*");
+    let (kind, pat) = match route.r#match.kind() {
+        Some(RouteMatchKind::Prefix) => ("prefix", route.r#match.path.as_str()),
+        Some(RouteMatchKind::Suffix) => (
+            "suffix",
+            route.r#match.suffix.as_deref().unwrap_or(""),
+        ),
+        Some(RouteMatchKind::Regex) => (
+            "regex",
+            route.r#match.regex.as_deref().unwrap_or(""),
+        ),
+        None => ("?", ""),
+    };
+    format!("{}@{}:{}:{}", route.name, host, kind, pat)
+}
+
+/// Route identities present in an AppConfig (sorted unique).
+pub fn route_identities(cfg: &AppConfig) -> BTreeSet<String> {
+    cfg.routes.iter().map(route_identity).collect()
+}
+
+/// Summarize routes added / removed between baseline and candidate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RouteDiffSummary {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub unchanged: usize,
+}
+
+impl RouteDiffSummary {
+    pub fn from_sets(baseline: &BTreeSet<String>, candidate: &BTreeSet<String>) -> Self {
+        let added: Vec<String> = candidate.difference(baseline).cloned().collect();
+        let removed: Vec<String> = baseline.difference(candidate).cloned().collect();
+        let unchanged = baseline.intersection(candidate).count();
+        Self {
+            added,
+            removed,
+            unchanged,
+        }
+    }
+
+    pub fn from_configs(baseline: &AppConfig, candidate: &AppConfig) -> Self {
+        Self::from_sets(&route_identities(baseline), &route_identities(candidate))
+    }
+
+    /// Human lines for reload / --diff output.
+    pub fn format_lines(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "routes_added = {}\n",
+            if self.added.is_empty() {
+                "(none)".into()
+            } else {
+                self.added.join(", ")
+            }
+        ));
+        out.push_str(&format!(
+            "routes_removed = {}\n",
+            if self.removed.is_empty() {
+                "(none)".into()
+            } else {
+                self.removed.join(", ")
+            }
+        ));
+        out.push_str(&format!("routes_unchanged = {}\n", self.unchanged));
+        out
+    }
+}
+
+/// Sidecar written after successful live reload (Q-07 / ADR-056).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AppliedRoutesSnapshot {
+    pub schema_version: u32,
+    pub fingerprint: String,
+    pub routes: Vec<String>,
+}
+
+/// Path of the applied-routes sidecar next to the daemon-bound config.
+pub fn applied_routes_sidecar_path(config_path: &Path) -> PathBuf {
+    let mut s = config_path.as_os_str().to_os_string();
+    s.push(".exyonq-applied-routes.v1.json");
+    PathBuf::from(s)
+}
+
+pub fn write_applied_routes_snapshot(
+    config_path: &Path,
+    fingerprint: &str,
+    cfg: &AppConfig,
+) -> std::io::Result<()> {
+    let snap = AppliedRoutesSnapshot {
+        schema_version: 1,
+        fingerprint: fingerprint.to_string(),
+        routes: route_identities(cfg).into_iter().collect(),
+    };
+    let path = applied_routes_sidecar_path(config_path);
+    let body = serde_json::to_string_pretty(&snap)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(path, body)
+}
+
+pub fn read_applied_routes_snapshot(config_path: &Path) -> Option<AppliedRoutesSnapshot> {
+    let path = applied_routes_sidecar_path(config_path);
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +204,7 @@ pub fn reload_precheck(path: &Path) -> ReloadPrecheck {
     }
 }
 
-fn load_app_for_reload(path: &Path) -> Result<AppConfig, Box<Diagnostic>> {
+pub(crate) fn load_app_for_reload(path: &Path) -> Result<AppConfig, Box<Diagnostic>> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -145,11 +256,30 @@ fn load_app_for_reload(path: &Path) -> Result<AppConfig, Box<Diagnostic>> {
     }
 }
 
+/// Options for Q-07 route diff (optional baseline file or applied-routes sidecar).
+#[derive(Debug, Clone, Default)]
+pub struct ReloadDiffOptions {
+    /// Explicit previous TOML/IR path (`--baseline`).
+    pub baseline_path: Option<PathBuf>,
+    /// Daemon-bound config path used to locate the applied-routes sidecar.
+    pub applied_sidecar_of: Option<PathBuf>,
+}
+
 /// Offline diff vs optional live fingerprint (from `status`). Classifies listener/H3 limits.
+/// Q-07: also prints `routes_added` / `routes_removed` when a baseline is available.
 pub fn classify_reload_diff(
     path: &Path,
     current_fingerprint: Option<&str>,
     current_generation: Option<u64>,
+) -> ToolResult {
+    classify_reload_diff_with(path, current_fingerprint, current_generation, ReloadDiffOptions::default())
+}
+
+pub fn classify_reload_diff_with(
+    path: &Path,
+    current_fingerprint: Option<&str>,
+    current_generation: Option<u64>,
+    opts: ReloadDiffOptions,
 ) -> ToolResult {
     let pre = reload_precheck(path);
     if !pre.ok {
@@ -183,6 +313,8 @@ pub fn classify_reload_diff(
             detail: format!("candidate={candidate_fp} (no live fingerprint supplied)"),
         });
     }
+
+    let route_summary = resolve_route_diff(&pre, &opts);
 
     if let Some(cfg) = &pre.config {
         for server in &cfg.servers {
@@ -232,6 +364,13 @@ pub fn classify_reload_diff(
     if let Some(ir) = &pre.candidate_ir_fingerprint {
         out.push_str(&format!("candidate_ir_fingerprint = {ir}\n"));
     }
+    match &route_summary {
+        Some(s) => out.push_str(&s.format_lines()),
+        None => {
+            out.push_str("routes_added = (baseline unavailable — pass --baseline or apply once to write sidecar)\n");
+            out.push_str("routes_removed = (baseline unavailable)\n");
+        }
+    }
     out.push_str("IDENTICAL_RELOAD = NO_OP\n");
     out.push_str("DYNAMIC_INPLACE = FORBIDDEN\n");
     out.push_str("H3_RELOAD_SUPPORT = SAME_LISTENER_CONFIG_ONLY\n");
@@ -248,6 +387,26 @@ pub fn classify_reload_diff(
         stdout: out,
         stderr: String::new(),
     }
+}
+
+fn resolve_route_diff(pre: &ReloadPrecheck, opts: &ReloadDiffOptions) -> Option<RouteDiffSummary> {
+    let candidate = pre.config.as_ref()?;
+    let cand_set = route_identities(candidate);
+    if let Some(base_path) = &opts.baseline_path {
+        let base = load_app_for_reload(base_path).ok()?;
+        return Some(RouteDiffSummary::from_configs(&base, candidate));
+    }
+    if let Some(side_of) = &opts.applied_sidecar_of {
+        if let Some(snap) = read_applied_routes_snapshot(side_of) {
+            let base: BTreeSet<String> = snap.routes.into_iter().collect();
+            return Some(RouteDiffSummary::from_sets(&base, &cand_set));
+        }
+    }
+    // First apply: treat empty baseline → all candidate routes are "added".
+    if opts.applied_sidecar_of.is_some() {
+        return Some(RouteDiffSummary::from_sets(&BTreeSet::new(), &cand_set));
+    }
+    None
 }
 
 pub fn reload_check(path: &Path, format: OutputFormat) -> ToolResult {
@@ -445,6 +604,111 @@ root = "/tmp"
         let r = classify_reload_diff(&p, Some(&fp), Some(3));
         assert_eq!(r.exit, CliExit::Ok);
         assert!(r.stdout.contains("NO_EFFECT") || r.stdout.contains("IDENTICAL_RELOAD"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn q07_route_diff_added_removed() {
+        let a = AppConfig::parse_str(
+            r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:1"
+routes = ["a", "b"]
+[[route]]
+name = "a"
+match = { path = "/" }
+root = "/t"
+[[route]]
+name = "b"
+match = { path = "/old" }
+root = "/t"
+"#,
+        )
+        .expect("a");
+        let b = AppConfig::parse_str(
+            r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:1"
+routes = ["a", "c"]
+[[route]]
+name = "a"
+match = { path = "/" }
+root = "/t"
+[[route]]
+name = "c"
+match = { path = "/new" }
+root = "/t"
+"#,
+        )
+        .expect("b");
+        let s = RouteDiffSummary::from_configs(&a, &b);
+        assert_eq!(s.removed, vec!["b@*:prefix:/old".to_string()]);
+        assert_eq!(s.added, vec!["c@*:prefix:/new".to_string()]);
+        assert_eq!(s.unchanged, 1);
+        let lines = s.format_lines();
+        assert!(lines.contains("routes_added = c@*:prefix:/new"));
+        assert!(lines.contains("routes_removed = b@*:prefix:/old"));
+    }
+
+    #[test]
+    fn q07_diff_with_baseline_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "exyonq-q07-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("base.toml");
+        let cand = dir.join("cand.toml");
+        fs::write(
+            &base,
+            r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:1"
+routes = ["a"]
+[[route]]
+name = "a"
+match = { path = "/" }
+root = "/t"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            &cand,
+            r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:1"
+routes = ["a", "b"]
+[[route]]
+name = "a"
+match = { path = "/" }
+root = "/t"
+[[route]]
+name = "b"
+match = { path = "/api" }
+root = "/t"
+"#,
+        )
+        .unwrap();
+        let r = classify_reload_diff_with(
+            &cand,
+            None,
+            None,
+            ReloadDiffOptions {
+                baseline_path: Some(base),
+                applied_sidecar_of: None,
+            },
+        );
+        assert_eq!(r.exit, CliExit::Ok);
+        assert!(r.stdout.contains("routes_added = b@*:prefix:/api"));
+        assert!(r.stdout.contains("routes_removed = (none)"));
+        assert!(r.stdout.contains("candidate_fingerprint ="));
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -63,14 +63,16 @@ pub async fn run_spike_proxy(listen: SocketAddr, upstream: Uri) -> anyhow::Resul
         let xff = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"));
 
+        let client = client.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
             let service = service_fn(move |req: Request<Incoming>| {
                 let upstream = upstream.clone();
                 let xff = xff.clone();
+                let client = client.clone();
                 async move {
                     Ok::<_, Infallible>(
-                        forward_spike_request(client, &upstream, req, Some(&xff)).await,
+                        forward_spike_request(&client, &upstream, req, Some(&xff)).await,
                     )
                 }
             });

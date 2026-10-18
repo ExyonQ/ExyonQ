@@ -54,7 +54,8 @@ wp exyonq-cache purge-generation 12
 ## Tests
 
 ```bash
-docker run --rm -v "$PWD:/work" -w /work php:8.2-cli php tests/run-tests.php
+docker run --rm -v "$PWD:/work" -w /work/integrations/wordpress/exyonq-cache \
+  php:8.2-cli php tests/run-tests.php
 ```
 
 ## Out of scope (this plugin)

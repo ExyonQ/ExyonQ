@@ -66,6 +66,23 @@ pub fn response_for_attempt_class(
     class: UpstreamAttemptClass,
     metrics: &ProxyHyperMetrics,
 ) -> Response<BoxBody> {
+    response_for_attempt_class_ctx(class, metrics, None)
+}
+
+/// Like [`response_for_attempt_class`], emitting Q-02 `EXY-RT-*` with route context when given.
+pub fn response_for_attempt_class_ctx(
+    class: UpstreamAttemptClass,
+    metrics: &ProxyHyperMetrics,
+    ctx: Option<&crate::runtime_diag::RtFailCtx<'_>>,
+) -> Response<BoxBody> {
+    let fallback = crate::runtime_diag::RtFailCtx {
+        cluster_id: 0,
+        path: "",
+        peer: None,
+        host: None,
+        detail: None,
+    };
+    crate::runtime_diag::emit_upstream_class(ctx.unwrap_or(&fallback), class);
     match class {
         UpstreamAttemptClass::TimedOut => {
             note_504(metrics);
@@ -252,21 +269,75 @@ pub async fn attempt_forward_empty_body(
     _metrics: &ProxyHyperMetrics,
     budget: Duration,
 ) -> Result<Response<BoxBody>, UpstreamAttemptClass> {
+    attempt_forward_empty_body_with_headers(
+        upstream,
+        path_and_query,
+        method,
+        x_forwarded_for,
+        x_forwarded_proto,
+        &[],
+        _metrics,
+        budget,
+    )
+    .await
+}
+
+/// NG-05: GET/HEAD forward with optional outbound header replacements.
+#[allow(clippy::too_many_arguments)]
+pub async fn attempt_forward_empty_body_with_headers(
+    upstream: &UpstreamTarget,
+    path_and_query: &str,
+    method: Method,
+    x_forwarded_for: Option<&HeaderValue>,
+    x_forwarded_proto: Option<&HeaderValue>,
+    extra_headers: &[(String, String)],
+    _metrics: &ProxyHyperMetrics,
+    budget: Duration,
+) -> Result<Response<BoxBody>, UpstreamAttemptClass> {
     if budget.is_zero() {
         return Err(UpstreamAttemptClass::TimedOut);
     }
     let is_head = method == Method::HEAD;
+
+    // Assemble + strip hop-by-hop (incl. Connection nominations) before Request::builder.
+    // Hyper may drop Connection during build; stripping afterward would miss nominations.
+    let mut header_map = hyper::HeaderMap::new();
+    for (name, value) in extra_headers {
+        if name.eq_ignore_ascii_case("x-forwarded-for")
+            || name.eq_ignore_ascii_case("x-forwarded-proto")
+            || name.eq_ignore_ascii_case("host")
+        {
+            continue;
+        }
+        if let (Ok(n), Ok(v)) = (
+            hyper::header::HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            header_map.insert(n, v);
+        }
+    }
+    strip_hop_by_hop_headers(&mut header_map);
+
     let mut builder = Request::builder()
         .method(method)
         .uri(upstream.uri_for(path_and_query));
-
+    for (name, value) in header_map.iter() {
+        builder = builder.header(name, value);
+    }
+    // Identity headers after strip so Connection cannot wipe them.
     if let Some(value) = x_forwarded_for {
         builder = builder.header("x-forwarded-for", value.clone());
     }
     if let Some(value) = x_forwarded_proto {
         builder = builder.header("x-forwarded-proto", value.clone());
     }
-    if let Some(host) = &upstream.host {
+    // Explicit Host from proxy_set_headers wins over upstream default.
+    if let Some((_, host_v)) = extra_headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("host"))
+    {
+        builder = builder.header(HOST, host_v.as_str());
+    } else if let Some(host) = &upstream.host {
         builder = builder.header(HOST, host.clone());
     }
 

@@ -140,7 +140,7 @@ document_root = "{}"
     FcgiOverlayHarness {
         ctx: ConnectionContext {
             state,
-            proxy_client: proxy_client.clone(),
+            proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -332,7 +332,7 @@ document_root = "{}"
     let _fcgi_guard = install_fcgi_runtime_for_tests(Arc::new(NoCall), vec![(0, 1)]);
     let ctx = ConnectionContext {
         state,
-        proxy_client: proxy_client.clone(),
+        proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -484,7 +484,7 @@ document_root = "{}"
         install_fcgi_runtime_for_tests(Arc::new(CaptureScriptExecutor), vec![(0, 8), (1, 8)]);
     let ctx = ConnectionContext {
         state,
-        proxy_client: proxy_client.clone(),
+        proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -570,7 +570,7 @@ document_root = "{}"
         .expect("state");
     let ctx = ConnectionContext {
         state,
-        proxy_client: proxy_client.clone(),
+        proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -638,7 +638,7 @@ document_root = "{}"
     FcgiOverlayHarness {
         ctx: ConnectionContext {
             state,
-            proxy_client: proxy_client.clone(),
+            proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -758,7 +758,7 @@ document_root = "{}"
     .expect("register global fcgi for multi-thread test");
     let harness_ctx = ConnectionContext {
         state,
-        proxy_client: proxy_client.clone(),
+        proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };

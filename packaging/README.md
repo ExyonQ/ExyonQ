@@ -100,21 +100,21 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.4.13 \
+  --build-arg EXYONQ_VERSION=0.5.0 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
 
-# Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
+# Local 0.5.0 image only. Do not push this tag. A real release still requires the Docker E2E gate.
 # Runtime stage is scratch. Debian is used only to copy CA certificates and is not shipped.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
   --provenance=mode=max \
   --sbom=true \
-  --build-arg EXYONQ_VERSION=0.4.13 \
+  --build-arg EXYONQ_VERSION=0.5.0 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t ghcr.io/exyonq/exyonq:0.4.13 .
+  -t exyonq/exyonq:0.5.0-local .
 ```
 
 ## CI
@@ -130,10 +130,10 @@ OCI publish (`docker` job) encodes the canonical contract explicitly:
 - revision/version/source via build-args + OCI labels
 
 
-WordPress and SQLite, after the scratch image exists locally as `exyonq:0.4.13`:
+The published images remain **0.4.13**. Do not tag or push `0.5.0` until the Docker E2E gate passes.
 
 ```bash
-docker build -f packaging/docker/wordpress/Dockerfile -t ghcr.io/exyonq/exyonq-wordpress:0.4.13 .
+docker pull ghcr.io/exyonq/exyonq:0.4.13
 docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.13
 docker pull exyonq/exyonq:0.4.13
 docker pull exyonq/exyonq-wordpress:0.4.13

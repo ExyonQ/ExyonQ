@@ -4,9 +4,7 @@
 //! 1) kill process / restart with data preserved
 //! 2) kill / restart / FLUSHALL → local generation never rolls back
 //!
-//! Soft-skips when Docker itself is unavailable, or when the Redis image
-//! cannot be pulled (Docker Hub rate limit or registry timeout). A failed
-//! `docker run` for any other reason still fails the test.
+//! Soft-skips only when Docker itself is unavailable.
 //!
 //! KF-P16-009: container/volume/port are unique per process (PID + run stamp).
 //! Never uses the historical fixed name `exyonq-wc7b2-redis`. Cleanup removes
@@ -134,54 +132,7 @@ fn docker_available() -> bool {
 }
 
 fn docker(args: &[&str]) -> std::process::Output {
-    // `docker pull` against Docker Hub can sit forever on a stalled registry
-    // connection. An unbounded wait stalls the whole nextest run.
-    let mut child = match Command::new("docker")
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => return docker_failed(&format!("docker failed to start: {err}")),
-    };
-    let start = Instant::now();
-    let limit = Duration::from_secs(25);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .unwrap_or_else(|err| docker_failed(&format!("docker output failed: {err}")));
-            }
-            Ok(None) if start.elapsed() >= limit => {
-                let _ = child.kill();
-                // A pull stuck in an uninterruptible network wait does not die
-                // on SIGKILL. Do not block the suite on wait().
-                let kill_start = Instant::now();
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(_)) | Err(_) => return docker_failed("docker timed out"),
-                        Ok(None) if kill_start.elapsed() >= Duration::from_secs(2) => {
-                            return docker_failed("docker timed out");
-                        }
-                        Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                    }
-                }
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(err) => return docker_failed(&format!("docker wait failed: {err}")),
-        }
-    }
-}
-
-fn docker_failed(message: &str) -> std::process::Output {
-    use std::os::unix::process::ExitStatusExt;
-    std::process::Output {
-        status: std::process::ExitStatus::from_raw(1),
-        stdout: Vec::new(),
-        stderr: message.as_bytes().to_vec(),
-    }
+    Command::new("docker").args(args).output().expect("docker")
 }
 
 fn docker_ok(args: &[&str]) -> bool {
@@ -213,33 +164,13 @@ fn container_exists() -> bool {
     docker_ok(&["inspect", &container()])
 }
 
-enum RedisEnsure {
-    Ready,
-    ImageUnavailable,
-}
-
-fn redis_image_pull_blocked(stderr: &str) -> bool {
-    let lower = stderr.to_ascii_lowercase();
-    // A name conflict is our container, not a registry failure.
-    if lower.contains("conflict") || lower.contains("already in use") {
-        return false;
-    }
-    lower.contains("toomanyrequests")
-        || lower.contains("pull rate limit")
-        || lower.contains("unable to find image")
-        || lower.contains("registry-1.docker.io")
-        || lower.contains("client.timeout")
-        || lower.contains("request canceled")
-        || lower.contains("timed out")
-}
-
-fn ensure_redis_container() -> RedisEnsure {
+fn ensure_redis_container() {
     if !manages_docker() {
         assert!(
             wait_redis(Duration::from_secs(5)),
             "external EXYONQ_REDIS_COORD_URL not ready"
         );
-        return RedisEnsure::Ready;
+        return;
     }
     let _lock = docker_lock().lock().unwrap_or_else(|e| e.into_inner());
     let c = container();
@@ -288,15 +219,11 @@ fn ensure_redis_container() -> RedisEnsure {
                     "--appendonly",
                     "yes",
                 ]);
-                let err2 = String::from_utf8_lossy(&out2.stderr);
-                if !out2.status.success() {
-                    if redis_image_pull_blocked(&err2) {
-                        return RedisEnsure::ImageUnavailable;
-                    }
-                    panic!("docker run failed after reclaiming our container: {err2}");
-                }
-            } else if redis_image_pull_blocked(&err) {
-                return RedisEnsure::ImageUnavailable;
+                assert!(
+                    out2.status.success(),
+                    "docker run failed after reclaiming our container: {}",
+                    String::from_utf8_lossy(&out2.stderr)
+                );
             } else {
                 panic!("docker run failed: {err}");
             }
@@ -311,7 +238,6 @@ fn ensure_redis_container() -> RedisEnsure {
         wait_redis(Duration::from_secs(30)),
         "Redis not ready after ensure"
     );
-    RedisEnsure::Ready
 }
 
 fn kill_redis_process() {
@@ -411,12 +337,7 @@ fn wc7d_real_redis_process_restart_preserve_data() {
         return;
     }
     let _cleanup = RedisResourceGuard;
-    if matches!(ensure_redis_container(), RedisEnsure::ImageUnavailable) {
-        eprintln!(
-            "wc7d_real_redis_process_restart_preserve_data: soft-skip (redis image unavailable)"
-        );
-        return;
-    }
+    ensure_redis_container();
     let ns = format!("exyonq:fpc:v1:wc7d:rst:{}", std::process::id());
     let a = open(&ns, "a");
     let b = open(&ns, "b");
@@ -460,10 +381,7 @@ fn wc7d_redis_data_loss_local_generation_never_rolls_back() {
         return;
     }
     let _cleanup = RedisResourceGuard;
-    if matches!(ensure_redis_container(), RedisEnsure::ImageUnavailable) {
-        eprintln!("wc7d_redis_data_loss: soft-skip (redis image unavailable)");
-        return;
-    }
+    ensure_redis_container();
     let ns = format!("exyonq:fpc:v1:wc7d:dl:{}", std::process::id());
     let a = open(&ns, "a");
     let b = open(&ns, "b");

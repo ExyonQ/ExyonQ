@@ -25,7 +25,7 @@ ExyonQ is a modular reverse proxy. This clean publication tree contains the comp
 
 ## Release
 
-Current product version: **v0.4.13**. The production container is a scratch image: the `exyonq` and `exyonqctl` binaries are static musl, and the image carries CA certificates plus a default page. It does not ship a Debian userland. The same tag is on GHCR and Docker Hub: `exyonq/exyonq:0.4.13` and `exyonq/exyonq-wordpress:0.4.13`.
+Published release: **v0.4.13**. Source version in this tree: **0.5.0**, not published. The production container for 0.4.13 is a scratch image: the `exyonq` and `exyonqctl` binaries are static musl, and the image carries CA certificates plus a default page. It does not ship a Debian userland. That tag is on GHCR and Docker Hub: `exyonq/exyonq:0.4.13` and `exyonq/exyonq-wordpress:0.4.13`. There is no `0.5.0` image.
 
 ## Contact
 

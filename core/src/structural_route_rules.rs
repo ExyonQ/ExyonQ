@@ -25,7 +25,7 @@ pub fn structural_route_rule_input(route: &RouteConfig) -> RouteRuleInput<'_> {
     RouteRuleInput {
         redirect_status: route.redirect.as_ref().map(|r| r.status),
         redirect_location: route.redirect.as_ref().map(|r| r.location.as_str()),
-        rewrite_target: route.rewrite.as_deref(),
+        rewrite_target: route.rewrite.as_ref().and_then(|r| r.literal_path()),
     }
 }
 

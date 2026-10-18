@@ -20,12 +20,13 @@ use crate::health::{peer_key_from_http_uri, HealthSupervisor};
 use crate::hyper_client::{build_incoming_client, post_body_client, ProxyClient};
 use crate::hyper_forward::{
     attempt_forward_empty_body, classify_hyper_response, forward_get_streaming, forward_request,
-    note_connect_retry, response_for_attempt_class, ProxyHyperMetrics,
+    note_connect_retry, response_for_attempt_class_ctx, ProxyHyperMetrics,
 };
 use crate::retry::{
     classify_hyper_error, may_retry_connect, remaining_budget, shared_deadline,
     UpstreamAttemptClass,
 };
+use crate::runtime_diag::{emit_no_eligible, emit_upstream_class, RtFailCtx};
 use crate::selector::{
     endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, SelectionOutcome,
 };
@@ -310,9 +311,24 @@ impl ProxyRuntime {
         request: &ProxyDispatchRequest,
         budget: std::time::Duration,
     ) -> Result<ProxyDispatchOutcome, UpstreamAttemptClass> {
-        // GET and HEAD must carry the same headers as POST. The empty-body
-        // fast path sent the upstream's own Host and dropped Cookie.
-        self.attempt_post_like(target, request, budget).await
+        let xff = Self::xff_from_request(request);
+        let xfp = Self::xfp_from_request(request);
+        let method = match request.method {
+            ProxyMethod::Head => Method::HEAD,
+            _ => Method::GET,
+        };
+        let response = crate::hyper_forward::attempt_forward_empty_body_with_headers(
+            target,
+            &request.path_and_query,
+            method,
+            xff.as_ref(),
+            xfp.as_ref(),
+            &request.headers,
+            &self.metrics,
+            budget,
+        )
+        .await?;
+        Ok(classify_hyper_response(response, &request.path_and_query, request.method).await)
     }
 
     async fn attempt_post_like(
@@ -331,6 +347,13 @@ impl ProxyRuntime {
 
         let mut header_map = hyper::HeaderMap::new();
         for (name, value) in &request.headers {
+            if name.eq_ignore_ascii_case("x-forwarded-for")
+                || name.eq_ignore_ascii_case("x-forwarded-proto")
+                || name.eq_ignore_ascii_case("x-forwarded-host")
+                || name.eq_ignore_ascii_case("forwarded")
+            {
+                continue;
+            }
             if let (Ok(n), Ok(v)) = (
                 hyper::header::HeaderName::from_bytes(name.as_bytes()),
                 HeaderValue::from_str(value),
@@ -341,32 +364,22 @@ impl ProxyRuntime {
         if !request_headers_safe_for_proxy(&header_map) {
             return Ok(ProxyDispatchOutcome::BadGateway);
         }
+        // Strip on the full map *before* Request::builder: Hyper may drop Connection
+        // during build, which would skip RFC 7230 nomination and leak hop fields.
+        strip_hop_by_hop_headers(&mut header_map);
 
         let path_and_query = request.path_and_query.clone();
         let mut builder = Request::builder()
             .method(Self::hyper_method(request.method))
             .uri(target.uri_for(&path_and_query));
 
-        for (name, value) in &request.headers {
-            if name.eq_ignore_ascii_case("x-forwarded-for")
-                || name.eq_ignore_ascii_case("x-forwarded-proto")
-                || name.eq_ignore_ascii_case("x-forwarded-host")
-                || name.eq_ignore_ascii_case("forwarded")
-            {
-                continue;
-            }
-            builder = builder.header(name.as_str(), value.as_str());
+        for (name, value) in header_map.iter() {
+            builder = builder.header(name, value);
         }
-        let client_sent_host = request
-            .headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("host"));
-        if !client_sent_host {
-            if let Some(host) = &request.host {
-                builder = builder.header("host", host.as_str());
-            } else if let Some(host) = &target.host {
-                builder = builder.header(HOST, host.clone());
-            }
+        if let Some(host) = &request.host {
+            builder = builder.header("host", host.as_str());
+        } else if let Some(host) = &target.host {
+            builder = builder.header(HOST, host.clone());
         }
 
         let mut req = match builder.body(Full::from(body)) {
@@ -378,21 +391,13 @@ impl ProxyRuntime {
         };
         {
             let headers = req.headers_mut();
-            headers.remove("x-forwarded-for");
-            headers.remove("x-forwarded-proto");
-            headers.remove("x-forwarded-host");
-            headers.remove("forwarded");
-            // Strip before re-injecting intermediary identity headers so Connection
-            // cannot nominate-and-wipe XFF / Host after injection.
-            strip_hop_by_hop_headers(headers);
-            if !client_sent_host {
-                if let Some(host) = &request.host {
-                    if let Ok(v) = HeaderValue::from_str(host.as_str()) {
-                        headers.insert(HOST, v);
-                    }
-                } else if let Some(host) = &target.host {
-                    headers.insert(HOST, host.clone());
+            // Re-inject intermediary identity after strip so Connection cannot wipe them.
+            if let Some(host) = &request.host {
+                if let Ok(v) = HeaderValue::from_str(host.as_str()) {
+                    headers.insert(HOST, v);
                 }
+            } else if let Some(host) = &target.host {
+                headers.insert(HOST, host.clone());
             }
             if let Some(xff) = Self::xff_from_request(request) {
                 headers.insert("x-forwarded-for", xff);
@@ -425,7 +430,23 @@ impl ProxyRuntime {
         }
     }
 
-    fn outcome_for_class(&self, class: UpstreamAttemptClass) -> ProxyDispatchOutcome {
+    fn outcome_for_class(
+        &self,
+        class: UpstreamAttemptClass,
+        request: &ProxyDispatchRequest,
+        peer: Option<&str>,
+        detail: Option<&str>,
+    ) -> ProxyDispatchOutcome {
+        emit_upstream_class(
+            &RtFailCtx {
+                cluster_id: request.cluster_id,
+                path: &request.path_and_query,
+                peer,
+                host: request.host.as_deref(),
+                detail,
+            },
+            class,
+        );
         match class {
             UpstreamAttemptClass::TimedOut => {
                 self.metrics.responses_504.fetch_add(1, Ordering::Relaxed);
@@ -600,6 +621,13 @@ impl ProxyDispatchService for ProxyRuntime {
             Resolve::Selected(t) => t,
             Resolve::NoEligible | Resolve::Missing => {
                 self.responses_503.fetch_add(1, Ordering::Relaxed);
+                emit_no_eligible(&RtFailCtx {
+                    cluster_id: request.cluster_id,
+                    path: &request.path_and_query,
+                    peer: None,
+                    host: request.host.as_deref(),
+                    detail: None,
+                });
                 return ProxyDispatchOutcome::ServiceUnavailable;
             }
         };
@@ -614,7 +642,12 @@ impl ProxyDispatchService for ProxyRuntime {
             // timeout_ms = 0 is already elapsed. Do not poll the upstream:
             // a zero tokio timeout can still observe a ready localhost future.
             if budget.is_zero() {
-                return self.outcome_for_class(UpstreamAttemptClass::TimedOut);
+                return self.outcome_for_class(
+                    UpstreamAttemptClass::TimedOut,
+                    &request,
+                    Some(target.peer_key.as_str()),
+                    None,
+                );
             }
             let attempt = match request.method {
                 ProxyMethod::Get | ProxyMethod::Head => {
@@ -638,7 +671,12 @@ impl ProxyDispatchService for ProxyRuntime {
                         {
                             Resolve::Selected(t) => t,
                             Resolve::NoEligible | Resolve::Missing => {
-                                return self.outcome_for_class(class);
+                                return self.outcome_for_class(
+                                    class,
+                                    &request,
+                                    Some(failed_peer.as_str()),
+                                    None,
+                                );
                             }
                         };
                         note_connect_retry(&self.metrics);
@@ -650,7 +688,12 @@ impl ProxyDispatchService for ProxyRuntime {
                         );
                         continue;
                     }
-                    return self.outcome_for_class(class);
+                    return self.outcome_for_class(
+                        class,
+                        &request,
+                        Some(target.peer_key.as_str()),
+                        None,
+                    );
                 }
             }
         }
@@ -719,6 +762,13 @@ pub async fn forward_websocket_by_cluster(
 ) -> hyper::Response<http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>> {
     let rt = crate::wire_conn::pinned_runtime();
     let Some(target) = rt.upstream_for_cluster(cluster_id) else {
+        emit_no_eligible(&RtFailCtx {
+            cluster_id,
+            path: req.uri().path(),
+            peer: None,
+            host: None,
+            detail: None,
+        });
         return crate::hyper_forward::service_unavailable();
     };
     crate::websocket::forward_websocket(
@@ -762,14 +812,28 @@ impl ProxyRuntime {
             Err(class) => {
                 let remain = remaining_budget(deadline);
                 if !may_retry_connect(max_retries, retries_used, class, remain) {
-                    return response_for_attempt_class(class, &self.metrics);
+                    let ctx = RtFailCtx {
+                        cluster_id,
+                        path: path_and_query,
+                        peer: Some(target.peer_key.as_str()),
+                        host: None,
+                        detail: None,
+                    };
+                    return response_for_attempt_class_ctx(class, &self.metrics, Some(&ctx));
                 }
                 let failed_peer = target.peer_key.clone();
                 let mut current =
                     match self.resolve_excluding(cluster_id, Some(failed_peer.as_str())) {
                         Resolve::Selected(t) => t,
                         Resolve::NoEligible | Resolve::Missing => {
-                            return response_for_attempt_class(class, &self.metrics);
+                            let ctx = RtFailCtx {
+                                cluster_id,
+                                path: path_and_query,
+                                peer: Some(failed_peer.as_str()),
+                                host: None,
+                                detail: None,
+                            };
+                            return response_for_attempt_class_ctx(class, &self.metrics, Some(&ctx));
                         }
                     };
                 note_connect_retry(&self.metrics);
@@ -803,7 +867,18 @@ impl ProxyRuntime {
                                 {
                                     Resolve::Selected(t) => t,
                                     Resolve::NoEligible | Resolve::Missing => {
-                                        return response_for_attempt_class(class, &self.metrics);
+                                        let ctx = RtFailCtx {
+                                            cluster_id,
+                                            path: path_and_query,
+                                            peer: Some(failed_peer.as_str()),
+                                            host: None,
+                                            detail: None,
+                                        };
+                                        return response_for_attempt_class_ctx(
+                                            class,
+                                            &self.metrics,
+                                            Some(&ctx),
+                                        );
                                     }
                                 };
                                 note_connect_retry(&self.metrics);
@@ -815,7 +890,14 @@ impl ProxyRuntime {
                                 );
                                 continue;
                             }
-                            return response_for_attempt_class(class, &self.metrics);
+                            let ctx = RtFailCtx {
+                                cluster_id,
+                                path: path_and_query,
+                                peer: Some(current.peer_key.as_str()),
+                                host: None,
+                                detail: None,
+                            };
+                            return response_for_attempt_class_ctx(class, &self.metrics, Some(&ctx));
                         }
                     }
                 }

@@ -4,6 +4,7 @@
 
 | Version   | Supported |
 |-----------|-----------|
+| 0.5.0     | No, source only; not published |
 | 0.4.13    | Yes, current published release |
 | 0.4.12    | Yes |
 | 0.4.11    | Yes |
@@ -36,6 +37,8 @@ For **v0.4.4.1**, the audit artifact is [`docs/security/audit-v0.4.4.1.md`](docs
 ```text
 PUBLICATION_STATUS = PUBLISHED
 PUBLIC_RELEASE = v0.4.13
+WORKSPACE_VERSION = 0.5.0
+WORKSPACE_PUBLICATION = NOT_PUBLISHED
 GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.13
 GHCR = ghcr.io/exyonq/exyonq:0.4.13
 DOCKER_HUB = exyonq/exyonq:0.4.13

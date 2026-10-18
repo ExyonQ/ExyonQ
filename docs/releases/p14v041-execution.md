@@ -142,6 +142,6 @@ Tag `v0.4.1` points at `43805eb` (annotated SSH-signed).
 ## Notes
 
 - Product/publication work executed only in `release/p14v041` worktree; ambient dirt preserved.
-- Official signing (tag SSH, Cosign blob, Cosign OCI) performed manually in Terminal.app; Cursor verified with public material only.
+- Official signing (tag SSH, Cosign blob, Cosign OCI) performed manually in Terminal.app; verification used public material only.
 - No `latest` mutation; repository and GHCR remain private.
 - This ledger update may land as a post-tag documentation commit on `main` and does not move `v0.4.1`.

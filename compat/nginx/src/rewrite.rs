@@ -130,10 +130,12 @@ pub fn analyze_rewrite(
     }
 
     let (status, message, action) = classify_rewrite(rule);
-    if matches!(
-        rule.flag,
-        Some(RewriteFlag::Last) | Some(RewriteFlag::Break)
-    ) {
+    if matches!(status, CompatStatus::Unsupported)
+        && matches!(
+            rule.flag,
+            Some(RewriteFlag::Last) | Some(RewriteFlag::Break) | None
+        )
+    {
         report.summary.internal_rewrites_unsupported += 1;
     }
     report.push_migration(
@@ -151,50 +153,105 @@ pub fn analyze_rewrite(
 }
 
 fn classify_rewrite(rule: &RewriteRule) -> (CompatStatus, String, String) {
-    if rule.pattern.contains('(') || rule.replacement.contains('$') {
+    // NG-02 / ADR-048: patterned rewrite with $1..$9 is runtime-supported.
+    if replacement_has_unsupported_vars(&rule.replacement) {
         return (
             CompatStatus::Unsupported,
             format!(
-                "rewrite `{}` uses regex captures or variables",
+                "rewrite `{}` uses unsupported variables (only $1..$9 / $$)",
                 semantic_form(rule)
             ),
-            "Requires regex rewrite engine".into(),
+            "Simplify replacement to $1..$9 captures".into(),
         );
     }
     match rule.flag {
         Some(RewriteFlag::Last) => (
-            CompatStatus::Unsupported,
+            CompatStatus::Supported,
             format!(
-                "rewrite `{}` with flag last re-selects location",
+                "rewrite `{}` maps to rewrite rule flag=last (ADR-048)",
                 semantic_form(rule)
             ),
-            "Requires regex rewrite engine (last → new location search)".into(),
+            "route.rewrite = { pattern, replacement, flag = \"last\" }".into(),
         ),
         Some(RewriteFlag::Break) => (
-            CompatStatus::Unsupported,
+            CompatStatus::Supported,
             format!(
-                "rewrite `{}` with flag break stops in current location",
+                "rewrite `{}` maps to rewrite rule flag=break (ADR-048)",
                 semantic_form(rule)
             ),
-            "Requires regex rewrite engine (break → stay in location)".into(),
+            "route.rewrite = { pattern, replacement, flag = \"break\" }".into(),
         ),
-        Some(RewriteFlag::Permanent) | Some(RewriteFlag::Redirect) => (
-            CompatStatus::Partial,
-            format!(
-                "rewrite `{}` redirect not literal-safe for automatic mapping",
-                semantic_form(rule)
-            ),
-            "Requires regex rewrite engine".into(),
-        ),
+        Some(RewriteFlag::Permanent) | Some(RewriteFlag::Redirect) => {
+            if is_literal_path_pattern(&rule.pattern) && !rule.replacement.contains('$') {
+                (
+                    CompatStatus::Partial,
+                    format!(
+                        "rewrite `{}` redirect not literal-safe for automatic mapping",
+                        semantic_form(rule)
+                    ),
+                    "Requires regex rewrite engine".into(),
+                )
+            } else {
+                (
+                    CompatStatus::Supported,
+                    format!(
+                        "rewrite `{}` maps to rewrite rule redirect/permanent (ADR-048)",
+                        semantic_form(rule)
+                    ),
+                    "route.rewrite = { pattern, replacement, flag = \"redirect\"|\"permanent\" }"
+                        .into(),
+                )
+            }
+        }
         None => (
-            CompatStatus::Unsupported,
+            CompatStatus::Supported,
             format!(
-                "rewrite `{}` implies internal URI rewrite",
+                "rewrite `{}` maps to rewrite rule flag=last (default, ADR-048)",
                 semantic_form(rule)
             ),
-            "Requires regex rewrite engine".into(),
+            "route.rewrite = { pattern, replacement, flag = \"last\" }".into(),
         ),
     }
+}
+
+fn replacement_has_unsupported_vars(replacement: &str) -> bool {
+    let mut chars = replacement.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            continue;
+        }
+        match chars.next() {
+            Some('$') => {}
+            Some(d) if ('1'..='9').contains(&d) => {}
+            _ => return true,
+        }
+    }
+    false
+}
+
+/// Map a parsed nginx rewrite into ExyonQ IR when NG-02 can express it.
+pub fn map_rewrite_to_ir(rule: &RewriteRule) -> Option<exyonq_config_ir::RewriteConfig> {
+    use exyonq_config_ir::{RewriteConfig, RewriteFlagConfig, RewriteRuleConfig};
+    if replacement_has_unsupported_vars(&rule.replacement) {
+        return None;
+    }
+    if let Some((status, _from, target)) = is_safe_literal_redirect(rule) {
+        let _ = status;
+        let _ = target;
+        return None; // caller uses redirect IR
+    }
+    let flag = match rule.flag {
+        Some(RewriteFlag::Last) | None => RewriteFlagConfig::Last,
+        Some(RewriteFlag::Break) => RewriteFlagConfig::Break,
+        Some(RewriteFlag::Redirect) => RewriteFlagConfig::Redirect,
+        Some(RewriteFlag::Permanent) => RewriteFlagConfig::Permanent,
+    };
+    Some(RewriteConfig::Rule(RewriteRuleConfig {
+        pattern: rule.pattern.clone(),
+        replacement: rule.replacement.clone(),
+        flag,
+        when: vec![],
+    }))
 }
 
 pub fn analyze_rewrites_in_location(

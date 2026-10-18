@@ -16,8 +16,7 @@
 //! HMAC-SHA256 authenticated PoW challenge + grant token (WAF abuse seam).
 
 use exyonq_waf_api::{ChallengeIssue, ChallengeVerifyResult, WafChallengeHandler};
-use hmac::digest::KeyInit;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use std::collections::{HashSet, VecDeque};
 use std::net::IpAddr;
@@ -92,7 +91,7 @@ impl ChallengeService {
     }
 
     fn hmac_hex(&self, msg: &[u8]) -> String {
-        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&self.key).expect("HMAC key length");
+        let mut mac = HmacSha256::new_from_slice(&self.key).expect("HMAC key length");
         mac.update(msg);
         hex_encode(&mac.finalize().into_bytes())
     }
@@ -133,13 +132,7 @@ impl ChallengeService {
         let host = host.unwrap_or("");
         let expires = Self::now_unix().saturating_add(CHALLENGE_TTL_SECS);
         let mut id_bytes = [0u8; 16];
-        if getrandom::fill(&mut id_bytes).is_err() {
-            return ChallengeIssue {
-                status: 503,
-                content_type: "text/plain; charset=utf-8",
-                body: b"challenge unavailable\n".to_vec(),
-            };
-        }
+        getrandom::fill(&mut id_bytes).expect("getrandom for challenge_id");
         let challenge_id = hex_encode(&id_bytes);
         let mac = self.hmac_hex(
             Self::challenge_mac_msg(&challenge_id, client_ip, host, expires, self.difficulty)

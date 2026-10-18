@@ -62,7 +62,7 @@ async fn proxy_ctx(counting: Arc<CountingProxy>) -> (ConnectionContext, ProxyDis
     (
         ConnectionContext {
             state,
-            proxy_client: proxy_client.clone(),
+            proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -238,7 +238,13 @@ fn handler_uses_bounded_collector_not_unbounded_collect() {
     let section = handler
         .split("async fn proxy_route_target")
         .nth(1)
-        .and_then(|rest| rest.split("\nasync fn ").next())
+        .map(|rest| {
+            // Stop at the next top-level `fn`/`async fn` (NG-05 added
+            // `fn apply_proxy_set_headers` immediately after this helper).
+            let async_end = rest.find("\nasync fn ").unwrap_or(rest.len());
+            let fn_end = rest.find("\nfn ").unwrap_or(rest.len());
+            &rest[..async_end.min(fn_end)]
+        })
         .expect("proxy_route_target");
     assert!(
         section.contains("collect_proxy_request_body_bounded"),

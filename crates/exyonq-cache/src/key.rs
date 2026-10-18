@@ -9,7 +9,7 @@ pub struct CacheKeyParts {
     pub site_id: u64,
     /// Backend namespace id ([`crate::CacheNamespace`] as u16; 0 = unset / Plan 12).
     pub namespace: u16,
-    /// Canonical runtime-plan `BackendId` index for FPC keys.
+    /// Canonical [`exyonq_runtime_plan::BackendId`] index for FPC keys.
     pub backend_id: u32,
     pub runtime_generation: u64,
     pub policy_generation: u64,

@@ -103,7 +103,7 @@ pub fn append_length(buf: &mut Vec<u8>, len: usize) -> Result<(), EncodeError> {
     Ok(())
 }
 
-/// `FCGI_BEGIN_REQUEST` for responder role (PHP-FPM); flags usually `0` or [`crate::FCGI_KEEP_CONN`].
+/// `FCGI_BEGIN_REQUEST` for responder role (PHP-FPM); flags usually `0` or [`FCGI_KEEP_CONN`].
 pub fn encode_begin_request_frame(request_id: u16) -> Result<Vec<u8>, EncodeError> {
     encode_begin_request_frame_with_flags(request_id, 0)
 }

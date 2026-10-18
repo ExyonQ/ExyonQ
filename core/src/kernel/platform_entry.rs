@@ -16,7 +16,7 @@
 //! **INTERNAL WORKSPACE CONTRACT — NOT STABLE PUBLIC API**
 //!
 //! Minimal platform→core productive serve entry (PS1C-FACADE).
-//! Opaque handle over `CoreConnectionExecutor` (Linux `connection_executor`; not a stable public path).
+//! Opaque handle over [`crate::server::connection_executor::CoreConnectionExecutor`].
 //! Construction: composition root inside `exyonq-core` only (`pub(crate)`).
 
 use crate::kernel::epoll_attach::{
@@ -294,7 +294,7 @@ mod tests {
         });
         let entry = PlatformConnectionEntry::from_executor(Arc::new(CoreConnectionExecutor::new(
             shared,
-            proxy.clone(),
+            proxy,
             Arc::clone(&ops),
             rt.handle().clone(),
         )));

@@ -7,6 +7,8 @@ AUTHORITY = SOLE for R* global phase identifiers
 LAST_UPDATED = 2026-10-15
 BRANCH = main
 PUBLIC_RELEASE = v0.4.13
+WORKSPACE_VERSION = 0.5.0
+WORKSPACE_PUBLICATION = NOT_PUBLISHED
 FINAL_PUBLISHED_RELEASE_HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
 R3_PRODUCT_BASELINE = f0b2d67
 R3_CLOSE_DOCUMENTATION_TIP = d0814bc79ea08b91b753269e0883ab249bf7c3b9
@@ -23,7 +25,7 @@ Documentation map: [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)
 Only R* determines the current global project phase.
 ```
 
-Internal tracks (BV04-P\*, K8S-P\*, P14\*, K\*/KD\*, MR\*, Cursor plans) do **not** redefine R\*.
+Internal tracks (BV04-P\*, K8S-P\*, P14\*, K\*/KD\*, MR\*, local plans) do **not** redefine R\*.
 
 ---
 
@@ -71,6 +73,8 @@ PROJECT_PHASE_1_STATUS = NOT_CLOSED
 PROJECT_PHASE_2_STATUS = NOT_STARTED
 
 PUBLISHED_PRODUCT = v0.4.13
+WORKSPACE_VERSION = 0.5.0
+WORKSPACE_PUBLICATION = NOT_PUBLISHED
 PUBLISHED_PRODUCT_SURFACES = GitHub Release + GHCR + Docker Hub (linux/amd64, linux/arm64, no :latest)
 ```
 
@@ -88,7 +92,7 @@ R0_STATUS = COMPLETE
 
 Delivered:
 
-- Worktree authority on `/Volumes/Lexar/Cursor/exyonq-lab`
+- Worktree authority on the development tree
 - Branch `release/v0.4.3-integration` @ product parent `fd41b761…` + docs `b3a24ca…`
 - Product baseline = v0.4.2 + Changeset A + Changeset B
 - Tracked tree clean of ambient product dirt (untracked `study/` preserved intentionally)

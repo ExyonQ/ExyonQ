@@ -85,6 +85,30 @@ pub enum DiagnosticCode {
     HtaccessPreviousOverlayRetained,
     /// EXY-HTACCESS-0006
     HtaccessSiteNotFound,
+    /// EXY-LINT-0001 — predictive: shaded route (Q-01 / ADR-052)
+    LintShadedRoute,
+    /// EXY-LINT-0002 — predictive: duplicate proxy_set_headers name
+    LintDuplicateProxyHeader,
+    /// EXY-LINT-0003 — predictive: upstream without health_check
+    LintUpstreamNoHealthCheck,
+    /// EXY-LINT-0004 — predictive: weaker same-host regex
+    LintWeakRegexRoute,
+    /// EXY-LINT-0005 — predictive: unused map
+    LintUnusedMap,
+    /// EXY-LINT-0006 — predictive: hostless catch-all vs host routes
+    LintHostlessCatchAll,
+    /// EXY-RT-0001 — runtime: upstream connect/DNS failed (Q-02 / ADR-054)
+    RtUpstreamConnectFailed,
+    /// EXY-RT-0002 — runtime: upstream attempt timeout
+    RtUpstreamTimeout,
+    /// EXY-RT-0003 — runtime: no eligible peer / missing cluster
+    RtNoEligiblePeer,
+    /// EXY-RT-0004 — runtime: unretryable upstream transport/protocol error
+    RtUpstreamUnretryable,
+    /// EXY-RT-0005 — runtime: `$map` name unknown in proxy_set_headers expand
+    RtMapUnknown,
+    /// EXY-RT-0006 — runtime: request rejected while draining
+    RtDraining,
 }
 
 impl Serialize for DiagnosticCode {
@@ -141,6 +165,18 @@ impl DiagnosticCode {
             Self::HtaccessCompileFailed => "EXY-HTACCESS-0004",
             Self::HtaccessPreviousOverlayRetained => "EXY-HTACCESS-0005",
             Self::HtaccessSiteNotFound => "EXY-HTACCESS-0006",
+            Self::LintShadedRoute => "EXY-LINT-0001",
+            Self::LintDuplicateProxyHeader => "EXY-LINT-0002",
+            Self::LintUpstreamNoHealthCheck => "EXY-LINT-0003",
+            Self::LintWeakRegexRoute => "EXY-LINT-0004",
+            Self::LintUnusedMap => "EXY-LINT-0005",
+            Self::LintHostlessCatchAll => "EXY-LINT-0006",
+            Self::RtUpstreamConnectFailed => "EXY-RT-0001",
+            Self::RtUpstreamTimeout => "EXY-RT-0002",
+            Self::RtNoEligiblePeer => "EXY-RT-0003",
+            Self::RtUpstreamUnretryable => "EXY-RT-0004",
+            Self::RtMapUnknown => "EXY-RT-0005",
+            Self::RtDraining => "EXY-RT-0006",
         }
     }
 
@@ -184,6 +220,18 @@ impl DiagnosticCode {
             "EXY-HTACCESS-0004" => Self::HtaccessCompileFailed,
             "EXY-HTACCESS-0005" => Self::HtaccessPreviousOverlayRetained,
             "EXY-HTACCESS-0006" => Self::HtaccessSiteNotFound,
+            "EXY-LINT-0001" => Self::LintShadedRoute,
+            "EXY-LINT-0002" => Self::LintDuplicateProxyHeader,
+            "EXY-LINT-0003" => Self::LintUpstreamNoHealthCheck,
+            "EXY-LINT-0004" => Self::LintWeakRegexRoute,
+            "EXY-LINT-0005" => Self::LintUnusedMap,
+            "EXY-LINT-0006" => Self::LintHostlessCatchAll,
+            "EXY-RT-0001" => Self::RtUpstreamConnectFailed,
+            "EXY-RT-0002" => Self::RtUpstreamTimeout,
+            "EXY-RT-0003" => Self::RtNoEligiblePeer,
+            "EXY-RT-0004" => Self::RtUpstreamUnretryable,
+            "EXY-RT-0005" => Self::RtMapUnknown,
+            "EXY-RT-0006" => Self::RtDraining,
             _ => return None,
         })
     }
@@ -266,6 +314,24 @@ impl Diagnostic {
         Self {
             code,
             severity: Severity::Error,
+            message: message.into(),
+            source: None,
+            span: None,
+            field: None,
+            received: None,
+            expected: None,
+            cause: None,
+            suggestion: None,
+            documentation: None,
+            related: Vec::new(),
+        }
+    }
+
+    /// Advisory diagnostic (Q-01 predictive lint). Does not fail lint unless `--strict`.
+    pub fn warning(code: DiagnosticCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            severity: Severity::Warning,
             message: message.into(),
             source: None,
             span: None,
@@ -517,9 +583,20 @@ mod tests {
             DiagnosticCode::UnknownField,
             DiagnosticCode::IncludeCycle,
             DiagnosticCode::DeprecatedField,
+            DiagnosticCode::RtUpstreamConnectFailed,
+            DiagnosticCode::RtUpstreamTimeout,
+            DiagnosticCode::RtNoEligiblePeer,
+            DiagnosticCode::RtUpstreamUnretryable,
+            DiagnosticCode::RtMapUnknown,
+            DiagnosticCode::RtDraining,
         ] {
             assert_eq!(DiagnosticCode::parse_stable(code.as_str()), Some(code));
         }
+        assert_eq!(
+            DiagnosticCode::RtUpstreamConnectFailed.as_str(),
+            "EXY-RT-0001"
+        );
+        assert_eq!(DiagnosticCode::RtDraining.as_str(), "EXY-RT-0006");
     }
 
     #[test]

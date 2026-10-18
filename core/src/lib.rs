@@ -61,9 +61,9 @@ pub fn find_header_end(buf: &[u8]) -> Option<usize> {
 }
 
 pub use exyonq_cache::{
-    build_cache_key, build_storage_cache_key, global_response_cache, global_singleflight,
-    normalize_host, set_singleflight_follower_hook_for_tests, CacheKey, CacheKeyParts,
-    CacheStoreSnapshot, CachedEntry, ResponseCache, Singleflight,
+    append_fpc_prometheus, build_cache_key, build_storage_cache_key, global_response_cache,
+    global_singleflight, normalize_host, set_singleflight_follower_hook_for_tests, CacheKey,
+    CacheKeyParts, CacheStoreSnapshot, CachedEntry, ResponseCache, Singleflight,
 };
 pub use exyonq_mod_proxy::{request_headers_safe_for_proxy, ProxyClient};
 pub use exyonq_mod_static::{invalidate_static_path, serve_static_with_cache, StaticCacheLoad};

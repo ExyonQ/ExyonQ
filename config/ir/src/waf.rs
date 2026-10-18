@@ -27,10 +27,8 @@ use crate::ConfigError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Off unless the operator sets `enabled = true`. The data plane must stay safe
-/// without a WAF; inspection is opt-in, not a silent default.
 fn default_waf_enabled() -> bool {
-    false
+    true
 }
 
 fn default_waf_mode() -> WafModeIr {
@@ -439,7 +437,7 @@ target = "http://127.0.0.1:9000"
     #[test]
     fn absent_waf_defaults() {
         let config: AppConfig = MINIMAL.parse().expect("parse");
-        assert!(!config.waf.enabled);
+        assert!(config.waf.enabled);
         assert_eq!(config.waf.mode, WafModeIr::Monitor);
         assert_eq!(config.waf.engine, WafEngineIr::Native);
         assert_eq!(config.waf.max_inspection_body_bytes, 1_048_576);

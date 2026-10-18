@@ -41,6 +41,7 @@ pub mod proxy_dispatch;
 pub mod proxy_wire;
 pub mod reload_runtime;
 pub mod response_observation;
+pub mod rewrite_engine;
 pub mod route_rules;
 pub mod static_dispatch;
 #[cfg(target_os = "linux")]
@@ -157,6 +158,10 @@ pub use reload_runtime::{
     ReloadRuntimeService, ReloadRuntimeSupervisor, ReloadRuntimeTestGuard,
 };
 pub use response_observation::{ResponseBodyState, ResponseObservation, StreamingBodyError};
+pub use rewrite_engine::{
+    apply_compiled_rewrite, compile_rewrite, CompileRewriteError, CompiledRewrite,
+    RewriteApplyOutcome, RewriteRequest,
+};
 pub use route_rules::{
     evaluate_structural_route_rules, RouteRuleInput, RouteRuleOutcome, DISPATCH_STAGE_BACKEND,
     DISPATCH_STAGE_HTACCESS_OVERLAY, DISPATCH_STAGE_ROUTE_LOOKUP, DISPATCH_STAGE_STRUCTURAL_RULES,
@@ -165,7 +170,7 @@ pub use route_rules::{
 pub use tls_runtime::{TlsAlpnProfile, TlsListenerBinding};
 pub use wire_module_hooks::{
     install_wire_module_hooks, rate_limit_reject_wire, wire_admit, wire_admit_active,
-    wire_admit_for_path, wire_record_exchange, wire_record_response, WireAdmit, WireModuleHooks,
+    wire_record_exchange, wire_record_response, WireAdmit, WireModuleHooks,
 };
 
 pub type BoxError = Box<dyn Error + Send + Sync>;

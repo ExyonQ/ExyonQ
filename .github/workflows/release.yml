@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (pin; preserves toolchain input contract)
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
-          toolchain: 1.98.1
+          toolchain: 1.97.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -54,6 +54,8 @@ jobs:
         run: bash scripts/legal/verify-release-legal-bundle.sh
       - name: cargo deny check advisories bans sources
         run: cargo deny check advisories bans sources
+      - name: security tests
+        run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security)' --test-threads=1
       - name: private-material-zero
         run: bash scripts/security/scan-private-material.sh --git-tree --repo .
       - name: verify release audit
@@ -64,9 +66,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (pin; preserves toolchain input contract)
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
-          toolchain: 1.98.1
+          toolchain: 1.97.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-about
         run: cargo install cargo-about --locked --features cli
@@ -86,17 +88,15 @@ jobs:
     name: ${{ matrix.target }}
     needs: compliance-artifacts
     runs-on: ${{ matrix.os }}
-    # Windows still compiles unix-only FastCGI. Do not block Linux/macOS release assets.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
+            target: x86_64-unknown-linux-gnu
             artifact: exyonq-linux-amd64
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
+            target: aarch64-unknown-linux-gnu
             artifact: exyonq-linux-arm64
           - os: macos-15
             target: aarch64-apple-darwin
@@ -110,20 +110,14 @@ jobs:
         with:
           name: release-compliance
           path: .
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (pin; preserves toolchain input contract)
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
-          toolchain: 1.98.1
+          toolchain: 1.97.1
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Install musl C toolchain
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Build binaries (linux static)
-        if: runner.os == 'Linux'
-        # P1.5-WS6: --locked required for release artifacts. musl static is the production default.
-        run: EXYONQ_TARGET=${{ matrix.target }} bash scripts/release/build-production.sh
-      - name: Build binaries (macOS)
-        if: runner.os == 'macOS'
+      - name: Build binaries (unix)
+        if: runner.os != 'Windows'
+        # P1.5-WS6: --locked required for release artifacts.
         run: cargo build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli --target ${{ matrix.target }}
       - name: Build binaries (windows)
         if: runner.os == 'Windows'
@@ -384,10 +378,8 @@ jobs:
     needs: compliance-artifacts
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       packages: write
-      attestations: write
-      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -420,14 +412,14 @@ jobs:
       # V044_DEP_BASELINE_OCI_001: encode canonical multiarch + explicit attestations.
       # Contract: linux/amd64 + linux/arm64 index; provenance mode=max; SBOM attest;
       # revision/version/source labels; version tag only (no :latest).
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: packaging/docker/Dockerfile
@@ -548,7 +540,7 @@ jobs:
             exit 1
           }
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ExyonQ v${{ steps.ver.outputs.version }}

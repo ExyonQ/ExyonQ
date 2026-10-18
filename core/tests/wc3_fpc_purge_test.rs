@@ -53,7 +53,7 @@ max_ttl_seconds = 300
     );
     let config: AppConfig = raw.parse().expect("config");
     let proxy = exyonq_mod_proxy::build_incoming_client();
-    let state = ServerState::new_with_generation(gen, config, proxy.clone())
+    let state = ServerState::new_with_generation(gen, config, proxy)
         .await
         .expect("state");
     let site_a = stable_fpc_site_id(route_a);
@@ -196,50 +196,13 @@ async fn purge_generation_and_tag_deferred() {
     assert_eq!(out.purged_entries, 1);
     assert_eq!(cache.snapshot().entries, 1);
 
-    let tagged = build_storage_cache_key(CacheKeyParts {
-        site_id: site_a,
-        namespace: 4,
-        backend_id: be,
-        runtime_generation: 10,
-        policy_generation: 0,
-        route_idx: 0,
-        method: "GET".into(),
-        scheme: "http".into(),
-        host: "example.test".into(),
-        path: "/a/menu".into(),
-        query: String::new(),
-        content_encoding: "identity".into(),
-    });
-    cache.insert_entry(
-        tagged,
-        site_a,
-        0,
-        10,
-        Duration::from_secs(60),
-        200,
-        vec![("content-type".into(), "text/html".into())],
-        bytes::Bytes::from_static(b"menu-page"),
-        None,
-        CacheNamespace::new(4),
-        Arc::from([String::from("menu")]),
-        NamespaceMetrics::NONE,
-    );
-    assert_eq!(cache.snapshot().entries, 2);
-
-    let rejected = port.purge(CachePurgeOp::Tag {
+    let tag = port.purge(CachePurgeOp::Tag {
         site_id: site_a,
         tag: "post:1".into(),
     });
-    assert!(!rejected.ok);
-    assert_eq!(rejected.error, Some("invalid_key"));
-
-    let tag = port.purge(CachePurgeOp::Tag {
-        site_id: site_a,
-        tag: "menu".into(),
-    });
-    assert!(tag.ok);
-    assert_eq!(tag.purged_entries, 1);
-    assert_eq!(cache.snapshot().entries, 1);
+    assert!(!tag.ok);
+    assert_eq!(tag.error, Some("unsupported_operation"));
+    assert!(fpc_purge_rejected_total("unsupported_operation") >= 1);
 }
 
 #[tokio::test]

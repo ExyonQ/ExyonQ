@@ -299,14 +299,15 @@ async fn s2n_error_response_write_failure_is_observed() {
         .body(())
         .unwrap();
     let mut stream = send.send_request(req).await.expect("send");
-    // Exactly the cap: the server accepts this chunk and waits for the rest.
-    // Resetting then makes the required error response fail.
-    let filled = Bytes::from(vec![b'x'; body_cap]);
+    let oversized = Bytes::from(vec![b'x'; body_cap + 2048]);
     stream
-        .send_data(filled)
+        .send_data(oversized)
         .await
-        .expect("send body up to the cap");
-    sleep(Duration::from_millis(200)).await;
+        .expect("send oversized body chunk");
+    // End request body so the server finishes TooLarge handling and attempts 413 write.
+    let _ = stream.finish().await;
+    // Peer STOP_SENDING on the response direction is a real H3 condition that makes
+    // the server's error-response write fail (not a mock transport).
     stream.stop_sending(Code::H3_REQUEST_CANCELLED);
     stream.stop_stream(Code::H3_REQUEST_CANCELLED);
 

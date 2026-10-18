@@ -19,10 +19,11 @@ use exyonq_compat_nginx::{
     ReportFormat,
 };
 use exyonq_config_cli::{
-    classify_reload_diff, emit_result, explain, format_config_status, format_exy,
-    format_generation, lint, profile_explain, profile_list, profile_render, profile_test,
-    reload_check, test_config, CheckOptions, ExplainRequest, FormatMode, FormatRequest,
-    OutputFormat as ConfigOut, ProfileCliInputs,
+    cache_explain, classify_reload_diff_with, dump_ir, emit_result, explain, format_config_status,
+    format_exy, format_generation, lint, profile_explain, profile_list, profile_render,
+    profile_test, reload_check, reload_precheck, test_config, write_applied_routes_snapshot,
+    CheckOptions, DumpIrFormat, ExplainRequest, FormatMode, FormatRequest,
+    OutputFormat as ConfigOut, ProfileCliInputs, ReloadDiffOptions,
 };
 use exyonq_config_ir::redact_secrets;
 use serde::{Deserialize, Serialize};
@@ -106,10 +107,35 @@ enum Command {
         #[arg(long, global = true)]
         token: Option<String>,
     },
+    /// FPC observability (Q-04 / ADR-057): stats + explain.
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommand,
+    },
     /// Offline configuration utilities.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CacheCommand {
+    /// Show FPC counters from a live Prometheus `/metrics` scrape.
+    Stats {
+        /// Metrics URL (default: EXYONQ_METRICS_URL or http://127.0.0.1:9090/metrics).
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// Offline: why a URL would hit / miss / bypass FPC under a config.
+    Explain {
+        /// Candidate ExyonQ config (TOML).
+        #[arg(long)]
+        config: PathBuf,
+        /// Absolute http(s) URL to evaluate.
+        url: String,
+        #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
+        format: DiagFormat,
     },
 }
 
@@ -139,8 +165,30 @@ enum ConfigCommand {
         format: DiagFormat,
         #[arg(long)]
         strict: bool,
+        /// Emit predictive advisories (shaded routes, duplicate headers, …). ADR-052 / Q-01.
+        #[arg(long)]
+        warn: bool,
         #[arg(long)]
         no_color: bool,
+    },
+    /// Alias of `lint`: parse and validate config (no RuntimePlan compile).
+    Check {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
+        format: DiagFormat,
+        #[arg(long)]
+        strict: bool,
+        /// Emit predictive advisories (shaded routes, duplicate headers, …). ADR-052 / Q-01.
+        #[arg(long)]
+        warn: bool,
+        #[arg(long)]
+        no_color: bool,
+    },
+    /// Load/validate config and print canonical IR (TOML or JSON) to stdout.
+    DumpIr {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliOutputFormat::Toml)]
+        format: CliOutputFormat,
     },
     /// Validate and compile RuntimePlan offline (discard; no listeners).
     Test {
@@ -152,11 +200,14 @@ enum ConfigCommand {
         #[arg(long)]
         no_color: bool,
     },
-    /// Explain a public configuration term / directive.
+    /// Explain a public term (lexicon) or effective-value provenance (`--path` + `--pointer`).
     Explain {
+        /// Lexicon term, or provenance key when `--path` is set.
         directive: Option<String>,
+        /// Config file for Q-06 provenance explain.
         #[arg(long)]
         path: Option<PathBuf>,
+        /// Dotted / named pointer (e.g. `route[name=main].root`).
         #[arg(long)]
         pointer: Option<String>,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
@@ -174,20 +225,23 @@ enum ConfigCommand {
         #[arg(long)]
         no_color: bool,
     },
-    /// Product profiles (static|proxy|php|wordpress).
+    /// Product profiles (static|proxy|php|wordpress|websocket|sse|tls-h2).
     Profile {
         #[command(subcommand)]
         command: ProfileCommand,
     },
-    /// Precheck / diff / live structural reload (P1.4-WS5).
+    /// Precheck / diff / live structural reload (P1.4-WS5 / Q-07).
     Reload {
         path: PathBuf,
         /// Offline preflight only (parse → validate → compile; no publish).
         #[arg(long)]
         check: bool,
-        /// Classify candidate vs live fingerprint (no publish).
+        /// Classify candidate vs live fingerprint + route add/remove (no publish).
         #[arg(long)]
         diff: bool,
+        /// Previous IR for route diff (Q-07). Else uses applied-routes sidecar.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
         #[arg(short, long)]
@@ -306,6 +360,10 @@ enum ProfileCommand {
         fpm_transport: Option<String>,
         #[arg(long)]
         index: Option<String>,
+        #[arg(long)]
+        tls_cert_file: Option<PathBuf>,
+        #[arg(long)]
+        tls_key_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
     },
@@ -330,6 +388,10 @@ enum ProfileCommand {
         fpm_transport: Option<String>,
         #[arg(long)]
         index: Option<String>,
+        #[arg(long)]
+        tls_cert_file: Option<PathBuf>,
+        #[arg(long)]
+        tls_key_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
     },
@@ -369,9 +431,6 @@ enum CliMigrateProfile {
     /// Fail-closed FastCGI/PHP subset (`compat/nginx/NGINX_FASTCGI_PHP_IMPORT_MVP.md`).
     #[value(name = "fastcgi-php-mvp")]
     FastcgiPhpMvp,
-    /// WordPress product config. Not full nginx compatibility.
-    #[value(name = "wordpress")]
-    Wordpress,
 }
 
 impl From<CliMigrateProfile> for MigrateProfile {
@@ -381,7 +440,6 @@ impl From<CliMigrateProfile> for MigrateProfile {
             CliMigrateProfile::StaticMvp => MigrateProfile::StaticMvp,
             CliMigrateProfile::ReverseProxyMvp => MigrateProfile::ReverseProxyMvp,
             CliMigrateProfile::FastcgiPhpMvp => MigrateProfile::FastcgiPhpMvp,
-            CliMigrateProfile::Wordpress => MigrateProfile::Wordpress,
         }
     }
 }
@@ -431,10 +489,11 @@ fn main() -> ExitCode {
             socket,
             token,
         }) => run_purge(command, socket, token),
+        Some(Command::Cache { command }) => run_cache(command),
         Some(Command::Config { command }) => run_config(command),
         None => {
             eprintln!(
-                "exyonqctl: use reload, status, drain, shutdown, purge, or config (see --help)"
+                "exyonqctl: use reload, status, drain, shutdown, purge, cache, or config (see --help)"
             );
             ExitCode::from(2)
         }
@@ -447,6 +506,14 @@ fn run_config(command: ConfigCommand) -> ExitCode {
             path,
             format,
             strict,
+            warn,
+            no_color,
+        }
+        | ConfigCommand::Check {
+            path,
+            format,
+            strict,
+            warn,
             no_color,
         } => emit_result(&lint(
             &path,
@@ -454,6 +521,14 @@ fn run_config(command: ConfigCommand) -> ExitCode {
                 format: map_fmt(format),
                 strict,
                 color: !no_color,
+                warn,
+            },
+        )),
+        ConfigCommand::DumpIr { path, format } => emit_result(&dump_ir(
+            &path,
+            match format {
+                CliOutputFormat::Toml => DumpIrFormat::Toml,
+                CliOutputFormat::Json => DumpIrFormat::Json,
             },
         )),
         ConfigCommand::Test {
@@ -467,6 +542,7 @@ fn run_config(command: ConfigCommand) -> ExitCode {
                 format: map_fmt(format),
                 strict,
                 color: !no_color,
+                warn: false,
             },
         )),
         ConfigCommand::Explain {
@@ -509,9 +585,10 @@ fn run_config(command: ConfigCommand) -> ExitCode {
             path,
             check,
             diff,
+            baseline,
             format,
             socket,
-        } => run_config_reload(path, check, diff, format, socket),
+        } => run_config_reload(path, check, diff, baseline, format, socket),
         ConfigCommand::Status {
             format,
             socket,
@@ -551,6 +628,7 @@ fn run_config_reload(
     path: PathBuf,
     check: bool,
     diff: bool,
+    baseline: Option<PathBuf>,
     format: DiagFormat,
     socket: Option<PathBuf>,
 ) -> ExitCode {
@@ -580,7 +658,20 @@ fn run_config_reload(
             Ok(r) => (Some(r.fingerprint), Some(r.generation)),
             Err(_) => (None, None),
         };
-        return emit_result(&classify_reload_diff(&path, cur_fp.as_deref(), cur_gen));
+        let sidecar_of = std::env::var("EXYONQ_CONFIG")
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.clone());
+        let opts = ReloadDiffOptions {
+            baseline_path: baseline,
+            applied_sidecar_of: Some(sidecar_of),
+        };
+        return emit_result(&classify_reload_diff_with(
+            &path,
+            cur_fp.as_deref(),
+            cur_gen,
+            opts,
+        ));
     }
     // Live structural reload: PATH must be the daemon-bound config (honesty).
     // Control plane reloads the process-bound path only; PATH is the operator
@@ -626,17 +717,41 @@ fn run_config_reload(
     if pre.exit != exyonq_config_cli::CliExit::Ok {
         return emit_result(&pre);
     }
-    match invoke_control(
-        &match control_socket(socket) {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!("exyonqctl config reload: {err}");
-                return ExitCode::from(2);
+    // Q-07: print route diff + fingerprint before publish.
+    let diff_opts = ReloadDiffOptions {
+        baseline_path: baseline,
+        applied_sidecar_of: Some(path.clone()),
+    };
+    let sock = match control_socket(socket) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("exyonqctl config reload: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    let (cur_fp, cur_gen) = match invoke_control(&sock, "status\n") {
+        Ok(r) => (Some(r.fingerprint), Some(r.generation)),
+        Err(_) => (None, None),
+    };
+    let summary = classify_reload_diff_with(&path, cur_fp.as_deref(), cur_gen, diff_opts);
+    if !summary.stdout.is_empty() {
+        print!("{}", summary.stdout);
+    }
+    match invoke_control(&sock, "reload\n") {
+        Ok(response) => {
+            if response.ok {
+                if let Some(cfg) = reload_precheck(&path).config {
+                    if let Err(err) =
+                        write_applied_routes_snapshot(&path, &response.fingerprint, &cfg)
+                    {
+                        eprintln!(
+                            "exyonqctl config reload: warning: applied-routes sidecar: {err}"
+                        );
+                    }
+                }
             }
-        },
-        "reload\n",
-    ) {
-        Ok(response) => print_response(response, ControlOutFormat::Human),
+            print_response(response, ControlOutFormat::Human)
+        }
         Err(err) => {
             eprintln!("exyonqctl config reload: {err}");
             ExitCode::from(1)
@@ -730,6 +845,8 @@ fn run_profile(command: ProfileCommand) -> ExitCode {
             fpm_address,
             fpm_transport,
             index,
+            tls_cert_file,
+            tls_key_file,
             format,
         } => emit_result(&profile_render(
             &profile,
@@ -740,6 +857,8 @@ fn run_profile(command: ProfileCommand) -> ExitCode {
                 fpm_address,
                 fpm_transport,
                 index,
+                tls_cert_file,
+                tls_key_file,
             },
             map_fmt(format),
         )),
@@ -754,6 +873,8 @@ fn run_profile(command: ProfileCommand) -> ExitCode {
             fpm_address,
             fpm_transport,
             index,
+            tls_cert_file,
+            tls_key_file,
             format,
         } => emit_result(&profile_test(
             &profile,
@@ -764,6 +885,8 @@ fn run_profile(command: ProfileCommand) -> ExitCode {
                 fpm_address,
                 fpm_transport,
                 index,
+                tls_cert_file,
+                tls_key_file,
             },
             map_fmt(format),
         )),
@@ -837,17 +960,13 @@ fn run_migrate_nginx(
     // Fail-closed MVPs must not surface a usable IR body on reject.
     if matches!(
         mode.profile,
-        MigrateProfile::StaticMvp
-            | MigrateProfile::ReverseProxyMvp
-            | MigrateProfile::FastcgiPhpMvp
-            | MigrateProfile::Wordpress
+        MigrateProfile::StaticMvp | MigrateProfile::ReverseProxyMvp | MigrateProfile::FastcgiPhpMvp
     ) && migrate_out.exit_code_for_profile(mode.profile, mode.strict) != 0
     {
         let reason = match mode.profile {
             MigrateProfile::StaticMvp => "REFUSED_STATIC_MVP",
             MigrateProfile::ReverseProxyMvp => "REFUSED_REVERSE_PROXY_MVP",
             MigrateProfile::FastcgiPhpMvp => "REFUSED_FASTCGI_PHP_MVP",
-            MigrateProfile::Wordpress => "REFUSED_WORDPRESS",
             MigrateProfile::Full => "REFUSED",
         };
         let product = redact_product_report(ProductImportReport::from_migrate(
@@ -862,7 +981,6 @@ fn run_migrate_nginx(
             MigrateProfile::StaticMvp => "static-mvp",
             MigrateProfile::ReverseProxyMvp => "reverse-proxy-mvp",
             MigrateProfile::FastcgiPhpMvp => "fastcgi-php-mvp",
-            MigrateProfile::Wordpress => "wordpress",
             MigrateProfile::Full => "full",
         };
         eprintln!("TOTAL_COMPAT_PROMISE=FORBIDDEN profile={label} refused usable IR");
@@ -1109,7 +1227,11 @@ fn htaccess_explain(path: &Path, format: DiagFormat) -> ExitCode {
         let class = match name.as_str() {
             "directoryindex" | "redirect" | "rewriteengine" | "options" => "SUPPORTED",
             "rewriterule" | "rewritecond" => "SUPPORTED_LIMITED",
-            "php_value" | "php_flag" => "FORBIDDEN",
+            "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride"
+            | "authtype" | "authuserfile" | "authname" | "authgroupfile" | "php_value"
+            | "php_flag" => "FORBIDDEN",
+            "header" | "expiresactive" | "expiresbytype" | "expiresdefault" => "UNSUPPORTED",
+            n if n.starts_with('<') => "UNSUPPORTED",
             _ => "UNSUPPORTED",
         };
         let code = match class {
@@ -1197,6 +1319,116 @@ struct PurgeResponse {
     generation: u64,
     #[serde(default)]
     error: Option<String>,
+}
+
+fn run_cache(command: CacheCommand) -> ExitCode {
+    match command {
+        CacheCommand::Explain {
+            config,
+            url,
+            format,
+        } => emit_result(&cache_explain(&config, &url, map_fmt(format))),
+        CacheCommand::Stats { url } => {
+            let metrics_url = url
+                .or_else(|| std::env::var("EXYONQ_METRICS_URL").ok())
+                .unwrap_or_else(|| "http://127.0.0.1:9090/metrics".into());
+            match scrape_fpc_stats(&metrics_url) {
+                Ok(text) => {
+                    print!("{text}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("exyonqctl cache stats: {err}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+    }
+}
+
+fn scrape_fpc_stats(metrics_url: &str) -> Result<String, String> {
+    let body = http_get_text(metrics_url)?;
+    let keys = [
+        "exyonq_fpc_lookup_total",
+        "exyonq_fpc_hit_total",
+        "exyonq_fpc_miss_total",
+        "exyonq_fpc_bypass_total",
+        "exyonq_fpc_store_attempt_total",
+        "exyonq_fpc_store_success_total",
+        "exyonq_cache_entries_current",
+    ];
+    let mut out = String::from("source = prometheus\n");
+    out.push_str(&format!("metrics_url = {metrics_url}\n"));
+    let mut found = 0usize;
+    for key in keys {
+        let mut val = "(missing)".to_string();
+        for line in body.lines() {
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(key) {
+                let rest = rest.trim_start();
+                if rest.is_empty() || rest.starts_with('{') {
+                    // labeled metrics — take first sample value after space
+                    if let Some((_, v)) = line.rsplit_once(' ') {
+                        val = v.trim().to_string();
+                        found += 1;
+                        break;
+                    }
+                } else {
+                    val = rest.split_whitespace().next().unwrap_or("?").to_string();
+                    found += 1;
+                    break;
+                }
+            }
+        }
+        out.push_str(&format!("{key} = {val}\n"));
+    }
+    if found == 0 {
+        return Err(format!(
+            "no exyonq_fpc_* series in {metrics_url} (is the process serving metrics with FPC appender?)"
+        ));
+    }
+    Ok(out)
+}
+
+fn http_get_text(url: &str) -> Result<String, String> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or_else(|| "metrics url must be http://host:port/path".to_string())?;
+    let (hostport, path) = rest
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap_or((rest, "/".into()));
+    let addr: std::net::SocketAddr = hostport
+        .parse()
+        .or_else(|_| format!("{hostport}:80").parse())
+        .map_err(|e| format!("bad host:port in metrics url: {e}"))?;
+    let mut stream = std::net::TcpStream::connect_timeout(
+        &addr,
+        std::time::Duration::from_secs(3),
+    )
+    .map_err(|e| format!("connect {addr}: {e}"))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok();
+    let host = hostport.split(':').next().unwrap_or(hostport);
+    let req = format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    use std::io::{Read, Write};
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write: {e}"))?;
+    let mut buf = Vec::new();
+    stream
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("read: {e}"))?;
+    let raw = String::from_utf8_lossy(&buf);
+    let body = raw
+        .split_once("\r\n\r\n")
+        .or_else(|| raw.split_once("\n\n"))
+        .map(|(_, b)| b.to_string())
+        .unwrap_or(raw.into_owned());
+    Ok(body)
 }
 
 fn run_purge(command: PurgeCommand, socket: Option<PathBuf>, token: Option<String>) -> ExitCode {

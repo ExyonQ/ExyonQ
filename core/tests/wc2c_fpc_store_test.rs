@@ -68,7 +68,7 @@ max_ttl_seconds = 300
     FpcCtx {
         ctx: Arc::new(ConnectionContext {
             state,
-            proxy_client: proxy_client.clone(),
+            proxy_client,
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         }),
@@ -98,6 +98,13 @@ async fn miss_fill_hit_vertical_static() {
         .expect("req");
     let r1 = serve_http3_request(ctx.as_ref().clone(), req1).await;
     assert_eq!(r1.status(), StatusCode::OK);
+    // Q-04: first eligible fill must advertise miss.
+    let x1 = r1
+        .headers()
+        .get("x-cache")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(x1, "miss", "expected X-Cache: miss on FPC fill");
     let body1 = r1.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body1[..], b"fpc-body-v1");
     assert!(fpc_miss_total() > before_miss);
@@ -111,6 +118,12 @@ async fn miss_fill_hit_vertical_static() {
         .expect("req");
     let r2 = serve_http3_request(ctx.as_ref().clone(), req2).await;
     assert_eq!(r2.status(), StatusCode::OK);
+    let x2 = r2
+        .headers()
+        .get("x-cache")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(x2, "hit", "expected X-Cache: hit on L1 serve");
     let body2 = r2.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body2[..], b"fpc-body-v1");
     assert!(fpc_hit_total() > before_hit);

@@ -19,6 +19,7 @@ use crate::caps::{FCGI_CONNECT_TIMEOUT, FCGI_READ_TIMEOUT, FCGI_WRITE_TIMEOUT};
 use crate::client::ForwardResponse;
 use crate::commit::CommitStage;
 use crate::fcgi_stream::{FcgiStream, PoolEndpoint};
+use crate::diagnostics::{endpoint_display, format_saturation_message, SaturationKind};
 use crate::metrics;
 use crate::pooled_forward::forward_on_stream_budgeted;
 use crate::record::FCGI_KEEP_CONN;
@@ -79,6 +80,8 @@ struct ConnPoolState {
 /// Generation-scoped FastCGI connection pool (Unix or TCP endpoint).
 pub struct ConnPool {
     generation: u64,
+    /// Config `[[fcgi_pool]].name` when known (Q-08 diagnostics).
+    pool_name: String,
     endpoint: PoolEndpoint,
     config: ConnPoolConfig,
     state: Mutex<ConnPoolState>,
@@ -113,8 +116,18 @@ pub struct ConnPoolStats {
 
 impl ConnPool {
     pub fn new(generation: u64, endpoint: PoolEndpoint, config: ConnPoolConfig) -> Self {
+        Self::with_name(generation, endpoint, config, "unnamed")
+    }
+
+    pub fn with_name(
+        generation: u64,
+        endpoint: PoolEndpoint,
+        config: ConnPoolConfig,
+        pool_name: impl Into<String>,
+    ) -> Self {
         Self {
             generation,
+            pool_name: pool_name.into(),
             endpoint,
             config,
             state: Mutex::new(ConnPoolState {
@@ -139,6 +152,31 @@ impl ConnPool {
     /// Convenience: Unix path constructor (legacy call sites).
     pub fn new_unix(generation: u64, socket_path: PathBuf, config: ConnPoolConfig) -> Self {
         Self::new(generation, PoolEndpoint::Unix(socket_path), config)
+    }
+
+    pub fn pool_name(&self) -> &str {
+        &self.pool_name
+    }
+
+    /// Q-08: structured warn when returning PoolBusy.
+    fn emit_saturation(&self, kind: SaturationKind) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let msg = format_saturation_message(
+            &self.pool_name,
+            kind,
+            state.open,
+            state.idle.len(),
+            state.waiters,
+            self.config.max_connections,
+            &endpoint_display(&self.endpoint),
+        );
+        drop(state);
+        tracing::warn!(
+            target: "exyonq::fcgi",
+            pool = %self.pool_name,
+            timeout_kind = kind.as_str(),
+            "{msg}"
+        );
     }
 
     pub fn generation(&self) -> u64 {
@@ -292,6 +330,7 @@ impl ConnPool {
             metrics::note_fcgi_checkout_timeout();
             // Checkout wait exhausted under absolute budget → 503 (not 504).
             let _ = e;
+            self.emit_saturation(SaturationKind::Checkout);
             WireError::PoolBusy
         })?;
         let wait_deadline = Instant::now() + checkout_cap;
@@ -307,6 +346,13 @@ impl ConnPool {
             if state.closing || self.config.max_connections == 0 {
                 self.busy_rejections.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_saturation_rejection();
+                let kind = if state.closing {
+                    SaturationKind::Closed
+                } else {
+                    SaturationKind::Capacity
+                };
+                drop(state);
+                self.emit_saturation(kind);
                 return Err(WireError::PoolBusy);
             }
             let now = Instant::now();
@@ -397,6 +443,8 @@ impl ConnPool {
                 metrics::note_fcgi_checkout_timeout();
                 self.busy_rejections.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_saturation_rejection();
+                drop(state);
+                self.emit_saturation(SaturationKind::Checkout);
                 return Err(WireError::PoolBusy);
             }
             state.waiters = state.waiters.saturating_add(1);
@@ -411,6 +459,8 @@ impl ConnPool {
                 metrics::note_fcgi_checkout_timeout();
                 self.busy_rejections.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_saturation_rejection();
+                drop(state);
+                self.emit_saturation(SaturationKind::Checkout);
                 return Err(WireError::PoolBusy);
             }
         }

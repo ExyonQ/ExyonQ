@@ -230,11 +230,7 @@ fn same_socket_waf_generation_g1_g2() {
     );
 
     publish_waf(&child, 4, &table, &waf_off);
-    // Post-disable check does not require the same TCP socket: a generation
-    // publish under load may drop idle keepalives. Reopen for the allow path.
-    let mut s2 = TcpStream::connect_timeout(&listen, Duration::from_secs(2)).unwrap();
-    s2.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    assert_eq!(http_get_keepalive(&mut s2, "app.example", "/api/"), 200);
+    assert_eq!(http_get_keepalive(&mut s, "app.example", "/api/"), 200);
 
     drop(child);
 }

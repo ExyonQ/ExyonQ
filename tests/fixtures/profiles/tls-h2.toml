@@ -1,0 +1,15 @@
+# ProductProfile = tls-h2
+# PRODUCT_INHERITED: TLS terminates at the listener; HTTP/2 is negotiated when ALPN/client supports it.
+# INTERNAL deploy presets Dev|Edge|Lb are NOT applied here.
+config_version = 2
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["site"]
+tls = { cert = "/etc/exyonq/tls/server.pem", key = "/etc/exyonq/tls/server.key" }
+
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www/html"
+index = "index.html"

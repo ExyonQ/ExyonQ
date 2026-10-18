@@ -62,10 +62,14 @@ async fn spawn_echo_upstream() -> (String, tokio::task::JoinHandle<()>) {
                     let path = req.uri().path().to_string();
                     let query = req.uri().query().unwrap_or("").to_string();
                     let mut saw_connection = false;
+                    let mut saw_secret = false;
                     let mut xff = String::new();
                     for (name, value) in req.headers().iter() {
                         if name.as_str().eq_ignore_ascii_case("connection") {
                             saw_connection = true;
+                        }
+                        if name.as_str().eq_ignore_ascii_case("x-secret") {
+                            saw_secret = true;
                         }
                         if name.as_str().eq_ignore_ascii_case("x-forwarded-for") {
                             if let Ok(v) = value.to_str() {
@@ -84,7 +88,7 @@ async fn spawn_echo_upstream() -> (String, tokio::task::JoinHandle<()>) {
                             .unwrap_or_default()
                     } else {
                         Bytes::from(format!(
-                            "path={path}?{query}|xff={xff}|conn={saw_connection}"
+                            "path={path}?{query}|xff={xff}|conn={saw_connection}|secret={saw_secret}"
                         ))
                     };
                     let status = if path == "/error" { 500 } else { 200 };
@@ -237,7 +241,9 @@ async fn hop_by_hop_request_stripped_and_response_filtered() {
         "/hop",
         None,
         vec![
-            ("connection".into(), "keep-alive".into()),
+            // Client Connection nominates x-secret as hop-by-hop (must not leak).
+            ("connection".into(), "x-secret, keep-alive".into()),
+            ("x-secret".into(), "leak".into()),
             ("x-test".into(), "1".into()),
         ],
         None,
@@ -247,7 +253,12 @@ async fn hop_by_hop_request_stripped_and_response_filtered() {
     .await;
     let (_status, headers, body_bytes) = outcome_status_headers_body(outcome).await;
     let body = String::from_utf8_lossy(&body_bytes);
-    assert!(body.contains("conn=false"));
+    // Hyper may attach its own Connection for the *new* upstream hop; that is not
+    // a client-header leak. Nominated hop fields must still be stripped.
+    assert!(
+        body.contains("secret=false"),
+        "Connection-nominated x-secret must not reach upstream: {body}"
+    );
     assert!(!headers
         .iter()
         .any(|(k, _)| k.eq_ignore_ascii_case("connection")));

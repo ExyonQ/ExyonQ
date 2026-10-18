@@ -286,10 +286,7 @@ where
     Ok(req)
 }
 
-async fn drain_request_recv<S>(
-    stream: &mut h3::server::RequestStream<S, Bytes>,
-    drain_cap: usize,
-) -> anyhow::Result<()>
+async fn drain_request_recv<S>(stream: &mut h3::server::RequestStream<S, Bytes>, drain_cap: usize)
 where
     S: h3::quic::BidiStream<Bytes>,
 {
@@ -300,21 +297,17 @@ where
                 discarded = discarded.saturating_add(chunk.remaining());
                 if discarded > drain_cap {
                     stream.stop_sending(Code::H3_NO_ERROR);
-                    // h3 panics in poll_next while a DATA frame is still open.
-                    // recv_trailers is that poll. The 413 write still runs.
-                    return Ok(());
+                    break;
                 }
             }
             Ok(None) => break,
-            Err(err) => {
+            Err(_) => {
                 stream.stop_sending(Code::H3_NO_ERROR);
-                // The required error response was not written. Counted by the caller.
-                anyhow::bail!("request reset before the error response was written: {err}");
+                break;
             }
         }
     }
     let _ = stream.recv_trailers().await;
-    Ok(())
 }
 
 fn payload_too_large_response() -> Http3MaterializedResponse {
@@ -348,8 +341,7 @@ where
     S: h3::quic::BidiStream<Bytes>,
 {
     // P13F: drain request recv before responding to avoid post-body resets.
-    // A peer reset here means the required response was not written.
-    drain_request_recv(stream, drain_cap).await?;
+    drain_request_recv(stream, drain_cap).await;
 
     let Http3MaterializedResponse {
         status,

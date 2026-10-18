@@ -71,9 +71,9 @@ mod tcp_cork;
 /// Marker for composition-root linking (binary may call; no runtime side effects alone).
 pub const COMPOSITION_LINK: &str = "exyonq-platform-linux:ps3a-pm4-extraction-cleanup";
 
-/// Re-export the Linux mechanism; the CLI composition root owns module-api wiring.
+/// Re-export cork install for explicit CLI wiring if needed.
 #[cfg(target_os = "linux")]
-pub use tcp_cork::set_tcp_cork;
+pub use tcp_cork::install_proxy_tcp_send_hooks;
 
 /// Composition root: link crate + register Linux worker starters.
 #[inline(always)]
@@ -88,6 +88,8 @@ pub fn ensure_composition_link() {
         register_epoll_keepalive_signal_stop(epoll_worker::signal_keepalive_pool_stop);
         register_epoll_keepalive_stop(epoll_worker::stop_keepalive_pool);
         register_epoll_keepalive_enqueue(epoll_worker::enqueue_keepalive_transfer);
+        // P8TP: compose TCP_CORK hooks into module-api (no-op until peer fd captured).
+        tcp_cork::install_proxy_tcp_send_hooks();
         // Compile/shape proof: allowlisted mechanism symbols remain reachable.
         let _ = static_epoll::interest_reading;
     }

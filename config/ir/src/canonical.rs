@@ -15,7 +15,10 @@
  */
 //! Canonical IR representation for deterministic fingerprinting.
 
-use crate::{AppConfig, FcgiPoolConfig, RouteConfig, ServerConfig, UpstreamConfig};
+use crate::{
+    AppConfig, FcgiPoolConfig, RewriteConfig, RewriteFlagConfig, RouteConfig, ServerConfig,
+    UpstreamConfig,
+};
 use std::collections::BTreeMap;
 
 /// Stable hex fingerprint of canonical IR JSON (64-char SHA-256).
@@ -234,7 +237,7 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
         map.insert("redirect".into(), serde_json::Value::Object(redir));
     }
     if let Some(rewrite) = &route.rewrite {
-        map.insert("rewrite".into(), serde_json::Value::String(rewrite.clone()));
+        map.insert("rewrite".into(), canonical_rewrite(rewrite));
     }
     if let Some(fastcgi) = &route.fastcgi {
         map.insert("fastcgi".into(), serde_json::Value::String(fastcgi.clone()));
@@ -249,7 +252,72 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
     if let Some(cache) = &route.cache {
         map.insert("cache".into(), serde_json::Value::String(cache.clone()));
     }
+    // F2 / ADR-061: MIME Cache-Control map.
+    if let Some(ch) = &route.cache_headers {
+        if !ch.by_mime.is_empty() {
+            map.insert(
+                "cache_headers".into(),
+                serde_json::to_value(ch).expect("cache_headers serialize"),
+            );
+        }
+    }
     serde_json::Value::Object(map)
+}
+
+fn canonical_rewrite(rewrite: &RewriteConfig) -> serde_json::Value {
+    match rewrite {
+        RewriteConfig::Literal(path) => serde_json::Value::String(path.clone()),
+        RewriteConfig::Rule(rule) => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "pattern".into(),
+                serde_json::Value::String(rule.pattern.clone()),
+            );
+            map.insert(
+                "replacement".into(),
+                serde_json::Value::String(rule.replacement.clone()),
+            );
+            map.insert(
+                "flag".into(),
+                serde_json::Value::String(
+                    match rule.flag {
+                        RewriteFlagConfig::Last => "last",
+                        RewriteFlagConfig::Break => "break",
+                        RewriteFlagConfig::Redirect => "redirect",
+                        RewriteFlagConfig::Permanent => "permanent",
+                    }
+                    .into(),
+                ),
+            );
+            if !rule.when.is_empty() {
+                let when: Vec<serde_json::Value> = rule
+                    .when
+                    .iter()
+                    .map(|c| {
+                        let mut m = serde_json::Map::new();
+                        if let Some(p) = &c.path {
+                            m.insert("path".into(), serde_json::Value::String(p.clone()));
+                        }
+                        if let Some(h) = &c.host {
+                            m.insert("host".into(), serde_json::Value::String(h.clone()));
+                        }
+                        if let Some(q) = &c.query {
+                            m.insert("query".into(), serde_json::Value::String(q.clone()));
+                        }
+                        if let Some(h) = &c.header {
+                            m.insert("header".into(), serde_json::Value::String(h.clone()));
+                        }
+                        if let Some(v) = &c.header_value {
+                            m.insert("header_value".into(), serde_json::Value::String(v.clone()));
+                        }
+                        serde_json::Value::Object(m)
+                    })
+                    .collect();
+                map.insert("when".into(), serde_json::Value::Array(when));
+            }
+            serde_json::Value::Object(map)
+        }
+    }
 }
 
 fn canonical_fcgi_pool(pool: &FcgiPoolConfig) -> serde_json::Value {

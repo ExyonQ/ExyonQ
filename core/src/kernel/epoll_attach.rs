@@ -343,7 +343,7 @@ mod epoll_contract_tests {
         });
         let entry = PlatformConnectionEntry::from_executor(Arc::new(CoreConnectionExecutor::new(
             shared,
-            proxy.clone(),
+            proxy,
             Arc::clone(&ops),
             rt.handle().clone(),
         )));

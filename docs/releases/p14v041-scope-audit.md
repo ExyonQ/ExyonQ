@@ -384,7 +384,7 @@ PERFORMANCE: no material unexplained regression; raw evidence retained;
 OCI: amd64/arm64/multi-arch smoke PASS when packaging path touched;
      no latest; no publication until later express authorize
 
-RELEASE: signing manual outside Cursor; tag/release/GHCR need express
+RELEASE: signing is manual; tag, release, and GHCR need express authorization
          authorize; repo + packages remain private
 ```
 

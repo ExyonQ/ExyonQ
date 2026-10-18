@@ -131,6 +131,8 @@ pub struct RuntimeSnapshot {
     pub route_cache_policy_ids: Box<[Option<u16>]>,
     /// WC2B full-page cache compile result (lookup gate; default disabled).
     pub full_page_cache: CompiledFullPageCache,
+    /// Parallel to IR routes: compiled Cap035/NG-02 rewrite engines (ADR-048).
+    pub route_rewrites: Box<[Option<exyonq_module_api::CompiledRewrite>]>,
 }
 
 /// Compiled `[full_page_cache]` (WC2B).
@@ -422,44 +424,64 @@ pub fn compile_runtime_plan_from_ir(
             }
             static_slots.push(StaticCompiledSlot {
                 filesystem_root: root.clone(),
-                route_prefix: route.r#match.path.clone(),
+                // Suffix/regex static: map full URI under document root (prefix "/").
+                // ADR-048 break: rewritten URI is absolute under document root.
+                route_prefix: if route.r#match.path.is_empty()
+                    || matches!(
+                        route.rewrite.as_ref().and_then(|r| r.as_rule()),
+                        Some(rule)
+                            if matches!(
+                                rule.flag,
+                                exyonq_config_ir::RewriteFlagConfig::Break
+                            )
+                    ) {
+                    "/".to_string()
+                } else {
+                    route.r#match.path.clone()
+                },
                 index_file: route.index.clone(),
                 route_name: route.name.clone(),
                 route_host: route.r#match.host.clone(),
                 preload_max_file_bytes: config.static_section.preload.max_file_bytes,
                 preload_max_total_bytes: config.static_section.preload.max_total_bytes,
                 preload_max_entries: config.static_section.preload.max_entries,
-                allow_sensitive: route.allow_sensitive,
             });
         }
     }
     let static_slots = static_slots.into_boxed_slice();
 
-    // Cap033: duplicate normalized (host, path) is ambiguous virtual-host identity — fail closed.
+    // Cap033 + ADR-047: duplicate (host_norm, kind, pattern_key) — fail closed.
     {
         use crate::router::normalize_route_host;
         use std::collections::HashMap;
-        let mut seen: HashMap<(String, String), String> = HashMap::new();
+        let mut seen: HashMap<(String, String, String), String> = HashMap::new();
         for route in &config.routes {
-            let Some(host) = route.r#match.host.as_deref() else {
-                continue;
-            };
-            let key = (
-                normalize_route_host(host),
-                route.r#match.path.trim_end_matches('/').to_string(),
-            );
+            let host_key = route
+                .r#match
+                .host
+                .as_deref()
+                .map(normalize_route_host)
+                .unwrap_or_default();
+            let kind = route
+                .r#match
+                .kind()
+                .map(|k| format!("{k:?}"))
+                .unwrap_or_else(|| "invalid".into());
+            let pattern = route.r#match.pattern_key().unwrap_or("").to_string();
+            let key = (host_key, kind, pattern);
             if let Some(prev) = seen.insert(key, route.name.clone()) {
                 anyhow::bail!(
-                    "duplicate route host {:?} path {:?} (routes {prev} and {})",
-                    host,
-                    route.r#match.path,
+                    "duplicate route match identity host={:?} pattern={:?} (routes {prev} and {})",
+                    route.r#match.host,
+                    route.r#match.pattern_key(),
                     route.name
                 );
             }
         }
     }
 
-    let route_index = RouteIndex::new(config.routes.clone());
+    let route_index = RouteIndex::try_new(config.routes.clone())
+        .map_err(|e| anyhow::anyhow!("route index: {e}"))?;
 
     let mut clusters = HashMap::new();
     let proxy_compiled_slots = compile_proxy_compiled_slots(&config, &mut clusters)?;
@@ -487,6 +509,7 @@ pub fn compile_runtime_plan_from_ir(
     let htaccess_sites = compile_htaccess_site_bindings(&config);
     let (cache_policies, route_cache_policy_ids) = compile_cache_policies(&config);
     let full_page_cache = compile_full_page_cache(&config);
+    let route_rewrites = compile_route_rewrites(&config)?;
     if full_page_cache.enabled {
         tracing::info!(
             enabled = true,
@@ -517,9 +540,27 @@ pub fn compile_runtime_plan_from_ir(
         cache_policies,
         route_cache_policy_ids,
         full_page_cache,
+        route_rewrites,
     };
 
     Ok(Arc::new(plan))
+}
+
+fn compile_route_rewrites(
+    config: &AppConfig,
+) -> anyhow::Result<Box<[Option<exyonq_module_api::CompiledRewrite>]>> {
+    let mut out = Vec::with_capacity(config.routes.len());
+    for route in &config.routes {
+        match &route.rewrite {
+            None => out.push(None),
+            Some(rw) => {
+                let compiled = exyonq_module_api::compile_rewrite(rw)
+                    .map_err(|e| anyhow::anyhow!("route `{}`: {e}", route.name))?;
+                out.push(Some(compiled));
+            }
+        }
+    }
+    Ok(out.into_boxed_slice())
 }
 
 /// Compile from config IR (public alias kept stable).
@@ -698,6 +739,8 @@ mod tests {
             r#match: RouteMatch {
                 path: path.into(),
                 host: None,
+
+                ..Default::default()
             },
             upstream: None,
             root: None,
@@ -707,7 +750,12 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         }
     }
 
@@ -752,12 +800,13 @@ mod tests {
                 routes: vec!["legacy".into()],
                 tls: None,
                 http3_listen: None,
-                response_headers: Vec::new(),
+                error_pages: Default::default(),
             }],
             routes: vec![redir],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+            maps: Default::default(),
             modules: Default::default(),
             static_section: Default::default(),
             full_page_cache: Default::default(),
@@ -791,12 +840,13 @@ mod tests {
                 routes: vec!["api".into()],
                 tls: None,
                 http3_listen: None,
-                response_headers: Vec::new(),
+                error_pages: Default::default(),
             }],
             routes: vec![api],
             upstreams,
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+            maps: Default::default(),
             modules: Default::default(),
             static_section: Default::default(),
             full_page_cache: Default::default(),

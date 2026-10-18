@@ -173,11 +173,11 @@ fn count_location_kind(kind: LocationKind, report: &mut CompatibilityReport) {
 
 fn location_status(kind: LocationKind) -> CompatStatus {
     match kind {
-        LocationKind::Prefix => CompatStatus::Supported,
+        LocationKind::Prefix
+        | LocationKind::RegexCaseSensitive
+        | LocationKind::RegexCaseInsensitive => CompatStatus::Supported,
         LocationKind::Exact | LocationKind::PreferentialPrefix => CompatStatus::Partial,
-        LocationKind::RegexCaseSensitive
-        | LocationKind::RegexCaseInsensitive
-        | LocationKind::Named => CompatStatus::Unsupported,
+        LocationKind::Named => CompatStatus::Unsupported,
     }
 }
 
@@ -191,10 +191,10 @@ fn location_message(kind: LocationKind, pattern: &str) -> String {
             format!("preferential prefix `^~ {pattern}` parsed; ExyonQ does not model ^~ priority")
         }
         LocationKind::RegexCaseSensitive => {
-            format!("regex location `~ {pattern}` parsed; not mapped to runtime route")
+            format!("regex location `~ {pattern}` maps to match.regex / match.suffix (ADR-047)")
         }
         LocationKind::RegexCaseInsensitive => {
-            format!("regex location `~* {pattern}` parsed; not mapped to runtime route")
+            format!("regex location `~* {pattern}` maps to match.regex with (?i) (ADR-047)")
         }
         LocationKind::Named => {
             format!("named location `{pattern}` parsed; internal dispatch unsupported")
@@ -208,7 +208,9 @@ fn mapping_hint(kind: LocationKind, pattern: &str) -> Option<String> {
         LocationKind::Exact | LocationKind::PreferentialPrefix => {
             Some(format!("route match.path={pattern} (literal only)"))
         }
-        _ => None,
+        LocationKind::RegexCaseSensitive => Some(format!("route match.regex={pattern}")),
+        LocationKind::RegexCaseInsensitive => Some(format!("route match.regex=(?i){pattern}")),
+        LocationKind::Named => None,
     }
 }
 
@@ -237,6 +239,13 @@ pub fn analyze_location_directives(
                 Ok(rule) => rewrites.push(rule),
                 Err(msg) => report.push(&d.loc, "rewrite", CompatStatus::Error, msg, None),
             },
+            "if" => report.push(
+                &d.loc,
+                "if",
+                CompatStatus::Error,
+                "nginx `if` is not supported (EXY-NG-IF / ADR-051); use match.header / map / explicit routes",
+                None,
+            ),
             _ => {}
         }
     }
@@ -405,7 +414,11 @@ pub fn analyze_precedence(server: &ParsedServer, report: &mut CompatibilityRepor
 pub fn is_runtime_mappable(kind: LocationKind) -> bool {
     matches!(
         kind,
-        LocationKind::Prefix | LocationKind::Exact | LocationKind::PreferentialPrefix
+        LocationKind::Prefix
+            | LocationKind::Exact
+            | LocationKind::PreferentialPrefix
+            | LocationKind::RegexCaseSensitive
+            | LocationKind::RegexCaseInsensitive
     )
 }
 
@@ -414,4 +427,49 @@ pub fn route_path(location: &ParsedLocation) -> String {
         .normalized_literal_path
         .clone()
         .unwrap_or_else(|| location.raw_pattern.clone())
+}
+
+/// Map NGINX location pattern to ExyonQ `RouteMatch` (ADR-047 / NG-01).
+pub fn route_match_from_location(location: &ParsedLocation) -> exyonq_config_ir::RouteMatch {
+    use exyonq_config_ir::RouteMatch;
+    match location.kind {
+        LocationKind::Prefix | LocationKind::Exact | LocationKind::PreferentialPrefix => {
+            RouteMatch::prefix(route_path(location))
+        }
+        LocationKind::RegexCaseSensitive => match_from_regex_pattern(&location.raw_pattern, false),
+        LocationKind::RegexCaseInsensitive => match_from_regex_pattern(&location.raw_pattern, true),
+        LocationKind::Named => RouteMatch::prefix("/"),
+    }
+}
+
+fn match_from_regex_pattern(pattern: &str, case_insensitive: bool) -> exyonq_config_ir::RouteMatch {
+    use exyonq_config_ir::RouteMatch;
+    if !case_insensitive {
+        if let Some(suffix) = try_literal_suffix(pattern) {
+            return RouteMatch::with_suffix(suffix);
+        }
+    }
+    let pat = if case_insensitive {
+        format!("(?i){pattern}")
+    } else {
+        pattern.to_string()
+    };
+    RouteMatch::with_regex(pat)
+}
+
+/// `\.php$` / `^\.html$` → literal suffix `.php` / `.html`.
+fn try_literal_suffix(pattern: &str) -> Option<String> {
+    let p = pattern.strip_prefix('^').unwrap_or(pattern);
+    let p = p.strip_suffix('$')?;
+    let rest = p.strip_prefix(r"\.")?;
+    if rest.is_empty() {
+        return None;
+    }
+    if rest
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Some(format!(".{rest}"));
+    }
+    None
 }

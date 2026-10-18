@@ -13,23 +13,84 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Path routing: Cap033 host-aware longest directory-prefix over IR routes.
+//! Path routing: Cap033 host-aware ranking + ADR-047 regex/suffix (NG-01).
 //!
-//! Product matching is linear over `routes` (exact host > wildcard > hostless,
-//! then longest path). A matchit radix tree previously lived here but was
-//! superseded by Cap033 — matchit cannot rank among vhosts.
+//! Product matching is linear over `routes`:
+//! host (exact > wildcard > hostless) → kind (regex/suffix > prefix > catch-all `/`)
+//! → longer pattern → lower original index on ties.
+//! Regex is compiled once in [`RouteIndex::try_new`], never on the request path.
 
-use exyonq_config_ir::RouteConfig;
+use std::cmp::Reverse;
 
-/// Compiled route index for Cap033 host+path selection.
+use exyonq_config_ir::{RouteConfig, RouteMatchKind};
+use regex::Regex;
+
+/// Compiled route index for Cap033 + NG-01 selection.
 #[derive(Clone, Debug)]
 pub struct RouteIndex {
     routes: Vec<RouteConfig>,
+    matchers: Vec<CompiledMatcher>,
 }
 
+#[derive(Clone, Debug)]
+enum CompiledMatcher {
+    Prefix,
+    Suffix,
+    Regex(Regex),
+}
+
+#[derive(Debug)]
+pub enum RouteIndexError {
+    InvalidKind { route: String },
+    RegexCompile { route: String, detail: String },
+}
+
+impl std::fmt::Display for RouteIndexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidKind { route } => write!(
+                f,
+                "route `{route}` has invalid match kind (need exactly one of path/suffix/regex)"
+            ),
+            Self::RegexCompile { route, detail } => {
+                write!(f, "route `{route}` regex compile failed: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RouteIndexError {}
+
 impl RouteIndex {
+    /// Build index, compiling regex arms once. Prefer this over [`Self::new`].
+    pub fn try_new(routes: Vec<RouteConfig>) -> Result<Self, RouteIndexError> {
+        let mut matchers = Vec::with_capacity(routes.len());
+        for route in &routes {
+            let matcher = match route.r#match.kind() {
+                Some(RouteMatchKind::Prefix) => CompiledMatcher::Prefix,
+                Some(RouteMatchKind::Suffix) => CompiledMatcher::Suffix,
+                Some(RouteMatchKind::Regex) => {
+                    let pattern = route.r#match.regex.as_deref().unwrap_or("");
+                    let re = Regex::new(pattern).map_err(|e| RouteIndexError::RegexCompile {
+                        route: route.name.clone(),
+                        detail: e.to_string(),
+                    })?;
+                    CompiledMatcher::Regex(re)
+                }
+                None => {
+                    return Err(RouteIndexError::InvalidKind {
+                        route: route.name.clone(),
+                    });
+                }
+            };
+            matchers.push(matcher);
+        }
+        Ok(Self { routes, matchers })
+    }
+
+    /// Panic on invalid match (tests with prefix-only fixtures).
     pub fn new(routes: Vec<RouteConfig>) -> Self {
-        Self { routes }
+        Self::try_new(routes).expect("RouteIndex::new: invalid route match")
     }
 
     pub fn match_route(&self, path: &str) -> Option<&RouteConfig> {
@@ -42,10 +103,18 @@ impl RouteIndex {
         path: &str,
         host: Option<&str>,
     ) -> Option<(usize, &RouteConfig)> {
-        // Cap033: rank among all path+host matches (exact host > wildcard > hostless,
-        // then longest path). Matchit alone is path-only and cannot choose among vhosts.
+        self.match_route_index_with_host_and_headers(path, host, &[])
+    }
+
+    /// NG-05 / ADR-051: path/host match plus optional `match.header` AND filter.
+    pub fn match_route_index_with_host_and_headers(
+        &self,
+        path: &str,
+        host: Option<&str>,
+        request_headers: &[(String, String)],
+    ) -> Option<(usize, &RouteConfig)> {
         let path = normalize_path(path);
-        self.best_host_path_match(&path, host)
+        self.best_match(&path, host, request_headers)
     }
 
     pub fn match_route_with_host(&self, path: &str, host: Option<&str>) -> Option<&RouteConfig> {
@@ -53,28 +122,46 @@ impl RouteIndex {
             .map(|(_, route)| route)
     }
 
-    /// Longest path among host-matching routes, preferring exact host > wildcard > hostless.
-    fn best_host_path_match(
+    fn best_match(
         &self,
         path: &str,
         host: Option<&str>,
+        request_headers: &[(String, String)],
     ) -> Option<(usize, &RouteConfig)> {
         self.routes
             .iter()
+            .zip(self.matchers.iter())
             .enumerate()
-            .filter(|(_, route)| path_under_route_prefix(path, &route.r#match.path))
-            .filter(|(_, route)| host_matches_route(route, host))
-            .max_by_key(|(_, route)| {
+            .filter(|(_, (route, matcher))| {
+                host_matches_route(route, host)
+                    && path_matches(path, route, matcher)
+                    && exyonq_config_ir::match_header_satisfied(&route.r#match, request_headers)
+            })
+            .max_by_key(|(idx, (route, _))| {
                 (
                     host_match_rank(route.r#match.host.as_deref()),
-                    route.r#match.path.len(),
+                    route.r#match.kind_rank(),
+                    route.r#match.pattern_len(),
+                    Reverse(*idx),
                 )
             })
+            .map(|(idx, (route, _))| (idx, route))
     }
 
     /// Exposes the normalized/canonical IR routes for callers that need parallel alignment.
     pub fn routes(&self) -> &[RouteConfig] {
         &self.routes
+    }
+}
+
+fn path_matches(path: &str, route: &RouteConfig, matcher: &CompiledMatcher) -> bool {
+    match matcher {
+        CompiledMatcher::Prefix => path_under_route_prefix(path, &route.r#match.path),
+        CompiledMatcher::Suffix => {
+            let suffix = route.r#match.suffix.as_deref().unwrap_or("");
+            !suffix.is_empty() && path.ends_with(suffix)
+        }
+        CompiledMatcher::Regex(re) => re.is_match(path),
     }
 }
 
@@ -158,12 +245,15 @@ fn host_matches(expected: &str, actual: &str) -> bool {
     normalize_route_host(expected) == actual_n
 }
 
-/// Legacy helper: longest directory-prefix among slice (tests and ad-hoc callers).
+/// Legacy helper: longest directory-prefix among slice (prefix arms only).
 pub fn match_route<'a>(routes: &'a [RouteConfig], path: &str) -> Option<&'a RouteConfig> {
     let path = normalize_path(path);
     routes
         .iter()
-        .filter(|route| path_under_route_prefix(&path, &route.r#match.path))
+        .filter(|route| {
+            route.r#match.kind() == Some(RouteMatchKind::Prefix)
+                && path_under_route_prefix(&path, &route.r#match.path)
+        })
         .max_by_key(|route| route.r#match.path.len())
 }
 
@@ -175,10 +265,7 @@ mod tests {
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
             name: name.to_string(),
-            r#match: RouteMatch {
-                path: path.to_string(),
-                host: None,
-            },
+            r#match: RouteMatch::prefix(path),
             upstream: Some("backend".to_string()),
             root: None,
             index: None,
@@ -187,8 +274,25 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         }
+    }
+
+    fn route_suffix(name: &str, suffix: &str) -> RouteConfig {
+        let mut r = route(name, "/");
+        r.r#match = RouteMatch::with_suffix(suffix);
+        r
+    }
+
+    fn route_regex(name: &str, regex: &str) -> RouteConfig {
+        let mut r = route(name, "/");
+        r.r#match = RouteMatch::with_regex(regex);
+        r
     }
 
     #[test]
@@ -340,5 +444,70 @@ mod tests {
                 .name,
             "a"
         );
+    }
+
+    #[test]
+    fn suffix_beats_prefix_catchall() {
+        let routes = vec![route("root", "/"), route_suffix("php", ".php")];
+        let index = RouteIndex::new(routes);
+        assert_eq!(index.match_route("/index.php").unwrap().name, "php");
+        assert_eq!(index.match_route("/about").unwrap().name, "root");
+    }
+
+    #[test]
+    fn regex_beats_prefix_and_longer_regex_wins() {
+        let routes = vec![
+            route("root", "/"),
+            route("api", "/api"),
+            route_regex("api_ver", r"^/api/v[0-9]+/"),
+            route_regex("api_ver_long", r"^/api/v[0-9]+/users"),
+        ];
+        let index = RouteIndex::new(routes);
+        assert_eq!(
+            index.match_route("/api/v2/users/1").unwrap().name,
+            "api_ver_long"
+        );
+        assert_eq!(index.match_route("/api/v2/x").unwrap().name, "api_ver");
+        assert_eq!(index.match_route("/api/plain").unwrap().name, "api");
+    }
+
+    #[test]
+    fn exact_host_beats_hostless_regex() {
+        let mut named = route("named-prefix", "/");
+        named.r#match.host = Some("app.example".into());
+        let routes = vec![route_regex("any-php", r"\.php$"), named];
+        let index = RouteIndex::new(routes);
+        assert_eq!(
+            index
+                .match_route_with_host("/x.php", Some("app.example"))
+                .unwrap()
+                .name,
+            "named-prefix"
+        );
+        assert_eq!(
+            index
+                .match_route_with_host("/x.php", Some("other.example"))
+                .unwrap()
+                .name,
+            "any-php"
+        );
+    }
+
+    #[test]
+    fn tie_prefers_lower_route_index() {
+        // Same kind_rank + same pattern_len → lower index wins (ADR-047).
+        let routes = vec![
+            route_regex("first", r"^/x/"),
+            route_regex("second", r"^/y/"), // different pattern; not a tie
+        ];
+        let index = RouteIndex::new(routes);
+        assert_eq!(index.match_route("/x/1").unwrap().name, "first");
+
+        let routes = vec![
+            route_suffix("a", ".html"),
+            route_suffix("b", ".htm"), // different
+        ];
+        let index = RouteIndex::new(routes);
+        assert_eq!(index.match_route("/p.html").unwrap().name, "a");
     }
 }

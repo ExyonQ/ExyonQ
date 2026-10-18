@@ -85,9 +85,6 @@ pub struct RateLimitConfig {
     pub requests_per_second: u32,
     #[serde(default = "default_burst")]
     pub burst: u32,
-    /// When set, only this path and its subpaths are limited. Other requests are not counted.
-    #[serde(default)]
-    pub path: Option<String>,
 }
 
 impl Default for RateLimitConfig {
@@ -96,7 +93,6 @@ impl Default for RateLimitConfig {
             enabled: false,
             requests_per_second: default_rps(),
             burst: default_burst(),
-            path: None,
         }
     }
 }

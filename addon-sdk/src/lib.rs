@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! ExyonQ Addon SDK — thin helpers over [`exyonq_addon_api`].
+//! ExyonQ Addon SDK — thin helpers over [`exyonq-addon-api`].
 //!
 //! Official addons should depend on this crate for descriptor builders and re-exports.
 
@@ -41,7 +41,7 @@ pub fn static_descriptor(
     }
 }
 
-/// Convenience for official modules targeting the v0.3.x core line.
+/// Official modules stay compatible with the current 0.5.x core line.
 pub fn official_core_compat() -> &'static str {
-    ">=0.1.0, <0.5.0"
+    ">=0.1.0, <0.6.0"
 }

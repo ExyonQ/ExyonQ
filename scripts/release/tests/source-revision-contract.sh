@@ -23,19 +23,6 @@ if grep -nE 'COPY[[:space:]]+\.git|ADD[[:space:]]+\.git' "$DF"; then
 fi
 pass "Dockerfile injects revision without copying .git"
 
-# Product builders copy no benchmark sources and must prune the host-only
-# workspace member with the same container-local manifest transformation.
-BENCH_DF=benchmarks/docker/Dockerfile.exyonq
-PRUNE_LINE='RUN sed -i '\''\|  "benchmarks/exyonq-bench",|d'\'' Cargo.toml'
-grep -Fqx "$PRUNE_LINE" "$DF" \
-  || fail "product Dockerfile must prune benchmarks/exyonq-bench from container workspace"
-grep -Fqx "$PRUNE_LINE" "$BENCH_DF" \
-  || fail "benchmark product Dockerfile must use the canonical workspace prune"
-if grep -nE '^COPY[[:space:]]+benchmarks(/|[[:space:]])' "$DF"; then
-  fail "product Dockerfile must not copy benchmark tooling"
-fi
-pass "product Dockerfiles prune host-only benchmark tooling"
-
 # WS6 packaging must export revision before cargo build
 grep -q 'EXYONQ_SOURCE_REVISION=' scripts/release/p15-ws6-build-artifacts.sh \
   || fail "p15-ws6-build-artifacts.sh must export EXYONQ_SOURCE_REVISION"

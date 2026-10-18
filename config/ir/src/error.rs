@@ -108,6 +108,18 @@ pub enum ConfigError {
     #[error("route match path must start with '/': {value}")]
     InvalidMatchPath { value: String },
 
+    #[error("route match must set exactly one of path, suffix, or regex (got none or multiple)")]
+    InvalidRouteMatchKind,
+
+    #[error("route match suffix must be non-empty")]
+    InvalidMatchSuffix,
+
+    #[error("route match regex exceeds {limit} bytes (got {found})")]
+    RouteRegexTooLong { limit: usize, found: usize },
+
+    #[error("route match regex invalid: {detail}")]
+    InvalidRouteRegex { detail: String },
+
     #[error("invalid upstream target (http only in v1): {value}")]
     InvalidUpstreamTarget { value: String },
 

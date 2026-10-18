@@ -1,6 +1,7 @@
-//! Public lexicon explain (P1.4-WS3).
+//! Public lexicon explain (P1.4-WS3) + Q-06 provenance (`--path` + `--pointer`).
 
 use crate::output::{sanitize_control_chars, CliExit, OutputFormat, ToolResult};
+use crate::provenance::explain_provenance;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -340,6 +341,25 @@ fn explain_json(entry: &Entry) -> String {
 }
 
 pub fn explain(req: ExplainRequest) -> ToolResult {
+    // Q-06 / ADR-059: provenance when a config file path is provided.
+    if let Some(path) = &req.path {
+        let pointer = req
+            .pointer
+            .as_deref()
+            .or(req.directive.as_deref())
+            .unwrap_or("")
+            .trim();
+        if pointer.is_empty() {
+            return ToolResult {
+                exit: CliExit::UsageOrTool,
+                stdout: String::new(),
+                stderr: "explain provenance: provide --pointer KEY (or a positional key) with --path\n"
+                    .into(),
+            };
+        }
+        return explain_provenance(path, pointer, req.format);
+    }
+
     let term = req
         .directive
         .as_deref()
@@ -351,11 +371,8 @@ pub fn explain(req: ExplainRequest) -> ToolResult {
         return ToolResult {
             exit: CliExit::UsageOrTool,
             stdout: String::new(),
-            stderr: "explain: provide a directive or --pointer\n".into(),
+            stderr: "explain: provide a directive or --path FILE --pointer KEY\n".into(),
         };
-    }
-    if let Some(path) = &req.path {
-        let _ = path; // pointer+path reserved; catalog explain is sufficient for WS3
     }
 
     let entry = CATALOG

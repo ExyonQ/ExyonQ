@@ -15,6 +15,8 @@ pub struct ProfileCliInputs {
     pub fpm_address: Option<String>,
     pub fpm_transport: Option<String>,
     pub index: Option<String>,
+    pub tls_cert_file: Option<PathBuf>,
+    pub tls_key_file: Option<PathBuf>,
 }
 
 impl ProfileCliInputs {
@@ -37,6 +39,12 @@ impl ProfileCliInputs {
         }
         if let Some(v) = &self.index {
             i.index = v.clone();
+        }
+        if let Some(v) = &self.tls_cert_file {
+            i.tls_cert_file = v.clone();
+        }
+        if let Some(v) = &self.tls_key_file {
+            i.tls_key_file = v.clone();
         }
         i
     }
@@ -123,6 +131,21 @@ pub fn profile_explain(name: &str, format: OutputFormat) -> ToolResult {
             "WordPress: PHP base + wp-includes/wp-content static + front controller via htaccess=overlay.",
             "Same as php + htaccess=overlay on app route; FULL_HTACCESS_COMPATIBILITY=NO; WORDPRESS_CACHE=OFF",
             "No LSCache claim. Partial htaccess overlay only.",
+        ),
+        ProductProfile::Websocket => (
+            "WebSocket-oriented reverse proxy: same IR shape as proxy; WS upgrade is supported on the proxy path.",
+            "listen=0.0.0.0:8080 upstream=http://127.0.0.1:9000 timeout_ms=30000",
+            "No separate websocket IR module. PRODUCT_INHERITED notes document WS on proxy path.",
+        ),
+        ProductProfile::Sse => (
+            "SSE-oriented reverse proxy: same IR shape as proxy for streaming upstream responses.",
+            "listen=0.0.0.0:8080 upstream=http://127.0.0.1:9000 timeout_ms=30000",
+            "No separate SSE IR module. Same product inheritance as proxy.",
+        ),
+        ProductProfile::TlsH2 => (
+            "Static site with server TLS (cert/key). HTTP/2 negotiated when ALPN/client supports it.",
+            "listen=0.0.0.0:8080 root=/var/www/html tls.cert=/etc/exyonq/tls/server.pem tls.key=/etc/exyonq/tls/server.key",
+            "Requires tls.cert + tls.key. No proxy/FastCGI in the preset body.",
         ),
     };
     match format {

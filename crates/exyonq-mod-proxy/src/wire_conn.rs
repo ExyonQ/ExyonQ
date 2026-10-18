@@ -361,6 +361,52 @@ fn push_u64_decimal(buf: &mut Vec<u8>, mut n: u64) {
     buf.extend_from_slice(&tmp[i..]);
 }
 
+/// Cap034 framing for [`crate::raw_upstream::RawGetResponse`] (known-length only).
+#[allow(dead_code)] // retained for Cap034 raw-GET framing; hot path uses encode_head helpers
+async fn write_raw_proxy_response<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    raw: &crate::raw_upstream::RawGetResponse,
+    client_close: bool,
+) -> Result<WireWriteOutcome> {
+    let mut wire = Vec::with_capacity(128usize.saturating_add(raw.body.len()));
+    wire.extend_from_slice(b"HTTP/1.1 ");
+    push_u64_decimal(&mut wire, u64::from(raw.status));
+    if !raw.reason.is_empty() {
+        wire.push(b' ');
+        wire.extend_from_slice(&raw.reason);
+    }
+    wire.extend_from_slice(b"\r\n");
+    for (name, value) in &raw.passthrough_headers {
+        wire.extend_from_slice(name);
+        wire.extend_from_slice(b": ");
+        wire.extend_from_slice(value);
+        wire.extend_from_slice(b"\r\n");
+    }
+    let outcome = if client_close {
+        wire.extend_from_slice(b"Content-Length: ");
+        push_u64_decimal(&mut wire, raw.content_length);
+        wire.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+        WireWriteOutcome::Close
+    } else {
+        wire.extend_from_slice(b"Content-Length: ");
+        push_u64_decimal(&mut wire, raw.content_length);
+        wire.extend_from_slice(b"\r\nConnection: keep-alive\r\n\r\n");
+        WireWriteOutcome::KeepAlive
+    };
+    // Single write for small known-length bodies (P4 1 KiB): headers+body one syscall.
+    if !raw.body.is_empty() && raw.body.len() <= 16 * 1024 {
+        wire.extend_from_slice(&raw.body);
+        wire_io::write_all_async(stream, &wire).await?;
+    } else {
+        wire_io::write_all_async(stream, &wire).await?;
+        if !raw.body.is_empty() {
+            wire_io::write_all_async(stream, &raw.body).await?;
+        }
+    }
+    stream.flush().await?;
+    Ok(outcome)
+}
+
 /// Legacy encoder retained for byte-equivalence tests only.
 #[cfg(test)]
 fn encode_proxy_response_head_format_legacy(
@@ -882,10 +928,7 @@ where
         } else {
             let client_ip = x_forwarded_for.to_str().unwrap_or("127.0.0.1");
             if let exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } =
-                exyonq_module_api::wire_admit_for_path(
-                    client_ip,
-                    path_and_query.split('?').next().unwrap_or(path_and_query),
-                )
+                exyonq_module_api::wire_admit(client_ip)
             {
                 let reject = exyonq_module_api::rate_limit_reject_wire(retry_after_secs);
                 wire_io::write_all_async(&mut stream, &reject).await?;
@@ -896,11 +939,10 @@ where
         }
 
         // Cap024/dispatch alignment: no eligible upstream (incl. all unhealthy) → 503, not 404.
-        if cached_target.is_none() {
-            match rt.upstream_for_cluster(cluster_id) {
-                Some(t) => {
-                    cached_target = Some(t);
-                }
+        let target = match cached_target {
+            Some(ref t) => t,
+            None => match rt.upstream_for_cluster(cluster_id) {
+                Some(t) => cached_target.insert(t),
                 None => {
                     write_fixed_close(
                         &mut stream,
@@ -910,21 +952,7 @@ where
                     exyonq_module_api::wire_record_response(503);
                     return Ok(503);
                 }
-            }
-        }
-        if let (Some(target), Some(raw)) = (cached_target.as_mut(), this_host.as_deref()) {
-            if let Ok(value) = HeaderValue::from_bytes(raw) {
-                target.host = Some(value);
-            }
-        }
-        let Some(target) = cached_target.as_ref() else {
-            write_fixed_close(
-                &mut stream,
-                b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
-            )
-            .await?;
-            exyonq_module_api::wire_record_response(503);
-            return Ok(503);
+            },
         };
 
         let client_close = connection_close_requested(head.as_ref());

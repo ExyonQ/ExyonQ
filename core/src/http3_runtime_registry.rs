@@ -602,7 +602,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let resp = dispatcher
@@ -643,7 +643,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
         ops.start_drain();
 
         let live = dispatcher
@@ -701,7 +701,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let _ = dispatcher.dispatch(req, "127.0.0.1").await;
@@ -721,7 +721,7 @@ mod tests {
         let capture = Arc::new(CapturingProxy::default());
         let service: Arc<dyn ProxyDispatchService> = capture.clone();
         let _guard = crate::execute_backend::ProxyDispatchTestGuard::install(service);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy.clone(), Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
 
         let req = Request::builder()
             .method("POST")

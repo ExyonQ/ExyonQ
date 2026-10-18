@@ -17,7 +17,6 @@
 
 use crate::caps::{MAX_CGI_HEADER_BYTES, MAX_CGI_HEADER_COUNT, MAX_FCGI_RESPONSE_BYTES};
 use crate::client::{ClientError, PhpFpmClient};
-#[cfg(unix)]
 use crate::metrics;
 use crate::params::MinForwardRequest;
 use crate::scripted::{ScriptedFpmConfig, ScriptedFpmTransport};
@@ -25,11 +24,8 @@ use crate::transport::TransportError;
 use exyonq_module_api::fcgi_dispatch::{
     FcgiBackendExecutor, FcgiDispatchOutcome, FcgiDispatchRequest, FcgiSuccessResponse,
 };
-#[cfg(unix)]
 use std::collections::HashMap;
-#[cfg(unix)]
 use std::path::PathBuf;
-#[cfg(unix)]
 use std::time::Duration;
 
 /// Map module transport errors to the closed core-visible outcome enum.
@@ -214,12 +210,10 @@ impl FcgiBackendExecutor for ScriptedFcgiExecutor {
 }
 
 /// Production executor — pooled FastCGI (UDS or TCP) with generation-scoped ConnPool.
-#[cfg(unix)]
 pub struct FcgiModuleExecutor {
     pools: HashMap<u32, std::sync::Arc<crate::conn_pool::ConnPool>>,
 }
 
-#[cfg(unix)]
 impl FcgiModuleExecutor {
     /// Single-pool Unix production constructor.
     pub fn production_unix(socket_path: PathBuf, connect_timeout: Duration) -> Self {
@@ -318,14 +312,23 @@ impl FcgiModuleExecutor {
         }
         metrics::note_fcgi_pool_generation_created();
         metrics::note_fcgi_pool_generation();
+        let mut names = HashMap::new();
+        for slot in slots {
+            names.insert(slot.pool_id, slot.name.clone());
+        }
         let mut map = HashMap::new();
         for (pool_id, endpoint) in endpoints {
             let cfg = configs
                 .remove(&pool_id)
                 .unwrap_or_else(crate::conn_pool::ConnPoolConfig::default);
+            let name = names
+                .remove(&pool_id)
+                .unwrap_or_else(|| format!("pool_{pool_id}"));
             map.insert(
                 pool_id,
-                std::sync::Arc::new(crate::conn_pool::ConnPool::new(generation, endpoint, cfg)),
+                std::sync::Arc::new(crate::conn_pool::ConnPool::with_name(
+                    generation, endpoint, cfg, name,
+                )),
             );
         }
         Ok(Self { pools: map })
@@ -375,7 +378,6 @@ impl FcgiModuleExecutor {
     }
 }
 
-#[cfg(unix)]
 impl FcgiBackendExecutor for FcgiModuleExecutor {
     fn dispatch(&self, request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
         let Some(pool) = self.pools.get(&request.pool_id) else {
@@ -397,42 +399,6 @@ impl FcgiBackendExecutor for FcgiModuleExecutor {
     fn begin_drain(&self) {
         self.begin_drain_all();
     }
-}
-
-/// Windows has no Unix-domain FastCGI pools. The type stays so the server builds.
-#[cfg(not(unix))]
-pub struct FcgiModuleExecutor;
-
-#[cfg(not(unix))]
-impl FcgiModuleExecutor {
-    pub fn from_compiled_slots(
-        _generation: u64,
-        slots: &[exyonq_module_api::fcgi_dispatch::FcgiCompiledSlot],
-    ) -> Result<Self, exyonq_module_api::fcgi_dispatch::FcgiBindError> {
-        use exyonq_module_api::fcgi_dispatch::FcgiBindError;
-        if slots.is_empty() {
-            return Ok(Self);
-        }
-        Err(FcgiBindError::InvalidEndpoint {
-            pool: slots[0].name.clone(),
-            detail: "FastCGI pools require a Unix host".into(),
-        })
-    }
-
-    pub fn is_quiescent(&self) -> bool {
-        true
-    }
-
-    pub fn begin_drain_all(&self) {}
-}
-
-#[cfg(not(unix))]
-impl FcgiBackendExecutor for FcgiModuleExecutor {
-    fn dispatch(&self, _request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
-        FcgiDispatchOutcome::BadGateway
-    }
-
-    fn begin_drain(&self) {}
 }
 
 fn dispatch_request_to_min(request: &FcgiDispatchRequest) -> MinForwardRequest {
@@ -486,8 +452,7 @@ pub fn parse_tcp_pool_address(
     address.parse()
 }
 
-/// Resolve `pool_id` → [`crate::PoolEndpoint`] (Unix or TCP) from config.
-#[cfg(unix)]
+/// Resolve `pool_id` → [`PoolEndpoint`] (Unix or TCP) from config.
 pub fn resolve_pool_endpoints(
     sorted_pool_names: &[String],
     address_by_name: &HashMap<String, String>,
@@ -529,7 +494,6 @@ pub fn resolve_pool_endpoints(
 }
 
 /// Resolve `pool_id` → unix socket path from config addresses with optional env fallback.
-#[cfg(unix)]
 pub fn resolve_unix_socket_pools(
     sorted_pool_names: &[String],
     address_by_name: &HashMap<String, String>,

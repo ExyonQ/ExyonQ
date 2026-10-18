@@ -1,16 +1,16 @@
 //! Map analyzed NGINX config to ExyonQ IR and render TOML.
 
 use crate::ast::{AnalyzedConfig, LocationKind, ParsedLocation, ParsedServer};
-use crate::location::{is_runtime_mappable, route_path};
+use crate::location::{is_runtime_mappable, route_match_from_location, route_path};
 use crate::report::{CompatStatus, CompatibilityReport};
-use crate::rewrite::{is_safe_literal_redirect, parse_rewrite};
+use crate::rewrite::{is_safe_literal_redirect, map_rewrite_to_ir, parse_rewrite};
 use crate::upstream::{
     map_fcgi_pools_from_upstreams, map_http_upstreams, resolve_fastcgi_upstream_ref,
     resolve_proxy_upstream_ref, NginxUpstreamIndex,
 };
 use exyonq_config_ir::{
-    AppConfig, FcgiPoolConfig, ModulesConfig, RedirectConfig, RouteConfig, RouteMatch,
-    ServerConfig, ServerNames, UpstreamConfig, CONFIG_VERSION_V1,
+    AppConfig, FcgiPoolConfig, MapConfig, MapInputKind, ModulesConfig, RedirectConfig, RouteConfig,
+    RouteMatch, ServerConfig, ServerNames, UpstreamConfig, CONFIG_VERSION_V1,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -94,7 +94,7 @@ pub fn map_to_ir(
         } else {
             for (loc_index, location) in server.locations.iter().enumerate() {
                 let route_name = format!("srv{}_loc{}", server_index + 1, loc_index + 1);
-                if let Some(route) = map_location(
+                if let Some(mut route) = map_location(
                     &route_name,
                     location,
                     server,
@@ -104,29 +104,48 @@ pub fn map_to_ir(
                     report,
                     allow_tcp_fastcgi,
                 ) {
+                    // ADR-062: location add_header → route.response_headers
+                    route.response_headers =
+                        map_add_header_directives(&location.directives, report);
+                    // Server-scoped add_header → catch-all / DocumentRoot route only.
+                    if route_is_server_header_target(&route) {
+                        for h in map_add_header_directives(&server.directives, report) {
+                            if !route
+                                .response_headers
+                                .iter()
+                                .any(|e| e.name.eq_ignore_ascii_case(&h.name))
+                            {
+                                route.response_headers.push(h);
+                            }
+                        }
+                    }
                     route_names.push(route.name.clone());
                     routes.push(route);
                 }
             }
 
             if route_names.is_empty() {
-                if let Some(route) = server_default_route(server_index, server, report) {
+                if let Some(mut route) = server_default_route(server_index, server, report) {
+                    route.response_headers =
+                        map_add_header_directives(&server.directives, report);
                     route_names.push(route.name.clone());
                     routes.push(route);
                 }
             }
         }
 
+        let error_pages = map_server_error_pages(server, report);
         servers.push(ServerConfig {
             listen,
             server_name: server_names,
             routes: route_names,
             tls: None,
             http3_listen: None,
-            response_headers: Vec::new(),
+            error_pages,
         });
     }
 
+    let maps = map_nginx_maps(&analyzed.maps, report);
     let app = AppConfig {
         config_version: CONFIG_VERSION_V1,
         includes: Vec::new(),
@@ -135,6 +154,7 @@ pub fn map_to_ir(
         upstreams,
         pools_fcgi,
         cache_policies: HashMap::new(),
+        maps,
         modules: ModulesConfig::default(),
         static_section: Default::default(),
         full_page_cache: Default::default(),
@@ -156,6 +176,169 @@ pub fn map_to_ir(
 
     let toml = render_toml(&app, &app.pools_fcgi);
     MappedConfig { app, toml }
+}
+
+/// NG-05 / ADR-051: nginx `map $src $dst` → `[[map]]`.
+fn map_nginx_maps(
+    parsed: &[crate::ast::ParsedMap],
+    report: &mut CompatibilityReport,
+) -> HashMap<String, MapConfig> {
+    let mut maps = HashMap::new();
+    for m in parsed {
+        let (input, header) = match map_source_to_input(&m.source_var) {
+            Some(v) => v,
+            None => {
+                report.push(
+                    &m.loc,
+                    "map",
+                    CompatStatus::Unsupported,
+                    format!(
+                        "map source `{}` not in ADR-051 allowlist ($host/$remote_addr/$request_uri/$scheme/$http_upgrade)",
+                        m.source_var
+                    ),
+                    None,
+                );
+                continue;
+            }
+        };
+        let cfg = MapConfig {
+            name: m.dest_var.clone(),
+            input,
+            header,
+            default: m.default.clone(),
+            values: m.values.clone(),
+        };
+        report.push(
+            &m.loc,
+            "map",
+            CompatStatus::Supported,
+            format!("map → [[map]] name=`{}`", cfg.name),
+            Some(format!("map.{}", cfg.name)),
+        );
+        maps.insert(cfg.name.clone(), cfg);
+    }
+    maps
+}
+
+fn map_source_to_input(src: &str) -> Option<(MapInputKind, Option<String>)> {
+    match src.trim() {
+        "$host" => Some((MapInputKind::Host, None)),
+        "$remote_addr" => Some((MapInputKind::RemoteAddr, None)),
+        "$request_uri" => Some((MapInputKind::RequestUri, None)),
+        "$scheme" => Some((MapInputKind::Scheme, None)),
+        "$http_upgrade" => Some((MapInputKind::Header, Some("Upgrade".into()))),
+        other if other.starts_with("$http_") => {
+            let raw = other.trim_start_matches("$http_");
+            if raw.is_empty() {
+                return None;
+            }
+            // nginx $http_foo_bar → Foo-Bar
+            let mut name = String::new();
+            for (i, part) in raw.split('_').enumerate() {
+                if i > 0 {
+                    name.push('-');
+                }
+                let mut chars = part.chars();
+                if let Some(first) = chars.next() {
+                    name.extend(first.to_uppercase());
+                    name.extend(chars);
+                }
+            }
+            Some((MapInputKind::Header, Some(name)))
+        }
+        _ => None,
+    }
+}
+
+/// NG-04 / ADR-050: `error_page 404 /404.html` → server `error_pages`.
+fn map_server_error_pages(
+    server: &ParsedServer,
+    report: &mut CompatibilityReport,
+) -> HashMap<String, String> {
+    let mut pages = HashMap::new();
+    for d in &server.directives {
+        if d.name != "error_page" {
+            continue;
+        }
+        match parse_error_page_args(&d.args) {
+            Ok(mapped) => {
+                for (code, path) in mapped {
+                    pages.insert(code.clone(), path.clone());
+                    report.push(
+                        &d.loc,
+                        "error_page",
+                        CompatStatus::Supported,
+                        format!("error_page {code} → error_pages[\"{code}\"] = `{path}`"),
+                        Some(format!("error_pages[\"{code}\"] = {path:?}")),
+                    );
+                }
+            }
+            Err(msg) => {
+                report.push(&d.loc, "error_page", CompatStatus::Unsupported, msg, None);
+            }
+        }
+    }
+    // Location-scoped error_page is residual (server map only in v0.5).
+    for loc in &server.locations {
+        for d in &loc.directives {
+            if d.name == "error_page" {
+                report.push(
+                    &d.loc,
+                    "error_page",
+                    CompatStatus::Unsupported,
+                    "location-scoped error_page not mapped (ADR-050: server-scoped only)",
+                    None,
+                );
+            }
+        }
+    }
+    pages
+}
+
+fn parse_error_page_args(args: &[String]) -> Result<Vec<(String, String)>, String> {
+    if args.len() < 2 {
+        return Err("error_page requires status code(s) and a URI".into());
+    }
+    let uri = args.last().expect("len>=2").as_str();
+    if uri.starts_with('@') {
+        return Err(format!(
+            "error_page named location `{uri}` not supported (ADR-050)"
+        ));
+    }
+    if uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("//") {
+        return Err(format!(
+            "error_page URL redirect `{uri}` not supported (ADR-050)"
+        ));
+    }
+    if uri.starts_with('=') {
+        return Err(format!(
+            "error_page status rewrite `{uri}` not supported (ADR-050)"
+        ));
+    }
+    if !uri.starts_with('/') || uri.contains('?') || uri.contains('#') {
+        return Err(format!(
+            "error_page URI `{uri}` must be an absolute path without query/fragment"
+        ));
+    }
+    let mut codes = Vec::new();
+    for arg in &args[..args.len() - 1] {
+        if arg.starts_with('=') {
+            return Err(format!(
+                "error_page `{arg}` status rewrite not supported (ADR-050)"
+            ));
+        }
+        let status: u16 = arg
+            .parse()
+            .map_err(|_| format!("error_page status `{arg}` must be an integer in 400..=599"))?;
+        if !(400..=599).contains(&status) {
+            return Err(format!("error_page status {status} must be in 400..=599"));
+        }
+        codes.push(status.to_string());
+    }
+    if codes.is_empty() {
+        return Err("error_page requires at least one status code".into());
+    }
+    Ok(codes.into_iter().map(|c| (c, uri.to_string())).collect())
 }
 
 fn map_listen(server: &ParsedServer, report: &mut CompatibilityReport) -> String {
@@ -344,7 +527,11 @@ fn map_location(
     }
 
     let path = route_path(location);
-    if location.kind != LocationKind::Prefix {
+    let route_match = route_match_from_location(location);
+    if matches!(
+        location.kind,
+        LocationKind::Exact | LocationKind::PreferentialPrefix
+    ) {
         report.push_migration(
             &location.loc,
             "location",
@@ -360,6 +547,30 @@ fn map_location(
             None,
             None,
         );
+    } else if matches!(
+        location.kind,
+        LocationKind::RegexCaseSensitive | LocationKind::RegexCaseInsensitive
+    ) {
+        let hint = match (&route_match.suffix, &route_match.regex) {
+            (Some(s), _) => format!("route match.suffix={s}"),
+            (_, Some(r)) => format!("route match.regex={r}"),
+            _ => format!("route match.path={path}"),
+        };
+        report.push_migration(
+            &location.loc,
+            "location",
+            CompatStatus::Supported,
+            format!(
+                "{} location `{}` mapped to ExyonQ match (ADR-047)",
+                location.kind.as_str(),
+                location.raw_pattern
+            ),
+            Some(hint),
+            None,
+            Some(location.kind.as_str()),
+            None,
+            None,
+        );
     }
 
     if let Some(msg) = conflicting_terminal_actions(location) {
@@ -369,7 +580,7 @@ fn map_location(
 
     for d in &location.directives {
         if d.name == "return" {
-            return map_return(route_name, &path, d, report);
+            return map_return(route_name, &route_match, d, report);
         }
     }
 
@@ -379,10 +590,7 @@ fn map_location(
                 if let Some((status, _from, target)) = is_safe_literal_redirect(&rule) {
                     return Some(RouteConfig {
                         name: route_name.to_string(),
-                        r#match: RouteMatch {
-                            path: path.clone(),
-                            host: None,
-                        },
+                        r#match: route_match.clone(),
                         upstream: None,
                         root: None,
                         index: None,
@@ -394,7 +602,32 @@ fn map_location(
                         fastcgi: None,
                         htaccess: Default::default(),
                         cache: None,
-                        allow_sensitive: false,
+                        fallback_rewrite: None,
+                        try_uri: None,
+                        try_uri_dir: None,
+                        proxy_set_headers: Vec::new(),
+                    cache_headers: None,
+            response_headers: Vec::new(),
+                    });
+                }
+                if let Some(rw) = map_rewrite_to_ir(&rule) {
+                    return Some(RouteConfig {
+                        name: route_name.to_string(),
+                        r#match: route_match.clone(),
+                        upstream: None,
+                        root: None,
+                        index: None,
+                        redirect: None,
+                        rewrite: Some(rw),
+                        fastcgi: None,
+                        htaccess: Default::default(),
+                        cache: None,
+                        fallback_rewrite: None,
+                        try_uri: None,
+                        try_uri_dir: None,
+                        proxy_set_headers: Vec::new(),
+                    cache_headers: None,
+            response_headers: Vec::new(),
                     });
                 }
             }
@@ -405,7 +638,7 @@ fn map_location(
         if d.name == "fastcgi_pass" {
             return map_fastcgi(
                 route_name,
-                &path,
+                &route_match,
                 d,
                 location,
                 server,
@@ -419,7 +652,15 @@ fn map_location(
 
     for d in &location.directives {
         if d.name == "proxy_pass" {
-            return map_proxy(route_name, &path, d, upstream_index, upstreams, report);
+            return map_proxy(
+                route_name,
+                location,
+                &route_match,
+                d,
+                upstream_index,
+                upstreams,
+                report,
+            );
         }
     }
 
@@ -435,9 +676,11 @@ fn map_location(
                 Some(format!("route.root={root}")),
             );
         }
+        let (fallback_rewrite, try_uri, try_uri_dir) =
+            map_location_try_files(location).unwrap_or((None, None, None));
         return Some(RouteConfig {
             name: route_name.to_string(),
-            r#match: RouteMatch { path, host: None },
+            r#match: route_match,
             upstream: None,
             root: Some(PathBuf::from(root)),
             index,
@@ -446,10 +689,36 @@ fn map_location(
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite,
+            try_uri,
+            try_uri_dir,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         });
     }
 
+    None
+}
+
+fn map_location_try_files(
+    location: &ParsedLocation,
+) -> Option<(Option<String>, Option<bool>, Option<bool>)> {
+    use crate::try_files::{map_try_files_to_fallback, parse_try_files};
+    for d in &location.directives {
+        if d.name != "try_files" {
+            continue;
+        }
+        let Ok(tf) = parse_try_files(&d.loc, &d.args) else {
+            continue;
+        };
+        let mapped = map_try_files_to_fallback(&tf)?;
+        return Some((
+            Some(mapped.fallback_rewrite),
+            Some(mapped.try_uri),
+            Some(mapped.try_uri_dir),
+        ));
+    }
     None
 }
 
@@ -492,7 +761,8 @@ fn is_named_upstream_ref(name: &str) -> bool {
 
 fn map_proxy(
     route_name: &str,
-    path: &str,
+    location: &ParsedLocation,
+    route_match: &RouteMatch,
     d: &crate::ast::Directive,
     upstream_index: &NginxUpstreamIndex,
     upstreams: &mut HashMap<String, UpstreamConfig>,
@@ -551,12 +821,10 @@ fn map_proxy(
         Some(format!("route.upstream={upstream_name}")),
     );
 
+    let proxy_set_headers = map_location_proxy_set_headers(location, report);
     Some(RouteConfig {
         name: route_name.to_string(),
-        r#match: RouteMatch {
-            path: path.to_string(),
-            host: None,
-        },
+        r#match: route_match.clone(),
         upstream: Some(upstream_name),
         root: None,
         index: None,
@@ -565,14 +833,241 @@ fn map_proxy(
         fastcgi: None,
         htaccess: Default::default(),
         cache: None,
-        allow_sensitive: false,
+        fallback_rewrite: None,
+        try_uri: None,
+        try_uri_dir: None,
+        proxy_set_headers,
+        cache_headers: None,
+            response_headers: Vec::new(),
     })
+}
+
+/// ADR-062: catch-all / DocumentRoot route receives server-scoped `add_header`.
+fn route_is_server_header_target(route: &RouteConfig) -> bool {
+    route.r#match.path == "/"
+        && route.r#match.regex.is_none()
+        && route.r#match.suffix.is_none()
+}
+
+/// ADR-062 / F1-R19: `add_header Name Value [always];` → `response_headers`.
+fn map_add_header_directives(
+    directives: &[crate::ast::Directive],
+    report: &mut CompatibilityReport,
+) -> Vec<exyonq_config_ir::ResponseHeaderConfig> {
+    let mut out = Vec::new();
+    for d in directives {
+        if d.name != "add_header" {
+            continue;
+        }
+        if d.args.len() < 2 {
+            report.push(
+                &d.loc,
+                "add_header",
+                CompatStatus::Error,
+                "add_header requires name and value",
+                None,
+            );
+            continue;
+        }
+        let name = d.args[0].clone();
+        let mut always = false;
+        let value_parts: Vec<&str> = if d.args.last().map(String::as_str) == Some("always") {
+            always = true;
+            d.args[1..d.args.len() - 1]
+                .iter()
+                .map(String::as_str)
+                .collect()
+        } else {
+            d.args[1..].iter().map(String::as_str).collect()
+        };
+        let value = value_parts.join(" ");
+        if is_response_header_denied_name(&name) {
+            report.push(
+                &d.loc,
+                "add_header",
+                CompatStatus::Unsupported,
+                format!("add_header `{name}` denied by ADR-062 denylist"),
+                None,
+            );
+            continue;
+        }
+        if value.contains('$') {
+            let mut rest = value.as_str();
+            let mut vars_ok = true;
+            while let Some(idx) = rest.find('$') {
+                rest = &rest[idx + 1..];
+                if rest.starts_with('$') {
+                    rest = &rest[1..];
+                    continue;
+                }
+                let len = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .count();
+                let var = &rest[..len];
+                rest = &rest[len..];
+                if !matches!(var, "host" | "uri") {
+                    vars_ok = false;
+                    break;
+                }
+            }
+            if !vars_ok {
+                report.push(
+                    &d.loc,
+                    "add_header",
+                    CompatStatus::Unsupported,
+                    format!(
+                        "add_header value `{value}` uses vars outside ADR-062 allowlist ($host/$uri)"
+                    ),
+                    None,
+                );
+                continue;
+            }
+        }
+        if out
+            .iter()
+            .any(|e: &exyonq_config_ir::ResponseHeaderConfig| e.name.eq_ignore_ascii_case(&name))
+        {
+            report.push(
+                &d.loc,
+                "add_header",
+                CompatStatus::Unsupported,
+                format!("duplicate add_header `{name}` in same scope (ADR-062)"),
+                None,
+            );
+            continue;
+        }
+        report.push(
+            &d.loc,
+            "add_header",
+            CompatStatus::Supported,
+            format!("add_header `{name}` → response_headers (always={always})"),
+            Some(format!(
+                "response_headers {{ name={name:?} value={value:?} always={always} }}"
+            )),
+        );
+        out.push(exyonq_config_ir::ResponseHeaderConfig {
+            name,
+            value,
+            always,
+        });
+    }
+    out
+}
+
+fn is_response_header_denied_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if lower == "cache-control" || lower == "set-cookie" {
+        return true;
+    }
+    if lower.starts_with("proxy-") {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+/// Hop-by-hop names IR rejects on `proxy_set_headers` (ADR-051).
+/// `Connection` is intentionally absent — allowed when map-driven.
+fn is_proxy_set_hop_by_hop_denied(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+/// NG-05 / ADR-051: `proxy_set_header Name $var|literal`.
+fn map_location_proxy_set_headers(
+    location: &ParsedLocation,
+    report: &mut CompatibilityReport,
+) -> Vec<exyonq_config_ir::ProxySetHeaderConfig> {
+    let mut out = Vec::new();
+    for d in &location.directives {
+        if d.name != "proxy_set_header" {
+            continue;
+        }
+        if d.args.len() < 2 {
+            report.push(
+                &d.loc,
+                "proxy_set_header",
+                CompatStatus::Error,
+                "proxy_set_header requires name and value",
+                None,
+            );
+            continue;
+        }
+        let name = d.args[0].clone();
+        let value = d.args[1..].join(" ");
+        if is_proxy_set_hop_by_hop_denied(&name) {
+            report.push(
+                &d.loc,
+                "proxy_set_header",
+                CompatStatus::Unsupported,
+                format!(
+                    "proxy_set_header `{name}` is hop-by-hop (ADR-051); use [[map]] on Upgrade + Connection $map"
+                ),
+                None,
+            );
+            continue;
+        }
+        // No `$http_*` (F1 residual / ADR-051 allowlist).
+        if value.contains("$http_") {
+            report.push(
+                &d.loc,
+                "proxy_set_header",
+                CompatStatus::Unsupported,
+                format!("proxy_set_header value `{value}` uses $http_* (ADR-051 allowlist)"),
+                None,
+            );
+            continue;
+        }
+        // Allowlisted templates only (builtins + $map refs validated later at IR load).
+        let ok = value.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '$' | '_' | '-' | '.' | '/' | ':' | ' ')
+        }) && !value.contains("${");
+        if !ok {
+            report.push(
+                &d.loc,
+                "proxy_set_header",
+                CompatStatus::Unsupported,
+                format!("proxy_set_header value `{value}` not representable (ADR-051)"),
+                None,
+            );
+            continue;
+        }
+        report.push(
+            &d.loc,
+            "proxy_set_header",
+            CompatStatus::Supported,
+            format!("proxy_set_header `{name}` → proxy_set_headers"),
+            Some(format!(
+                "proxy_set_headers {{ name={name:?} value={value:?} }}"
+            )),
+        );
+        out.push(exyonq_config_ir::ProxySetHeaderConfig { name, value });
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
 fn map_fastcgi(
     route_name: &str,
-    path: &str,
+    route_match: &RouteMatch,
     d: &crate::ast::Directive,
     location: &ParsedLocation,
     server: &ParsedServer,
@@ -634,10 +1129,7 @@ fn map_fastcgi(
         }
         return Some(RouteConfig {
             name: route_name.to_string(),
-            r#match: RouteMatch {
-                path: path.to_string(),
-                host: None,
-            },
+            r#match: route_match.clone(),
             upstream: None,
             root: None,
             index: location_index(location, server, report),
@@ -646,7 +1138,12 @@ fn map_fastcgi(
             fastcgi: Some(pool_name),
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         });
     }
 
@@ -699,10 +1196,7 @@ fn map_fastcgi(
             }
             return Some(RouteConfig {
                 name: route_name.to_string(),
-                r#match: RouteMatch {
-                    path: path.to_string(),
-                    host: None,
-                },
+                r#match: route_match.clone(),
                 upstream: None,
                 root: None,
                 index: None,
@@ -711,7 +1205,12 @@ fn map_fastcgi(
                 fastcgi: Some(pool_name),
                 htaccess: Default::default(),
                 cache: None,
-                allow_sensitive: false,
+                fallback_rewrite: None,
+                try_uri: None,
+                try_uri_dir: None,
+                proxy_set_headers: Vec::new(),
+            cache_headers: None,
+            response_headers: Vec::new(),
             });
         }
         report.push(
@@ -735,10 +1234,7 @@ fn map_fastcgi(
         )?;
         return Some(RouteConfig {
             name: route_name.to_string(),
-            r#match: RouteMatch {
-                path: path.to_string(),
-                host: None,
-            },
+            r#match: route_match.clone(),
             upstream: None,
             root: None,
             index: location_index(location, server, report),
@@ -747,7 +1243,12 @@ fn map_fastcgi(
             fastcgi: Some(pool_name),
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         });
     }
 
@@ -768,7 +1269,12 @@ fn map_server_return(
 ) -> Option<RouteConfig> {
     for d in &server.directives {
         if d.name == "return" {
-            return map_return(&format!("srv{}_return", server_index + 1), "/", d, report);
+            return map_return(
+                &format!("srv{}_return", server_index + 1),
+                &RouteMatch::prefix("/"),
+                d,
+                report,
+            );
         }
     }
     None
@@ -776,7 +1282,7 @@ fn map_server_return(
 
 fn map_return(
     route_name: &str,
-    path: &str,
+    route_match: &RouteMatch,
     d: &crate::ast::Directive,
     report: &mut CompatibilityReport,
 ) -> Option<RouteConfig> {
@@ -867,10 +1373,7 @@ fn map_return(
             );
             Some(RouteConfig {
                 name: route_name.to_string(),
-                r#match: RouteMatch {
-                    path: path.to_string(),
-                    host: None,
-                },
+                r#match: route_match.clone(),
                 upstream: None,
                 root: None,
                 index: None,
@@ -879,7 +1382,12 @@ fn map_return(
                 fastcgi: None,
                 htaccess: Default::default(),
                 cache: None,
-                allow_sensitive: false,
+                fallback_rewrite: None,
+                try_uri: None,
+                try_uri_dir: None,
+                proxy_set_headers: Vec::new(),
+            cache_headers: None,
+            response_headers: Vec::new(),
             })
         }
         404 => {
@@ -965,6 +1473,8 @@ fn server_default_route(
         r#match: RouteMatch {
             path: "/".into(),
             host: None,
+
+            ..Default::default()
         },
         upstream: None,
         root: Some(PathBuf::from(root)),
@@ -974,7 +1484,12 @@ fn server_default_route(
         fastcgi: None,
         htaccess: Default::default(),
         cache: None,
-        allow_sensitive: false,
+        fallback_rewrite: None,
+        try_uri: None,
+        try_uri_dir: None,
+        proxy_set_headers: Vec::new(),
+    cache_headers: None,
+            response_headers: Vec::new(),
     })
 }
 
@@ -1008,15 +1523,41 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
             }
             out.push_str("]\n");
         }
+        if !server.error_pages.is_empty() {
+            out.push_str("error_pages = { ");
+            let mut keys: Vec<_> = server.error_pages.keys().collect();
+            keys.sort();
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let v = &server.error_pages[*k];
+                out.push_str(&format!("{k:?} = {v:?}"));
+            }
+            out.push_str(" }\n");
+        }
         out.push('\n');
     }
 
     for route in &app.routes {
         out.push_str("[[route]]\n");
         out.push_str(&format!("name = {:?}\n", route.name));
-        out.push_str(&format!("match = {{ path = {:?}", route.r#match.path));
+        out.push_str("match = { ");
+        if let Some(suffix) = &route.r#match.suffix {
+            out.push_str(&format!("suffix = {suffix:?}"));
+        } else if let Some(regex) = &route.r#match.regex {
+            out.push_str(&format!("regex = {regex:?}"));
+        } else {
+            out.push_str(&format!("path = {:?}", route.r#match.path));
+        }
         if let Some(host) = &route.r#match.host {
             out.push_str(&format!(", host = {host:?}"));
+        }
+        if let Some(header) = &route.r#match.header {
+            out.push_str(&format!(", header = {header:?}"));
+            if let Some(hv) = &route.r#match.header_value {
+                out.push_str(&format!(", header_value = {hv:?}"));
+            }
         }
         out.push_str(" }\n");
         if let Some(upstream) = &route.upstream {
@@ -1028,14 +1569,96 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         if let Some(index) = &route.index {
             out.push_str(&format!("index = {index:?}\n"));
         }
+        if let Some(fb) = &route.fallback_rewrite {
+            out.push_str(&format!("fallback_rewrite = {fb:?}\n"));
+            if let Some(v) = route.try_uri {
+                out.push_str(&format!("try_uri = {}\n", if v { "true" } else { "false" }));
+            }
+            if let Some(v) = route.try_uri_dir {
+                out.push_str(&format!(
+                    "try_uri_dir = {}\n",
+                    if v { "true" } else { "false" }
+                ));
+            }
+        }
         if let Some(redirect) = &route.redirect {
             out.push_str(&format!(
                 "redirect = {{ status = {}, location = {:?} }}\n",
                 redirect.status, redirect.location
             ));
         }
+        if let Some(rewrite) = &route.rewrite {
+            match rewrite {
+                exyonq_config_ir::RewriteConfig::Literal(path) => {
+                    out.push_str(&format!("rewrite = {path:?}\n"));
+                }
+                exyonq_config_ir::RewriteConfig::Rule(rule) => {
+                    let flag = match rule.flag {
+                        exyonq_config_ir::RewriteFlagConfig::Last => "last",
+                        exyonq_config_ir::RewriteFlagConfig::Break => "break",
+                        exyonq_config_ir::RewriteFlagConfig::Redirect => "redirect",
+                        exyonq_config_ir::RewriteFlagConfig::Permanent => "permanent",
+                    };
+                    out.push_str(&format!(
+                        "rewrite = {{ pattern = {:?}, replacement = {:?}, flag = {:?} }}\n",
+                        rule.pattern, rule.replacement, flag
+                    ));
+                }
+            }
+        }
         if let Some(fastcgi) = &route.fastcgi {
             out.push_str(&format!("fastcgi = {fastcgi:?}\n"));
+        }
+        if !route.proxy_set_headers.is_empty() {
+            out.push_str("proxy_set_headers = [\n");
+            for h in &route.proxy_set_headers {
+                out.push_str(&format!(
+                    "  {{ name = {:?}, value = {:?} }},\n",
+                    h.name, h.value
+                ));
+            }
+            out.push_str("]\n");
+        }
+        for h in &route.response_headers {
+            out.push_str("[[route.response_headers]]\n");
+            out.push_str(&format!("name = {:?}\n", h.name));
+            out.push_str(&format!("value = {:?}\n", h.value));
+            if h.always {
+                out.push_str("always = true\n");
+            }
+        }
+        out.push('\n');
+    }
+
+    let mut map_names: Vec<_> = app.maps.keys().collect();
+    map_names.sort();
+    for name in map_names {
+        let map = &app.maps[name];
+        out.push_str("[[map]]\n");
+        out.push_str(&format!("name = {:?}\n", map.name));
+        let input = match map.input {
+            MapInputKind::Header => "header",
+            MapInputKind::Host => "host",
+            MapInputKind::RemoteAddr => "remote_addr",
+            MapInputKind::RequestUri => "request_uri",
+            MapInputKind::Scheme => "scheme",
+        };
+        out.push_str(&format!("input = {input:?}\n"));
+        if let Some(h) = &map.header {
+            out.push_str(&format!("header = {h:?}\n"));
+        }
+        out.push_str(&format!("default = {:?}\n", map.default));
+        if !map.values.is_empty() {
+            out.push_str("values = { ");
+            let mut keys: Vec<_> = map.values.keys().collect();
+            keys.sort();
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&format!("{k:?} = {:?}", map.values[*k]));
+            }
+            out.push_str(" }\n");
         }
         out.push('\n');
     }

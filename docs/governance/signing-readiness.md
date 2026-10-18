@@ -51,7 +51,7 @@ V043_PRODUCTION_SIGNING = PASS
 | `scripts/release/tests/p14sign-phase3.sh` / `p14sign-phase5-proof.sh` | Ephemeral **TEST_ONLY** / **NON_PRODUCTION** fixtures |
 
 Production release signing remains an **explicit manual owner ceremony**.
-Cursor agents must not access private signing media (`EXYONQ-SIGNING-A` volume paths are forbidden in-repo).
+Agents must not access private signing media. Signing-volume paths are forbidden in-repo.
 
 ## Readiness vs execution
 

@@ -146,7 +146,7 @@ document_root = "{}"
     FcgiHarness {
         ctx: ConnectionContext {
             state,
-            proxy_client: proxy_client.clone(),
+            proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -274,13 +274,19 @@ async fn existing_file_bypasses_front_controller() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(htaccess_front_controller_bypass_file_total(), before + 1);
 
-    let (script, request_uri) = FCGI_CAPTURE
-        .lock()
-        .expect("lock")
-        .clone()
-        .expect("captured");
-    assert!(script.ends_with("existing.txt"));
-    assert_eq!(request_uri, "/existing.txt");
+    // Non-PHP existing files are served from disk (ServeStatic), not php-fpm —
+    // otherwise .css/.js hit security.limit_extensions. FCGI must not run.
+    assert!(
+        FCGI_CAPTURE.lock().expect("lock").is_none(),
+        "existing non-PHP asset must not be dispatched to FastCGI"
+    );
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert_eq!(&body[..], b"plain");
 }
 
 #[tokio::test]
@@ -393,7 +399,7 @@ document_root = "{}"
     let _fcgi_guard = install_fcgi_runtime_for_tests(Arc::new(NoCall), vec![(0, 1)]);
     let ctx = ConnectionContext {
         state,
-        proxy_client: proxy_client.clone(),
+        proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -492,7 +498,7 @@ document_root = "{}"
     .expect("register global fcgi for multi-thread test");
     let harness_ctx = ConnectionContext {
         state,
-        proxy_client: proxy_client.clone(),
+        proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };

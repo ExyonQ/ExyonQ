@@ -24,7 +24,7 @@ cargo test --workspace
 
 Or: `cargo run -p xtask -- ci`
 
-Disparar Bugbot antes de merge: comentario `bugbot run` (o `@cursor review`) en el PR. Trigger **manual only** — no asumir revisión automática.
+Request a review before merge. Do not assume an automatic review.
 
 ## Scope discipline
 

@@ -16,7 +16,7 @@
 //! Transport trait surface — module-local until PR-7 composition.
 //!
 //! Live sockets use [`crate::wire::WireTransport`] / [`crate::unix_transport::UnixFpmTransport`].
-//! [`InertTransport`] is fail-closed when no wire is bound. [`crate::ScriptedFpmTransport`] is an
+//! [`InertTransport`] is fail-closed when no wire is bound. [`ScriptedFpmTransport`] is an
 //! in-memory record peer for protocol unit tests only (not a product substitute).
 
 use crate::ParseError;

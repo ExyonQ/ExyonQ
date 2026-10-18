@@ -102,13 +102,7 @@ pub fn ensure_runtime_prometheus_hook(install: fn(PrometheusAppendFn)) {
 }
 
 /// Clear **test overlay only**. Never clears production / frozen appenders.
-///
-/// Acquires the same exclusive overlay gate as [`begin_prometheus_appender_test`]
-/// so this cannot race with overlay registration / append tests.
-/// Do **not** call while already holding a [`PrometheusAppenderTestGuard`]
-/// (non-reentrant mutex → deadlock). Prefer the guard's `Drop` clear instead.
 #[doc(hidden)]
 pub fn clear_prometheus_appenders_for_tests() {
-    let _gate = TEST_OVERLAY_GATE.lock().unwrap_or_else(|p| p.into_inner());
     lock_vec(&TEST_OVERLAY).clear();
 }

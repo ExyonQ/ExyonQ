@@ -12,6 +12,9 @@ pub enum ProductProfile {
     Proxy,
     Php,
     Wordpress,
+    Websocket,
+    Sse,
+    TlsH2,
 }
 
 impl ProductProfile {
@@ -21,6 +24,9 @@ impl ProductProfile {
             Self::Proxy => "proxy",
             Self::Php => "php",
             Self::Wordpress => "wordpress",
+            Self::Websocket => "websocket",
+            Self::Sse => "sse",
+            Self::TlsH2 => "tls-h2",
         }
     }
 
@@ -30,12 +36,23 @@ impl ProductProfile {
             "proxy" => Some(Self::Proxy),
             "php" => Some(Self::Php),
             "wordpress" | "wp" => Some(Self::Wordpress),
+            "websocket" | "ws" => Some(Self::Websocket),
+            "sse" => Some(Self::Sse),
+            "tls-h2" | "tlsh2" | "tls_h2" => Some(Self::TlsH2),
             _ => None,
         }
     }
 
     pub fn all() -> &'static [Self] {
-        &[Self::Static, Self::Proxy, Self::Php, Self::Wordpress]
+        &[
+            Self::Static,
+            Self::Proxy,
+            Self::Php,
+            Self::Wordpress,
+            Self::Websocket,
+            Self::Sse,
+            Self::TlsH2,
+        ]
     }
 }
 
@@ -51,6 +68,10 @@ pub struct ProductProfileInputs {
     pub upstream_timeout_ms: u64,
     pub max_concurrency: u32,
     pub max_connections: u32,
+    /// PEM certificate path for [`ProductProfile::TlsH2`] (IR field `tls.cert`).
+    pub tls_cert_file: PathBuf,
+    /// Private key path for [`ProductProfile::TlsH2`] (IR field `tls.key`).
+    pub tls_key_file: PathBuf,
 }
 
 impl Default for ProductProfileInputs {
@@ -65,6 +86,8 @@ impl Default for ProductProfileInputs {
             upstream_timeout_ms: 30_000,
             max_concurrency: 16,
             max_connections: 16,
+            tls_cert_file: PathBuf::from("/etc/exyonq/tls/server.pem"),
+            tls_key_file: PathBuf::from("/etc/exyonq/tls/server.key"),
         }
     }
 }
@@ -94,6 +117,8 @@ pub fn render_product_profile_toml(
     let upstream = toml_string(&inputs.upstream_target);
     let fpm = toml_string(&inputs.fpm_address);
     let transport = toml_string(&inputs.fpm_transport);
+    let tls_cert = toml_string(&inputs.tls_cert_file.display().to_string());
+    let tls_key = toml_string(&inputs.tls_key_file.display().to_string());
     let includes = inputs.document_root.join("wp-includes");
     let content = inputs.document_root.join("wp-content");
     let includes_s = toml_string(&includes.display().to_string());
@@ -214,6 +239,72 @@ enabled = false
             mc = inputs.max_concurrency,
             mx = inputs.max_connections
         ),
+        ProductProfile::Websocket => format!(
+            r#"# ProductProfile = websocket
+# PRODUCT_INHERITED: X-Forwarded-For = do not trust inbound (P1.3a)
+# PRODUCT_INHERITED: ONE_SAFE_RETRY = GET/HEAD only (P1.3a)
+# PRODUCT_INHERITED: WebSocket upgrade is supported on the reverse-proxy path (not a separate IR module).
+# No H2/H3 upstream claim.
+config_version = 2
+
+[[server]]
+listen = {listen}
+routes = ["app"]
+
+[[route]]
+name = "app"
+match = {{ path = "/" }}
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = {upstream}
+timeout_ms = {timeout}
+"#,
+            timeout = inputs.upstream_timeout_ms
+        ),
+        ProductProfile::Sse => format!(
+            r#"# ProductProfile = sse
+# PRODUCT_INHERITED: X-Forwarded-For = do not trust inbound (P1.3a)
+# PRODUCT_INHERITED: ONE_SAFE_RETRY = GET/HEAD only (P1.3a)
+# PRODUCT_INHERITED: SSE is reverse-proxied on the same IR shape as proxy (streaming upstream).
+# No H2/H3 upstream claim.
+config_version = 2
+
+[[server]]
+listen = {listen}
+routes = ["app"]
+
+[[route]]
+name = "app"
+match = {{ path = "/" }}
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = {upstream}
+timeout_ms = {timeout}
+"#,
+            timeout = inputs.upstream_timeout_ms
+        ),
+        ProductProfile::TlsH2 => format!(
+            r#"# ProductProfile = tls-h2
+# PRODUCT_INHERITED: TLS terminates at the listener; HTTP/2 is negotiated when ALPN/client supports it.
+# INTERNAL deploy presets Dev|Edge|Lb are NOT applied here.
+config_version = 2
+
+[[server]]
+listen = {listen}
+routes = ["site"]
+tls = {{ cert = {tls_cert}, key = {tls_key} }}
+
+[[route]]
+name = "site"
+match = {{ path = "/" }}
+root = {root}
+index = {index}
+"#
+        ),
     }
 }
 
@@ -241,16 +332,25 @@ fn assert_product_invariants(profile: ProductProfile, cfg: &AppConfig) -> Result
             "product profile must not emit cache_policy".into(),
         ));
     }
-    if matches!(profile, ProductProfile::Static)
+    if matches!(profile, ProductProfile::Static | ProductProfile::TlsH2)
         && (!cfg.upstreams.is_empty() || !cfg.pools_fcgi.is_empty())
     {
         return Err(ConfigError::Parse(
-            "static profile must not emit upstream or fcgi_pool".into(),
+            "static/tls-h2 profile must not emit upstream or fcgi_pool".into(),
         ));
     }
-    if matches!(profile, ProductProfile::Proxy) && !cfg.pools_fcgi.is_empty() {
+    if matches!(
+        profile,
+        ProductProfile::Proxy | ProductProfile::Websocket | ProductProfile::Sse
+    ) && !cfg.pools_fcgi.is_empty()
+    {
         return Err(ConfigError::Parse(
-            "proxy profile must not emit fcgi_pool".into(),
+            "proxy/websocket/sse profile must not emit fcgi_pool".into(),
+        ));
+    }
+    if matches!(profile, ProductProfile::TlsH2) && !cfg.servers.iter().any(|s| s.tls.is_some()) {
+        return Err(ConfigError::Parse(
+            "tls-h2 profile must emit server.tls with cert and key".into(),
         ));
     }
     Ok(())
@@ -300,8 +400,33 @@ mod tests {
     #[test]
     fn parse_names() {
         assert_eq!(ProductProfile::parse("WP"), Some(ProductProfile::Wordpress));
+        assert_eq!(ProductProfile::parse("ws"), Some(ProductProfile::Websocket));
+        assert_eq!(ProductProfile::parse("sse"), Some(ProductProfile::Sse));
+        assert_eq!(ProductProfile::parse("tls_h2"), Some(ProductProfile::TlsH2));
+        assert_eq!(ProductProfile::parse("tlsh2"), Some(ProductProfile::TlsH2));
         assert!(ProductProfile::parse("edge").is_none());
         assert!(ProductProfile::parse("dev").is_none());
+    }
+
+    #[test]
+    fn tls_h2_emits_tls_block() {
+        let cfg = expand_product_profile(ProductProfile::TlsH2, &ProductProfileInputs::default())
+            .unwrap();
+        let tls = cfg.servers[0].tls.as_ref().unwrap();
+        assert_eq!(tls.cert, PathBuf::from("/etc/exyonq/tls/server.pem"));
+        assert_eq!(tls.key, PathBuf::from("/etc/exyonq/tls/server.key"));
+        assert!(cfg.upstreams.is_empty());
+    }
+
+    #[test]
+    fn websocket_and_sse_are_proxy_shaped() {
+        let inputs = ProductProfileInputs::default();
+        for p in [ProductProfile::Websocket, ProductProfile::Sse] {
+            let cfg = expand_product_profile(p, &inputs).unwrap();
+            assert!(!cfg.upstreams.is_empty());
+            assert!(cfg.pools_fcgi.is_empty());
+            assert!(cfg.routes[0].upstream.is_some());
+        }
     }
 
     #[test]

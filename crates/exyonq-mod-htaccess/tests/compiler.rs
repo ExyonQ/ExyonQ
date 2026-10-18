@@ -52,6 +52,82 @@ fn invalid_redirect_rejected_in_report() {
 }
 
 #[test]
+fn q03_require_all_denied_fail_closed() {
+    let files = vec![DiscoveredFile {
+        absolute: PathBuf::from("/virtual/.htaccess"),
+        relative_directory: "/".into(),
+        content: "Require all denied\nRedirect 301 /old /new\n".into(),
+    }];
+    let out = compile_from_discovered("site", Path::new("/virtual"), 1, files).expect("compile");
+    assert!(
+        out.report
+            .errors
+            .iter()
+            .any(|e| e.contains("EXY-HTACCESS-0003") && e.to_ascii_lowercase().contains("require")),
+        "errors={:?}",
+        out.report.errors
+    );
+}
+
+#[test]
+fn q03_header_and_expires_fail_closed() {
+    let files = vec![DiscoveredFile {
+        absolute: PathBuf::from("/virtual/.htaccess"),
+        relative_directory: "/".into(),
+        content: "Header set X-Frame-Options SAMEORIGIN\nExpiresActive On\n".into(),
+    }];
+    let out = compile_from_discovered("site", Path::new("/virtual"), 1, files).expect("compile");
+    assert!(out.report.errors.iter().any(|e| {
+        e.contains("EXY-HTACCESS-0002") && e.to_ascii_lowercase().contains("header")
+    }));
+    assert!(out.report.errors.iter().any(|e| {
+        e.contains("EXY-HTACCESS-0002") && e.to_ascii_lowercase().contains("expires")
+    }));
+}
+
+#[test]
+fn q03_filesmatch_container_fail_closed() {
+    let files = vec![DiscoveredFile {
+        absolute: PathBuf::from("/virtual/.htaccess"),
+        relative_directory: "/".into(),
+        content: "<FilesMatch \"\\.env$\">\nRequire all denied\n</FilesMatch>\n".into(),
+    }];
+    let out = compile_from_discovered("site", Path::new("/virtual"), 1, files).expect("compile");
+    assert!(
+        out.report.errors.iter().any(|e| {
+            e.contains("EXY-HTACCESS-0002") && e.to_ascii_lowercase().contains("filesmatch")
+        }),
+        "errors={:?}",
+        out.report.errors
+    );
+}
+
+#[test]
+fn q03_publish_blocked_when_require_present() {
+    use exyonq_mod_htaccess::{compile_and_publish, HtaccessSite};
+    let publisher = Arc::new(OverlayPublisher::new(1));
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(".htaccess"), "Redirect 301 /old /new\n").expect("write");
+    let site = HtaccessSite {
+        site_id: "site-a".into(),
+        document_root: tmp.path().to_path_buf(),
+    };
+    compile_and_publish(&site, &publisher).expect("good publish");
+    let gen_ok = publisher.overlay_generation();
+    std::fs::write(
+        tmp.path().join(".htaccess"),
+        "Require all denied\nRedirect 301 /old /new\n",
+    )
+    .expect("write");
+    let err = compile_and_publish(&site, &publisher).expect_err("must fail");
+    assert!(
+        err.to_string().contains("EXY-HTACCESS-0003"),
+        "err={err}"
+    );
+    assert_eq!(publisher.overlay_generation(), gen_ok);
+}
+
+#[test]
 fn publish_fail_closed_keeps_previous_generation() {
     let publisher = Arc::new(OverlayPublisher::new(1));
     let tmp = tempfile::tempdir().expect("tempdir");

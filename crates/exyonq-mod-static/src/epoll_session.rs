@@ -234,7 +234,7 @@ pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandl
         // skip identity FD-cache hits — never sendfile identity without CE.
         if wanted_coding.is_none() {
             if let Some(asset) =
-                crate::sendfile_fd_cache::try_hit_hot(generation, site_slot, path, root.as_ref())
+                crate::sendfile_fd_cache::try_hit(generation, site_slot, path, root.as_ref())
             {
                 // LA-CAP067-DEAD-001: enforce SENDFILE_MIN_BYTES (comment was lying).
                 if asset.body_len < crate::sendfile::SENDFILE_MIN_BYTES {
@@ -260,7 +260,7 @@ pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandl
             #[cfg(target_os = "linux")]
             {
                 let coding_tag = coding.fd_cache_tag();
-                if let Some(asset) = crate::sendfile_fd_cache::try_hit_coded_hot(
+                if let Some(asset) = crate::sendfile_fd_cache::try_hit_coded(
                     generation,
                     site_slot,
                     path,
@@ -391,9 +391,8 @@ pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandl
 /// off / head not sendfile-eligible) — caller may Hyper-fallback without re-registering
 /// sendfile.
 ///
-/// Security: PathTraversal and Forbidden → 403; containment/open failures → 404.
-/// Never discloses out-of-root secret bytes or a denied static body. Does not
-/// reopen a less-restrictive Hyper static path.
+/// Security: PathTraversal → 403; containment/open failures → 404. Never discloses
+/// out-of-root secret bytes. Does not reopen a less-restrictive Hyper static path.
 pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Bytes> {
     let _ = site_slot;
     if !crate::sendfile_fsm::epoll_sendfile_enabled() {
@@ -435,9 +434,7 @@ pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Byt
             return Some(not_found(client_close));
         };
         match root.resolved_file_path(path) {
-            Err(crate::StaticError::PathTraversal | crate::StaticError::Forbidden) => {
-                Some(forbidden(client_close))
-            }
+            Err(crate::StaticError::PathTraversal) => Some(forbidden(client_close)),
             Err(crate::StaticError::NotFound) | Err(crate::StaticError::BudgetExceeded) => {
                 Some(not_found(client_close))
             }
@@ -894,7 +891,6 @@ pub fn clear_sendfile_session(fd: RawFd, session: u64) {
 /// Clears sessions on the **calling** thread only (TLS). Tests that drive Cap067 from a
 /// dedicated worker must clear on that same thread.
 #[cfg(any(test, feature = "test-utils"))]
-#[allow(dead_code)]
 pub fn clear_all_sessions_for_test() {
     with_sessions_mut(|table| {
         table.by_id.clear();

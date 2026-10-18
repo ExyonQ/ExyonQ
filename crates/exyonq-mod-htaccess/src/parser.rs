@@ -21,6 +21,20 @@ pub fn parse_htaccess(path: &str, content: &str) -> Result<ParsedFile, ParseErro
             continue;
         }
         if trimmed.starts_with('<') {
+            // Q-03 / ADR-055: container openers must not be silent (FilesMatch ACL, etc.).
+            if directives.len() >= MAX_DIRECTIVES_PER_FILE {
+                return Err(ParseError::LimitDirectives);
+            }
+            let tag = container_tag_name(trimmed);
+            directives.push(ParsedDirective {
+                name: format!("<{tag}"),
+                args: vec![trimmed.to_string()],
+                loc: SourceLoc {
+                    file: path.to_string(),
+                    line: (line_no + 1) as u32,
+                    column: 1,
+                },
+            });
             continue;
         }
         if directives.len() >= MAX_DIRECTIVES_PER_FILE {
@@ -45,6 +59,16 @@ pub fn parse_htaccess(path: &str, content: &str) -> Result<ParsedFile, ParseErro
         path: path.to_string(),
         directives,
     })
+}
+
+/// Extract container name from `<FilesMatch "…">` / `</FilesMatch>` → `filesmatch`.
+fn container_tag_name(trimmed: &str) -> String {
+    let inner = trimmed
+        .trim_start_matches('<')
+        .trim_start_matches('/')
+        .trim_end_matches('>');
+    let name = inner.split_whitespace().next().unwrap_or(inner);
+    name.to_ascii_lowercase()
 }
 
 fn strip_comment(line: &str) -> &str {

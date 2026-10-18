@@ -17,6 +17,8 @@
 
 pub mod backend;
 pub mod config_load;
+#[cfg(test)]
+mod ng01_precedence;
 pub mod router;
 pub mod routing;
 pub mod runtime_plan;

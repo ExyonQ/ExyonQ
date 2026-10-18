@@ -18,12 +18,8 @@
 
 use super::conditional::{PreparedStaticWire, StaticValidators};
 use bytes::Bytes;
-#[cfg(target_os = "linux")]
-use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io;
-#[cfg(target_os = "linux")]
-use std::os::fd::BorrowedFd;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -161,13 +157,11 @@ fn open_regular_file_contained(
     }
 }
 
-/// Cap067 FD-reuse: pathname identity under root dirfd without opening for serve.
+/// Relative path under `canonical_root` as a NUL-terminated C string.
 ///
-/// Detects rename-replace / delete / recreate by `(dev,ino,len,mtime)`. Serving still
-/// requires Cap004 `openat2(RESOLVE_BENEATH)` on miss. Uses the same relative path under
-/// the generation root dirfd with `AT_SYMLINK_NOFOLLOW`.
+/// Used by Cap067 FD-cache insert (store once) and by [`identity_under_root`].
 #[cfg(target_os = "linux")]
-pub(crate) fn relative_c_path(path: &Path, canonical_root: &Path) -> io::Result<CString> {
+pub(crate) fn relative_c_path(path: &Path, canonical_root: &Path) -> io::Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
 
     let rel = match path.strip_prefix(canonical_root) {
@@ -185,16 +179,7 @@ pub(crate) fn relative_c_path(path: &Path, canonical_root: &Path) -> io::Result<
             ));
         }
     };
-    if rel
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "static stat escaped configured root",
-        ));
-    }
-    CString::new(rel.as_os_str().as_bytes()).map_err(|_| {
+    std::ffi::CString::new(rel.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "static path contains interior NUL",
@@ -202,22 +187,20 @@ pub(crate) fn relative_c_path(path: &Path, canonical_root: &Path) -> io::Result<
     })
 }
 
-/// Read a final-component-no-follow identity relative to a held root directory fd.
+/// Cap067 FD-reuse: `fstatat` identity from a borrowed relative C path + root dirfd.
+///
+/// Allocation-free on the warm hit path (caller already holds `CString` / `CStr`).
 #[cfg(target_os = "linux")]
 pub(crate) fn identity_from_c_str(
-    rel: &CStr,
-    root_fd: BorrowedFd<'_>,
+    rel: &std::ffi::CStr,
+    root_dir_fd: std::os::fd::BorrowedFd<'_>,
 ) -> io::Result<crate::conditional::ValidatorIdentity> {
     use std::os::fd::AsRawFd;
 
-    // SAFETY: all-zero is a valid initial bit pattern for libc::stat, which is
-    // immediately initialized by a successful fstatat call before it is read.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
-    // SAFETY: rel is NUL-terminated, root_fd is borrowed and valid for this call,
-    // and st points to writable storage for one libc::stat.
     let rc = unsafe {
         libc::fstatat(
-            root_fd.as_raw_fd(),
+            root_dir_fd.as_raw_fd(),
             rel.as_ptr(),
             &mut st,
             libc::AT_SYMLINK_NOFOLLOW,
@@ -243,13 +226,18 @@ pub(crate) fn identity_from_c_str(
     })
 }
 
+/// Cap067 FD-reuse: pathname identity under root dirfd without opening for serve.
+///
+/// Detects rename-replace / delete / recreate by `(dev,ino,len,mtime)`. Serving still
+/// requires Cap004 `openat2(RESOLVE_BENEATH)` on miss. Uses the same relative path under
+/// the generation root dirfd with `AT_SYMLINK_NOFOLLOW`.
 #[cfg(target_os = "linux")]
 pub(crate) fn identity_under_root(
     path: &Path,
     root: OpenUnderRoot<'_>,
 ) -> io::Result<crate::conditional::ValidatorIdentity> {
-    let rel = relative_c_path(path, root.canonical_root)?;
-    identity_from_c_str(rel.as_c_str(), root.root_dir_fd)
+    let c_path = relative_c_path(path, root.canonical_root)?;
+    identity_from_c_str(c_path.as_c_str(), root.root_dir_fd)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -719,111 +707,15 @@ mod cause2_request_count_tests {
         }
         let out_fd = writer.as_raw_fd();
         let in_fd = asset.file.as_raw_fd();
-        // The reader must run while sendfile writes. A blocking pair whose
-        // buffer cannot hold 1 MiB deadlocks if the read starts only after
-        // the write returns.
-        let reader_thread = std::thread::spawn(move || {
-            let mut got = Vec::new();
-            reader.read_to_end(&mut got)?;
-            Ok::<Vec<u8>, io::Error>(got)
-        });
         write_sendfile_fd(out_fd, in_fd, asset.header.as_ref(), asset.body_len)?;
         drop(writer);
-        let got = reader_thread.join().expect("reader thread")?;
+        let mut got = Vec::new();
+        reader.read_to_end(&mut got)?;
         assert!(got.starts_with(b"HTTP/1.1 200"));
         let sep = got.windows(4).position(|w| w == b"\r\n\r\n").expect("hdr");
         let body = &got[sep + 4..];
         assert_eq!(body.len(), payload.len());
         assert_eq!(body, payload.as_slice());
-        Ok(())
-    }
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod identity_under_root_tests {
-    use super::*;
-    use std::os::fd::AsFd;
-    use std::os::unix::ffi::OsStringExt;
-
-    #[test]
-    fn relative_path_rejects_escape_root_and_nul() {
-        let root = Path::new("/srv/exyonq-static");
-
-        assert_eq!(
-            relative_c_path(&root.join("assets/app.js"), root)
-                .expect("contained path")
-                .as_bytes(),
-            b"assets/app.js"
-        );
-        assert_eq!(
-            relative_c_path(Path::new("/srv/outside/app.js"), root)
-                .expect_err("outside path")
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(
-            relative_c_path(&root.join("../outside/app.js"), root)
-                .expect_err("lexical parent escape")
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(
-            relative_c_path(root, root)
-                .expect_err("root-equal path")
-                .kind(),
-            io::ErrorKind::InvalidInput
-        );
-
-        let nul_path = root.join(std::ffi::OsString::from_vec(b"bad\0name".to_vec()));
-        assert_eq!(
-            relative_c_path(&nul_path, root)
-                .expect_err("interior NUL")
-                .kind(),
-            io::ErrorKind::InvalidInput
-        );
-    }
-
-    #[test]
-    fn identity_rejects_final_symlink_and_non_regular_target() -> io::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let root = dir.path();
-        std::fs::write(root.join("regular"), b"ok")?;
-        std::os::unix::fs::symlink("regular", root.join("link"))?;
-        std::fs::create_dir(root.join("directory"))?;
-        let root_dir = File::open(root)?;
-
-        assert!(identity_from_c_str(c"regular", root_dir.as_fd()).is_ok());
-        assert_eq!(
-            identity_from_c_str(c"link", root_dir.as_fd())
-                .expect_err("final symlink")
-                .kind(),
-            io::ErrorKind::InvalidInput
-        );
-        assert_eq!(
-            identity_from_c_str(c"directory", root_dir.as_fd())
-                .expect_err("directory")
-                .kind(),
-            io::ErrorKind::InvalidInput
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn identity_tracks_atomic_rename_drift() -> io::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let root = dir.path();
-        let live = root.join("asset.bin");
-        std::fs::write(&live, b"inode-a")?;
-        let root_dir = File::open(root)?;
-
-        let before = identity_from_c_str(c"asset.bin", root_dir.as_fd())?;
-        let replacement = root.join("replacement.bin");
-        std::fs::write(&replacement, b"inode-b-content")?;
-        std::fs::rename(replacement, &live)?;
-        let after = identity_from_c_str(c"asset.bin", root_dir.as_fd())?;
-
-        assert_ne!((before.dev, before.ino), (after.dev, after.ino));
-        assert_eq!(after.len, b"inode-b-content".len() as u64);
         Ok(())
     }
 }

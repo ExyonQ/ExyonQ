@@ -79,6 +79,34 @@ pub enum BypassReason {
     Unknown,
 }
 
+impl BypassReason {
+    /// Stable token for `X-Cache-Reason` / `cache explain` (Q-04 / ADR-057).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Method => "method",
+            Self::Authorization => "authorization",
+            Self::CookieDenied => "cookie_denied",
+            Self::CookiePresent => "cookie",
+            Self::Range => "range",
+            Self::Conditional => "conditional",
+            Self::Upgrade => "upgrade",
+            Self::RequestCacheControl => "request_cache_control",
+            Self::RequestPragma => "request_pragma",
+            Self::WpAdmin => "wp_admin",
+            Self::WpLogin => "wp_login",
+            Self::WpCron => "wp_cron",
+            Self::WpJson => "wp_json",
+            Self::Preview => "preview",
+            Self::Customize => "customize",
+            Self::CommercePath => "commerce_path",
+            Self::UnsafeQuery => "unsafe_query",
+            Self::UnsafePath => "unsafe_path",
+            Self::MissingIdentity => "missing_identity",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// Cookie name prefixes / exact names that always bypass FPC (WC1 hard deny).
 pub const FPC_COOKIE_HARD_DENY_PREFIXES: &[&str] = &[
     "wordpress_logged_in_",

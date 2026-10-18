@@ -15,20 +15,9 @@
  */
 //! KD4.9 — control plane and operations runtime.
 
-#![forbid(unsafe_code)]
-
-#[cfg(unix)]
 mod control_socket;
-#[cfg(unix)]
 mod purge_socket;
-#[cfg(unix)]
 mod service;
-#[cfg(not(unix))]
-mod unsupported;
 
-#[cfg(unix)]
 pub use purge_socket::{constant_time_eq, parse_purge_line, ParsedPurge};
-#[cfg(unix)]
 pub use service::{register_control_plane, ControlPlane};
-#[cfg(not(unix))]
-pub use unsupported::register_control_plane;

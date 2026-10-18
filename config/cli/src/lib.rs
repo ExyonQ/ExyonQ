@@ -1,15 +1,22 @@
 //! Shared offline configuration CLI (P1.4-WS3).
 //!
-//! Single owner for `lint` / `test` / `explain` / `format`. Binaries must delegate here.
+//! Single owner for `lint` / `check` / `test` / `dump-ir` / `explain` / `format`.
+//! Binaries must delegate here.
 
+mod cache_ux;
+mod dump;
 mod explain;
 mod format;
 mod limits;
 mod load;
 mod output;
+mod predictive;
 mod profile;
+mod provenance;
 mod reload;
 
+pub use cache_ux::cache_explain;
+pub use dump::{dump_ir, DumpIrFormat};
 pub use explain::{explain, ExplainRequest};
 pub use format::{format_exy, FormatMode, FormatRequest};
 pub use limits::{enforce_diag_cap, MAX_DIAGNOSTICS, MAX_FILE_BYTES, MAX_INCLUDE_DEPTH};
@@ -17,8 +24,10 @@ pub use load::{load_app_config, ConfigKind};
 pub use output::{emit_result, sanitize_control_chars, CliExit, OutputFormat, ToolResult};
 pub use profile::{profile_explain, profile_list, profile_render, profile_test, ProfileCliInputs};
 pub use reload::{
-    classify_reload_diff, format_config_status, format_generation, reload_check, reload_precheck,
-    ChangeClass, DiffEntry, ReloadPrecheck,
+    applied_routes_sidecar_path, classify_reload_diff, classify_reload_diff_with,
+    format_config_status, format_generation, read_applied_routes_snapshot, reload_check,
+    reload_precheck, route_identities, route_identity, write_applied_routes_snapshot, AppliedRoutesSnapshot,
+    ChangeClass, DiffEntry, ReloadDiffOptions, ReloadPrecheck, RouteDiffSummary,
 };
 
 use exyonq_config_ir::{render_human, Diagnostic, DiagnosticCode, DiagnosticDocument, Severity};
@@ -31,6 +40,8 @@ pub struct CheckOptions {
     pub format: OutputFormat,
     pub strict: bool,
     pub color: bool,
+    /// Q-01 / ADR-052: run predictive advisory pass after successful load.
+    pub warn: bool,
 }
 
 impl Default for CheckOptions {
@@ -39,6 +50,7 @@ impl Default for CheckOptions {
             format: OutputFormat::Human,
             strict: false,
             color: true,
+            warn: false,
         }
     }
 }
@@ -47,7 +59,11 @@ impl Default for CheckOptions {
 pub fn lint(path: &Path, opts: &CheckOptions) -> ToolResult {
     let mut diags = Vec::new();
     match load_for_check(path, &mut diags) {
-        Ok(_) => {}
+        Ok(cfg) => {
+            if opts.warn {
+                diags.extend(predictive::analyze_predictive(&cfg));
+            }
+        }
         Err(early) => {
             if let Some(d) = early {
                 diags.push(*d);
@@ -62,7 +78,12 @@ pub fn lint(path: &Path, opts: &CheckOptions) -> ToolResult {
 pub fn test_config(path: &Path, opts: &CheckOptions) -> ToolResult {
     let mut diags = Vec::new();
     let loaded = match load_for_check(path, &mut diags) {
-        Ok(c) => c,
+        Ok(c) => {
+            if opts.warn {
+                diags.extend(predictive::analyze_predictive(&c));
+            }
+            c
+        }
         Err(early) => {
             if let Some(d) = early {
                 diags.push(*d);
@@ -384,6 +405,66 @@ root = "/t"
             },
         );
         assert_eq!(r.exit, CliExit::Ok);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lint_warn_emits_predictive_and_strict_fails() {
+        let dir = test_dir();
+        let p = dir.join("warn.toml");
+        fs::write(
+            &p,
+            r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:18081"
+routes = ["short", "long"]
+[[route]]
+name = "short"
+match = { path = "/api" }
+upstream = "u"
+[[route]]
+name = "long"
+match = { path = "/api/v1" }
+upstream = "u"
+[[upstream]]
+name = "u"
+target = "http://127.0.0.1:9001"
+"#,
+        )
+        .unwrap();
+        let silent = lint(&p, &CheckOptions::default());
+        assert_eq!(silent.exit, CliExit::Ok);
+        assert!(
+            !silent.stderr.contains("EXY-LINT-"),
+            "without --warn must stay quiet: {}",
+            silent.stderr
+        );
+
+        let warned = lint(
+            &p,
+            &CheckOptions {
+                warn: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(warned.exit, CliExit::Ok);
+        assert!(
+            warned.stderr.contains("EXY-LINT-0001") || warned.stderr.contains("EXY-LINT-0003"),
+            "expected predictive warnings: {}",
+            warned.stderr
+        );
+        assert!(warned.stderr.contains("cause:") && warned.stderr.contains("suggestion:"));
+
+        let strict = lint(
+            &p,
+            &CheckOptions {
+                warn: true,
+                strict: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(strict.exit, CliExit::DiagnosticError);
         let _ = fs::remove_dir_all(dir);
     }
 

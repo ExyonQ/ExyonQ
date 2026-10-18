@@ -495,7 +495,7 @@ where
 
     // Wire-cheap Cap055: admit before WAF / upstream (same process limiter as Hyper).
     let client_ip = x_forwarded_for.to_str().unwrap_or("127.0.0.1");
-    match exyonq_module_api::wire_admit_for_path(client_ip, path) {
+    match exyonq_module_api::wire_admit(client_ip) {
         exyonq_module_api::WireAdmit::Allow => {}
         exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
             let started = Instant::now();
@@ -1003,6 +1003,7 @@ mod tests {
             exyonq_mod_proxy::install_kernel_hooks(proxy_rt);
         });
     }
+    use std::time::Duration;
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
     /// Process-global write-error counter is shared; serialize these two tests.
@@ -1078,6 +1079,8 @@ mod tests {
             r#match: RouteMatch {
                 path: "/site".into(),
                 host: None,
+
+                ..Default::default()
             },
             upstream: None,
             root,
@@ -1087,13 +1090,20 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         };
         let api = RouteConfig {
             name: "api".into(),
             r#match: RouteMatch {
                 path: "/api".into(),
                 host: None,
+
+                ..Default::default()
             },
             upstream: Some("backend".into()),
             root: None,
@@ -1103,7 +1113,12 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1119,12 +1134,13 @@ mod tests {
                 routes: vec!["site".into(), "api".into()],
                 tls: None,
                 http3_listen: None,
-                response_headers: Vec::new(),
+                error_pages: Default::default(),
             }],
             routes: vec![site, api],
             upstreams,
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+            maps: Default::default(),
             modules: Default::default(),
             static_section: Default::default(),
             full_page_cache: Default::default(),
@@ -1137,48 +1153,17 @@ mod tests {
     async fn state_for(
         config: AppConfig,
     ) -> (Arc<ServerState>, execute_backend::StaticDispatchTestGuard) {
-        ensure_wire_hooks();
         let runtime = Arc::new(exyonq_mod_static::StaticRuntime::new());
-        let slots = static_slots_for_test(&config);
-        if !slots.is_empty() {
-            // The Linux planner asks the pinned runtime, not only ServerState.
-            // An empty pin would downgrade a real static GET to Hyper.
-            runtime.bind_compiled_slots(1, &slots);
-        }
         let service: Arc<dyn exyonq_module_api::static_dispatch::StaticDispatchService> =
             runtime.clone();
         let static_guard = execute_backend::StaticDispatchTestGuard::install(service);
-        // install_kernel_hooks pins this Arc. It must run after ensure_wire_hooks,
-        // which pins an empty runtime on its first call.
         exyonq_mod_static::install_kernel_hooks(runtime);
+        ensure_wire_hooks();
         let proxy_client = build_incoming_client();
-        let state = ServerState::new_with_generation(1, config, proxy_client.clone())
+        let state = ServerState::new_with_generation(1, config, proxy_client)
             .await
             .expect("server state");
         (state, static_guard)
-    }
-
-    fn static_slots_for_test(
-        config: &AppConfig,
-    ) -> Vec<exyonq_module_api::static_dispatch::StaticCompiledSlot> {
-        config
-            .routes
-            .iter()
-            .filter_map(|route| {
-                let root = route.root.clone()?;
-                Some(exyonq_module_api::static_dispatch::StaticCompiledSlot {
-                    filesystem_root: root,
-                    route_prefix: route.r#match.path.clone(),
-                    index_file: route.index.clone(),
-                    route_name: route.name.clone(),
-                    route_host: route.r#match.host.clone(),
-                    preload_max_file_bytes: 0,
-                    preload_max_total_bytes: 0,
-                    preload_max_entries: 0,
-                    allow_sensitive: route.allow_sensitive,
-                })
-            })
-            .collect()
     }
 
     /// `/site/*` wire heads must match route `"site"` and resolve to `Backend::Static` offline.
@@ -1485,7 +1470,6 @@ mod tests {
     /// SUB-LET-WIRE-REJECT-WRITE: TE on wire → Reject → real 400 write succeeds;
     /// must not increment write-error counter (no false failure).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[allow(clippy::await_holding_lock)]
     async fn wire_reject_te_emits_400_without_write_error() {
         use std::time::Duration;
         use tokio::io::AsyncReadExt;
@@ -1514,7 +1498,7 @@ mod tests {
             let ctx = super::WireDispatchContext {
                 shared,
                 state: state_accept,
-                proxy_client: proxy_client.clone(),
+                proxy_client,
                 x_forwarded_for: hyper::header::HeaderValue::from_str(&peer.ip().to_string())
                     .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
                 ops,
@@ -1551,7 +1535,6 @@ mod tests {
     /// SUB-LET-WIRE-REJECT-WRITE: after Reject is selected, a real peer RST makes
     /// write_all fail; failure must be observed (counter++) — not silent success.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[allow(clippy::await_holding_lock)]
     async fn wire_reject_write_failure_observed_on_real_rst() {
         use std::os::fd::AsRawFd;
         use std::time::Duration;
@@ -1624,7 +1607,6 @@ mod tests {
     /// SUB-LET-PROTOCOL-WRITE-MISC / LET-059: WAF reject on wire → write succeeds;
     /// must not increment WAF write-error counter.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[allow(clippy::await_holding_lock)]
     async fn wire_waf_reject_emits_429_without_write_error() {
         use crate::waf::WafRuntimeBinding;
         use exyonq_waf_api::{NopWafEngine, WafAbuseGate, WafDecision, WafPhase};
@@ -1664,7 +1646,7 @@ mod tests {
             let ctx = super::WireDispatchContext {
                 shared,
                 state: state_accept,
-                proxy_client: proxy_client.clone(),
+                proxy_client,
                 x_forwarded_for: hyper::header::HeaderValue::from_str(&peer.ip().to_string())
                     .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
                 ops,
@@ -1702,7 +1684,6 @@ mod tests {
     /// SUB-LET-PROTOCOL-WRITE-MISC / LET-059: after WAF reject is selected, a real peer
     /// RST makes write_all fail; failure must be observed — not silent waf_* delivery.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[allow(clippy::await_holding_lock)]
     async fn wire_waf_reject_write_failure_observed_on_real_rst() {
         use crate::waf::WafRuntimeBinding;
         use exyonq_waf_api::{NopWafEngine, WafAbuseGate, WafDecision, WafPhase};
@@ -1910,6 +1891,8 @@ mod ws_tunnel_tests {
             r#match: RouteMatch {
                 path: "/api".into(),
                 host: None,
+
+                ..Default::default()
             },
             upstream: Some("backend".into()),
             root: None,
@@ -1919,7 +1902,12 @@ mod ws_tunnel_tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            allow_sensitive: false,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+        cache_headers: None,
+            response_headers: Vec::new(),
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1935,12 +1923,13 @@ mod ws_tunnel_tests {
                 routes: vec!["api".into()],
                 tls: None,
                 http3_listen: None,
-                response_headers: Vec::new(),
+                error_pages: Default::default(),
             }],
             routes: vec![api],
             upstreams,
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+            maps: Default::default(),
             modules: Default::default(),
             static_section: Default::default(),
             full_page_cache: Default::default(),

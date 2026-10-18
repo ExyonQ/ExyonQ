@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 arc-swap.workspace = true
+exyonq-module-api = { path = "../../module-api" }
 exyonq-runtime-plan = { workspace = true }
 exyonq-waf-api = { workspace = true }
 httparse = "1.10"

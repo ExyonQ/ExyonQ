@@ -76,7 +76,8 @@ pub fn compile_from_discovered(
         .into_iter()
         .map(|(directory, state)| OverlayEntry {
             directory: NormalizedDirectory(directory),
-            directory_index: directory_index_or_front_controller_default(&state)
+            directory_index: state
+                .directory_index
                 .map(|v| Arc::<[String]>::from(v.into_boxed_slice())),
             redirect_rules: Arc::from(state.redirects.into_boxed_slice()),
             rewrite_redirects: Arc::from(state.rewrite_redirects.into_boxed_slice()),
@@ -269,10 +270,46 @@ fn classify_and_apply(
             Ok(DirectiveSupport::Executed)
         }
         other => {
+            if let Some(msg) = q03_fail_closed_error(d.loc.file.as_str(), d.loc.line, other) {
+                return Err(msg);
+            }
             report.push_diag(format!("unknown:{}:{}:{}", d.loc.file, d.loc.line, other));
             Ok(DirectiveSupport::Unknown)
         }
     }
+}
+
+/// Q-03 / ADR-055: security / header / expires / container directives must fail compile.
+fn q03_fail_closed_error(file: &str, line: u32, name: &str) -> Option<String> {
+    let n = name.trim_start_matches('<').to_ascii_lowercase();
+    let (code, alt) = match n.as_str() {
+        "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride"
+        | "authtype" | "authuserfile" | "authname" | "authgroupfile" => (
+            "EXY-HTACCESS-0003",
+            "use WAF ip_filter / [[route]] access (F6) — overlay never enforces ACL",
+        ),
+        "php_value" | "php_flag" => (
+            "EXY-HTACCESS-0003",
+            "set PHP options in the FPM pool / app — not applied by ExyonQ overlay",
+        ),
+        "header" => (
+            "EXY-HTACCESS-0002",
+            "set response headers in the app or wait for F5 add_header (F1-R19) — not applied",
+        ),
+        "expiresactive" | "expiresbytype" | "expiresdefault" => (
+            "EXY-HTACCESS-0002",
+            "use [[cache_policy]] / F5 cache_headers — Expires* not applied by overlay",
+        ),
+        "filesmatch" | "files" | "directory" | "ifmodule" | "limit" | "limitexcept"
+        | "ifdefine" | "else" | "elseif" => (
+            "EXY-HTACCESS-0002",
+            "container directives are not executed — move rules to IR routes / WAF",
+        ),
+        _ => return None,
+    };
+    Some(format!(
+        "{code} {file}:{line} `{name}` — {alt}"
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -397,32 +434,9 @@ fn parse_internal_rewrite_flags(flags: &str) -> Result<bool, String> {
         {
             return Ok(false);
         }
-        if is_setenv_flag(flag) {
-            continue;
-        }
-        // An unknown flag must not discard the rest of the file.
-        return Ok(false);
+        return Err(format!("unsupported RewriteRule flag `{flag}`"));
     }
     Ok(true)
-}
-
-fn is_setenv_flag(flag: &str) -> bool {
-    let flag = flag.trim_matches(|c| c == '[' || c == ']');
-    let bytes = flag.as_bytes();
-    bytes.len() >= 2 && bytes[0].eq_ignore_ascii_case(&b'e') && bytes[1] == b'='
-}
-
-fn directory_index_or_front_controller_default(state: &DirState) -> Option<Vec<String>> {
-    if let Some(index) = &state.directory_index {
-        return Some(index.clone());
-    }
-    let target = state.front_controller.as_ref()?.target_uri.as_ref();
-    let name = target.trim_start_matches('/');
-    if name.eq_ignore_ascii_case("index.php") {
-        Some(vec!["index.php".to_string()])
-    } else {
-        None
-    }
 }
 
 fn parse_redirect_args(d: &ParsedDirective) -> Result<(u16, String, String), String> {
@@ -502,8 +516,7 @@ fn parse_rewrite_flags(flags: &str) -> Result<(u16, bool), String> {
         if flag.eq_ignore_ascii_case("last") || flag.eq_ignore_ascii_case("break") {
             return Ok((302, false));
         }
-        // E= and any other unknown flag are ignored so they cannot refuse the file.
-        continue;
+        return Err(format!("unsupported RewriteRule flag `{flag}`"));
     }
     Ok((status, has_redirect))
 }

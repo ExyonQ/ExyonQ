@@ -133,8 +133,7 @@ target = "http://127.0.0.1:${UP_PORT}"
 EOF
 
 cargo build -q -p exyonq 2>/dev/null || cargo build -p exyonq
-EXYONQ_CONFIG="$CFG" EXYONQ_CONTROL_SOCKET="$CTRL" \
-  "$ROOT/target/debug/exyonq" serve -c "$CFG" >"$LOG" 2>&1 &
+cargo run -q -p exyonq -- serve -c "$CFG" >"$LOG" 2>&1 &
 SRV_PID=$!
 
 for _ in $(seq 1 80); do

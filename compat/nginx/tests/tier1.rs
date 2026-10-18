@@ -61,16 +61,21 @@ fn tier1_return_redirect_maps_route_redirect() {
 }
 
 #[test]
-fn tier1_regex_location_is_unsupported() {
-    let (_, report) = migrate(&read_fixture("tier1-regex-location.conf")).expect("migrate");
+fn tier1_regex_location_maps_supported() {
+    let (toml, report) = migrate(&read_fixture("tier1-regex-location.conf")).expect("migrate");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
     assert!(
-        report
-            .unsupported
-            .iter()
-            .any(|u| u.contains("regex") || u.contains("location")),
-        "expected regex location diagnostic: {:?}",
-        report.unsupported
+        !cfg.routes.is_empty(),
+        "NG-01 must map location ~ to a route: {toml}"
     );
+    assert!(
+        cfg.routes
+            .iter()
+            .any(|r| { r.r#match.regex.is_some() || r.r#match.suffix.is_some() }),
+        "expected match.regex or match.suffix: {:?}",
+        cfg.routes
+    );
+    let _ = report;
 }
 
 #[test]

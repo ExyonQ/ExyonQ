@@ -4,10 +4,9 @@ mod htaccess_runtime_support;
 use exyonq_core::server::handler::{serve_http3_request, ConnectionContext};
 use exyonq_core::server::state::ServerState;
 use exyonq_core::{
-    build_fcgi_dispatch_request, clear_global_fcgi_dispatch_for_register_once_test,
-    contract_service_registration_test_gate, execute_backend, fcgi_metrics_assert_guard,
-    register_fcgi_dispatch_service, AppConfig, Backend, FcgiDispatchTestGuard,
-    FcgiRuntimeRegistration, StaticDispatchTestGuard, DEFAULT_FCGI_MAX_CONCURRENCY,
+    build_fcgi_dispatch_request, execute_backend, fcgi_metrics_assert_guard, AppConfig, Backend,
+    FcgiDispatchTestGuard, FcgiRuntimeRegistration, StaticDispatchTestGuard,
+    DEFAULT_FCGI_MAX_CONCURRENCY,
 };
 use exyonq_metrics::{fcgi_responses_501_total, KernelShellMetrics};
 use exyonq_mod_fastcgi::{
@@ -95,7 +94,7 @@ htaccess = "overlay"
     StaticOverlayHarness {
         ctx: ConnectionContext {
             state,
-            proxy_client: proxy_client.clone(),
+            proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
             ops: exyonq_core::lifecycle::LifecycleState::new(),
         },
@@ -181,7 +180,7 @@ htaccess = "overlay"
         .expect("state");
     let ctx = ConnectionContext {
         state,
-        proxy_client: proxy_client.clone(),
+        proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
         ops: exyonq_core::lifecycle::LifecycleState::new(),
     };
@@ -262,6 +261,7 @@ fn overlay_lookup_directory_index_requires_trailing_slash_at_runtime() {
 async fn fcgi_no_executor_returns_501() {
     let _obs = KernelObservationTestGuard::install(Arc::new(KernelShellMetrics));
     let _script_resolver = install_fcgi_script_resolver_for_tests();
+    let _metrics_gate = fcgi_metrics_assert_guard().await;
     let _guard = FcgiDispatchTestGuard::force_absent();
     let before = fcgi_responses_501_total();
     let dir = tempfile::tempdir().expect("tempdir");
@@ -289,6 +289,7 @@ async fn fcgi_no_executor_returns_501() {
 #[tokio::test]
 async fn fcgi_backend_failure_returns_502() {
     let _script_resolver = install_fcgi_script_resolver_for_tests();
+    let _metrics_gate = fcgi_metrics_assert_guard().await;
     struct Fail502;
     impl FcgiBackendExecutor for Fail502 {
         fn dispatch(&self, _request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
@@ -325,13 +326,12 @@ async fn fcgi_backend_failure_returns_502() {
     assert_eq!(fcgi_responses_502_total(), before + 1);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::await_holding_lock)]
+/// TLS override + current_thread — avoids global register clobber when parallel
+/// `ServerState::publish_compiled_module_slots` binds FCGI on the composition-root slot.
+#[tokio::test(flavor = "current_thread")]
 async fn fcgi_saturation_returns_503() {
     let _script_resolver = install_fcgi_script_resolver_for_tests();
     let _metrics_gate = fcgi_metrics_assert_guard().await;
-    let _gate = contract_service_registration_test_gate();
-    clear_global_fcgi_dispatch_for_register_once_test();
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -352,18 +352,16 @@ async fn fcgi_saturation_returns_503() {
             })
         }
     }
-    let gate_executor = Arc::new(Gate {
-        started_tx,
-        release_rx: std::sync::Mutex::new(release_rx),
-    });
-    register_fcgi_dispatch_service(Arc::new(
+    let _guard = FcgiDispatchTestGuard::install(Arc::new(
         FcgiRuntime::new(FcgiRuntimeRegistration {
-            executor: gate_executor,
+            executor: Arc::new(Gate {
+                started_tx,
+                release_rx: std::sync::Mutex::new(release_rx),
+            }),
             pool_capacities: vec![(0, 1)],
         })
         .expect("fcgi runtime"),
-    ))
-    .expect("register global fcgi for multi-thread test");
+    ));
 
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("index.php"), b"<?php").expect("write");
@@ -384,9 +382,16 @@ async fn fcgi_saturation_returns_503() {
     let backend = Backend::Fastcgi { pool_id: 0 };
     let first =
         tokio::spawn(async move { execute_backend(&backend, Some(request), None, None).await });
-    started_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("started");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if started_rx.try_recv().is_ok() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("started");
     let before = fcgi_responses_503_total();
     let second = execute_backend(
         &Backend::Fastcgi { pool_id: 0 },
@@ -419,6 +424,7 @@ async fn fcgi_saturation_returns_503() {
 #[tokio::test]
 async fn fcgi_timeout_returns_504() {
     let _script_resolver = install_fcgi_script_resolver_for_tests();
+    let _metrics_gate = fcgi_metrics_assert_guard().await;
     struct Fail504;
     impl FcgiBackendExecutor for Fail504 {
         fn dispatch(&self, _request: &FcgiDispatchRequest) -> FcgiDispatchOutcome {
