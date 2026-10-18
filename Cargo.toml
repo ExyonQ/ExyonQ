@@ -70,7 +70,7 @@ bytes = "1"
 memmap2 = "0.9.11"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
-brotli = "8"
+brotli = "9"
 # Cap071: buffered encode_all only — no legacy / dictionary / arrays defaults.
 zstd = { version = "0.13", default-features = false }
 http = "1"
