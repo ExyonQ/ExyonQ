@@ -24,14 +24,14 @@ ExyonQ is for teams that want a single, modern edge server for static content, a
 Run the pinned server image on port 8080:
 
 ```bash
-docker run --rm -p 8080:8080 ghcr.io/exyonq/exyonq:0.5.0
+docker run --rm -p 8080:8080 ghcr.io/exyonq/exyonq:0.6.0
 curl http://127.0.0.1:8080/
 ```
 
 Pull the WordPress image when that is your deployment target:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.5.0
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.6.0
 ```
 
 Versioned release artifacts and Linux binaries are available from the [v0.5.0 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.5.0).
