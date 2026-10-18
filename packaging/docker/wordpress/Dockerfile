@@ -1,17 +1,17 @@
-# ExyonQ 0.5.0 and current WordPress, SQLite, one container.
+# ExyonQ 0.6.0 and current WordPress, SQLite, one container.
 # The HTTP server is the static binary from the official image. PHP-FPM is
 # the Debian PHP image. Build the official image first:
-#   docker build -f packaging/docker/Dockerfile -t exyonq:0.5.0 .
-#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.5.0 .
+#   docker build -f packaging/docker/Dockerfile -t exyonq:0.6.0 .
+#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.6.0 .
 
-ARG EXYONQ_IMAGE=exyonq:0.5.0
-ARG EXYONQ_VERSION=0.5.0
+ARG EXYONQ_IMAGE=exyonq:0.6.0
+ARG EXYONQ_VERSION=0.6.0
 ARG EXYONQ_GIT_REVISION=unknown
 
 FROM ${EXYONQ_IMAGE} AS exyonqbin
 
 FROM php:8.4-fpm-bookworm
-ARG EXYONQ_VERSION=0.5.0
+ARG EXYONQ_VERSION=0.6.0
 ARG EXYONQ_GIT_REVISION=unknown
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip \
