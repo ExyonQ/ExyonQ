@@ -129,7 +129,7 @@ OCI publish (`docker` job) encodes the canonical contract explicitly:
 - revision/version/source via build-args + OCI labels
 
 
-Published images are **0.6.0.1** on GHCR and Docker Hub (same digests as **0.6.0**). There is no `:latest` tag.
+Published images are **0.6.0.1** on GHCR and Docker Hub. There is no `:latest` tag. Docker Hub no longer carries `:0.6.0`.
 
 ```bash
 docker pull ghcr.io/exyonq/exyonq:0.6.0.1

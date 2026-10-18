@@ -33,7 +33,7 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ## [0.6.0] — 2026-10-18
 
-Product version 0.6.0. Builds on the 0.5.0 public tree. GitHub release/source archive: **v0.6.0.1**. Images: `ghcr.io/exyonq/exyonq:0.6.0.1`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0.1`, `exyonq/exyonq:0.6.0.1`, and `exyonq/exyonq-wordpress:0.6.0.1`, all `linux/amd64` and `linux/arm64` (same digests as `:0.6.0`). No `:latest` tag.
+Product version 0.6.0. Builds on the 0.5.0 public tree. GitHub release/source archive: **v0.6.0.1**. Images: `ghcr.io/exyonq/exyonq:0.6.0.1`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0.1`, `exyonq/exyonq:0.6.0.1`, and `exyonq/exyonq-wordpress:0.6.0.1`, all `linux/amd64` and `linux/arm64`. No `:latest` tag. Docker Hub tags `:0.6.0` were removed.
 
 ### Added
 

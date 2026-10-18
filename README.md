@@ -34,7 +34,7 @@ Pull the WordPress image when that is your deployment target:
 docker pull ghcr.io/exyonq/exyonq-wordpress:0.6.0.1
 ```
 
-Versioned release artifacts and Linux binaries are available from the [v0.6.0.1 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.6.0.1). Tag `:0.6.0` on GHCR and Docker Hub is the same digest as `:0.6.0.1`.
+Versioned release artifacts and Linux binaries are available from the [v0.6.0.1 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.6.0.1). Pull `:0.6.0.1` only; the older `:0.6.0` Hub tags were removed.
 ## What it does today
 
 | Area | Delivered capability |
