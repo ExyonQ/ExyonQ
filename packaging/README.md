@@ -105,8 +105,7 @@ docker buildx build -f packaging/docker/Dockerfile \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
 
-# Local 0.5.0 image only. Do not push this tag. A real release still requires the Docker E2E gate.
-# Runtime stage is scratch. Debian is used only to copy CA certificates and is not shipped.
+# Official image. Runtime stage is debian:bookworm-slim (glibc). Pass the tag commit as EXYONQ_GIT_REVISION.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
   --provenance=mode=max \
@@ -130,13 +129,13 @@ OCI publish (`docker` job) encodes the canonical contract explicitly:
 - revision/version/source via build-args + OCI labels
 
 
-The published images remain **0.4.13**. Do not tag or push `0.5.0` until the Docker E2E gate passes.
+Published images are **0.5.0** on GHCR and Docker Hub. There is no `:latest` tag.
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.4.13
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.13
-docker pull exyonq/exyonq:0.4.13
-docker pull exyonq/exyonq-wordpress:0.4.13
+docker pull ghcr.io/exyonq/exyonq:0.5.0
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.5.0
+docker pull exyonq/exyonq:0.5.0
+docker pull exyonq/exyonq-wordpress:0.5.0
 ```
 
 Signing (cosign/minisign) is optional follow-up when infra is ready.

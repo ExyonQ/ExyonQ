@@ -11,9 +11,9 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.13
+PUBLIC_RELEASE = v0.5.0
 WORKSPACE_VERSION = 0.5.0
-WORKSPACE_PUBLICATION = NOT_PUBLISHED
+WORKSPACE_PUBLICATION = PUBLISHED
 LATEST_CHANGED = NO
 ```
 
@@ -27,14 +27,13 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- Source version in this tree is **0.5.0**. It is not a GitHub release and it has no images. Tag, GHCR, Docker Hub, and binaries stay at **v0.4.13** until the Docker E2E gate passes and publication is authorized.
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
 
-## [0.5.0] — staging (not published)
+## [0.5.0] — 2026-10-18
 
-Workspace product version **0.5.0** (Cargo). No tag, no GitHub Release, no container images.
+Product version 0.5.0. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.5.0`, `ghcr.io/exyonq/exyonq-wordpress:0.5.0`, `exyonq/exyonq:0.5.0`, and `exyonq/exyonq-wordpress:0.5.0`, all `linux/amd64` and `linux/arm64`. No `:latest` tag. The server image is Debian bookworm slim with glibc binaries. v0.4.13 remains the previous scratch image.
 
 ### Added
 
@@ -43,11 +42,17 @@ Workspace product version **0.5.0** (Cargo). No tag, no GitHub Release, no conta
 - Cache header and `ExpiresByType` controls.
 - Response header rules (`add_header` / `Header set`) and rewrite variables `$uri` / `$host`.
 
+### Fixed
+
+- The server image ships a valid default page, so `GET /` returns 200.
+- Official modules accept the 0.5.x core line, so metrics can start.
+- The WordPress image uses an `.htaccess` the 0.5 compiler accepts, so `/` reaches the installer.
+
 ### Not in this publication
 
 - No `:latest` tag.
-- No claim that 0.5.0 images exist on GHCR or Docker Hub.
 - Phase 1 remains not closed.
+- Wasmtime stays at 49.0.2. `cargo deny` still reports component-model panic advisories for that pin.
 
 ---
 

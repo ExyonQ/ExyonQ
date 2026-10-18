@@ -4,12 +4,12 @@
 DOCUMENT = ROADMAP.md
 DOCUMENT_ROLE = CANONICAL_GLOBAL_ROADMAP
 AUTHORITY = SOLE for R* global phase identifiers
-LAST_UPDATED = 2026-10-15
+LAST_UPDATED = 2026-10-18
 BRANCH = main
-PUBLIC_RELEASE = v0.4.13
+PUBLIC_RELEASE = v0.5.0
 WORKSPACE_VERSION = 0.5.0
-WORKSPACE_PUBLICATION = NOT_PUBLISHED
-FINAL_PUBLISHED_RELEASE_HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
+WORKSPACE_PUBLICATION = PUBLISHED
+FINAL_PUBLISHED_RELEASE_HEAD = e2f0a3827d71f8f6a92c20e4fcfff954432b10c7
 R3_PRODUCT_BASELINE = f0b2d67
 R3_CLOSE_DOCUMENTATION_TIP = d0814bc79ea08b91b753269e0883ab249bf7c3b9
 R5_STATUS = COMPLETE
@@ -72,13 +72,13 @@ R6_STATUS = NOT_STARTED
 PROJECT_PHASE_1_STATUS = NOT_CLOSED
 PROJECT_PHASE_2_STATUS = NOT_STARTED
 
-PUBLISHED_PRODUCT = v0.4.13
+PUBLISHED_PRODUCT = v0.5.0
 WORKSPACE_VERSION = 0.5.0
-WORKSPACE_PUBLICATION = NOT_PUBLISHED
+WORKSPACE_PUBLICATION = PUBLISHED
 PUBLISHED_PRODUCT_SURFACES = GitHub Release + GHCR + Docker Hub (linux/amd64, linux/arm64, no :latest)
 ```
 
-R0–R5 are closed. R6 has not started, and Phase 1 is not closed. The R5 section below records the private **v0.4.3** publication. It is not the current product release. The current published release is **v0.4.13**.
+R0–R5 are closed. R6 has not started, and Phase 1 is not closed. The R5 section below records the private **v0.4.3** publication. It is not the current product release. The current published release is **v0.5.0**.
 
 ---
 

@@ -1,6 +1,6 @@
 # Compatibility scope V1
 
-**Status:** active for ExyonQ 0.4.13
+**Status:** active for ExyonQ 0.5.0
 **Rule:** offline importers only — ExyonQ never reads Apache/NGINX config at runtime.
 
 ## Declared sources

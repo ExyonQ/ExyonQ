@@ -4,12 +4,12 @@
 DOCUMENT = DOCUMENTATION_INDEX.md
 DOCUMENT_ROLE = CANONICAL_DOCUMENTATION_MAP
 AUTHORITY = SOLE inventory of documentation roles for this worktree
-LAST_UPDATED = 2026-10-15
+LAST_UPDATED = 2026-10-18
 BRANCH = main
-PUBLIC_RELEASE = v0.4.13
+PUBLIC_RELEASE = v0.5.0
 WORKSPACE_VERSION = 0.5.0
-WORKSPACE_PUBLICATION = NOT_PUBLISHED
-HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
+WORKSPACE_PUBLICATION = PUBLISHED
+HEAD = e2f0a3827d71f8f6a92c20e4fcfff954432b10c7
 ```
 
 Companions: [`PROJECT_STATUS.md`](PROJECT_STATUS.md) · [`ROADMAP.md`](ROADMAP.md)
@@ -78,7 +78,7 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
 |------|-------|------------------|------|---------------|--------|---------------------|----------------------|--------------------|---------------|--------------------|
-| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.4.13 | 2026-10 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
+| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.5.0 | 2026-10 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
 | `ARCHITECTURE.md` | Source-tree architecture | TRACKED | architecture | overview | IMPLEMENTED_REFERENCE | — | layout current | 2026-07 | README | KEEP_ACTIVE |
 | `CHANGELOG.md` | Changelog | TRACKED | release | changelog | HISTORICAL_EVIDENCE | — | partial vs HEAD | UNKNOWN | packaging | REVIEW vs Changeset A/B |
 | `CONTRIBUTING.md` | Contributing | TRACKED | process | guide | IMPLEMENTED_REFERENCE | — | process | UNKNOWN | README | KEEP_ACTIVE |
@@ -209,7 +209,7 @@ Promotion requires: owner allowlist, secret scan, and decision whether `/docs/` 
 ## F. Owner review required
 
 1. Whether Phase 0 `study/reports` should be promoted to tracked tree or remain LOCAL_ONLY with scripts still pointing there.
-2. Resolved: the v0.4.3 freeze was published. The current release notes are `CHANGELOG.md` for **v0.4.13**.
+2. Resolved: the v0.4.3 freeze was published. The current release notes are `CHANGELOG.md` for **v0.5.0**.
 3. Whether ignored `docs/architecture` / `docs/benchmarks` content is stale vs clean publication README claims.
 4. Local plans that still look active versus `ROADMAP.md` R* — close or retarget without creating parallel roadmaps.
 
