@@ -60,12 +60,12 @@ BASELINE_DRIFT = NO
 
 PUBLICATION_STATUS = PUBLISHED
 GITHUB_RELEASE_STATUS = PUBLISHED
-GHCR_EXYONQ = ghcr.io/exyonq/exyonq:0.5.0
+GHCR_EXYONQ = ghcr.io/exyonq/exyonq:0.6.0
 GHCR_EXYONQ_DIGEST = sha256:fd033273bb87c40847df3b6849b06d451b0e75104a234fd672933c89fde87e06
-GHCR_WORDPRESS = ghcr.io/exyonq/exyonq-wordpress:0.5.0
+GHCR_WORDPRESS = ghcr.io/exyonq/exyonq-wordpress:0.6.0
 GHCR_WORDPRESS_DIGEST = sha256:41b55fa6cea617f449a51869f48e4be9d4ce26a6c8aab68e04c23d65af4b73d4
-DOCKER_HUB_EXYONQ = exyonq/exyonq:0.5.0
-DOCKER_HUB_WORDPRESS = exyonq/exyonq-wordpress:0.5.0
+DOCKER_HUB_EXYONQ = exyonq/exyonq:0.6.0
+DOCKER_HUB_WORDPRESS = exyonq/exyonq-wordpress:0.6.0
 LATEST_TAG_MUTATED = NO
 ```
 
