@@ -11,8 +11,8 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.5.0
-WORKSPACE_VERSION = 0.5.0
+PUBLIC_RELEASE = v0.6.0
+WORKSPACE_VERSION = 0.6.0
 WORKSPACE_PUBLICATION = PUBLISHED
 LATEST_CHANGED = NO
 ```
@@ -30,6 +30,32 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 - Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
+
+## [0.6.0] — 2026-10-18
+
+Product version 0.6.0 — F2 operational confidence cut (Q-03…Q-08 + Expires/cache_headers adelanto). Builds on the 0.5.0 public tree. Images: `ghcr.io/exyonq/exyonq:0.6.0`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0`, `exyonq/exyonq:0.6.0`, and `exyonq/exyonq-wordpress:0.6.0`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
+
+### Added
+
+- `.htaccess` fail-closed diagnostics for security/header directives that are not applied (Q-03).
+- `X-Cache` / `X-Cache-Reason` plus `exyonqctl cache stats|explain` (Q-04).
+- WebSocket + keepalive guarantees across reload/drain with E2E N=100 (Q-05).
+- `exyonqctl config explain` provenance (`--path` / `--pointer`) (Q-06).
+- Reload route diff summary (`routes_added` / `routes_removed` + fingerprint) (Q-07).
+- FCGI pool saturation diagnostics and `exyonq_fcgi_*` Prometheus metrics (Q-08).
+- Minimal `cache_headers.by_mime` / `ExpiresByType` migration adelanto (ADR-061).
+- Transition `response_headers` + rewrite `$uri`/`$host` (ADR-062).
+
+### Changed
+
+- Official modules accept the 0.6.x core line (`>=0.1.0, <0.7.0`).
+- Coordinated OpenTelemetry stack 0.33.1 + `tracing-opentelemetry` 0.34.0 (post-0.5.0 main).
+- Dependabot cargo/GHA pins merged on main after v0.5.0 (brotli 9, toml 1.1, getrandom 0.4, ipnetwork 0.21, GHA pins).
+
+### Notes
+
+- Wasmtime 49.0.2 advisories remain open (same posture as 0.5.0) unless cleared in this cut.
+- Lab F2 Linux canónico evidence remains optional follow-up; publication gate is container E2E 134.
 
 ## [0.5.0] — 2026-10-18
 
