@@ -31,12 +31,12 @@ V044_TAGGED_COMMIT = 8f3336f783dc546bdaad4a60b5501568bf688b3a
 ```text
 PRODUCTION_SIGNING_EXECUTED = YES  (v0.4.3 private release; design under security/signing/)
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.5.0
-WORKSPACE_VERSION = 0.5.0
+PUBLIC_RELEASE = v0.6.0.1
+WORKSPACE_VERSION = 0.6.0
 WORKSPACE_PUBLICATION = PUBLISHED
-GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.5.0
-GHCR = ghcr.io/exyonq/exyonq:0.5.0
-DOCKER_HUB = exyonq/exyonq:0.5.0
-AUDIT = docs/security/audit-v0.5.0.md
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.6.0.1
+GHCR = ghcr.io/exyonq/exyonq:0.6.0.1
+DOCKER_HUB = exyonq/exyonq:0.6.0.1
+AUDIT = docs/security/audit-v0.6.0.md
 WASMTIME = 49.0.2
 ```

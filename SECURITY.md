@@ -36,15 +36,15 @@ For **v0.4.4.1**, the audit artifact is [`docs/security/audit-v0.4.4.1.md`](docs
 
 ```text
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.5.0
-WORKSPACE_VERSION = 0.5.0
+PUBLIC_RELEASE = v0.6.0.1
+WORKSPACE_VERSION = 0.6.0
 WORKSPACE_PUBLICATION = PUBLISHED
-GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.5.0
-GHCR = ghcr.io/exyonq/exyonq:0.5.0
-DOCKER_HUB = exyonq/exyonq:0.5.0
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.6.0.1
+GHCR = ghcr.io/exyonq/exyonq:0.6.0.1
+DOCKER_HUB = exyonq/exyonq:0.6.0.1
 WASMTIME = 49.0.2
 RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.2
-AUDIT = docs/security/audit-v0.5.0.md
+AUDIT = docs/security/audit-v0.6.0.md
 ```
 
 v0.4.4 remains published. v0.4.3 remains the previous private release. Its Wasmtime 45.0.2 waiver expired for review at v0.4.4 and is not carried forward.

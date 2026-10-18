@@ -129,13 +129,13 @@ OCI publish (`docker` job) encodes the canonical contract explicitly:
 - revision/version/source via build-args + OCI labels
 
 
-Published images are **0.5.0** on GHCR and Docker Hub. There is no `:latest` tag.
+Published images are **0.6.0.1** on GHCR and Docker Hub (same digests as **0.6.0**). There is no `:latest` tag.
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.5.0
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.5.0
-docker pull exyonq/exyonq:0.5.0
-docker pull exyonq/exyonq-wordpress:0.5.0
+docker pull ghcr.io/exyonq/exyonq:0.6.0.1
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.6.0.1
+docker pull exyonq/exyonq:0.6.0.1
+docker pull exyonq/exyonq-wordpress:0.6.0.1
 ```
 
 Signing (cosign/minisign) is optional follow-up when infra is ready.

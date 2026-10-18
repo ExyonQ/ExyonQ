@@ -4,9 +4,9 @@
 
 ExyonQ serves static sites, terminates TLS, proxies application traffic, runs PHP through FastCGI, and supports HTTP/1.1, HTTP/2, and HTTP/3/QUIC. It is available as Linux binaries and multi-architecture container images for `linux/amd64` and `linux/arm64`.
 
-> **Project phase:** Alpha · **Published release:** [v0.5.0](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.5.0) · [Documentation](DOCUMENTATION_INDEX.md) · [Release notes](CHANGELOG.md) · [Security policy](SECURITY.md)
+> **Project phase:** Alpha · **Published release:** [v0.6.0.1](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.6.0.1) · [Documentation](DOCUMENTATION_INDEX.md) · [Release notes](CHANGELOG.md) · [Security policy](SECURITY.md)
 
-ExyonQ is in alpha. The published release is v0.5.0. Later versions may change behavior and configuration.
+ExyonQ is in alpha. The published release is v0.6.0.1 (product line 0.6.0). Later versions may change behavior and configuration.
 
 ## Why ExyonQ?
 
@@ -24,18 +24,17 @@ ExyonQ is for teams that want a single, modern edge server for static content, a
 Run the pinned server image on port 8080:
 
 ```bash
-docker run --rm -p 8080:8080 ghcr.io/exyonq/exyonq:0.6.0
+docker run --rm -p 8080:8080 ghcr.io/exyonq/exyonq:0.6.0.1
 curl http://127.0.0.1:8080/
 ```
 
 Pull the WordPress image when that is your deployment target:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.6.0
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.6.0.1
 ```
 
-Versioned release artifacts and Linux binaries are available from the [v0.5.0 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.5.0).
-
+Versioned release artifacts and Linux binaries are available from the [v0.6.0.1 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.6.0.1). Tag `:0.6.0` on GHCR and Docker Hub is the same digest as `:0.6.0.1`.
 ## What it does today
 
 | Area | Delivered capability |

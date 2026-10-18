@@ -11,7 +11,7 @@ P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.6.0
+PUBLIC_RELEASE = v0.6.0.1
 WORKSPACE_VERSION = 0.6.0
 WORKSPACE_PUBLICATION = PUBLISHED
 LATEST_CHANGED = NO
@@ -33,7 +33,7 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ## [0.6.0] — 2026-10-18
 
-Product version 0.6.0. Builds on the 0.5.0 public tree. Images: `ghcr.io/exyonq/exyonq:0.6.0`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0`, `exyonq/exyonq:0.6.0`, and `exyonq/exyonq-wordpress:0.6.0`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
+Product version 0.6.0. Builds on the 0.5.0 public tree. GitHub release/source archive: **v0.6.0.1**. Images: `ghcr.io/exyonq/exyonq:0.6.0.1`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0.1`, `exyonq/exyonq:0.6.0.1`, and `exyonq/exyonq-wordpress:0.6.0.1`, all `linux/amd64` and `linux/arm64` (same digests as `:0.6.0`). No `:latest` tag.
 
 ### Added
 
