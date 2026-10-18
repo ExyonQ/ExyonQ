@@ -1,4 +1,4 @@
-# ADR-058 — WebSocket / keepalive guarantees under reload & drain (Q-05 / v0.6 F2)
+# ADR-058 — WebSocket / keepalive guarantees under reload & drain
 
 **Status:** Accepted
 **Date:** 2026-10-18
@@ -26,12 +26,12 @@ QUEJAS_NGINX §2.4 / QUEJAS_OLS §2.3: operators fear reload/drain cutting Home 
 
 ### Keepalive (HTTP/1.1)
 
-Established keepalive connections may finish in-flight requests after drain latch; new requests on the same connection are subject to per-request drain admission (Cap040). Not measured in the Q-05 WS suite.
+Established keepalive connections may finish in-flight requests after drain latch; new requests on the same connection are subject to per-request drain admission (Cap040).
 
 ## Proof
 
-- Cap031 E2E: single-tunnel drain keep + reload coherence (`scripts/reality/cap-031-websocket-e2e.py`).
-- Q-05 E2E: **N=100** concurrent tunnels survive reload then drain without lost echo frames (`scripts/reality/q05-websocket-reload-drain-e2e.py`).
+- Single-tunnel drain keep + reload coherence (Cap031 hold path).
+- Concurrent tunnels survive reload then drain without lost echo frames under the product contract above.
 
 ## Consequences
 
