@@ -33,18 +33,18 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ## [0.6.0] — 2026-10-18
 
-Product version 0.6.0 — F2 operational confidence cut (Q-03…Q-08 + Expires/cache_headers adelanto). Builds on the 0.5.0 public tree. Images: `ghcr.io/exyonq/exyonq:0.6.0`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0`, `exyonq/exyonq:0.6.0`, and `exyonq/exyonq-wordpress:0.6.0`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
+Product version 0.6.0. Builds on the 0.5.0 public tree. Images: `ghcr.io/exyonq/exyonq:0.6.0`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0`, `exyonq/exyonq:0.6.0`, and `exyonq/exyonq-wordpress:0.6.0`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
 
 ### Added
 
-- `.htaccess` fail-closed diagnostics for security/header directives that are not applied (Q-03).
-- `X-Cache` / `X-Cache-Reason` plus `exyonqctl cache stats|explain` (Q-04).
-- WebSocket + keepalive guarantees across reload/drain with E2E N=100 (Q-05).
-- `exyonqctl config explain` provenance (`--path` / `--pointer`) (Q-06).
-- Reload route diff summary (`routes_added` / `routes_removed` + fingerprint) (Q-07).
-- FCGI pool saturation diagnostics and `exyonq_fcgi_*` Prometheus metrics (Q-08).
-- Minimal `cache_headers.by_mime` / `ExpiresByType` migration adelanto (ADR-061).
-- Transition `response_headers` + rewrite `$uri`/`$host` (ADR-062).
+- `.htaccess` fail-closed diagnostics for security/header directives that are not applied.
+- `X-Cache` / `X-Cache-Reason` plus `exyonqctl cache stats|explain`.
+- WebSocket and keepalive guarantees across reload/drain (live tunnels survive; new upgrades rejected under drain).
+- `exyonqctl config explain` provenance (`--path` / `--pointer`).
+- Reload route diff summary (`routes_added` / `routes_removed` + fingerprint).
+- FCGI pool saturation diagnostics and `exyonq_fcgi_*` Prometheus metrics.
+- Minimal `cache_headers.by_mime` / `ExpiresByType` controls.
+- Transition `response_headers` + rewrite `$uri`/`$host`.
 
 ### Changed
 
@@ -55,7 +55,6 @@ Product version 0.6.0 — F2 operational confidence cut (Q-03…Q-08 + Expires/c
 ### Notes
 
 - Wasmtime 49.0.2 advisories remain open (same posture as 0.5.0) unless cleared in this cut.
-- Lab F2 Linux canónico evidence remains optional follow-up; publication gate is container E2E 134.
 
 ## [0.5.0] — 2026-10-18
 
