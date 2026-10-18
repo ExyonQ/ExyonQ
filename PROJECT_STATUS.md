@@ -4,12 +4,12 @@
 DOCUMENT = PROJECT_STATUS.md
 DOCUMENT_ROLE = CANONICAL_PROJECT_STATUS
 AUTHORITY = SOLE for current project phase answers
-LAST_UPDATED = 2026-10-15
+LAST_UPDATED = 2026-10-18
 BRANCH = main
-PUBLIC_RELEASE = v0.4.13
+PUBLIC_RELEASE = v0.5.0
 WORKSPACE_VERSION = 0.5.0
-WORKSPACE_PUBLICATION = NOT_PUBLISHED
-FINAL_PUBLISHED_RELEASE_HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
+WORKSPACE_PUBLICATION = PUBLISHED
+FINAL_PUBLISHED_RELEASE_HEAD = e2f0a3827d71f8f6a92c20e4fcfff954432b10c7
 SUPERSEDED_RELEASE_CANDIDATE = f25137bff3b6fc0d4fc1b7f4c6d736b100fae741
 PRODUCT_QUALIFIED_REVISION = 2f8e869f97c36e18ca7976d673dd6db2aa16e45e
 R2_FINAL_QUALIFICATION_HEAD = 9176c374876d7c4bf503db1c1a02c885bb02fad9
@@ -48,10 +48,10 @@ GITHUB_RELEASE_AUTHORITY =
   this repository
   ROLE = GITHUB_STAGING / RELEASE_AUTHORITY
   BRANCH = main
-  FINAL_PUBLISHED_RELEASE_HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
-  PUBLIC_RELEASE = v0.4.13
+  FINAL_PUBLISHED_RELEASE_HEAD = e2f0a3827d71f8f6a92c20e4fcfff954432b10c7
+  PUBLIC_RELEASE = v0.5.0
   WORKSPACE_VERSION = 0.5.0
-  WORKSPACE_PUBLICATION = NOT_PUBLISHED
+  WORKSPACE_PUBLICATION = PUBLISHED
 
 PRODUCT_QUALIFIED_REVISION = 2f8e869f97c36e18ca7976d673dd6db2aa16e45e
 CURRENT_BASELINE_STATUS = CLEAN_KNOWN_BASELINE
@@ -60,12 +60,12 @@ BASELINE_DRIFT = NO
 
 PUBLICATION_STATUS = PUBLISHED
 GITHUB_RELEASE_STATUS = PUBLISHED
-GHCR_EXYONQ = ghcr.io/exyonq/exyonq:0.4.13
-GHCR_EXYONQ_DIGEST = sha256:67219771e8c85a59fd5a0b1cdf62ab4da26fcc831f9f37b2bc34e013847a9ccd
-GHCR_WORDPRESS = ghcr.io/exyonq/exyonq-wordpress:0.4.13
-GHCR_WORDPRESS_DIGEST = sha256:6d396f451ac128941c07a6b058530c85f8c72c97f80516b874d90120acbaca53
-DOCKER_HUB_EXYONQ = exyonq/exyonq:0.4.13
-DOCKER_HUB_WORDPRESS = exyonq/exyonq-wordpress:0.4.13
+GHCR_EXYONQ = ghcr.io/exyonq/exyonq:0.5.0
+GHCR_EXYONQ_DIGEST = sha256:fd033273bb87c40847df3b6849b06d451b0e75104a234fd672933c89fde87e06
+GHCR_WORDPRESS = ghcr.io/exyonq/exyonq-wordpress:0.5.0
+GHCR_WORDPRESS_DIGEST = sha256:41b55fa6cea617f449a51869f48e4be9d4ce26a6c8aab68e04c23d65af4b73d4
+DOCKER_HUB_EXYONQ = exyonq/exyonq:0.5.0
+DOCKER_HUB_WORDPRESS = exyonq/exyonq-wordpress:0.5.0
 LATEST_TAG_MUTATED = NO
 ```
 
@@ -92,7 +92,7 @@ CURRENT_PRODUCT_BASELINE =
     (test/harness only — product binaries remain @ 2f8e869…)
 
 The historical v0.4.3 release tree is `42f87a28…`.
-The current published release tree is FINAL_PUBLISHED_RELEASE_HEAD (`41cfb236…`, tag `v0.4.13`).
+The current published release tree is FINAL_PUBLISHED_RELEASE_HEAD (`e2f0a382…`, tag `v0.5.0`). v0.4.13 remains published at `41cfb236…`.
 ```
 
 ---
@@ -151,12 +151,12 @@ R6_STATUS = NOT_STARTED
 PROJECT_PHASE_1_STATUS = NOT_CLOSED
 PROJECT_PHASE_2_STATUS = NOT_STARTED
 
-PUBLISHED_PRODUCT = v0.4.13
-PUBLISHED_PRODUCT_HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
+PUBLISHED_PRODUCT = v0.5.0
+PUBLISHED_PRODUCT_HEAD = e2f0a3827d71f8f6a92c20e4fcfff954432b10c7
 WASMTIME = 49.0.2
 ```
 
-R0–R5 are closed. R6 has not started. Sections §2b and §2c stay the historical record of the private **v0.4.3** release. They do not name the current product. The current published release is **v0.4.13** (GitHub Release, GHCR, and Docker Hub; no `:latest`).
+R0–R5 are closed. R6 has not started. Sections §2b and §2c stay the historical record of the private **v0.4.3** release. They do not name the current product. The current published release is **v0.5.0** (GitHub Release, GHCR, and Docker Hub; no `:latest`).
 
 ---
 
@@ -641,7 +641,7 @@ EXPIRY_REVIEW = v0.4.4
    Late shell notifications (including wc7d progress-check exit 127 typo) are
    STALE_IGNORE — not a reopen reason.
 6. R4 closed the Kubernetes P2A/P2B replay and OPEN-002. P2C is not opened. That is not a shipped Kubernetes distribution.
-7. Private **v0.4.3** is published (`3a8af75…`). The current public release is **v0.4.13**. R5 is COMPLETE. R6 is NOT_STARTED.
+7. Private **v0.4.3** is published (`3a8af75…`). The current public release is **v0.5.0**. R5 is COMPLETE. R6 is NOT_STARTED.
 8. `--all-features` Clippy/check is not a valid v0.4.3 release matrix.  
 9. RUSTSEC-2026-0222 was waived for v0.4.3 only (Wasmtime 45.0.2; review at v0.4.4). The current workspace pin is Wasmtime **49.0.2**. The v0.4.3 waiver is not active.
 10. Smoke is DIAGNOSTIC_ONLY_NON_AUTHORITATIVE; cannot close capability/release/benchmark.
@@ -661,7 +661,7 @@ No claim that smoke PASS closes a capability, release, or benchmark admission.
 No claim that OCI version-only cell proves container runtime qualification.
 No claim that GRC-P0 Critical gaps are product correctness defects.
 No claim that GRC registers / EXQ-* IDs are canonical (PROVISIONAL until GRC-P2 admission).
-No claim that `latest` was updated by v0.4.3, or by v0.4.13 (LATEST_TAG_MUTATED=NO).
+No claim that `latest` was updated by v0.4.3, v0.4.13, or v0.5.0 (LATEST_TAG_MUTATED=NO).
 ```
 
 ---
@@ -680,10 +680,10 @@ WORKSPACE_BLOCKERS = NONE
 SECURITY_BLOCKERS =
   v0.4.3 waiver of RUSTSEC-2026-0222 is historical (Wasmtime 45.0.2; not renewed)
   current pin = Wasmtime 49.0.2
-  current release audit = docs/security/audit-v0.4.13.md
+  current release audit = docs/security/audit-v0.5.0.md
   GRC-P0 snapshot in §10 is historical and does not override this release
 
-PACKAGING_BLOCKERS = NONE for the published 0.4.13 images
+PACKAGING_BLOCKERS = NONE for the published 0.5.0 images
   GHCR + Docker Hub: exyonq and exyonq-wordpress, linux/amd64 and linux/arm64
   LATEST_TAG_MUTATED = NO
 
@@ -811,7 +811,7 @@ PUBLICATION_STATUS = FORBIDDEN
 
 R4 executed P2A/P2B replay onto `0fed18d`, closed OPEN-002 with eligible-count
 Single gating (`1d815fe`), and productively accepted multi-endpoint WRR on the
-canonical tip. P2C is ready to admit but **not** opened. The block above is the R4 open-time snapshot. R5 later closed on private v0.4.3. The current product release is v0.4.13. R6 remains NOT_STARTED.
+canonical tip. P2C is ready to admit but **not** opened. The block above is the R4 open-time snapshot. R5 later closed on private v0.4.3. The current product release is v0.5.0. R6 remains NOT_STARTED.
 
 ---
 

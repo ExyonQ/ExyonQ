@@ -1,18 +1,18 @@
 # WordPress on ExyonQ
 
-Applies to **v0.4.13**.
+Applies to **v0.5.0**.
 
 ExyonQ is the HTTP server. PHP-FPM is another process. The official server
-image is `FROM scratch` and does not contain PHP. The WordPress image is
-separate: `php:8.4-fpm-bookworm` plus that same static binary. SQLite or
-MySQL is also another process, or a file on the volume. ExyonQ does not run
-PHP inside its binary.
+image is Debian bookworm slim and does not contain PHP. The WordPress image is
+separate: `php:8.4-fpm-bookworm` plus the `exyonq` binary copied from that
+image. SQLite or MySQL is also another process, or a file on the volume.
+ExyonQ does not run PHP inside its binary.
 
 ## Which file to use
 
 | File | Use |
 | --- | --- |
-| `packaging/docker/default.toml` | Official scratch image. Static page on `0.0.0.0:8080`. `config_version` 1. |
+| `packaging/docker/default.toml` | Official server image. Static page on `0.0.0.0:8080`. `config_version` 1. |
 | `packaging/release/conf/wordpress.toml` | WordPress image. `config_version` 2. Static `/wp-includes` and `/wp-content`. PHP on `/`. |
 
 This tree does not ship `conf/exyonq.toml` or `conf/php-fpm.toml`. A single PHP
@@ -81,30 +81,30 @@ ExyonQ opens that socket only when the cache is enabled and
 `EXYONQ_CACHE_PURGE_SOCKET` is set. The entrypoint sets the path. ExyonQ
 then writes `/run/exyonq/cache-purge.token` (mode 0600) and
 `/run/exyonq/cache-purge.sock.sites`. The plugin reads those files. It
-does not invent the site id. The scratch image does not run this cache.
+does not invent the site id. The plain server image does not run this cache.
 
 ## Containers
 
-Static ExyonQ, scratch, port 8080:
+Static ExyonQ, port 8080:
 
 ```bash
-docker build -f packaging/docker/Dockerfile -t exyonq:0.4.13 .
-docker run --rm -p 8080:8080 exyonq:0.4.13
+docker build -f packaging/docker/Dockerfile -t exyonq:0.5.0 .
+docker run --rm -p 8080:8080 exyonq:0.5.0
 ```
 
-WordPress and SQLite, PHP-FPM plus that same static binary. Build the
-scratch image first; this Dockerfile copies `/usr/local/bin/exyonq` out of it.
+WordPress and SQLite, PHP-FPM plus the server binary. Build the server
+image first; this Dockerfile copies `/usr/local/bin/exyonq` out of it.
 
 ```bash
-docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.4.13 .
-docker run --rm -p 8080:8080 exyonq-wordpress:0.4.13
+docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.5.0 .
+docker run --rm -p 8080:8080 exyonq-wordpress:0.5.0
 ```
 
 Published images, linux/amd64 and linux/arm64:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.4.13
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.4.13
+docker pull ghcr.io/exyonq/exyonq:0.5.0
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.5.0
 ```
 
 Open `http://localhost:8080/` and finish the WordPress installer. The
