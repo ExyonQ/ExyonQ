@@ -1237,7 +1237,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "exyonq-addon-api",
  "exyonq-cache",
@@ -1450,7 +1450,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "exyonq-cache",
  "exyonq-linux-ffi",

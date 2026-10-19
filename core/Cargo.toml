@@ -40,7 +40,7 @@ exyonq-linux-ffi = { path = "../crates/exyonq-linux-ffi" }
 [dev-dependencies]
 tempfile = "3"
 sha1 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 exyonq-mod-static = { workspace = true, features = ["test-utils"] }
 exyonq-mod-proxy = { workspace = true }
