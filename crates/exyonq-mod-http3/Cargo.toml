@@ -17,7 +17,6 @@ provider-quiche = ["http3-provider-quiche"]
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 bytes.workspace = true
 exyonq-module-api = { path = "../../module-api" }
 exyonq-mod-tls = { path = "../exyonq-mod-tls" }
@@ -33,4 +32,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+
+[package.metadata.cargo-machete]
+# cargo-machete false positives: quinn-proto required by feature unification / optional dep: edges
+ignored = ["quinn-proto"]

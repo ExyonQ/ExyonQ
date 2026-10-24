@@ -12,11 +12,11 @@
 #   OFFICIAL_RELEASE_BUILD_WITHOUT_REVISION = FAIL_CLOSED
 # Pass EXYONQ_GIT_REVISION=<40-hex> and EXYONQ_OFFICIAL_RELEASE=1 for official images.
 
-ARG EXYONQ_VERSION=0.6.0
+ARG EXYONQ_VERSION=0.7.0
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 
-FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
+FROM rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS builder
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 # Map OCI label arg into the cargo build-script env (same SHA for amd64/arm64).
@@ -52,22 +52,22 @@ COPY crates ./crates
 COPY wasm ./wasm
 COPY tests ./tests
 COPY xtask ./xtask
-RUN cargo build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli
+RUN cargo install cargo-auditable --locked \
+    && cargo auditable build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli \
+    && mkdir -p /var/www/exyonq \
+    && printf '%s\n' '<!doctype html><title>ExyonQ</title><p>ExyonQ</p>' > /var/www/exyonq/index.html
 
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime
+# distroless: no shell, no package manager, no apt metadata — minimal CVE surface
+# (Docker Sponsored OSS gate: Scout 0 critical / 0 high / 0 medium).
+# Provides glibc + ca-certificates + nonroot user (uid 65532).
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 ARG EXYONQ_VERSION
 ARG EXYONQ_GIT_REVISION
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin exyonq
 COPY --from=builder /app/target/release/exyonq /usr/local/bin/exyonq
 COPY --from=builder /app/target/release/exyonqctl /usr/local/bin/exyonqctl
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md sbom.cdx.json /usr/share/doc/exyonq/
 COPY packaging/docker/default.toml /etc/exyonq/config.toml
-RUN mkdir -p /var/www/exyonq \
-    && printf '%s\n' '<!doctype html><title>ExyonQ</title><p>ExyonQ</p>' > /var/www/exyonq/index.html \
-    && chown -R exyonq:exyonq /var/www/exyonq
+COPY --from=builder --chown=65532:65532 /var/www/exyonq /var/www/exyonq
 ENV EXYONQ_CONFIG=/etc/exyonq/config.toml
 ENV EXYONQ_CONTROL_SOCKET=/tmp/exyonq.sock
 LABEL org.opencontainers.image.title="ExyonQ" \
@@ -76,6 +76,6 @@ LABEL org.opencontainers.image.title="ExyonQ" \
       org.opencontainers.image.source="https://github.com/ExyonQ/ExyonQ" \
       org.opencontainers.image.licenses="Apache-2.0"
 EXPOSE 8080
-USER exyonq
+USER nonroot
 ENTRYPOINT ["exyonq"]
 CMD ["serve", "-c", "/etc/exyonq/config.toml"]

@@ -1,8 +1,8 @@
 # ADR-057 — `X-Cache` observability (Q-04 / v0.6 F2)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** FPC WC2B/WC2C (`fpc_lookup` / `fpc_store`)
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** FPC WC2B/WC2C (`fpc_lookup` / `fpc_store`)  
 **Contract:** CONDITIONAL ACCEPT — emit `X-Cache` on FPC outcomes; stats via Prometheus; offline explain
 
 ## Context
@@ -24,7 +24,7 @@ Strip any origin-supplied `X-Cache` / `X-Cache-Reason` before applying ExyonQ’
 
 ### CLI
 
-- `exyonqctl cache stats [--url http://host/metrics]` — scrape `exyonq_fpc_*` (appender registered at serve start).
+- `exyonqctl cache stats [--url http://host/metrics]` — scrape `exyonq_fpc_*` (appender registered at serve start).  
 - `exyonqctl cache explain --config PATH URL` — offline `fpc_request_evaluate` decision.
 
 ### Prometheus
@@ -33,6 +33,6 @@ Strip any origin-supplied `X-Cache` / `X-Cache-Reason` before applying ExyonQ’
 
 ## Non-goals
 
-- Changing FPC eligibility / TTL / keying
-- Full CDN `Cache-Status` RFC parity
-- Live L1 contents dump in `cache explain`
+- Changing FPC eligibility / TTL / keying  
+- Full CDN `Cache-Status` RFC parity  
+- Live L1 contents dump in `cache explain`  

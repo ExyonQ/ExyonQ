@@ -9,7 +9,6 @@ license.workspace = true
 exyonq-module-api = { path = "../../module-api" }
 rustls.workspace = true
 tokio-rustls.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

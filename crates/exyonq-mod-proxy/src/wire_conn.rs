@@ -52,6 +52,58 @@ const SSE_FLUSH_CHUNK: usize = 16384;
 #[cfg(all(feature = "p8t-fix-baseline", not(feature = "p8-transport-diag")))]
 const SSE_FLUSH_INTERVAL: usize = 2;
 
+/// Counts bytes written to the client so an upstream retry decision can tell
+/// "nothing sent yet" (safe to fall back) from "response head already on the
+/// wire" (a second head would corrupt the downstream stream).
+struct CountingWrite<'a, W> {
+    inner: &'a mut W,
+    written: usize,
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for CountingWrite<'_, W> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        match std::pin::Pin::new(&mut *self.inner).poll_write(cx, buf) {
+            std::task::Poll::Ready(Ok(n)) => {
+                self.written += n;
+                std::task::Poll::Ready(Ok(n))
+            }
+            other => other,
+        }
+    }
+    fn poll_write_vectored(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> std::task::Poll<io::Result<usize>> {
+        match std::pin::Pin::new(&mut *self.inner).poll_write_vectored(cx, bufs) {
+            std::task::Poll::Ready(Ok(n)) => {
+                self.written += n;
+                std::task::Poll::Ready(Ok(n))
+            }
+            other => other,
+        }
+    }
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut *self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut *self.inner).poll_shutdown(cx)
+    }
+}
+
 static RUNTIME: OnceLock<RwLock<Arc<ProxyRuntime>>> = OnceLock::new();
 
 pub fn pin_runtime(runtime: Arc<ProxyRuntime>) {
@@ -180,6 +232,53 @@ fn parse_get_path_and_query(head: &[u8]) -> Option<&str> {
     let rest = &head[4..];
     let end = rest.iter().position(|&b| b == b' ')?;
     std::str::from_utf8(&rest[..end]).ok()
+}
+
+/// NG-07: append the minted route cookie on successful responses only.
+/// Suppressed when the response already carries a token for the same cookie
+/// name (a connect retry mints the NEW endpoint's token — the stale cached
+/// one must not reach the client alongside it).
+fn append_route_cookie_wire(
+    response: &mut hyper::Response<
+        http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>,
+    >,
+    route_cookie: Option<&str>,
+) {
+    let Some(cookie) = route_cookie else { return };
+    if response.status().as_u16() >= 500 {
+        return;
+    }
+    let name_eq = cookie.split_inclusive('=').next().unwrap_or(cookie);
+    let already = response
+        .headers()
+        .get_all(hyper::header::SET_COOKIE)
+        .iter()
+        .any(|v| v.as_bytes() == cookie.as_bytes() || v.as_bytes().starts_with(name_eq.as_bytes()));
+    if already {
+        return;
+    }
+    if let Ok(v) = hyper::header::HeaderValue::from_str(cookie) {
+        response.headers_mut().append(hyper::header::SET_COOKIE, v);
+    }
+}
+
+/// NG-07: extract `name: value` header pairs from a raw request head
+/// (affinity keys only — malformed lines are skipped, not trusted downstream).
+fn headers_from_head(head: &[u8]) -> Vec<(String, String)> {
+    head.split(|&b| b == b'\n')
+        .skip(1) // request line
+        .filter_map(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let pos = line.iter().position(|&b| b == b':')?;
+            let (name, value) = line.split_at(pos);
+            let name = std::str::from_utf8(name).ok()?.trim();
+            let value = std::str::from_utf8(&value[1..]).ok()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some((name.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -873,6 +972,7 @@ pub async fn serve<S>(
     first_head: Bytes,
     _carry: Bytes,
     x_forwarded_for: HeaderValue,
+    real_ip: Option<exyonq_module_api::real_ip::RealIpTrust>,
     #[cfg(target_os = "linux")] peer_fd: Option<RawFd>,
 ) -> Result<u16>
 where
@@ -899,7 +999,14 @@ where
     // Resolve once per admission. Peer health is rechecked on Hyper fallback /
     // connect failure; P4 KA stays on the same upstream for the TCP lifetime
     // (matches common reverse-proxy connection affinity).
-    let mut cached_target: Option<crate::upstream_target::UpstreamTarget> = None;
+    // NG-07: the cached slot also retains the inflight lease (the connection is
+    // active upstream work for its whole keep-alive lifetime) and the route
+    // cookie minted at resolve time, emitted on every response it produces.
+    let mut cached_target: Option<(
+        crate::upstream_target::UpstreamTarget,
+        Option<String>,
+        Option<crate::selector::InflightLease>,
+    )> = None;
 
     loop {
         let this_host = host_header_raw(head.as_ref()).map(|h| h.to_vec());
@@ -923,10 +1030,36 @@ where
             return Ok(400);
         };
 
+        // NG-11: per-request effective client IP — trusted peers recover the
+        // real client from the configured forwarding header; untrusted peers
+        // keep the socket peer (spoof-proof).
+        let request_xff = match real_ip.as_ref() {
+            Some(trust) => {
+                let peer = x_forwarded_for
+                    .to_str()
+                    .ok()
+                    .and_then(|s| s.parse::<std::net::IpAddr>().ok());
+                match peer {
+                    Some(peer) => {
+                        let pairs = headers_from_head(head.as_ref());
+                        let value = pairs
+                            .iter()
+                            .rev()
+                            .find(|(n, _)| n.eq_ignore_ascii_case(&trust.header))
+                            .map(|(_, v)| v.as_str());
+                        HeaderValue::from_str(&trust.resolve(peer, value).to_string())
+                            .unwrap_or_else(|_| x_forwarded_for.clone())
+                    }
+                    None => x_forwarded_for.clone(),
+                }
+            }
+            None => x_forwarded_for.clone(),
+        };
+
         if first_request_was_admitted {
             first_request_was_admitted = false;
         } else {
-            let client_ip = x_forwarded_for.to_str().unwrap_or("127.0.0.1");
+            let client_ip = request_xff.to_str().unwrap_or("127.0.0.1");
             if let exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } =
                 exyonq_module_api::wire_admit(client_ip)
             {
@@ -939,10 +1072,33 @@ where
         }
 
         // Cap024/dispatch alignment: no eligible upstream (incl. all unhealthy) → 503, not 404.
-        let target = match cached_target {
-            Some(ref t) => t,
-            None => match rt.upstream_for_cluster(cluster_id) {
-                Some(t) => cached_target.insert(t),
+        // NG-07: header parsing only when the cluster's policy consumes it.
+        let req_headers = if rt.cluster_uses_header_affinity(cluster_id) {
+            headers_from_head(head.as_ref())
+        } else {
+            Vec::new()
+        };
+        let ctx = crate::runtime::AffinityCtx {
+            client_ip: request_xff.to_str().ok(),
+            headers: &req_headers,
+            path_key: path_and_query,
+        };
+        // NG-07: keyed/load policies resolve per request — each keep-alive
+        // request carries its own path/cookie/header and inflight lease.
+        // WRR/source affinity keep the per-connection pin.
+        // NG-08: the pin must not bypass a passive ban — drop the cached
+        // target once the peer is banned so selection re-resolves.
+        // AP-01: same for hot admin drain/disable — a keep-alive pin must not
+        // resurrect a member that `server set` removed from selection.
+        if cached_target.as_ref().is_some_and(|(t, _, _)| {
+            !t.passive.selectable() || !t.admin.enabled() || t.admin.weight() == 0
+        }) {
+            cached_target = None;
+        }
+        let resolved;
+        let (target, route_cookie) = if rt.cluster_resolves_per_request(cluster_id) {
+            resolved = match rt.upstream_for_cluster_ctx(cluster_id, &ctx) {
+                Some(sel) => sel,
                 None => {
                     write_fixed_close(
                         &mut stream,
@@ -952,17 +1108,49 @@ where
                     exyonq_module_api::wire_record_response(503);
                     return Ok(503);
                 }
-            },
+            };
+            (&resolved.target, resolved.route_cookie.as_deref())
+        } else {
+            match cached_target {
+                Some((ref t, ref cookie, _)) => (t, cookie.as_deref()),
+                None => match rt.upstream_for_cluster_ctx(cluster_id, &ctx) {
+                    Some(sel) => {
+                        // Lease lives in the cached slot — the connection stays
+                        // counted as in-flight for its keep-alive lifetime.
+                        let entry = cached_target.insert((sel.target, sel.route_cookie, sel.lease));
+                        let (t, c, _) = &*entry;
+                        (t, c.as_deref())
+                    }
+                    None => {
+                        write_fixed_close(
+                            &mut stream,
+                            b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
+                        )
+                        .await?;
+                        exyonq_module_api::wire_record_response(503);
+                        return Ok(503);
+                    }
+                },
+            }
         };
 
         let client_close = connection_close_requested(head.as_ref());
         let started = std::time::Instant::now();
-        let (last_status, outcome) = if crate::raw_upstream::raw_upstream_get_enabled() {
+        // F3-R20: a cluster with location_rewrite rules cannot use the raw
+        // verbatim relay — the response head must be rewritten first.
+        let raw_ok = crate::raw_upstream::raw_upstream_get_enabled()
+            && rt.location_rewrite_rules(cluster_id).is_none();
+        let (last_status, outcome) = if raw_ok {
+            let mut counted = CountingWrite {
+                inner: &mut stream,
+                written: 0,
+            };
             match crate::raw_upstream::stream_get_to_client(
                 target,
                 path_and_query,
-                Some(&x_forwarded_for),
-                &mut stream,
+                Some(&request_xff),
+                route_cookie,
+                &mut counted,
                 client_close,
             )
             .await
@@ -975,6 +1163,14 @@ where
                     };
                     (status, outcome)
                 }
+                // Upstream already wrote a (possibly partial) response to the
+                // client — retry/fallback would emit a second head on the same
+                // downstream stream. Close instead.
+                Err(_) if counted.written > 0 => {
+                    let _ = counted.inner.shutdown().await;
+                    exyonq_module_api::wire_record_response(502);
+                    return Ok(502);
+                }
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {
                     write_fixed_close(
                         &mut stream,
@@ -985,14 +1181,16 @@ where
                     return Ok(504);
                 }
                 Err(_) => {
-                    let response = rt
+                    let mut response = rt
                         .forward_get_for_wire(
                             cluster_id,
                             target,
                             path_and_query,
-                            Some(&x_forwarded_for),
+                            Some(&request_xff),
+                            &ctx,
                         )
                         .await;
+                    append_route_cookie_wire(&mut response, route_cookie);
                     let status = response.status().as_u16();
                     let outcome =
                         write_proxy_response_wire(&mut stream, response, client_close).await?;
@@ -1000,9 +1198,10 @@ where
                 }
             }
         } else {
-            let response = rt
-                .forward_get_for_wire(cluster_id, target, path_and_query, Some(&x_forwarded_for))
+            let mut response = rt
+                .forward_get_for_wire(cluster_id, target, path_and_query, Some(&request_xff), &ctx)
                 .await;
+            append_route_cookie_wire(&mut response, route_cookie);
             let status = response.status().as_u16();
             let outcome = write_proxy_response_wire(&mut stream, response, client_close).await?;
             (status, outcome)
@@ -1192,6 +1391,7 @@ mod tests {
             Bytes::from_static(b"GET /api/x HTTP/1.1\r\nHost: x\r\n\r\n"),
             Bytes::new(),
             HeaderValue::from_static("127.0.0.1"),
+            None,
             #[cfg(target_os = "linux")]
             peer_fd,
         )
@@ -1245,6 +1445,7 @@ mod tests {
             head,
             Bytes::new(),
             HeaderValue::from_static("127.0.0.1"),
+            None,
             #[cfg(target_os = "linux")]
             peer_fd,
         )
@@ -1303,6 +1504,118 @@ mod tests {
         assert_eq!(buf[0], b'c');
         assert_eq!(write_chunk_hex_len(425, &mut buf), 3);
         assert_eq!(&buf[..3], b"1a9");
+    }
+
+    #[test]
+    fn ng07_route_cookie_appended_once_to_wire_response() {
+        use http_body_util::combinators::BoxBody;
+        let empty = || {
+            http_body_util::Empty::<bytes::Bytes>::new()
+                .map_err(|never| match never {})
+                .boxed()
+        };
+        let mut resp = hyper::Response::builder()
+            .status(200)
+            .body(BoxBody::new(empty()))
+            .expect("resp");
+        append_route_cookie_wire(&mut resp, Some("route=ea; Path=/; HttpOnly"));
+        append_route_cookie_wire(&mut resp, Some("route=ea; Path=/; HttpOnly"));
+        let cookies: Vec<_> = resp
+            .headers()
+            .get_all(hyper::header::SET_COOKIE)
+            .iter()
+            .collect();
+        assert_eq!(cookies.len(), 1, "duplicate route cookie must not append");
+        assert_eq!(cookies[0], "route=ea; Path=/; HttpOnly");
+        append_route_cookie_wire(&mut resp, None);
+        assert_eq!(
+            resp.headers()
+                .get_all(hyper::header::SET_COOKIE)
+                .iter()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn ng07_route_cookie_retry_replaces_stale_same_name() {
+        // F2 regression: connect retry mints the NEW endpoint's token inside
+        // forward_get_for_wire; the outer append (stale first-selection token)
+        // must not add a second, conflicting Set-Cookie for the same name.
+        use http_body_util::combinators::BoxBody;
+        let empty = || {
+            http_body_util::Empty::<bytes::Bytes>::new()
+                .map_err(|never| match never {})
+                .boxed()
+        };
+        let mut resp = hyper::Response::builder()
+            .status(200)
+            .body(BoxBody::new(empty()))
+            .expect("resp");
+        // Retry-minted token already on the response (new endpoint wins).
+        resp.headers_mut().append(
+            hyper::header::SET_COOKIE,
+            HeaderValue::from_static("route=eb; Path=/; HttpOnly"),
+        );
+        append_route_cookie_wire(&mut resp, Some("route=ea; Path=/; HttpOnly"));
+        let cookies: Vec<_> = resp
+            .headers()
+            .get_all(hyper::header::SET_COOKIE)
+            .iter()
+            .collect();
+        assert_eq!(
+            cookies.len(),
+            1,
+            "stale pin must not shadow the retry token: {cookies:?}"
+        );
+        assert_eq!(cookies[0], "route=eb; Path=/; HttpOnly");
+        // A different upstream Set-Cookie name must not suppress the mint.
+        let mut resp2 = hyper::Response::builder()
+            .status(200)
+            .body(BoxBody::new(empty()))
+            .expect("resp");
+        resp2.headers_mut().append(
+            hyper::header::SET_COOKIE,
+            HeaderValue::from_static("session=x1; Path=/app"),
+        );
+        append_route_cookie_wire(&mut resp2, Some("route=ea; Path=/; HttpOnly"));
+        assert_eq!(
+            resp2
+                .headers()
+                .get_all(hyper::header::SET_COOKIE)
+                .iter()
+                .count(),
+            2,
+            "unrelated upstream cookies coexist with the route pin"
+        );
+    }
+
+    #[test]
+    fn ng07_route_cookie_not_minted_on_5xx() {
+        use http_body_util::combinators::BoxBody;
+        let empty = || {
+            http_body_util::Empty::<bytes::Bytes>::new()
+                .map_err(|never| match never {})
+                .boxed()
+        };
+        let mut resp = hyper::Response::builder()
+            .status(502)
+            .body(BoxBody::new(empty()))
+            .expect("resp");
+        append_route_cookie_wire(&mut resp, Some("route=ea; Path=/; HttpOnly"));
+        assert!(resp.headers().get(hyper::header::SET_COOKIE).is_none());
+    }
+
+    #[test]
+    fn ng07_headers_from_head_extracts_cookie_and_custom() {
+        let head =
+            b"GET /api HTTP/1.1\r\nHost: x\r\nCookie: route=eb; other=1\r\nX-Tenant: t7\r\n\r\n";
+        let headers = headers_from_head(head);
+        assert!(headers.contains(&("Cookie".into(), "route=eb; other=1".into())));
+        assert!(headers.contains(&("X-Tenant".into(), "t7".into())));
+        assert!(!headers.iter().any(|(n, _)| n.is_empty()));
+        let empty: &[u8] = b"";
+        assert!(headers_from_head(empty).is_empty());
     }
 
     #[tokio::test]

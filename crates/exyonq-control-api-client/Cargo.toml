@@ -11,7 +11,5 @@ reqwest-middleware = "0.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-http = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }

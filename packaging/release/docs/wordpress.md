@@ -1,6 +1,6 @@
 # WordPress on ExyonQ
 
-Applies to **v0.6.0**.
+Applies to **v0.7.0**.
 
 ExyonQ is the HTTP server. PHP-FPM is another process. The official server
 image is Debian bookworm slim and does not contain PHP. The WordPress image is
@@ -88,23 +88,23 @@ does not invent the site id. The plain server image does not run this cache.
 Static ExyonQ, port 8080:
 
 ```bash
-docker build -f packaging/docker/Dockerfile -t exyonq:0.6.0 .
-docker run --rm -p 8080:8080 exyonq:0.6.0
+docker build -f packaging/docker/Dockerfile -t exyonq:0.7.0 .
+docker run --rm -p 8080:8080 exyonq:0.7.0
 ```
 
 WordPress and SQLite, PHP-FPM plus the server binary. Build the server
 image first; this Dockerfile copies `/usr/local/bin/exyonq` out of it.
 
 ```bash
-docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.6.0 .
-docker run --rm -p 8080:8080 exyonq-wordpress:0.6.0
+docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.7.0 .
+docker run --rm -p 8080:8080 exyonq-wordpress:0.7.0
 ```
 
 Published images, linux/amd64 and linux/arm64:
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.6.0
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.6.0
+docker pull ghcr.io/exyonq/exyonq:0.7.0
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.7.0
 ```
 
 Open `http://localhost:8080/` and finish the WordPress installer. The

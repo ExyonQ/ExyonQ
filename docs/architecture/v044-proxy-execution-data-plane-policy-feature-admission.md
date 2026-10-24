@@ -1,6 +1,6 @@
 # PXDP-P5 Architecture — Policy & Feature Admission
 
-**WIP:** `V044_PROXY_EXECUTION_DATA_PLANE_POLICY_AND_FEATURE_ADMISSION`
+**WIP:** `V044_PROXY_EXECUTION_DATA_PLANE_POLICY_AND_FEATURE_ADMISSION`  
 **Parent:** P4-A framing + keepalive lifecycle
 
 ## Purpose
@@ -86,8 +86,8 @@ P3_BACKPRESSURE = preserved (MAX_IN_FLIGHT body frames bounded)
 
 ## Evidence
 
-Darwin: `cargo test -p exyonq-core --lib pxdp_p5 -- --test-threads=1`
-Netcup: `scripts/evidence/pxdp-p5-netcup-product-e2e.py`
+Darwin: `cargo test -p exyonq-core --lib pxdp_p5 -- --test-threads=1`  
+Netcup: `scripts/evidence/pxdp-p5-netcup-product-e2e.py`  
 Ledger SSOT: `docs/governance/v044-proxy-execution-data-plane-feature-admission-ledger.md`
 
 ## Terminal performance validation (PXDP reality check)

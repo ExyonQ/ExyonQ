@@ -6,7 +6,7 @@ POLICY_STATUS = MANDATORY
 FAIL_MODE = FAIL_CLOSED
 CANONICAL_SCANNER = scripts/security/scan-private-material.sh
 LOCAL_GATE = scripts/security/private-material-release-gates.sh
-LOCAL_RULE = editor rules, not release content
+CURSOR_RULE = .cursor/rules/exyonq-sec-private-material-zero.mdc
 ```
 
 ## Ban

@@ -246,6 +246,18 @@ pub fn analyze_location_directives(
                 "nginx `if` is not supported (EXY-NG-IF / ADR-051); use match.header / map / explicit routes",
                 None,
             ),
+            // NG-11: real_ip is global in ExyonQ — a location-scoped directive
+            // must be hoisted to http/server by the operator.
+            "set_real_ip_from" | "real_ip_header" | "real_ip_recursive" => report.push(
+                &d.loc,
+                &d.name,
+                CompatStatus::Partial,
+                format!(
+                    "location-scoped `{}` is global in ExyonQ — move it to http/server",
+                    d.name
+                ),
+                None,
+            ),
             _ => {}
         }
     }

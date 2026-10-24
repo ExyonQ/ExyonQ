@@ -9,8 +9,10 @@ use crate::upstream::{
     resolve_proxy_upstream_ref, NginxUpstreamIndex,
 };
 use exyonq_config_ir::{
-    AppConfig, FcgiPoolConfig, MapConfig, MapInputKind, ModulesConfig, RedirectConfig, RouteConfig,
-    RouteMatch, ServerConfig, ServerNames, UpstreamConfig, CONFIG_VERSION_V1,
+    deterministic_endpoint_id, AdminEndpointState, AppConfig, Endpoint, EndpointFailoverPolicy,
+    EndpointSelectionPolicy, FcgiPoolConfig, MapConfig, MapInputKind, ModulesConfig,
+    ProxyProtocolConfig, RedirectConfig, RouteConfig, RouteMatch, ServerConfig, ServerNames,
+    UpstreamConfig, CONFIG_VERSION_V1,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -84,7 +86,7 @@ pub fn map_to_ir(
     let mut pools_fcgi = map_fcgi_pools_from_upstreams(&upstream_index, report);
 
     for (server_index, server) in analyzed.servers.iter().enumerate() {
-        let listen = map_listen(server, report);
+        let (listen, proxy_protocol_flag) = map_listen(server, report);
         let server_names = map_server_names(server, report);
         let mut route_names = Vec::new();
 
@@ -126,8 +128,7 @@ pub fn map_to_ir(
 
             if route_names.is_empty() {
                 if let Some(mut route) = server_default_route(server_index, server, report) {
-                    route.response_headers =
-                        map_add_header_directives(&server.directives, report);
+                    route.response_headers = map_add_header_directives(&server.directives, report);
                     route_names.push(route.name.clone());
                     routes.push(route);
                 }
@@ -142,6 +143,10 @@ pub fn map_to_ir(
             tls: None,
             http3_listen: None,
             error_pages,
+            proxy_protocol: proxy_protocol_flag.then(|| ProxyProtocolConfig {
+                enabled: true,
+                trusted: Vec::new(),
+            }),
         });
     }
 
@@ -155,7 +160,18 @@ pub fn map_to_ir(
         pools_fcgi,
         cache_policies: HashMap::new(),
         maps,
-        modules: ModulesConfig::default(),
+        modules: ModulesConfig {
+            // NG-11: accumulated set_real_ip_from / real_ip_header.
+            real_ip: exyonq_config_ir::RealIpConfig {
+                enabled: !analyzed.real_ip_trusted.is_empty(),
+                trusted: analyzed.real_ip_trusted.clone(),
+                header: analyzed
+                    .real_ip_header
+                    .clone()
+                    .unwrap_or_else(|| "x-forwarded-for".to_string()),
+            },
+            ..ModulesConfig::default()
+        },
         static_section: Default::default(),
         full_page_cache: Default::default(),
         http3: Default::default(),
@@ -341,8 +357,10 @@ fn parse_error_page_args(args: &[String]) -> Result<Vec<(String, String)>, Strin
     Ok(codes.into_iter().map(|c| (c, uri.to_string())).collect())
 }
 
-fn map_listen(server: &ParsedServer, report: &mut CompatibilityReport) -> String {
+/// Returns `(listen_addr, proxy_protocol_flag)`.
+fn map_listen(server: &ParsedServer, report: &mut CompatibilityReport) -> (String, bool) {
     let mut listen_value = None;
+    let mut proxy_protocol = false;
     for d in &server.directives {
         if d.name != "listen" {
             continue;
@@ -351,6 +369,17 @@ fn map_listen(server: &ParsedServer, report: &mut CompatibilityReport) -> String
         let mut parts: Vec<&str> = raw.split_whitespace().collect();
         let addr_port = parts.first().copied().unwrap_or("80");
         for flag in parts.drain(1..) {
+            if flag == "proxy_protocol" {
+                proxy_protocol = true;
+                report.push(
+                    &d.loc,
+                    "listen",
+                    CompatStatus::Supported,
+                    "listen flag `proxy_protocol` mapped to servers.proxy_protocol.enabled",
+                    None,
+                );
+                continue;
+            }
             report.push(
                 &d.loc,
                 "listen",
@@ -358,11 +387,13 @@ fn map_listen(server: &ParsedServer, report: &mut CompatibilityReport) -> String
                 format!("listen flag `{flag}` not represented in IR"),
                 None,
             );
-            let _ = flag;
         }
         listen_value = Some(normalize_listen_addr(addr_port));
     }
-    listen_value.unwrap_or_else(|| "0.0.0.0:80".into())
+    (
+        listen_value.unwrap_or_else(|| "0.0.0.0:80".into()),
+        proxy_protocol,
+    )
 }
 
 fn normalize_listen_addr(raw: &str) -> String {
@@ -606,8 +637,9 @@ fn map_location(
                         try_uri: None,
                         try_uri_dir: None,
                         proxy_set_headers: Vec::new(),
-                    cache_headers: None,
-            response_headers: Vec::new(),
+                        cache_headers: None,
+                        response_headers: Vec::new(),
+                        location_rewrite: Vec::new(),
                     });
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
@@ -626,8 +658,9 @@ fn map_location(
                         try_uri: None,
                         try_uri_dir: None,
                         proxy_set_headers: Vec::new(),
-                    cache_headers: None,
-            response_headers: Vec::new(),
+                        cache_headers: None,
+                        response_headers: Vec::new(),
+                        location_rewrite: Vec::new(),
                     });
                 }
             }
@@ -693,8 +726,9 @@ fn map_location(
             try_uri,
             try_uri_dir,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
+            cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         });
     }
 
@@ -822,6 +856,7 @@ fn map_proxy(
     );
 
     let proxy_set_headers = map_location_proxy_set_headers(location, report);
+    let location_rewrite = map_location_proxy_redirects(location, target, route_match, report);
     Some(RouteConfig {
         name: route_name.to_string(),
         r#match: route_match.clone(),
@@ -838,15 +873,103 @@ fn map_proxy(
         try_uri_dir: None,
         proxy_set_headers,
         cache_headers: None,
-            response_headers: Vec::new(),
+        response_headers: Vec::new(),
+        location_rewrite,
     })
+}
+
+/// F3-R20: `proxy_redirect` → `route.location_rewrite` (`Location`,
+/// `Content-Location`, `URI` rewrite on upstream responses).
+fn map_location_proxy_redirects(
+    location: &ParsedLocation,
+    proxy_pass_target: &str,
+    route_match: &RouteMatch,
+    report: &mut CompatibilityReport,
+) -> Vec<exyonq_config_ir::LocationRewriteConfig> {
+    let mut out = Vec::new();
+    for d in &location.directives {
+        if d.name != "proxy_redirect" {
+            continue;
+        }
+        let args: Vec<&str> = d.args.iter().map(String::as_str).collect();
+        match args.as_slice() {
+            ["off"] => {
+                report.push(
+                    &d.loc,
+                    "proxy_redirect",
+                    CompatStatus::Supported,
+                    "proxy_redirect off → no location rewriting (ExyonQ default)",
+                    None,
+                );
+            }
+            ["default"] => {
+                // nginx default: from = proxy_pass value, to = location path.
+                let rule = exyonq_config_ir::LocationRewriteConfig {
+                    from: format!("{}/", proxy_pass_target.trim_end_matches('/')),
+                    to: format!("{}/", route_match.path.trim_end_matches('/')),
+                };
+                report.push(
+                    &d.loc,
+                    "proxy_redirect",
+                    CompatStatus::Supported,
+                    format!(
+                        "proxy_redirect default → location_rewrite {} → {}",
+                        rule.from, rule.to
+                    ),
+                    Some(format!("route.location_rewrite from={}", rule.from)),
+                );
+                out.push(rule);
+            }
+            [from, to] => {
+                if from.contains('$') || to.contains('$') || to.starts_with('~') {
+                    report.push(
+                        &d.loc,
+                        "proxy_redirect",
+                        CompatStatus::Partial,
+                        format!("proxy_redirect `{from}` `{to}`: variables/regex not supported"),
+                        None,
+                    );
+                    continue;
+                }
+                if !(from.starts_with("http://") || from.starts_with("https://")) {
+                    report.push(
+                        &d.loc,
+                        "proxy_redirect",
+                        CompatStatus::Partial,
+                        format!("proxy_redirect `{from}`: relative `from` not supported"),
+                        None,
+                    );
+                    continue;
+                }
+                report.push(
+                    &d.loc,
+                    "proxy_redirect",
+                    CompatStatus::Supported,
+                    format!("proxy_redirect `{from}` `{to}` → location_rewrite"),
+                    Some("route.location_rewrite".to_string()),
+                );
+                out.push(exyonq_config_ir::LocationRewriteConfig {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                });
+            }
+            _ => {
+                report.push(
+                    &d.loc,
+                    "proxy_redirect",
+                    CompatStatus::Error,
+                    "proxy_redirect requires `off`, `default`, or `from to`",
+                    None,
+                );
+            }
+        }
+    }
+    out
 }
 
 /// ADR-062: catch-all / DocumentRoot route receives server-scoped `add_header`.
 fn route_is_server_header_target(route: &RouteConfig) -> bool {
-    route.r#match.path == "/"
-        && route.r#match.regex.is_none()
-        && route.r#match.suffix.is_none()
+    route.r#match.path == "/" && route.r#match.regex.is_none() && route.r#match.suffix.is_none()
 }
 
 /// ADR-062 / F1-R19: `add_header Name Value [always];` → `response_headers`.
@@ -1142,8 +1265,9 @@ fn map_fastcgi(
             try_uri: None,
             try_uri_dir: None,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
+            cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         });
     }
 
@@ -1209,8 +1333,9 @@ fn map_fastcgi(
                 try_uri: None,
                 try_uri_dir: None,
                 proxy_set_headers: Vec::new(),
-            cache_headers: None,
-            response_headers: Vec::new(),
+                cache_headers: None,
+                response_headers: Vec::new(),
+                location_rewrite: Vec::new(),
             });
         }
         report.push(
@@ -1247,8 +1372,9 @@ fn map_fastcgi(
             try_uri: None,
             try_uri_dir: None,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
+            cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         });
     }
 
@@ -1386,8 +1512,9 @@ fn map_return(
                 try_uri: None,
                 try_uri_dir: None,
                 proxy_set_headers: Vec::new(),
-            cache_headers: None,
-            response_headers: Vec::new(),
+                cache_headers: None,
+                response_headers: Vec::new(),
+                location_rewrite: Vec::new(),
             })
         }
         404 => {
@@ -1488,9 +1615,19 @@ fn server_default_route(
         try_uri: None,
         try_uri_dir: None,
         proxy_set_headers: Vec::new(),
-    cache_headers: None,
-            response_headers: Vec::new(),
+        cache_headers: None,
+        response_headers: Vec::new(),
+        location_rewrite: Vec::new(),
     })
+}
+
+/// TOML spelling of endpoint admin state (serde `snake_case`).
+fn admin_state_toml(state: AdminEndpointState) -> &'static str {
+    match state {
+        AdminEndpointState::Enabled => "enabled",
+        AdminEndpointState::Disabled => "disabled",
+        AdminEndpointState::DrainRequested => "drain_requested",
+    }
 }
 
 fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> String {
@@ -1535,6 +1672,18 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
                 out.push_str(&format!("{k:?} = {v:?}"));
             }
             out.push_str(" }\n");
+        }
+        if let Some(pp) = &server.proxy_protocol {
+            let trusted = pp
+                .trusted
+                .iter()
+                .map(|t| format!("{t:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "proxy_protocol = {{ enabled = {}, trusted = [{}] }}\n",
+                pp.enabled, trusted
+            ));
         }
         out.push('\n');
     }
@@ -1627,6 +1776,11 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
                 out.push_str("always = true\n");
             }
         }
+        for lr in &route.location_rewrite {
+            out.push_str("[[route.location_rewrite]]\n");
+            out.push_str(&format!("from = {:?}\n", lr.from));
+            out.push_str(&format!("to = {:?}\n", lr.to));
+        }
         out.push('\n');
     }
 
@@ -1666,7 +1820,100 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
     for upstream in app.upstreams.values() {
         out.push_str("[[upstream]]\n");
         out.push_str(&format!("name = {:?}\n", upstream.name));
-        out.push_str(&format!("target = {:?}\n", upstream.target));
+        let eps = upstream.endpoint_set.endpoints();
+        // NG-07: `target` shorthand is only valid for the plain single-endpoint
+        // case — weight/priority/admin_state must not be silently dropped.
+        // NG-08: passive-health params count too — a tuned single endpoint
+        // must keep its explicit `endpoints` row.
+        let legacy_single = eps.len() == 1
+            && eps[0].weight == Endpoint::DEFAULT_WEIGHT
+            && eps[0].priority == Endpoint::DEFAULT_PRIORITY
+            && eps[0].admin_state == AdminEndpointState::Enabled
+            && eps[0].max_fails == Endpoint::DEFAULT_MAX_FAILS
+            && eps[0].fail_timeout_ms == Endpoint::DEFAULT_FAIL_TIMEOUT_MS
+            && eps[0].slow_start_ms == Endpoint::DEFAULT_SLOW_START_MS
+            && eps[0].endpoint_id
+                == deterministic_endpoint_id(
+                    &eps[0].address,
+                    eps[0].port,
+                    eps[0].weight,
+                    eps[0].priority,
+                );
+        if eps.len() > 1 || (!eps.is_empty() && !legacy_single) {
+            let list: Vec<String> = eps
+                .iter()
+                .map(|e| {
+                    let mut s = format!(
+                        "{{ address = {:?}, port = {}",
+                        e.address.as_host_str(),
+                        e.port
+                    );
+                    // Endpoint ids are deterministic from address/port/weight/
+                    // priority — emit only a custom id that the shorthand
+                    // would otherwise drop.
+                    if e.endpoint_id
+                        != deterministic_endpoint_id(&e.address, e.port, e.weight, e.priority)
+                    {
+                        s.push_str(&format!(", id = {:?}", e.endpoint_id.as_str()));
+                    }
+                    if e.weight != Endpoint::DEFAULT_WEIGHT {
+                        s.push_str(&format!(", weight = {}", e.weight));
+                    }
+                    if e.priority != Endpoint::DEFAULT_PRIORITY {
+                        s.push_str(&format!(", priority = {}", e.priority));
+                    }
+                    if e.admin_state != AdminEndpointState::Enabled {
+                        s.push_str(&format!(
+                            ", admin_state = {:?}",
+                            admin_state_toml(e.admin_state)
+                        ));
+                    }
+                    // NG-08: passive-health params (non-default only).
+                    if e.max_fails != Endpoint::DEFAULT_MAX_FAILS {
+                        s.push_str(&format!(", max_fails = {}", e.max_fails));
+                    }
+                    if e.fail_timeout_ms != Endpoint::DEFAULT_FAIL_TIMEOUT_MS {
+                        s.push_str(&format!(", fail_timeout_ms = {}", e.fail_timeout_ms));
+                    }
+                    if e.slow_start_ms != Endpoint::DEFAULT_SLOW_START_MS {
+                        s.push_str(&format!(", slow_start_ms = {}", e.slow_start_ms));
+                    }
+                    s.push_str(" }");
+                    s
+                })
+                .collect();
+            out.push_str(&format!("endpoints = [{}]\n", list.join(", ")));
+        } else {
+            out.push_str(&format!("target = {:?}\n", upstream.target));
+        }
+        if upstream.selection_policy != EndpointSelectionPolicy::default() {
+            let policy = match upstream.selection_policy {
+                EndpointSelectionPolicy::WeightedRoundRobin => "weighted_round_robin",
+                EndpointSelectionPolicy::LeastConn => "least_conn",
+                EndpointSelectionPolicy::PowerOfTwo => "power_of_two",
+                EndpointSelectionPolicy::ConsistentHash => "consistent_hash",
+                EndpointSelectionPolicy::CookieAffinity => "cookie_affinity",
+                EndpointSelectionPolicy::SourceAffinity => "source_affinity",
+                EndpointSelectionPolicy::HeaderAffinity => "header_affinity",
+            };
+            out.push_str(&format!("selection_policy = {policy:?}\n"));
+        }
+        if upstream.failover_policy != EndpointFailoverPolicy::default() {
+            let policy = match upstream.failover_policy {
+                EndpointFailoverPolicy::PriorityBands => "priority_bands",
+                EndpointFailoverPolicy::None => "none",
+            };
+            out.push_str(&format!("failover_policy = {policy:?}\n"));
+        }
+        if let Some(cookie) = &upstream.sticky_cookie {
+            out.push_str(&format!("sticky_cookie = {cookie:?}\n"));
+        }
+        if let Some(header) = &upstream.sticky_header {
+            out.push_str(&format!("sticky_header = {header:?}\n"));
+        }
+        if upstream.dns_refresh_ms != 0 {
+            out.push_str(&format!("dns_refresh_ms = {}\n", upstream.dns_refresh_ms));
+        }
         out.push_str(&format!("timeout_ms = {}\n\n", upstream.timeout_ms));
     }
 
@@ -1684,6 +1931,18 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
             out.push_str(&format!("transport = {:?}\n", pool.transport));
         }
         out.push_str(&format!("max_concurrency = {}\n\n", pool.max_concurrency));
+    }
+
+    // NG-11: trusted-proxy client-IP resolution.
+    let rip = &app.modules.real_ip;
+    if rip.enabled || !rip.trusted.is_empty() {
+        out.push_str("[modules.real_ip]\n");
+        out.push_str(&format!("enabled = {}\n", rip.enabled));
+        out.push_str(&format!("trusted = {:?}\n", rip.trusted));
+        if rip.header != "x-forwarded-for" {
+            out.push_str(&format!("header = {:?}\n", rip.header));
+        }
+        out.push('\n');
     }
 
     out

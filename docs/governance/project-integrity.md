@@ -3,7 +3,7 @@
 ```text
 POLICY_ID = PROJECT-INTEGRITY-NO-SHORTCUTS-NO-FAKE-DATA
 POLICY_STATUS = MANDATORY
-LOCAL_RULE = editor rules, not release content
+CURSOR_RULE = .cursor/rules/project-integrity-no-shortcuts-no-fake-data.mdc
 PRODUCT_GATE = scripts/gates/project-integrity-gate.sh
 DATA_GATE = scripts/gates/data-provenance-gate.sh
 RELATED = docs/governance/benchmark-integrity.md
@@ -103,7 +103,7 @@ except observational variance (logs, tracing, profiling, metric capture).
 
 ## Agent declaration
 
-Before perf/test/bench/demo/measurement work, declare the fields in the local integrity rule. Real-evidence claims require real data YES and all shortcut/fake fields NO. Else `OWNER_REVIEW_REQUIRED=YES`, `EXECUTION_AUTHORIZED=NO`.
+Before perf/test/bench/demo/measurement work, declare the fields in the Cursor rule. Real-evidence claims require real data YES and all shortcut/fake fields NO. Else `OWNER_REVIEW_REQUIRED=YES`, `EXECUTION_AUTHORIZED=NO`.
 
 ## Process gates
 

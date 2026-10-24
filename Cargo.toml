@@ -57,7 +57,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/ExyonQ/ExyonQ"
@@ -70,10 +70,11 @@ bytes = "1"
 memmap2 = "0.9.11"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
-brotli = "9"
+brotli = "8"
 # Cap071: buffered encode_all only — no legacy / dictionary / arrays defaults.
 zstd = { version = "0.13", default-features = false }
 http = "1"
+http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1", "http2", "client"] }
 hyper-util = { version = "0.1", features = ["server-auto", "client-legacy", "tokio", "http1", "http2"] }
@@ -84,12 +85,12 @@ thiserror = "2"
 semver = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
-toml = "1.1"
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "ring"] }
-wasmtime = { version = "=49.0.2", default-features = false, features = ["cranelift", "pooling-allocator", "runtime"] }
+wasmtime = { version = "=49.0.4", default-features = false, features = ["cranelift", "pooling-allocator", "runtime"] }
 dashmap = "6"
 
 exyonq-core = { path = "core", default-features = false }
@@ -128,10 +129,10 @@ exyonq-discovery-runtime = { path = "crates/exyonq-discovery-runtime" }
 exyonq-reload-runtime = { path = "crates/exyonq-reload-runtime" }
 arc-swap = "1"
 regex = "1"
-ipnetwork = "0.21"
+ipnetwork = "0.20"
 hmac = "0.13"
 sha2 = "0.11"
-getrandom = "0.4"
+getrandom = "0.3"
 exyonq-waf-api = { path = "crates/exyonq-waf-api" }
 exyonq-waf = { path = "crates/exyonq-waf" }
 exyonq-observability = { path = "crates/exyonq-observability" }

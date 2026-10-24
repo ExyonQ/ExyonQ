@@ -1,0 +1,473 @@
+openapi: 3.1.2
+info:
+  title: ExyonQ HTTP Control API
+  version: 1.0.0
+  summary: ExyonQ-owned control-plane HTTP contract (Capability 016 MVP)
+  description: |
+    Stable portable control-plane contract for panels, SDKs, automation, and
+    integrations. Nexus is a client/adapter only; ExyonQ owns this contract.
+
+    Transport (v1):
+      - primary: HTTP over Unix domain socket `/run/exyonq/api.sock`
+      - secondary: HTTP over TCP `127.0.0.1:9090`
+      - public bind `0.0.0.0` is forbidden
+
+    Distinct from:
+      - operational control socket `/run/exyonq/control.sock` (line protocol)
+      - Nexus agent IPC `/run/nexus/agent.sock`
+
+    Mutations apply through Cap013 atomic reload. API success implies the
+    requested supported state is active; failure preserves last-good runtime.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: http://localhost
+    description: |
+      Logical base URL. Clients targeting UDS ignore host and connect to
+      `/run/exyonq/api.sock` (or configured path). Loopback TCP uses
+      `http://127.0.0.1:9090`.
+
+security:
+  - ServerToken: []
+
+tags:
+  - name: Health
+  - name: Stats
+  - name: Config
+  - name: Vhosts
+
+paths:
+  /api/v1/health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Process health
+      description: Current control-plane view of process health (real process state; not a lightweight probe substitute for Cap016 E2E).
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: |
+            Not ready / draining. Body is still the Health schema with
+            status=not_ready (structured fields preserved for clients).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /api/v1/stats:
+    get:
+      tags: [Stats]
+      operationId: getStats
+      summary: Runtime statistics
+      description: Real runtime statistics from the active process.
+      responses:
+        "200":
+          description: Stats snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/config:
+    get:
+      tags: [Config]
+      operationId: getConfig
+      summary: Effective configuration view
+      description: |
+        Returns the current effective configuration document revision plus a
+        redacted runtime config view. Secrets are never returned.
+      responses:
+        "200":
+          description: Runtime config
+          headers:
+            ETag:
+              description: Weak ETag for the config revision (`W/"rev-{revision}"`)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeConfig"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/config/vhosts:
+    post:
+      tags: [Vhosts]
+      operationId: createVhost
+      summary: Create a vhost (CREATE-only)
+      description: |
+        Creates a new virtual host and activates it via Cap013 atomic reload.
+
+        Semantics: CREATE-only. If the domain already exists, the server returns
+        409 Conflict and does not mutate runtime state.
+
+        Optional `If-Match` with the current config ETag rejects stale writers
+        with 412 Precondition Failed.
+
+        MVP must not change the process listen / http3_listen set. Cap013 rejects
+        listen/server-count changes on reload (`EXY-RELOAD-0005`); therefore create
+        attaches `server_name` + route to the existing primary server rather than
+        introducing a new `[[server]]` bind.
+      parameters:
+        - $ref: "#/components/parameters/IfMatchOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VhostCreate"
+      responses:
+        "201":
+          description: Vhost created and active
+          headers:
+            ETag:
+              schema:
+                type: string
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vhost"
+        "400":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Duplicate domain or Cap013 apply conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+        "412":
+          description: Stale If-Match
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+        "413":
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+        "503":
+          description: Reload in progress / temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+
+  /api/v1/config/vhosts/{domain}:
+    delete:
+      tags: [Vhosts]
+      operationId: deleteVhost
+      summary: Delete a vhost
+      description: |
+        Removes the vhost identified by `domain` and activates the change via
+        Cap013 atomic reload. `If-Match` is required.
+      parameters:
+        - $ref: "#/components/parameters/DomainPath"
+        - $ref: "#/components/parameters/IfMatchRequired"
+      responses:
+        "200":
+          description: Vhost deleted and inactive
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Revision"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+        "409":
+          description: Cap013 apply conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+        "412":
+          description: Missing or stale If-Match
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+        "503":
+          description: Reload in progress / temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlApiError"
+
+components:
+  securitySchemes:
+    ServerToken:
+      type: apiKey
+      in: header
+      name: X-ExyonQ-Server-Token
+      description: |
+        Server token family `exq_sk_v1_…`. Runtime-provided only.
+        Never log or return the raw token value.
+
+  parameters:
+    DomainPath:
+      name: domain
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 253
+        pattern: '^[A-Za-z0-9._*-]+$'
+      description: Virtual host domain / server_name key
+    IfMatchOptional:
+      name: If-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Optional weak ETag (`W/"rev-{revision}"`)
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Required weak ETag (`W/"rev-{revision}"`)
+
+  responses:
+    Unauthorized:
+      description: Missing, malformed, or invalid server token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ControlApiError"
+
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, generation, revision, draining, reload_in_progress]
+      properties:
+        status:
+          type: string
+          enum: [ok, not_ready]
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        draining:
+          type: boolean
+        reload_in_progress:
+          type: boolean
+
+    Stats:
+      type: object
+      additionalProperties: false
+      required:
+        - generation
+        - revision
+        - uptime_s
+        - active_connections
+        - draining
+        - reload_in_progress
+      properties:
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        uptime_s:
+          type: integer
+          format: int64
+          minimum: 0
+        active_connections:
+          type: integer
+          format: int64
+          minimum: 0
+        draining:
+          type: boolean
+        reload_in_progress:
+          type: boolean
+        fingerprint:
+          type: string
+        version:
+          type: ["string", "null"]
+
+    Revision:
+      type: object
+      additionalProperties: false
+      required: [revision, generation]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+
+    CapabilitySet:
+      type: object
+      additionalProperties: false
+      required: [api_version, features]
+      properties:
+        api_version:
+          type: string
+          const: "v1"
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: Sparse map; only true capabilities are listed when used.
+
+    VhostUpstream:
+      type: object
+      additionalProperties: false
+      required: [target]
+      properties:
+        target:
+          type: string
+          minLength: 1
+          description: HTTP upstream URI (e.g. http://127.0.0.1:18080)
+        timeout_ms:
+          type: integer
+          format: int64
+          minimum: 1
+          default: 30000
+
+    VhostCreate:
+      type: object
+      additionalProperties: false
+      required: [domain]
+      properties:
+        domain:
+          type: string
+          minLength: 1
+          maxLength: 253
+          pattern: '^[A-Za-z0-9._*-]+$'
+          description: |
+            Virtual host domain / server_name key.
+            Same charset as DomainPath; bare "*" is rejected by the server.
+        listen:
+          type: string
+          description: |
+            Optional. When set must equal the process primary listen address
+            (MVP cannot change listen set).
+        path:
+          type: string
+          default: /
+          description: |
+            Route path prefix attached to the primary server for this domain.
+            Prefer a dedicated prefix when coexisting with other routes on the
+            same listen (Cap013 forbids adding a new listen/server bind).
+        root:
+          type: ["string", "null"]
+          description: Static document root (mutually exclusive with upstream)
+        upstream:
+          oneOf:
+            - $ref: "#/components/schemas/VhostUpstream"
+            - type: "null"
+
+    Vhost:
+      type: object
+      additionalProperties: false
+      required: [domain, path, revision, generation]
+      properties:
+        domain:
+          type: string
+        listen:
+          type: string
+        path:
+          type: string
+        root:
+          type: ["string", "null"]
+        upstream:
+          oneOf:
+            - $ref: "#/components/schemas/VhostUpstream"
+            - type: "null"
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+
+    RuntimeConfig:
+      type: object
+      additionalProperties: false
+      required: [revision, generation, vhosts, capabilities]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        fingerprint:
+          type: string
+        vhosts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vhost"
+        capabilities:
+          $ref: "#/components/schemas/CapabilitySet"
+
+    ControlApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable diagnostic code (e.g. EXY-CTRL-0001)
+          examples:
+            - EXY-CTRL-0001
+            - EXY-CTRL-0002
+            - EXY-CTRL-0003
+            - EXY-CTRL-0004
+            - EXY-CTRL-0005
+            - EXY-RELOAD-0005
+        message:
+          type: string
+          description: Human-readable error without secrets
+        details:
+          type: object
+          additionalProperties: true

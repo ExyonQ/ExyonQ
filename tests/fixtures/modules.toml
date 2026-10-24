@@ -31,3 +31,8 @@ min_bytes = 32
 enabled = true
 requests_per_second = 2
 burst = 2
+
+[modules.real_ip]
+enabled = true
+trusted = ["10.0.0.0/8", "192.0.2.10"]
+header = "x-forwarded-for"

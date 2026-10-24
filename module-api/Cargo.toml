@@ -15,10 +15,10 @@ exyonq-addon-api.workspace = true
 exyonq-config-ir.workspace = true
 http.workspace = true
 http-body-util.workspace = true
+ipnetwork.workspace = true
 regex.workspace = true
 semver.workspace = true
 serde.workspace = true
-thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt"] }
 
 [dev-dependencies]

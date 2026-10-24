@@ -17,4 +17,3 @@ name = "cfd-publish-routes"
 path = "src/bin/cfd-publish-routes.rs"
 
 [dev-dependencies]
-tempfile = "3"

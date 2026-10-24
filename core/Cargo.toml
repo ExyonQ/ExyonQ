@@ -17,7 +17,6 @@ hyper-util.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-exyonq-addon-api = { workspace = true }
 exyonq-module-api = { path = "../module-api" }
 exyonq-cache = { workspace = true }
 exyonq-mod-proxy = { workspace = true }
@@ -32,6 +31,8 @@ exyonq-mod-tls = { workspace = true }
 exyonq-mod-http3 = { workspace = true }
 exyonq-waf-api = { workspace = true }
 arc-swap.workspace = true
+ipnetwork.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

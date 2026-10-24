@@ -1,6 +1,6 @@
 # FastCGI saturation policy (Phase 1 / C2)
 
-**Status:** Phase 1 product policy
+**Status:** Phase 1 product policy  
 **Owner crate:** `crates/exyonq-mod-fastcgi/src/conn_pool.rs`
 
 ## Default behavior

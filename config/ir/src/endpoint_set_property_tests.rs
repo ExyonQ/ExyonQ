@@ -20,8 +20,8 @@
 //! ```
 
 use crate::endpoint_set::{
-    deterministic_endpoint_id, endpoint_from_http_target, endpoint_from_raw, EndpointAddress,
-    EndpointId, EndpointSet, RawEndpointConfig, UserBackendId,
+    deterministic_endpoint_id, endpoint_from_http_target, endpoint_from_raw, Endpoint,
+    EndpointAddress, EndpointId, EndpointSet, RawEndpointConfig, UserBackendId,
     MAX_ENDPOINTS_PER_BACKEND_PROVISIONAL, MAX_ID_LENGTH_PROVISIONAL,
 };
 use crate::{AppConfig, ConfigError};
@@ -199,6 +199,9 @@ fn property_deterministic_fingerprint_and_id() {
         weight: 3,
         priority: 7,
         admin_state: Default::default(),
+        max_fails: 1,
+        fail_timeout_ms: 10_000,
+        slow_start_ms: 0,
     })
     .unwrap();
     assert_eq!(ep.endpoint_id, id1);
@@ -234,4 +237,106 @@ fn property_no_panic_under_repeated_normalize() {
         let set = EndpointSet::from_endpoints(vec![ep]).unwrap();
         assert_eq!(set.len(), 1);
     }
+}
+
+#[test]
+fn ng08_passive_health_fields_parse_and_default() {
+    let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+[[upstream]]
+name = "b"
+endpoints = [
+    { address = "10.0.0.2", port = 8080, weight = 2, max_fails = 3, fail_timeout_ms = 5_000, slow_start_ms = 30_000 },
+    { address = "10.0.0.3", port = 8080 },
+]
+"#;
+    let cfg: AppConfig = AppConfig::parse_str(toml).unwrap();
+    let set = &cfg.upstreams["b"].endpoint_set;
+    let tuned = set
+        .endpoints()
+        .iter()
+        .find(|e| e.port == 8080 && e.address.as_host_str() == "10.0.0.2")
+        .expect("tuned endpoint");
+    assert_eq!(tuned.max_fails, 3);
+    assert_eq!(tuned.fail_timeout_ms, 5_000);
+    assert_eq!(tuned.slow_start_ms, 30_000);
+    // Absent fields → nginx defaults (1 / 10s / 0).
+    let plain = set
+        .endpoints()
+        .iter()
+        .find(|e| e.address.as_host_str() == "10.0.0.3")
+        .expect("default endpoint");
+    assert_eq!(plain.max_fails, Endpoint::DEFAULT_MAX_FAILS);
+    assert_eq!(plain.fail_timeout_ms, Endpoint::DEFAULT_FAIL_TIMEOUT_MS);
+    assert_eq!(plain.slow_start_ms, Endpoint::DEFAULT_SLOW_START_MS);
+}
+
+#[test]
+fn ng08_zero_fail_timeout_rejected() {
+    let err = endpoint_from_raw(RawEndpointConfig {
+        id: None,
+        address: "10.0.0.1".into(),
+        port: 80,
+        weight: 1,
+        priority: 0,
+        admin_state: Default::default(),
+        max_fails: 1,
+        fail_timeout_ms: 0,
+        slow_start_ms: 0,
+    });
+    assert!(err.is_err(), "fail_timeout_ms = 0 must fail closed");
+}
+
+#[test]
+fn ng08_fingerprint_tracks_passive_fields() {
+    // Passive-health params are desired-config state — they must change the
+    // endpoint-set fingerprint (a reload that only tweaks max_fails must not
+    // compare equal to the prior generation).
+    let raw = |mf: u32| RawEndpointConfig {
+        id: None,
+        address: "10.0.0.1".into(),
+        port: 80,
+        weight: 1,
+        priority: 0,
+        admin_state: Default::default(),
+        max_fails: mf,
+        fail_timeout_ms: 10_000,
+        slow_start_ms: 0,
+    };
+    let a = EndpointSet::from_endpoints(vec![endpoint_from_raw(raw(1)).unwrap()]).unwrap();
+    let b = EndpointSet::from_endpoints(vec![endpoint_from_raw(raw(2)).unwrap()]).unwrap();
+    assert_ne!(a.desired_fingerprint_parts(), b.desired_fingerprint_parts());
+}
+
+#[test]
+fn ng08_oversized_timeouts_rejected() {
+    // NG-08/F4: unbounded ms values must fail closed at the trust boundary —
+    // a wrapped ban deadline is a silent fail-open.
+    let raw = |fail_timeout_ms: u64, slow_start_ms: u64| RawEndpointConfig {
+        id: None,
+        address: "10.0.0.1".into(),
+        port: 80,
+        weight: 1,
+        priority: 0,
+        admin_state: Default::default(),
+        max_fails: 1,
+        fail_timeout_ms,
+        slow_start_ms,
+    };
+    assert!(endpoint_from_raw(raw(u64::MAX, 0)).is_err());
+    assert!(endpoint_from_raw(raw(10_000, u64::MAX)).is_err());
+    assert!(endpoint_from_raw(raw(crate::MAX_UPSTREAM_TIMEOUT_MS + 1, 0)).is_err());
+    assert!(endpoint_from_raw(raw(10_000, crate::MAX_UPSTREAM_TIMEOUT_MS + 1)).is_err());
+    assert!(endpoint_from_raw(raw(
+        crate::MAX_UPSTREAM_TIMEOUT_MS,
+        crate::MAX_UPSTREAM_TIMEOUT_MS
+    ))
+    .is_ok());
 }

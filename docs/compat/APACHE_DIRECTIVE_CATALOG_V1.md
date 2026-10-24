@@ -1,7 +1,7 @@
 # Apache directive catalog V1 (Phase 0)
 
 **Status:** living inventory for migration — not a promise of runtime parity  
-**Importer:** `exyonq-compat-apache` equivalent map (`IMPORTER_VERSION=0.5.0`, workspace `0.5.0`)
+**Importer:** `exyonq-compat-apache` equivalent map (`IMPORTER_VERSION=0.4.11`, workspace `0.4.11`)  
 **Taxonomy:** see product target §6.1
 
 | Directive / construct | Classification | Importer | Notes |
@@ -21,7 +21,7 @@
 | `ServerAlias` empty / missing `ServerName` | MANUAL_ACTION_REQUIRED | refuse usable IR | Require `ServerName` |
 | Missing `DocumentRoot` (and no PHP/proxy-only site) | REJECTED_UNSUPPORTED | refuse | Blocker when no alternate root handler |
 | `RewriteCond` / regex `RewriteRule` / `RedirectMatch` | REJECTED_UNSUPPORTED | reject+line | Use native htaccess overlay for WP front-controller |
-| `ProxyPassReverse` | REJECTED_UNSUPPORTED | reject+line | No response `Location` rewrite in product |
+| `ProxyPassReverse <local-path> <remote-url>` | MIGRATED_TO_EXYONQ_CONSTRUCT | yes | → `[[route.location_rewrite]]` (F3-R20); 1-arg `<Location>` form rejected |
 | `ProxyPass` with upstream path / balancers / variables | REJECTED_UNSUPPORTED | reject+line | Same fail-closed policy as NGINX proxy MVP |
 | `AuthType` / `AuthUserFile` / `Require` | REJECTED_UNSUPPORTED | reject+line | Auth surface absent |
 | `ErrorDocument` | REJECTED_UNSUPPORTED | reject+line | No custom error-page IR |

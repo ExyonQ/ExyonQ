@@ -26,8 +26,9 @@ pub use profile::{profile_explain, profile_list, profile_render, profile_test, P
 pub use reload::{
     applied_routes_sidecar_path, classify_reload_diff, classify_reload_diff_with,
     format_config_status, format_generation, read_applied_routes_snapshot, reload_check,
-    reload_precheck, route_identities, route_identity, write_applied_routes_snapshot, AppliedRoutesSnapshot,
-    ChangeClass, DiffEntry, ReloadDiffOptions, ReloadPrecheck, RouteDiffSummary,
+    reload_precheck, route_identities, route_identity, write_applied_routes_snapshot,
+    AppliedRoutesSnapshot, ChangeClass, DiffEntry, ReloadDiffOptions, ReloadPrecheck,
+    RouteDiffSummary,
 };
 
 use exyonq_config_ir::{render_human, Diagnostic, DiagnosticCode, DiagnosticDocument, Severity};

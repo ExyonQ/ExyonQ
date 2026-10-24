@@ -9,7 +9,6 @@ license.workspace = true
 exyonq-config-ir = { path = "../ir" }
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 toml.workspace = true
 
 [dev-dependencies]

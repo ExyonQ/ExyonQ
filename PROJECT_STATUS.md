@@ -2,14 +2,20 @@
 
 ```text
 DOCUMENT = PROJECT_STATUS.md
-DOCUMENT_ROLE = CANONICAL_PROJECT_STATUS
-AUTHORITY = SOLE for current project phase answers
-LAST_UPDATED = 2026-10-18
-BRANCH = main
-PUBLIC_RELEASE = v0.6.0.1
-WORKSPACE_VERSION = 0.6.0
-WORKSPACE_PUBLICATION = PUBLISHED
-FINAL_PUBLISHED_RELEASE_HEAD = 7af7440ae9461560c8ae979d24d29d026d027952
+DOCUMENT_ROLE = CANONICAL_PROJECT_STATUS (lab tracker)
+AUTHORITY = SOLE for current lab phase answers
+LAST_UPDATED = 2026-10-12
+BRANCH = release/v0.4.4-integration
+EXYONQ_LAB_ROLE = DEVELOPMENT_INTEGRATION_QUALIFICATION
+EXYONQ_GITHUB_ROLE = CANONICAL_RELEASE_CLOUD_AUTHORITY
+LAB_TARGET_CUT = 0.4.11
+WORKSPACE_VERSION = 0.4.11
+V0411_STATUS = PUBLISHED_ON_GITHUB (tag v0.4.11 @ 3736455; lab may diverge)
+V0411_APACHE_EQUIV_IMPORTER = LANDED (Gate A NOT closed; TOTAL_COMPAT_PROMISE=FORBIDDEN)
+V043_RELEASE_STATUS = PUBLISHED
+PUBLIC_RELEASE = v0.4.11
+FINAL_RELEASE_HEAD = 37364553677fd9283bebf9e36ea514e4e157ef9a
+EXYONQ_GITHUB_POST_RELEASE_HEAD = bbeb4db
 SUPERSEDED_RELEASE_CANDIDATE = f25137bff3b6fc0d4fc1b7f4c6d736b100fae741
 PRODUCT_QUALIFIED_REVISION = 2f8e869f97c36e18ca7976d673dd6db2aa16e45e
 R2_FINAL_QUALIFICATION_HEAD = 9176c374876d7c4bf503db1c1a02c885bb02fad9
@@ -41,32 +47,33 @@ Only **R\*** identifiers in `ROADMAP.md` answer “what global phase is ExyonQ i
 
 ```text
 WORKTREE_AUTHORITY =
-  development tree
+  /Volumes/Lexar/Cursor/exyonq-laboratorio
   ROLE = DEVELOPMENT_CANONICAL
+  EXYONQ_LAB_ROLE = DEVELOPMENT_INTEGRATION_QUALIFICATION
 
 GITHUB_RELEASE_AUTHORITY =
-  this repository
-  ROLE = GITHUB_STAGING / RELEASE_AUTHORITY
+  /Volumes/Lexar/Cursor/exyonq-github
+  ROLE = CANONICAL_RELEASE_CLOUD_AUTHORITY
   BRANCH = main
-  FINAL_PUBLISHED_RELEASE_HEAD = e2f0a3827d71f8f6a92c20e4fcfff954432b10c7
-  PUBLIC_RELEASE = v0.5.0
-  WORKSPACE_VERSION = 0.5.0
-  WORKSPACE_PUBLICATION = PUBLISHED
+  FINAL_RELEASE_HEAD = 37364553677fd9283bebf9e36ea514e4e157ef9a
+  EXYONQ_GITHUB_POST_RELEASE_HEAD = bbeb4db
+  PUBLIC_RELEASE = v0.4.11
 
+LAB_HEAD_IS_NOT_PUBLIC_RELEASE_HEAD = YES
 PRODUCT_QUALIFIED_REVISION = 2f8e869f97c36e18ca7976d673dd6db2aa16e45e
 CURRENT_BASELINE_STATUS = CLEAN_KNOWN_BASELINE
-CURRENT_RELEASE_STATUS = PUBLISHED
+V043_RELEASE_STATUS = PUBLISHED
+CURRENT_RELEASE_STATUS = PRIVATE_V043_RELEASE_COMPLETE
 BASELINE_DRIFT = NO
 
-PUBLICATION_STATUS = PUBLISHED
+PUBLICATION_STATUS = PRIVATE_V043_RELEASE_COMPLETE
 GITHUB_RELEASE_STATUS = PUBLISHED
-GHCR_EXYONQ = ghcr.io/exyonq/exyonq:0.6.0
-GHCR_EXYONQ_DIGEST = sha256:fd033273bb87c40847df3b6849b06d451b0e75104a234fd672933c89fde87e06
-GHCR_WORDPRESS = ghcr.io/exyonq/exyonq-wordpress:0.6.0
-GHCR_WORDPRESS_DIGEST = sha256:41b55fa6cea617f449a51869f48e4be9d4ce26a6c8aab68e04c23d65af4b73d4
-DOCKER_HUB_EXYONQ = exyonq/exyonq:0.6.0
-DOCKER_HUB_WORDPRESS = exyonq/exyonq-wordpress:0.6.0
+GHCR_V043_STATUS = PUBLISHED
+GHCR_V043_DIGEST = sha256:ab02b5ffc3d54407a56b6edbb318d80a077da0f431970984408d82415217f2e5
 LATEST_TAG_MUTATED = NO
+SSH_TAG_SIGNATURE_STATUS = PASS
+COSIGN_BLOB_SIGNATURE_STATUS = PASS
+COSIGN_OCI_SIGNATURE_STATUS = PASS
 ```
 
 Historical product baseline lineage (unchanged; pre-publication integration line):
@@ -91,8 +98,8 @@ CURRENT_PRODUCT_BASELINE =
   + R2E KD3 proxy 501 metrics assert gate (2849d06f3dc1a4fbaecd412ab39a569662630eae)
     (test/harness only — product binaries remain @ 2f8e869…)
 
-The historical v0.4.3 release tree is `42f87a28…`.
-The current published release tree is FINAL_PUBLISHED_RELEASE_HEAD (`e2f0a382…`, tag `v0.5.0`). v0.4.13 remains published at `41cfb236…`.
+Cargo.toml / Cargo.lock fingerprints at published release tree are those of
+FINAL_PUBLISHED_RELEASE_HEAD (see git tree 42f87a28…).
 ```
 
 ---
@@ -150,13 +157,7 @@ R6_STATUS = NOT_STARTED
 
 PROJECT_PHASE_1_STATUS = NOT_CLOSED
 PROJECT_PHASE_2_STATUS = NOT_STARTED
-
-PUBLISHED_PRODUCT = v0.5.0
-PUBLISHED_PRODUCT_HEAD = e2f0a3827d71f8f6a92c20e4fcfff954432b10c7
-WASMTIME = 49.0.2
 ```
-
-R0–R5 are closed. R6 has not started. Sections §2b and §2c stay the historical record of the private **v0.4.3** release. They do not name the current product. The current published release is **v0.5.0** (GitHub Release, GHCR, and Docker Hub; no `:latest`).
 
 ---
 
@@ -189,7 +190,7 @@ SECURITY_COMPILER_STATUS = CONDITIONAL ACCEPT (RUSTSEC-2026-0222 unfixed; Wasmti
 R5_SECURITY_AUDIT_STATUS = PASS
 BASIC_PRODUCT_COMPLETENESS_GATE = PASS
 NO_SMOKE_AS_PROOF_GATE_RESULT = GREEN
-SMOKE_TEST_POLICY = DIAGNOSTIC_ONLY_NON_AUTHORITATIVE (may not close gates)
+DIAGNOSTIC_ONLY_POLICY = DIAGNOSTIC_ONLY_NON_AUTHORITATIVE (may not close gates)
 PRE_R5_GRC_READINESS = PASS
 FINAL_ARTIFACT_VERSION_COHERENCE = PASS
 OCI_INDEX_CREATED = YES
@@ -215,10 +216,12 @@ R5_RESULT = PASS
 R5_CLOSED = YES
 R6_STATUS = NOT_STARTED
 
-PUBLIC_RELEASE = v0.4.3
+PUBLIC_RELEASE = v0.4.11
 VERSION = 0.4.3
 RELEASE_TAG = v0.4.3
+FINAL_RELEASE_HEAD = 37364553677fd9283bebf9e36ea514e4e157ef9a
 FINAL_PUBLISHED_RELEASE_HEAD = 3a8af75dd0939e5aae2f4d09b842573499e15a1c
+EXYONQ_GITHUB_POST_RELEASE_HEAD = bbeb4db
 FINAL_RELEASE_TREE = 42f87a28384155c8d2f81a4bb6770f9e39c56fbb
 SUPERSEDED_RELEASE_CANDIDATE = f25137bff3b6fc0d4fc1b7f4c6d736b100fae741
 SUPERSEDED_CLASSIFICATION = SUPERSEDED_RELEASE_CANDIDATE
@@ -257,8 +260,8 @@ R2E_RESULT = PASS
 ENVIRONMENT = Darwin + Netcup amd64 + Oracle arm64 + OCI dual-arch local
 LINUX_AMD64_QUALIFICATION_STATUS = PASS (product @ 2f8e869…)
 LINUX_ARM64_QUALIFICATION_STATUS = PASS (product @ 2f8e869…)
-OCI_AMD64_BUILD_SMOKE = HISTORICAL_R2D_CELL class=A version-only (NOT_GATE_CLOSING under NO-SMOKE)
-OCI_ARM64_BUILD_SMOKE = HISTORICAL_R2D_CELL class=A version-only (NOT_GATE_CLOSING under NO-SMOKE)
+OCI_AMD64_BUILD_QUAL = HISTORICAL_R2D_CELL class=A version-only (NOT_GATE_CLOSING under NO-SMOKE)
+OCI_ARM64_BUILD_QUAL = HISTORICAL_R2D_CELL class=A version-only (NOT_GATE_CLOSING under NO-SMOKE)
 OCI_RUNTIME_E2E_STATUS = PASS_REAL_E2E (dual-arch NS5; HISTORICAL R2 evidence under .exyonq-local/tmp/; real OCI E2E, NOT_GATE_CLOSING for R5)
 OCI_INDEX_PUBLICATION_STATUS = NOT_EXECUTED_NOT_AUTHORIZED
 DARWIN_WORKSPACE_STATUS = PASS (R2E workspace run 3; evidence .exyonq-local/tmp/r2e-20260801/)
@@ -272,10 +275,10 @@ LATE_NOTIFICATIONS = STALE_IGNORE
 R2_REOPEN_REQUIRED = NO
 R2E_REOPEN_REQUIRED = NO
 
-SMOKE_TEST_POLICY = DIAGNOSTIC_ONLY_NON_AUTHORITATIVE
-SMOKE_TEST_MAY_CLOSE_CAPABILITY = NO
-SMOKE_TEST_MAY_QUALIFY_RELEASE = NO
-SMOKE_TEST_MAY_ADMIT_BENCHMARK = NO
+DIAGNOSTIC_ONLY_POLICY = DIAGNOSTIC_ONLY_NON_AUTHORITATIVE
+DIAGNOSTIC_ONLY_MAY_CLOSE_CAPABILITY = NO
+DIAGNOSTIC_ONLY_MAY_QUALIFY_RELEASE = NO
+DIAGNOSTIC_ONLY_MAY_ADMIT_BENCHMARK = NO
 REAL_E2E_REQUIRED_FOR_CAPABILITY_PASS = YES
 NO_SMOKE_AS_PROOF_GATE = ACTIVE (scripts/gates/no-smoke-as-proof-gate.sh)
 NO_SMOKE_AUDIT_STATUS = NS0_NS8_DONE; NS5_CORE+OCI_PASS; HTTP3_POST_BODY_FIXED_DUAL_ARCH
@@ -342,7 +345,7 @@ PRODUCT_CODE_CHANGED = NO
 NO_BASIC_PRODUCT_DEFECTS = YES
 DEFERRED_BASIC_FUNCTIONAL_ITEMS = 0
 DEFERRED_UNJUSTIFIED_ITEMS = 0
-NO_AUTHORITATIVE_SMOKE_GATES = YES
+NO_AUTHORITATIVE_DIAGNOSTIC_GATES = YES
 R3_NO_SMOKE_CONTRADICTION = STALE_FIXED_OR_SUPERSEDED
 
 NO_SMOKE_NS5_STATUS = CORE+OCI+HTTP3_POST PASS_REAL_E2E (dual-arch)
@@ -490,13 +493,13 @@ R2_STATUS_AFTER_R2E =
   Darwin workspace `--all-targets` PASS (R2E ws-3) → R2_STATUS=COMPLETE / R2_RESULT=PASS
 ```
 
-### Legacy smoke scripts (NON_AUTHORITATIVE_DIAGNOSTIC_ONLY)
+### Legacy diagnostic scripts (HISTORICAL / NOT_EVIDENCE / NON_AUTHORITATIVE)
 
 | SCRIPT | CAPABILITY | STATUS | ENVIRONMENT | FAILURE_CLASS |
 |--------|------------|--------|-------------|---------------|
-| `kd2-5-static-smoke.sh` | static | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
-| `kd3-proxy-smoke.sh` | proxy | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
-| `plan08-fcgi-real-smoke.sh` | FastCGI | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
+| `kd2-5-static-qual.sh` (historical name) | static | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
+| `kd3-proxy-qual.sh` (historical name) | proxy | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
+| `plan08-fcgi-real-qual.sh` (historical name) | FastCGI | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
 | `p13a-tls-alpn.sh` | TLS ALPN | PASS | Darwin | — |
 | `p13a-http2-multiplex.sh` | HTTP/2 | FAIL | Darwin | TEST_HARNESS_FAILURE / fixture (`payloads/www` has no `index.html`) |
 | `p13a-tls-reload.sh` | reload | FAIL | Darwin | TEST_HARNESS_FAILURE (CERT_PEM empty before `cp`) |
@@ -530,7 +533,7 @@ Status vocabulary: `PASS_REAL_E2E` | `PASS` | `CONDITIONAL` | `PARTIAL` | `BLOCK
 | CLI / config | PASS | dual-arch | — | — |
 | module API | PASS | Linux tests | — | — |
 | wasm host | PASS | tests + bench test-mode dual-arch | Wasmtime RUSTSEC waived | v0.4.4 dep review |
-| htaccess/compat | PARTIAL | documented subset; plan05b/plan11/nginx import tests | not full Apache | keep subset claim |
+| htaccess/compat | PARTIAL | nginx MVP + Apache 0.4.11 equivalent map (static/redirect/TLS/proxy/PHP); Auth/ErrorDocument/regex still reject | not Gate A / not full Apache | keep subset claim until Gate A |
 | security/release | PARTIAL | RUSTSEC waived OD-2; no v0.4.3 audit doc | freeze audit | R5 later (not basic core) |
 | container/packaging | PASS_REAL_E2E | `oci-runtime-e2e` dual-arch NS5 | publication forbidden | protect |
 | benchmark P1–P3 | PASS | closed tracks | — | protect |
@@ -568,7 +571,7 @@ K8S_P2C_OPENED = NO
 | explicit cache policy | IMPLEMENTED | `cache_policy` + plan12 |
 | FastCGI / PHP-FPM | IMPLEMENTED | `exyonq-mod-fastcgi` + plan12; Linux real FPM HISTORICAL cell (POST E2E pending) |
 | TLS | IMPLEMENTED | `exyonq-mod-tls` + p13a ALPN |
-| HTTP/2 | IMPLEMENTED | ALPN/h2 path; local multiplex smoke blocked by fixture |
+| HTTP/2 | IMPLEMENTED | ALPN/h2 path; local multiplex protocol probe blocked by fixture |
 | HTTP/3 / QUIC | IMPLEMENTED | HISTORICAL H3 foundation/SECINT (NOT_GATE_CLOSING alone); product-e2e script exists |
 | reload / drain | IMPLEMENTED | Linux tls-reload PASS after `ensure_ephemeral` harness |
 | CLI | IMPLEMENTED | `exyonq` / `exyonqctl` |
@@ -640,11 +643,11 @@ EXPIRY_REVIEW = v0.4.4
    R2E_RESULT=PASS at `9176c37`.
    Late shell notifications (including wc7d progress-check exit 127 typo) are
    STALE_IGNORE — not a reopen reason.
-6. R4 closed the Kubernetes P2A/P2B replay and OPEN-002. P2C is not opened. That is not a shipped Kubernetes distribution.
-7. Private **v0.4.3** is published (`3a8af75…`). The current public release is **v0.5.0**. R5 is COMPLETE. R6 is NOT_STARTED.
+6. Kubernetes P2B not integrated.  
+7. Private **v0.4.3** is **published** (`3a8af75…` / tag `v0.4.3`); R5 COMPLETE; R6 NOT_STARTED.  
 8. `--all-features` Clippy/check is not a valid v0.4.3 release matrix.  
-9. RUSTSEC-2026-0222 was waived for v0.4.3 only (Wasmtime 45.0.2; review at v0.4.4). The current workspace pin is Wasmtime **49.0.2**. The v0.4.3 waiver is not active.
-10. Smoke is DIAGNOSTIC_ONLY_NON_AUTHORITATIVE; cannot close capability/release/benchmark.
+9. RUSTSEC-2026-0222 is **waived**, not fixed; Wasmtime remains 45.0.2 (expiry/review v0.4.4).
+10. Diagnostic-only checks are NON_AUTHORITATIVE; cannot close capability/release/benchmark (see no-smoke-as-proof gate).
 11. NO_SMOKE_R2_IMPACT = PASS_REQUIRES_ADDITIONAL_REAL_E2E (R2 historical PASS retained; NS5 real E2E later closed for core/OCI/HTTP3 POST).
 12. R3 paused-for-NO-SMOKE → BPC PASS → R3 resume → R3E PARITY → performance-compiler ACCEPT → R3 CLOSED. Prior “resume vs NO_SMOKE” contradiction is **STALE_FIXED_OR_SUPERSEDED**.
 13. GRC-P0 is an accepted **audit snapshot**; its findings do **not** automatically override newer canonical product/R3 state. GRC-P1 is **not** authorized.
@@ -653,15 +656,15 @@ EXPIRY_REVIEW = v0.4.4
 ## 8. Explicit non-claims
 
 ```text
-No claim that RUSTSEC-2026-0222 was fixed inside v0.4.3 (waived there only; review at v0.4.4). The current pin is Wasmtime 49.0.2.
+No claim that RUSTSEC-2026-0222 is fixed (waived only; ACTIVE_WAIVER for v0.4.3; EXPIRY_REVIEW=v0.4.4).
 No claim that fixed-rate PARITY is an open-loop ceiling WIN/LOSS.
-No claim that a Kubernetes distribution or P2C is shipped. R4 closed the P2A/P2B replay only.
+No claim that Kubernetes is integrated.
 No claim that Phase 2 / R6 has started.
-No claim that smoke PASS closes a capability, release, or benchmark admission.
+No claim that a diagnostic-only PASS closes a capability, release, or benchmark admission.
 No claim that OCI version-only cell proves container runtime qualification.
 No claim that GRC-P0 Critical gaps are product correctness defects.
 No claim that GRC registers / EXQ-* IDs are canonical (PROVISIONAL until GRC-P2 admission).
-No claim that `latest` was updated by v0.4.3, v0.4.13, or v0.5.0 (LATEST_TAG_MUTATED=NO).
+No claim that `latest` was updated by v0.4.3 (LATEST_TAG_MUTATED=NO).
 ```
 
 ---
@@ -678,14 +681,12 @@ WORKSPACE_BLOCKERS = NONE
   (mirrors fcgi_metrics_assert_guard). Darwin workspace-3 EXIT=0.
 
 SECURITY_BLOCKERS =
-  v0.4.3 waiver of RUSTSEC-2026-0222 is historical (Wasmtime 45.0.2; not renewed)
-  current pin = Wasmtime 49.0.2
-  current release audit = docs/security/audit-v0.5.0.md
-  GRC-P0 snapshot in §10 is historical and does not override this release
+  RUSTSEC-2026-0222 waived for v0.4.3 only (not fixed; Wasmtime 45.0.2)
+  no Critical/High open under waived advisory model
+  GRC release-governance gaps remain CURRENT (see §10) — separate from product PASS
 
-PACKAGING_BLOCKERS = NONE for the published 0.5.0 images
-  GHCR + Docker Hub: exyonq and exyonq-wordpress, linux/amd64 and linux/arm64
-  LATEST_TAG_MUTATED = NO
+PACKAGING_BLOCKERS =
+  OCI multiarch index / GHCR push NOT_AUTHORIZED (local images validated @ 2f8e869…)
 
 INFRASTRUCTURE_BLOCKERS = NONE for R2/R3 cells
 
@@ -716,7 +717,7 @@ FIRST_DUAL_ARCH_RUN_CANONICAL = NO
 NOFILE_FIX_APPLIED = YES
 CANONICAL_RERUN_COMPLETED = YES
 
-R3A_STATUS = REUSE_INFRA (tools/r3-p4-mock class A)
+R3A_STATUS = REUSE_INFRA (tools/upstream class A)
 R3B_STATUS = PASS
 R3B_AMD64_MAX_VALID_RPS = 75000
 R3B_ARM64_MAX_VALID_RPS = 40000
@@ -745,7 +746,7 @@ R4_STATUS = COMPLETE
 R4_RESULT = PASS
 R4_CLOSED = YES
 R4_READY_TO_OPEN = N/A
-R5_OPENED = YES   # closed in §2c; the value above this packet is the pre-open snapshot
+R5_OPENED = NO
 GRC_P0_STATUS = COMPLETE
 GRC_P1_STARTED = NO
 GRC_R5_REMEDIATION_STATUS = COMPLETE
@@ -754,9 +755,10 @@ PRE_R5_GRC_READINESS = PASS
 
 ---
 
-## 9b. GRC-R5-BLOCKER-REMEDIATION (2026-08-03)
+## 9b. GRC-R5-BLOCKER-REMEDIATION (2026-08-03) — HISTORICAL snapshot
 
 ```text
+# HISTORICAL — state at GRC remediation close (2026-08-03). CURRENT: see §2c / header.
 GRC_R5_REMEDIATION_STATUS = COMPLETE
 GRC_P1_STARTED = NO
 R4_STATUS = COMPLETE
@@ -775,9 +777,10 @@ RELEASE = NO
 
 ---
 
-## 9c. R4 — Kubernetes baseline replay + OPEN-002 (2026-08-03)
+## 9c. R4 — Kubernetes baseline replay + OPEN-002 (2026-08-03) — HISTORICAL snapshot
 
 ```text
+# HISTORICAL — state at R4 close (2026-08-03). CURRENT: R5 COMPLETE; see §2c / header.
 R4_STATUS = COMPLETE
 R4_RESULT = PASS
 R4_CLOSED = YES
@@ -811,7 +814,8 @@ PUBLICATION_STATUS = FORBIDDEN
 
 R4 executed P2A/P2B replay onto `0fed18d`, closed OPEN-002 with eligible-count
 Single gating (`1d815fe`), and productively accepted multi-endpoint WRR on the
-canonical tip. P2C is ready to admit but **not** opened. The block above is the R4 open-time snapshot. R5 later closed on private v0.4.3. The current product release is v0.5.0. R6 remains NOT_STARTED.
+canonical tip. P2C is ready to admit but **not** opened. At that historical moment R5
+was still NOT_STARTED (superseded by §2c publication close).
 
 ---
 

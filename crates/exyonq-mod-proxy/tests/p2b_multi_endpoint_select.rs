@@ -45,6 +45,9 @@ fn multi_slot() -> ProxyCompiledSlot {
                 weight: 1,
                 priority: 0,
                 admin_enabled: true,
+                max_fails: 1,
+                fail_timeout_ms: 10_000,
+                slow_start_ms: 0,
             },
             ProxyCompiledEndpoint {
                 endpoint_id: "b".into(),
@@ -52,9 +55,17 @@ fn multi_slot() -> ProxyCompiledSlot {
                 weight: 1,
                 priority: 0,
                 admin_enabled: true,
+                max_fails: 1,
+                fail_timeout_ms: 10_000,
+                slow_start_ms: 0,
             },
         ]),
         health_check: Default::default(),
+        selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+        sticky_cookie: None,
+        sticky_header: None,
+        dns_refresh_ms: 0,
+        location_rewrites: Vec::new(),
     }
 }
 
@@ -123,6 +134,11 @@ async fn empty_multi_binding_is_service_unavailable() {
             failover_priority_bands: true,
             endpoints: Box::new([]),
             health_check: Default::default(),
+            selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+            sticky_cookie: None,
+            sticky_header: None,
+            dns_refresh_ms: 0,
+            location_rewrites: Vec::new(),
         }],
     );
     let outcome = rt.dispatch(get_req(0)).await;
@@ -231,6 +247,9 @@ async fn open002_configured_multi_one_eligible_binds_single_path() {
                 weight: 1,
                 priority: 0,
                 admin_enabled: true,
+                max_fails: 1,
+                fail_timeout_ms: 10_000,
+                slow_start_ms: 0,
             },
             ProxyCompiledEndpoint {
                 endpoint_id: "b".into(),
@@ -238,9 +257,17 @@ async fn open002_configured_multi_one_eligible_binds_single_path() {
                 weight: 0,
                 priority: 0,
                 admin_enabled: true,
+                max_fails: 1,
+                fail_timeout_ms: 10_000,
+                slow_start_ms: 0,
             },
         ]),
         health_check: Default::default(),
+        selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+        sticky_cookie: None,
+        sticky_header: None,
+        dns_refresh_ms: 0,
+        location_rewrites: Vec::new(),
     };
     let rt = Arc::new(ProxyRuntime::new());
     rt.bind_compiled_slots(1, &[slot]);
@@ -277,6 +304,9 @@ async fn open002_multi_flag_with_one_eligible_collapses_defense_in_depth() {
                 weight: 1,
                 priority: 0,
                 admin_enabled: true,
+                max_fails: 1,
+                fail_timeout_ms: 10_000,
+                slow_start_ms: 0,
             },
             ProxyCompiledEndpoint {
                 endpoint_id: "b".into(),
@@ -284,9 +314,17 @@ async fn open002_multi_flag_with_one_eligible_collapses_defense_in_depth() {
                 weight: 1,
                 priority: 0,
                 admin_enabled: false,
+                max_fails: 1,
+                fail_timeout_ms: 10_000,
+                slow_start_ms: 0,
             },
         ]),
         health_check: Default::default(),
+        selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+        sticky_cookie: None,
+        sticky_header: None,
+        dns_refresh_ms: 0,
+        location_rewrites: Vec::new(),
     };
     let rt = Arc::new(ProxyRuntime::new());
     rt.bind_compiled_slots(1, &[slot]);
@@ -364,6 +402,11 @@ fn websocket_and_helper_no_eligible_is_503() {
             failover_priority_bands: true,
             endpoints: Box::new([]),
             health_check: Default::default(),
+            selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+            sticky_cookie: None,
+            sticky_header: None,
+            dns_refresh_ms: 0,
+            location_rewrites: Vec::new(),
         }],
     );
     assert!(rt.upstream_for_cluster(0).is_none());
@@ -387,10 +430,16 @@ async fn cache_load_no_eligible_passthrough_is_503() {
             failover_priority_bands: true,
             endpoints: Box::new([]),
             health_check: Default::default(),
+            selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+            sticky_cookie: None,
+            sticky_header: None,
+            dns_refresh_ms: 0,
+            location_rewrites: Vec::new(),
         }],
     );
     wire_conn::pin_runtime(Arc::clone(&rt));
-    let load = load_get_for_cache_by_cluster(0, "/", None, 1024, &[]).await;
+    let (load, route_cookie) = load_get_for_cache_by_cluster(0, "/", None, 1024, &[]).await;
+    assert!(route_cookie.is_none());
     match load {
         ProxyCacheLoad::Passthrough { response, .. } => {
             assert_eq!(response.status(), 503);

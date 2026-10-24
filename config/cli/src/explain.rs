@@ -353,8 +353,9 @@ pub fn explain(req: ExplainRequest) -> ToolResult {
             return ToolResult {
                 exit: CliExit::UsageOrTool,
                 stdout: String::new(),
-                stderr: "explain provenance: provide --pointer KEY (or a positional key) with --path\n"
-                    .into(),
+                stderr:
+                    "explain provenance: provide --pointer KEY (or a positional key) with --path\n"
+                        .into(),
             };
         }
         return explain_provenance(path, pointer, req.format);

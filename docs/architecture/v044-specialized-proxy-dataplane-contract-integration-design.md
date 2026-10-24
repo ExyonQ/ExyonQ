@@ -14,8 +14,8 @@ SOURCE_EXYONQ_HEAD = 0bc2b973e5ff62b2316fbc7c3f002d673c65d791
 SOURCE_EXYONQ_TREE = b1b7659b4d3bb8745ea0ed42a8de7d424f523767
 ```
 
-Governance: [`../governance/v044-specialized-proxy-dataplane-integration-design.md`](../governance/v044-specialized-proxy-dataplane-integration-design.md)
-Performance budget: [`../performance/v044-specialized-proxy-dataplane-integration-budget.md`](../performance/v044-specialized-proxy-dataplane-integration-budget.md)
+Governance: [`../governance/v044-specialized-proxy-dataplane-integration-design.md`](../governance/v044-specialized-proxy-dataplane-integration-design.md)  
+Performance budget: [`../performance/v044-specialized-proxy-dataplane-integration-budget.md`](../performance/v044-specialized-proxy-dataplane-integration-budget.md)  
 Evidence: `.exyonq-local/evidence/specialized-proxy-dataplane-design/20260827-200623/`
 
 Parents: EP-C · GA-B · PXDP-P0 (P0-A) · PXDP-B · DP-C
@@ -438,14 +438,14 @@ Sunk cost does not preserve Hyper PXDP execution.
 
 Carry forward as SDP gates:
 
-- fresh plan per request / generation freshness
-- WAF before upstream
-- Cap015 keepalive WAF re-entry
-- backpressure / no unbounded buffer
-- commit boundary / retry pre-commit
-- framing CL/TE / smuggling rejects
-- keepalive boundaries
-- error mapping (502/504/…)
+- fresh plan per request / generation freshness  
+- WAF before upstream  
+- Cap015 keepalive WAF re-entry  
+- backpressure / no unbounded buffer  
+- commit boundary / retry pre-commit  
+- framing CL/TE / smuggling rejects  
+- keepalive boundaries  
+- error mapping (502/504/…)  
 
 ---
 
@@ -495,14 +495,14 @@ PRODUCT_IMPLEMENTATION_AUTHORIZED = NO  # until owner opens SDP-P1
 
 ### Must NOT rewrite for SDP adoption
 
-- Cap067 / sendfile FSM
-- Routing algorithm SSOT
-- WAF policy language / engine SSOT (compile, don’t fork)
-- Module trait public API (admission only)
-- Control API / ops socket
-- FastCGI runtime (initially)
-- Entire Tokio process model
-- Config IR wholesale
+- Cap067 / sendfile FSM  
+- Routing algorithm SSOT  
+- WAF policy language / engine SSOT (compile, don’t fork)  
+- Module trait public API (admission only)  
+- Control API / ops socket  
+- FastCGI runtime (initially)  
+- Entire Tokio process model  
+- Config IR wholesale  
 
 ---
 
@@ -573,6 +573,6 @@ Compact hot-path enum (adapt PXDP-P0 `ProxyError` taxonomy): protocol, policy re
 
 ## 26. Explicit non-claims
 
-- No prototype integration, product crate, or dependency change in this WIP.
-- EP-C validates **geometry**, not a mandate to merge experiment sources.
+- No prototype integration, product crate, or dependency change in this WIP.  
+- EP-C validates **geometry**, not a mandate to merge experiment sources.  
 - First product slice may be slower than bare prototype; gate is vs **current ExyonQ**, not vs OLS.

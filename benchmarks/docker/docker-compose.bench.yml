@@ -1,0 +1,261 @@
+# Comparative benchmark stack — ExyonQ vs Tier A (NGINX, HAProxy, Envoy, Traefik, Caddy)
+# Usage: docker compose -f benchmarks/docker/docker-compose.bench.yml up --build
+
+x-json-file-logging: &json-file-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  upstream:
+    build:
+      context: ../..
+      dockerfile: benchmarks/docker/Dockerfile.upstream
+    logging: *json-file-logging
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  exyonq:
+    build:
+      context: ../..
+      dockerfile: benchmarks/docker/Dockerfile.exyonq
+    logging: *json-file-logging
+    depends_on:
+      upstream:
+        condition: service_healthy
+    environment:
+      EXYONQ_CONFIG: ${EXYONQ_CONFIG:-/bench/bench.toml}
+      EXYONQ_CONTROL_SOCKET: /tmp/exyonq.sock
+      EXYONQ_EPOLL_STATIC: ${EXYONQ_EPOLL_STATIC:-}
+      EXYONQ_EPOLL_LISTEN: ${EXYONQ_EPOLL_LISTEN:-}
+      EXYONQ_EPOLL_POOL_THREADS: ${EXYONQ_EPOLL_POOL_THREADS:-}
+      EXYONQ_SYNC_ACCEPT: ${EXYONQ_SYNC_ACCEPT:-}
+      EXYONQ_IO_URING: ${EXYONQ_IO_URING:-}
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+      - "8443:8443/udp"
+      - "8444:8444/udp"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  nginx-stable:
+    image: nginx:1.30.3-alpine
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../scenarios/payloads/www:/bench/www:ro
+      - ../scenarios/payloads/health.txt:/bench/health.txt:ro
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nginx-mainline:
+    image: nginx:1.31.2-alpine
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../scenarios/payloads/www:/bench/www:ro
+      - ../scenarios/payloads/health.txt:/bench/health.txt:ro
+    ports:
+      - "8088:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  haproxy:
+    image: haproxy@sha256:9d3eb407e80af1f9ab9b37ca46c31ced058c016c2ffccbdd46de82191d2ebe8f
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8082:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  envoy:
+    image: envoyproxy/envoy@sha256:cfc0678bc03cca19cbb031688acb31d510bff501ff97e163026a375fe0515d69
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    ports:
+      - "8083:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9901/ready 2>/dev/null | grep -q LIVE || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  traefik:
+    image: traefik@sha256:2cd5cc75530c8d07ae0587c743d23eb30cae2436d07017a5ff78498b1a43d09f
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ../configs/traefik/dynamic:/etc/traefik/dynamic:ro
+    ports:
+      - "8084:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ping 2>/dev/null | grep -q OK || wget -qO- http://127.0.0.1:8080/health | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  caddy:
+    image: caddy@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../scenarios/payloads/www:/bench/www:ro
+      - ../scenarios/payloads/health.txt:/bench/health.txt:ro
+    ports:
+      - "8085:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  apache:
+    image: httpd@sha256:1b766f17b84026429b7cb243317b142921b24432336e798bc881c43f45ed9567
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/apache/httpd.conf:/usr/local/apache2/conf/httpd.conf:ro
+      - ../configs/apache/extra/bench.conf:/usr/local/apache2/conf/extra/bench.conf:ro
+      - ../scenarios/payloads/www:/bench/www:ro
+      - ../scenarios/payloads/health.txt:/bench/health.txt:ro
+    ports:
+      - "8086:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # REFERENCE_IMPLEMENTATION — display name: "Pingora reference implementation"
+  # Not a product peer. Not in bench-runner depends_on until MR4 harness wiring.
+  pingora-reference:
+    build:
+      context: ../pingora-reference
+      dockerfile: Dockerfile
+    image: exyonq-bench/pingora-reference:mr3-local
+    logging: *json-file-logging
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../pingora-reference/config/pingora-reference.toml:/bench/pingora-reference.toml:ro
+    environment:
+      PINGORA_REFERENCE_CONFIG: /bench/pingora-reference.toml
+      RUST_LOG: warn
+    ports:
+      - "8090:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/health | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  openlitespeed-stable:
+    image: litespeedtech/openlitespeed:1.8.5-lsphp82
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/openlitespeed/httpd_config.conf:/usr/local/lsws/conf/httpd_config.conf:ro
+      - ../configs/openlitespeed/vhosts/bench/vhconf.conf:/usr/local/lsws/conf/vhosts/bench/vhconf.conf:ro
+      - ../scenarios/payloads/www:/bench/www:ro
+      - ../scenarios/payloads/health.txt:/bench/health.txt:ro
+    ports:
+      - "8089:8088"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8088/health | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  openlitespeed-latest:
+    image: litespeedtech/openlitespeed:1.9.0-lsphp83
+    depends_on:
+      upstream:
+        condition: service_healthy
+    volumes:
+      - ../configs/openlitespeed/httpd_config.conf:/usr/local/lsws/conf/httpd_config.conf:ro
+      - ../configs/openlitespeed/vhosts/bench/vhconf.conf:/usr/local/lsws/conf/vhosts/bench/vhconf.conf:ro
+      - ../scenarios/payloads/www:/bench/www:ro
+      - ../scenarios/payloads/health.txt:/bench/health.txt:ro
+    ports:
+      - "8087:8088"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8088/health | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  bench-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.bench-runner
+    logging: *json-file-logging
+    profiles: ["bench"]
+    depends_on:
+      exyonq:
+        condition: service_started
+      nginx-stable:
+        condition: service_started
+      nginx-mainline:
+        condition: service_started
+      haproxy:
+        condition: service_started
+      envoy:
+        condition: service_started
+      traefik:
+        condition: service_started
+      caddy:
+        condition: service_started
+      apache:
+        condition: service_started
+      openlitespeed-stable:
+        condition: service_started
+      openlitespeed-latest:
+        condition: service_started
+    volumes:
+      - ../scenarios:/scripts:ro
+      - ../results:/results
+    working_dir: /results
+    entrypoint: ["/bin/sh", "-c", "sleep infinity"]

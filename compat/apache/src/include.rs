@@ -26,13 +26,24 @@ pub const MAX_TOTAL_INPUT_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IncludeDiag {
     /// Required Include matched nothing / missing file.
-    NotFound { pattern: String },
-    Cycle { path: String },
+    NotFound {
+        pattern: String,
+    },
+    Cycle {
+        path: String,
+    },
     DepthExceeded,
-    Escape { path: String, detail: String },
-    Budget { detail: String },
+    Escape {
+        path: String,
+        detail: String,
+    },
+    Budget {
+        detail: String,
+    },
     /// IncludeOptional matched nothing — caller emits a note, not a reject.
-    OptionalEmpty { pattern: String },
+    OptionalEmpty {
+        pattern: String,
+    },
 }
 
 impl IncludeDiag {
@@ -54,10 +65,7 @@ impl IncludeDiag {
             }
             Self::Cycle { path } => format!("{}: include cycle at `{path}`", self.code()),
             Self::DepthExceeded => {
-                format!(
-                    "{}: include depth exceeds {MAX_INCLUDE_DEPTH}",
-                    self.code()
-                )
+                format!("{}: include depth exceeds {MAX_INCLUDE_DEPTH}", self.code())
             }
             Self::Escape { path, detail } => {
                 format!("{}: include `{path}` — {detail}", self.code())
@@ -95,7 +103,11 @@ impl IncludeCtx {
         }
     }
 
-    pub fn begin_file(&mut self, path: &Path, depth: usize) -> Result<(PathBuf, String), IncludeDiag> {
+    pub fn begin_file(
+        &mut self,
+        path: &Path,
+        depth: usize,
+    ) -> Result<(PathBuf, String), IncludeDiag> {
         if depth > MAX_INCLUDE_DEPTH {
             return Err(IncludeDiag::DepthExceeded);
         }
@@ -166,11 +178,7 @@ impl IncludeCtx {
     }
 }
 
-fn expand_glob(
-    base: &Path,
-    pattern: &str,
-    entry_root: &Path,
-) -> Result<Vec<PathBuf>, IncludeDiag> {
+fn expand_glob(base: &Path, pattern: &str, entry_root: &Path) -> Result<Vec<PathBuf>, IncludeDiag> {
     let raw = Path::new(pattern);
     if raw.is_absolute() {
         let canonical = raw.canonicalize().map_err(|e| IncludeDiag::Escape {

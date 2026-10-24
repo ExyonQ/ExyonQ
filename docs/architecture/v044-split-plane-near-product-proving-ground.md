@@ -12,9 +12,9 @@ TERMINAL_CASE = SPPG-C
 TERMINAL_RUN_ID = 20260827-234226
 ```
 
-Governance: [`../governance/v044-split-plane-near-product-proving-ground.md`](../governance/v044-split-plane-near-product-proving-ground.md)
-Performance: [`../performance/v044-split-plane-near-product-proving-ground.md`](../performance/v044-split-plane-near-product-proving-ground.md)
-Experiment: `.exyonq-local/experiments/split-plane-near-product/`
+Governance: [`../governance/v044-split-plane-near-product-proving-ground.md`](../governance/v044-split-plane-near-product-proving-ground.md)  
+Performance: [`../performance/v044-split-plane-near-product-proving-ground.md`](../performance/v044-split-plane-near-product-proving-ground.md)  
+Experiment: `.exyonq-local/experiments/split-plane-near-product/`  
 Evidence: `.exyonq-local/evidence/split-plane-near-product/20260827-234226/`
 
 ---

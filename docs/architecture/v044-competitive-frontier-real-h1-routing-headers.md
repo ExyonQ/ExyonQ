@@ -1,7 +1,7 @@
 # V044 Competitive Frontier — Phase 2: Real H1 GET + Routing + Headers
 
-**WIP:** `V044_COMPETITIVE_FRONTIER_REAL_H1_ROUTING_HEADERS`
-**Phase:** 2 — STOP; Phase 3 (WAF) not authorized
+**WIP:** `V044_COMPETITIVE_FRONTIER_REAL_H1_ROUTING_HEADERS`  
+**Phase:** 2 — STOP; Phase 3 (WAF) not authorized  
 **Parent:** CFD-A foundations (`SEPARATE_PROCESS_HYBRID`)
 
 ## Owner-frozen architecture (inherited)
@@ -19,14 +19,14 @@
 
 Real HTTP/1.1 GET only:
 
-1. Bounded request-line + header parse
-2. Cap033 compiled route projection (`RouteTable` / `CFDRT002`)
-3. Hop-by-hop request/response filtering (Connection tokens)
-4. Upstream Host = peer authority (`UPSTREAM_HOST_POLICY`)
-5. Client Host = Cap033 routing key only (`CLIENT_HOST_POLICY`)
-6. Shard-local upstream keepalive pool + poison discard
-7. Shard-local timers
-8. Client keepalive with per-request generation refresh
+1. Bounded request-line + header parse  
+2. Cap033 compiled route projection (`RouteTable` / `CFDRT002`)  
+3. Hop-by-hop request/response filtering (Connection tokens)  
+4. Upstream Host = peer authority (`UPSTREAM_HOST_POLICY`)  
+5. Client Host = Cap033 routing key only (`CLIENT_HOST_POLICY`)  
+6. Shard-local upstream keepalive pool + poison discard  
+7. Shard-local timers  
+8. Client keepalive with per-request generation refresh  
 
 ## Host policies (product-aligned)
 
@@ -43,7 +43,7 @@ Outer blob unchanged (`EXYQCFD1`). Payload is `CFDRT002` route table (or empty t
 
 Control projects via:
 
-- `EXYONQ_CFD_ROUTES` text file (`host|path|connect|authority`), or
+- `EXYONQ_CFD_ROUTES` text file (`host|path|connect|authority`), or  
 - programmatic `CfdChild::publish_routes` / `table_from_entries`
 
 No hardcoded `/api` routes. No second routing SSOT.

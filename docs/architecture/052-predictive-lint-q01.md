@@ -1,8 +1,8 @@
 # ADR-052 — Predictive config lint (Q-01 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** ADR-047 (match ranking), Cap024 (health_check), ADR-051 (headers/maps)
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** ADR-047 (match ranking), Cap024 (health_check), ADR-051 (headers/maps)  
 **Contract:** ACCEPT (`exyonq-architecture-contract` — Q-01 before AP-07)
 
 ## Context
@@ -35,13 +35,13 @@ Every warning carries `cause` + `suggestion`. Documentation pointers use `docs/c
 
 ### Non-goals (this slice)
 
-- AP-07 Include expansion
-- Promoting advisories to IR `Error`
-- Runtime / serve-path diagnostics (Q-02)
-- Live health probes or DNS at lint time
+- AP-07 Include expansion  
+- Promoting advisories to IR `Error`  
+- Runtime / serve-path diagnostics (Q-02)  
+- Live health probes or DNS at lint time  
 
 ## Consequences
 
-- Migrate matrices that call `lint` without `--warn` stay `OK` on clean IR.
-- `--strict --warn` fails the process when advisories fire.
+- Migrate matrices that call `lint` without `--warn` stay `OK` on clean IR.  
+- `--strict --warn` fails the process when advisories fire.  
 - Residual / follow-up: richer dominance (header AND, rewrite rematch) stays out of Q-01.

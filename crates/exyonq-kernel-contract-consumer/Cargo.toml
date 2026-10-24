@@ -11,6 +11,5 @@ bytes = { workspace = true }
 exyonq-core = { path = "../../core", default-features = false, features = ["http3-provider-s2n"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
 exyonq-mod-static = { workspace = true }
 exyonq-mod-proxy = { workspace = true }

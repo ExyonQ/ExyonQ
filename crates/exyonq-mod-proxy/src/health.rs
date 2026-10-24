@@ -29,10 +29,31 @@ use http_body_util::{BodyExt, Empty};
 use hyper::{Method, Request};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
+
+/// NG-10 process-lifetime probe stats keyed `(upstream, peer_key)`; the gauge
+/// `state` mirrors the latest observed phase (1 healthy / 0 unhealthy).
+#[derive(Default)]
+struct HealthPeerStats {
+    probes_ok: u64,
+    probes_fail: u64,
+    state: u64,
+}
+
+static HEALTH_STATS: LazyLock<Mutex<HashMap<(String, String), HealthPeerStats>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn health_stats_map() -> std::sync::MutexGuard<'static, HashMap<(String, String), HealthPeerStats>>
+{
+    HEALTH_STATS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Current installed generation — a dead-generation probe task must not write
+/// stats after prune cleared the table (abort is not synchronous).
+static HEALTH_STATS_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Observed peer health for routing (optimistic start).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +101,8 @@ impl PeerHealthCell {
 #[derive(Debug)]
 pub struct ClusterHealthView {
     generation: u64,
+    /// NG-10: upstream name for stats/metric labels.
+    upstream: String,
     config: ProxyHealthCheckCompiled,
     peers: HashMap<String, PeerHealthCell>,
     healthy_transitions: AtomicU64,
@@ -141,6 +164,18 @@ impl ClusterHealthView {
                 s.consecutive_failures = 0;
             }
         }
+        if self.generation == HEALTH_STATS_GEN.load(Ordering::Relaxed) {
+            let mut map = health_stats_map();
+            let st = map
+                .entry((self.upstream.clone(), peer_key.to_string()))
+                .or_default();
+            if success {
+                st.probes_ok += 1;
+            } else {
+                st.probes_fail += 1;
+            }
+            st.state = (s.phase == PeerHealthPhase::Healthy) as u64;
+        }
         if prev != s.phase {
             match s.phase {
                 PeerHealthPhase::Healthy => {
@@ -195,12 +230,12 @@ impl HealthSupervisor {
         self.inner.lock().ok()?.views.get(&cluster_id).cloned()
     }
 
-    /// `(cluster_id, health_config, [(peer_key, http_uri), ...])`
+    /// `(cluster_id, upstream_name, health_config, [(peer_key, http_uri), ...])`
     #[allow(clippy::type_complexity)] // generation replace batch shape is intentional
     pub fn replace_generation(
         &self,
         generation: u64,
-        clusters: &[(u32, ProxyHealthCheckCompiled, Vec<(String, String)>)],
+        clusters: &[(u32, String, ProxyHealthCheckCompiled, Vec<(String, String)>)],
     ) {
         let Ok(mut inner) = self.inner.lock() else {
             return;
@@ -208,18 +243,37 @@ impl HealthSupervisor {
         for t in inner.tasks.drain(..) {
             t.abort();
         }
+        // Generation guard: aborted-but-still-finishing tasks can only write
+        // stats while their view's generation is current.
+        HEALTH_STATS_GEN.store(generation, Ordering::Relaxed);
+        // NG-10: prune stats for peers no longer tracked — gauges must not
+        // report phantom state for removed endpoints.
+        let active: std::collections::HashSet<(String, String)> = clusters
+            .iter()
+            .filter(|(_, _, cfg, _)| cfg.enabled)
+            .flat_map(|(_, upstream, _, peers)| {
+                peers.iter().map(|(k, _)| (upstream.clone(), k.clone()))
+            })
+            .collect();
+        health_stats_map().retain(|key, _| active.contains(key));
         let mut new_views = HashMap::new();
         let mut new_tasks = Vec::new();
-        for (cluster_id, cfg, peers) in clusters {
+        for (cluster_id, upstream, cfg, peers) in clusters {
             if !cfg.enabled || peers.is_empty() {
                 continue;
             }
+            // NG-10: one probe task per distinct peer — duplicate transport
+            // identities would multiply failure accumulation on one cell.
+            let mut peers = peers.clone();
+            peers.sort_by(|a, b| a.0.cmp(&b.0));
+            peers.dedup_by(|a, b| a.0 == b.0);
             let mut map = HashMap::new();
-            for (peer_key, _) in peers {
+            for (peer_key, _) in &peers {
                 map.insert(peer_key.clone(), PeerHealthCell::new());
             }
             let view = Arc::new(ClusterHealthView {
                 generation,
+                upstream: upstream.clone(),
                 config: cfg.clone(),
                 peers: map,
                 healthy_transitions: AtomicU64::new(0),
@@ -238,6 +292,7 @@ impl HealthSupervisor {
                 let path = cfg.path.clone();
                 let interval = cfg.interval;
                 let timeout = cfg.timeout;
+                let cfg = cfg.clone();
                 let stagger = slice.saturating_mul((i as u32) % n);
                 let handle = tokio::spawn(async move {
                     tokio::time::sleep(stagger).await;
@@ -256,7 +311,7 @@ impl HealthSupervisor {
                         {
                             continue;
                         }
-                        let ok = probe_once(&client, &http_uri, &path, timeout).await;
+                        let ok = probe_once(&client, &http_uri, &path, timeout, &cfg).await;
                         view.apply_observation(&peer_key, ok);
                         cell.probe_in_flight.store(false, Ordering::Release);
                     }
@@ -269,6 +324,8 @@ impl HealthSupervisor {
     }
 
     pub fn shutdown(&self) {
+        // Invalidate stats writes from tasks that are still finishing.
+        HEALTH_STATS_GEN.store(u64::MAX, Ordering::Relaxed);
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
@@ -293,6 +350,7 @@ async fn probe_once(
     base_uri: &str,
     path: &str,
     timeout: Duration,
+    cfg: &ProxyHealthCheckCompiled,
 ) -> bool {
     let Some(url) = join_health_url(base_uri, path) else {
         return false;
@@ -311,26 +369,127 @@ async fn probe_once(
     match tokio::time::timeout_at(deadline, client.request(req)).await {
         Ok(Ok(resp)) => {
             let status = resp.status();
-            let _ = tokio::time::timeout_at(deadline, async {
-                let mut body = resp.into_body();
-                let mut taken = 0usize;
-                const MAX_DRAIN: usize = 64 * 1024;
-                while taken < MAX_DRAIN {
-                    match body.frame().await {
-                        Some(Ok(frame)) => {
-                            if let Some(data) = frame.data_ref() {
-                                taken = taken.saturating_add(data.len());
-                            }
+            if !status_expected(status.as_u16(), &cfg.expect_status) {
+                let _ = tokio::time::timeout_at(deadline, drain_body(resp.into_body(), None)).await;
+                return false;
+            }
+            let headers_ok = match &cfg.expect_header {
+                None => true,
+                // Any occurrence may satisfy the expectation (multi-value
+                // headers like Set-Cookie appear more than once).
+                Some((name, expected)) => {
+                    let mut values = resp.headers().get_all(name.as_str()).iter();
+                    match expected {
+                        None => values.next().is_some(),
+                        Some(exp) => {
+                            values.any(|v| v.to_str().map(|s| s.trim() == exp).unwrap_or(false))
                         }
-                        _ => break,
                     }
                 }
-            })
-            .await;
-            status.is_success()
+            };
+            if !headers_ok {
+                let _ = tokio::time::timeout_at(deadline, drain_body(resp.into_body(), None)).await;
+                return false;
+            }
+            let need_body = cfg.expect_body.is_some();
+            let collected = tokio::time::timeout_at(
+                deadline,
+                drain_body(
+                    resp.into_body(),
+                    if need_body { Some(64 * 1024) } else { None },
+                ),
+            )
+            .await
+            .unwrap_or(None);
+            match &cfg.expect_body {
+                None => true,
+                Some(needle) => collected
+                    .map(|b| contains_subslice(&b, needle.as_bytes()))
+                    .unwrap_or(false),
+            }
         }
         Ok(Err(_)) | Err(_) => false,
     }
+}
+
+/// NG-10: empty `expect_status` keeps Cap024 semantics (any 2xx).
+fn status_expected(code: u16, expect: &[u16]) -> bool {
+    if expect.is_empty() {
+        return (200..300).contains(&code);
+    }
+    expect.contains(&code)
+}
+
+/// Bounded body drain; when `collect` is Some(cap) the first `cap` bytes are
+/// returned for `expect_body` matching.
+async fn drain_body(mut body: hyper::body::Incoming, collect: Option<usize>) -> Option<Vec<u8>> {
+    let mut taken = 0usize;
+    let mut buf = Vec::new();
+    const MAX_DRAIN: usize = 64 * 1024;
+    while taken < MAX_DRAIN {
+        match body.frame().await {
+            Some(Ok(frame)) => {
+                if let Some(data) = frame.data_ref() {
+                    taken = taken.saturating_add(data.len());
+                    if let Some(cap) = collect {
+                        if buf.len() < cap {
+                            let room = cap - buf.len();
+                            buf.extend_from_slice(&data[..data.len().min(room)]);
+                        }
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    collect.map(|_| buf)
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty() || haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// NG-10: `exyonq_upstream_health_*` Prometheus appender.
+pub fn append_health_prometheus(out: &mut String) {
+    let map = health_stats_map();
+    out.push_str(
+        "# HELP exyonq_upstream_health_probes_total Health probe results (process lifetime).\n",
+    );
+    out.push_str("# TYPE exyonq_upstream_health_probes_total counter\n");
+    let mut keys: Vec<_> = map.keys().cloned().collect();
+    keys.sort();
+    for (upstream, peer) in &keys {
+        let st = &map[&(upstream.clone(), peer.clone())];
+        out.push_str(&format!(
+            "exyonq_upstream_health_probes_total{{upstream=\"{}\",endpoint=\"{}\",result=\"success\"}} {}\n",
+            escape_label(upstream),
+            escape_label(peer),
+            st.probes_ok
+        ));
+        out.push_str(&format!(
+            "exyonq_upstream_health_probes_total{{upstream=\"{}\",endpoint=\"{}\",result=\"failure\"}} {}\n",
+            escape_label(upstream),
+            escape_label(peer),
+            st.probes_fail
+        ));
+    }
+    out.push_str(
+        "# HELP exyonq_upstream_health_state Current peer health phase (1 healthy, 0 unhealthy).\n",
+    );
+    out.push_str("# TYPE exyonq_upstream_health_state gauge\n");
+    for (upstream, peer) in &keys {
+        let st = &map[&(upstream.clone(), peer.clone())];
+        out.push_str(&format!(
+            "exyonq_upstream_health_state{{upstream=\"{}\",endpoint=\"{}\"}} {}\n",
+            escape_label(upstream),
+            escape_label(peer),
+            st.state
+        ));
+    }
+}
+
+fn escape_label(v: &str) -> String {
+    v.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Health probe URL: configured peer authority + path-only (no SSRF rewrite).
@@ -356,6 +515,7 @@ mod tests {
     fn consecutive_failures_required() {
         let view = ClusterHealthView {
             generation: 1,
+            upstream: "u".into(),
             config: ProxyHealthCheckCompiled {
                 enabled: true,
                 interval: Duration::from_millis(100),
@@ -363,6 +523,7 @@ mod tests {
                 path: "/health".into(),
                 healthy_threshold: 2,
                 unhealthy_threshold: 3,
+                ..Default::default()
             },
             peers: {
                 let mut m = HashMap::new();
@@ -391,6 +552,7 @@ mod tests {
     fn enabled_unknown_peer_not_selectable() {
         let view = ClusterHealthView {
             generation: 1,
+            upstream: "u".into(),
             config: ProxyHealthCheckCompiled {
                 enabled: true,
                 interval: Duration::from_millis(100),
@@ -398,6 +560,7 @@ mod tests {
                 path: "/health".into(),
                 healthy_threshold: 2,
                 unhealthy_threshold: 2,
+                ..Default::default()
             },
             peers: HashMap::new(),
             healthy_transitions: AtomicU64::new(0),
@@ -412,5 +575,41 @@ mod tests {
             join_health_url("http://127.0.0.1:9/api", "/health").as_deref(),
             Some("http://127.0.0.1:9/health")
         );
+    }
+
+    #[test]
+    fn stale_generation_observation_does_not_write_stats() {
+        // A dead-generation probe finishing after prune must not recreate
+        // phantom series (regression: stats write is gated on current gen).
+        HEALTH_STATS_GEN.store(7, Ordering::Relaxed);
+        let view = ClusterHealthView {
+            generation: 999, // stale — no longer installed
+            upstream: "u-stale".into(),
+            config: ProxyHealthCheckCompiled {
+                enabled: true,
+                ..Default::default()
+            },
+            peers: {
+                let mut m = HashMap::new();
+                m.insert("p".into(), PeerHealthCell::new());
+                m
+            },
+            healthy_transitions: AtomicU64::new(0),
+            unhealthy_transitions: AtomicU64::new(0),
+        };
+        view.apply_observation("p", true);
+        assert!(!health_stats_map().contains_key(&("u-stale".into(), "p".into())));
+    }
+
+    #[test]
+    fn expect_header_matches_any_occurrence() {
+        // Multi-value headers: expectation satisfied by any occurrence.
+        let mut hm = hyper::HeaderMap::new();
+        hm.append("x-h", hyper::header::HeaderValue::from_static("no"));
+        hm.append("x-h", hyper::header::HeaderValue::from_static("pass"));
+        let values: Vec<_> = hm.get_all("x-h").iter().collect();
+        assert!(values
+            .iter()
+            .any(|v| v.to_str().map(|s| s.trim() == "pass").unwrap_or(false)));
     }
 }

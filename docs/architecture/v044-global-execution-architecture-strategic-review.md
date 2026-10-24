@@ -12,8 +12,8 @@ SOURCE_HEAD = 0bc2b973e5ff62b2316fbc7c3f002d673c65d791
 SOURCE_TREE = b1b7659b4d3bb8745ea0ed42a8de7d424f523767
 ```
 
-Governance: [`../governance/v044-global-execution-architecture-strategic-review.md`](../governance/v044-global-execution-architecture-strategic-review.md)
-Performance: [`../performance/v044-global-execution-architecture-strategic-review.md`](../performance/v044-global-execution-architecture-strategic-review.md)
+Governance: [`../governance/v044-global-execution-architecture-strategic-review.md`](../governance/v044-global-execution-architecture-strategic-review.md)  
+Performance: [`../performance/v044-global-execution-architecture-strategic-review.md`](../performance/v044-global-execution-architecture-strategic-review.md)  
 Evidence: `.exyonq-local/evidence/global-execution-architecture-review/20260827-181625/`
 
 Parents (closed): PR-C · RC-B · UG-C · SW-C · MC-B · WG-B/EC-A · RT-C · CP-C · DP-C · PXDP-B
