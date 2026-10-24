@@ -4,9 +4,9 @@
 
 | Version   | Supported |
 |-----------|-----------|
-| 0.4.x     | Yes (integration / pre-release staging) |
-| 0.3.x     | Security fixes only until superseded |
-| < 0.3     | No |
+| 0.7.x     | Yes (current release) |
+| 0.6.x     | Security fixes only until superseded |
+| < 0.6     | No |
 
 ## Current audit
 
@@ -24,24 +24,23 @@ cargo xtask security pre-release --version X.Y.Z
 
 Until a release audit is owner-authorized and signed off for a given version, that version remains unpublished.
 
-For **v0.4.3**:
+For **v0.7.0**:
 
 ```text
-CURRENT_RELEASE_AUDIT = docs/security/audit-v0.4.3.md
-PUBLICATION_STATUS = PRIVATE_V043_RELEASE_COMPLETE
-PUBLIC_RELEASE = v0.4.3
+CURRENT_RELEASE_AUDIT = docs/security/audit-v0.7.0.md
+PUBLIC_RELEASE = v0.7.0
 RELEASE_AUTHORITY = exyonq-github
-RUSTSEC_2026_0222_EXCEPTION_STATUS = ACTIVE_WAIVER
-VULNERABILITY_FIXED = NO
-WAIVED_FOR_V043 = YES
-EXPIRY_REVIEW = v0.4.4
+WAIVERS = NONE
+CARGO_AUDIT = 0 vulnerabilities (516 crates scanned, 2026-10-24)
+CARGO_DENY = advisories/bans/licenses/sources PASS
+DOCKER_SCOUT = 0 critical / 0 high / 0 medium (exyonq + exyonq-wordpress, amd64 + arm64)
 ```
 
 Canonical security SoT index: [`docs/security/README.md`](docs/security/README.md).
 
 ## Reporting a vulnerability
 
-Email security reports to the maintainers (see repository contacts). Do not open public issues for exploitable vulnerabilities.
+Email **security@exyonq.org**. Do not open public issues for exploitable vulnerabilities.
 
 Include:
 
@@ -53,7 +52,7 @@ We aim to acknowledge reports within 72 hours.
 
 ## Scope
 
-In scope: ExyonQ core HTTP parser, static file resolver, reverse proxy, config reload, TLS termination, HTTP/3 QUIC, control socket (`exyonqctl`), official modules (metrics, compression, ratelimit), WASM host.
+In scope: ExyonQ core HTTP parser, static file resolver, reverse proxy, config reload, TLS termination, HTTP/3 QUIC, control socket (`exyonqctl`), WAF, FastCGI, `.htaccess` overlay compiler, cache layer, official modules (metrics, compression, ratelimit, ACME), WASM host.
 
 Out of scope: third-party benchmark containers, rival server configurations, compatibility importers except when they emit unsafe native config.
 
@@ -62,13 +61,17 @@ Out of scope: third-party benchmark containers, rival server configurations, com
 | Surface | Location |
 |---------|----------|
 | HTTP/1 raw + hyper | `core/src/server/` |
-| Static files | `core/src/static_files/` |
-| Reverse proxy | `core/src/proxy/` |
-| Hot reload | `core/src/reload/` |
-| Control plane | `core/src/control/`, `cli/exyonqctl/` |
-| TLS / HTTP/2 | `core/src/tls/` |
-| HTTP/3 | `core/src/http3/` |
-| Discovery | `core/src/discovery/` |
+| Static files | `crates/exyonq-mod-static/` |
+| Reverse proxy | `crates/exyonq-mod-proxy/` |
+| Hot reload | `core/src/reload/`, `crates/exyonq-reload-runtime/` |
+| Control plane | `crates/exyonq-ops-runtime/`, `crates/exyonq-control-api/`, `cli/exyonqctl/` |
+| TLS | `crates/exyonq-mod-tls/` |
+| HTTP/3 | `crates/exyonq-mod-http3/` |
+| Discovery | `crates/exyonq-discovery-runtime/` |
+| WAF | `crates/exyonq-waf/` |
+| FastCGI | `crates/exyonq-mod-fastcgi/` |
+| `.htaccess` overlay | `crates/exyonq-mod-htaccess/` |
+| Cache | `crates/exyonq-cache/`, `crates/exyonq-cache-redis/` |
 | Modules | `modules/*` |
 | WASM plugin host | `wasm/exyonq-wasm-host/` |
 
@@ -76,12 +79,13 @@ Out of scope: third-party benchmark containers, rival server configurations, com
 
 Each tag `vX.Y.Z` requires:
 
-1. Green CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-2. Green security workflow ([`.github/workflows/security.yml`](.github/workflows/security.yml))
-3. Audit artifact [`docs/security/audit-vX.Y.Z.md`](docs/security/audit-template.md) with no open **Blockers**
-4. Nightly fuzz/Miri monitored ([`.github/workflows/security-nightly.yml`](.github/workflows/security-nightly.yml))
-5. Private-material-zero PASS ([`docs/security/private-material-zero.md`](docs/security/private-material-zero.md))
-6. Integrity triad PASS (project / benchmark / data-provenance gates)
+1. Audit artifact [`docs/security/audit-vX.Y.Z.md`](docs/security/audit-template.md) with no open **Blockers**
+2. `cargo audit` and `cargo deny check` clean
+3. Workspace test suite green
+4. Private-material-zero PASS ([`docs/security/private-material-zero.md`](docs/security/private-material-zero.md))
+5. Integrity triad PASS (project / benchmark / data-provenance gates)
+6. Container images scanned clean (0 critical / high / medium) on both `linux/amd64` and `linux/arm64` before OCI publication
+7. Image E2E on real Linux amd64 and arm64 hosts before registry publication
 
 Local pre-tag check: `cargo xtask security pre-release --version X.Y.Z`
 
@@ -104,7 +108,9 @@ Waiver field requirements: [`docs/security/waiver-requirements.md`](docs/securit
 - Path traversal blocked via canonical root checks
 - Hop-by-hop headers stripped on proxy
 - Duplicate / conflicting length headers rejected before proxy forward
-- `.htaccess` never parsed at runtime (offline migration only)
+- WAF fails closed on malformed input (no fail-open on undecodable bytes)
+- `.htaccess` handled via offline compile + atomic overlay publish with bounded budgets — never ad-hoc per-request parsing
+- Cache-purge socket is Unix-domain only with token authentication
 - No committed TLS private keys (ephemeral generation only)
 
 ## Trusted configuration
