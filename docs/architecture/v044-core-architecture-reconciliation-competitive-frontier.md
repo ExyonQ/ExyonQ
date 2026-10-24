@@ -13,7 +13,7 @@ EVIDENCE = .exyonq-local/evidence/core-architecture-reconciliation/20260828-1228
 PHASE_1_AUTHORIZED = NO
 ```
 
-Governance: [`../governance/v044-core-architecture-reconciliation-competitive-frontier.md`](../governance/v044-core-architecture-reconciliation-competitive-frontier.md)
+Governance: [`../governance/v044-core-architecture-reconciliation-competitive-frontier.md`](../governance/v044-core-architecture-reconciliation-competitive-frontier.md)  
 Performance budget: [`../performance/v044-core-architecture-performance-budget-contract.md`](../performance/v044-core-architecture-performance-budget-contract.md)
 
 Lineage: GA-B → EP-C → SD-B → SDP-P1/SP1-C → IL-F → SPPG-C → **Phase 0 CFR** (this doc)
@@ -178,9 +178,9 @@ Phase 1 scope remains: dataplane foundations only (isolation, shard ownership, i
 
 ## 11. Zero-fake findings (no fix in Phase 0)
 
-- `BENCH_SMALL_UPSTREAM_BODY` product naming smell
-- Cap034 `GET /api/` wire admit path special-case
-- SSE hardcoded `/api/stream*` timeout paths
+- `BENCH_SMALL_UPSTREAM_BODY` product naming smell  
+- Cap034 `GET /api/` wire admit path special-case  
+- SSE hardcoded `/api/stream*` timeout paths  
 
 ```text
 ZERO_FAKE_REVIEW = FINDINGS

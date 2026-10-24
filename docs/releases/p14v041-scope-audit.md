@@ -60,7 +60,7 @@ PUBLIC_OPENING_AUTHORIZED = NO
 
 ## 1. Tree inspection
 
-### 1.1 Development (`exyonq-lab`)
+### 1.1 Development (`/Volumes/Lexar/Cursor/exyonq-laboratorio`)
 
 | Field | Value |
 |-------|-------|
@@ -76,7 +76,7 @@ PUBLIC_OPENING_AUTHORIZED = NO
 
 Local `.exyonq-local/status/p14v040-STATUS.env` still shows stale `OPEN` / Phase-2 blocked state. Authoritative close evidence is under `.exyonq-local/release/p14v040/phase5-histclean-…/evidence/phase6-final-status.env` (`PUBLICATION_STATUS=PRIVATE_V040_RELEASE_COMPLETE`). Status-file refresh is **out of scope** for this audit.
 
-### 1.2 GitHub canonical (`exyonq-github`)
+### 1.2 GitHub canonical (`/Volumes/Lexar/Cursor/exyonq-github`)
 
 | Field | Value |
 |-------|-------|
@@ -384,7 +384,7 @@ PERFORMANCE: no material unexplained regression; raw evidence retained;
 OCI: amd64/arm64/multi-arch smoke PASS when packaging path touched;
      no latest; no publication until later express authorize
 
-RELEASE: signing is manual; tag, release, and GHCR need express authorization
+RELEASE: signing manual outside Cursor; tag/release/GHCR need express
          authorize; repo + packages remain private
 ```
 

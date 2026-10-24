@@ -19,7 +19,6 @@ path = "src/main.rs"
 exyonq-cfd-gen = { path = "../exyonq-cfd-gen" }
 exyonq-cfd-control = { path = "../exyonq-cfd-control" }
 exyonq-fastcgi-wire = { path = "../exyonq-fastcgi-wire" }
-exyonq-linux-ffi = { path = "../exyonq-linux-ffi" }
 # Product WAF engine (sync, no Tokio/Hyper) — Phase-3 compiled projection execution.
 exyonq-waf = { path = "../exyonq-waf" }
 exyonq-waf-api = { path = "../exyonq-waf-api" }

@@ -14,11 +14,9 @@ wat = "=1.261.0"
 # crypto-common 0.1.7 pins generic-array = "=0.14.7" so dependents never see the
 # 0.14.8+ deprecation warning (Dependabot #43). Direct pin keeps the digest 0.10
 # stack on the exact 0.14.7 line.
-crypto-common = "=0.1.7"
 
 [dev-dependencies]
 wat = "=1.261.0"
-tempfile = "3"
 criterion = "0.8"
 
 [[bench]]

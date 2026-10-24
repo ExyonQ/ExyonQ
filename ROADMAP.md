@@ -2,14 +2,15 @@
 
 ```text
 DOCUMENT = ROADMAP.md
-DOCUMENT_ROLE = CANONICAL_GLOBAL_ROADMAP
-AUTHORITY = SOLE for R* global phase identifiers
-LAST_UPDATED = 2026-10-18
-BRANCH = main
-PUBLIC_RELEASE = v0.6.0.1
-WORKSPACE_VERSION = 0.6.0
-WORKSPACE_PUBLICATION = PUBLISHED
-FINAL_PUBLISHED_RELEASE_HEAD = 7af7440ae9461560c8ae979d24d29d026d027952
+DOCUMENT_ROLE = CANONICAL_GLOBAL_ROADMAP (lab tracker)
+AUTHORITY = SOLE for R* global phase identifiers in lab
+LAST_UPDATED = 2026-08-04
+BRANCH = release/v0.4.3-integration
+EXYONQ_LAB_ROLE = DEVELOPMENT_INTEGRATION_QUALIFICATION
+EXYONQ_GITHUB_ROLE = CANONICAL_RELEASE_CLOUD_AUTHORITY
+PUBLIC_RELEASE = v0.4.3
+FINAL_RELEASE_HEAD = 3a8af75dd0939e5aae2f4d09b842573499e15a1c
+EXYONQ_GITHUB_POST_RELEASE_HEAD = 22b20dfcce6718a0cad64938436af87e27ff383e
 R3_PRODUCT_BASELINE = f0b2d67
 R3_CLOSE_DOCUMENTATION_TIP = d0814bc79ea08b91b753269e0883ab249bf7c3b9
 R5_STATUS = COMPLETE
@@ -21,11 +22,13 @@ R6_STATUS = NOT_STARTED
 Status companion: [`PROJECT_STATUS.md`](PROJECT_STATUS.md)  
 Documentation map: [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)
 
+**Paridad funcional vs NGINX/Apache/OLS (F1–F8, versiones 0.5→1.2):** SoT en [`ROADMAP EXYONQ/ROADMAP_PARIDAD_EXYONQ.md`](ROADMAP%20EXYONQ/ROADMAP_PARIDAD_EXYONQ.md) + checklists por versión en [`ROADMAP EXYONQ/ROADMAP/`](ROADMAP%20EXYONQ/ROADMAP/). Esa pista **no** redefine `R*`; es el roadmap de producto de migración/paridad.
+
 ```text
 Only R* determines the current global project phase.
 ```
 
-Internal tracks (BV04-P\*, K8S-P\*, P14\*, K\*/KD\*, MR\*, local plans) do **not** redefine R\*.
+Internal tracks (BV04-P\*, K8S-P\*, P14\*, K\*/KD\*, MR\*, Cursor plans, F1–F8 paridad) do **not** redefine R\*.
 
 ---
 
@@ -71,14 +74,7 @@ R6_STATUS = NOT_STARTED
 
 PROJECT_PHASE_1_STATUS = NOT_CLOSED
 PROJECT_PHASE_2_STATUS = NOT_STARTED
-
-PUBLISHED_PRODUCT = v0.5.0
-WORKSPACE_VERSION = 0.5.0
-WORKSPACE_PUBLICATION = PUBLISHED
-PUBLISHED_PRODUCT_SURFACES = GitHub Release + GHCR + Docker Hub (linux/amd64, linux/arm64, no :latest)
 ```
-
-R0–R5 are closed. R6 has not started, and Phase 1 is not closed. The R5 section below records the private **v0.4.3** publication. It is not the current product release. The current published release is **v0.5.0**.
 
 ---
 
@@ -92,7 +88,7 @@ R0_STATUS = COMPLETE
 
 Delivered:
 
-- Worktree authority on the development tree
+- Worktree authority on `/Volumes/Lexar/Cursor/exyonq-laboratorio`
 - Branch `release/v0.4.3-integration` @ product parent `fd41b761…` + docs `b3a24ca…`
 - Product baseline = v0.4.2 + Changeset A + Changeset B
 - Tracked tree clean of ambient product dirt (untracked `study/` preserved intentionally)
@@ -190,7 +186,7 @@ Delivered:
 
 - BASIC_PRODUCT_COMPLETENESS_GATE = PASS (prerequisite)  
 - HTTP/3 POST body fix `8b702a2` dual-arch PASS  
-- R3A mock infra reuse (class A)  
+- R3A upstream infra reuse (class A)  
 - R3B/C capacity + R3D topology neutrality PASS on Netcup+Oracle  
 - R3E competitive ExyonQ vs OLS fixed-rate PARITY dual-arch @ `f0b2d67`  
 - R3F reconciliation; performance-compiler ACCEPT  
@@ -256,7 +252,7 @@ WAIVED_FOR_V043 = YES
 EXPIRY_REVIEW = v0.4.4
 ```
 
-**Status:** `COMPLETE` (PASS) — private `v0.4.3` published 2026-08-04.
+**Status:** `COMPLETE` (PASS) — private `v0.4.3` published 2026-08-04 on **exyonq-github** (lab is not release authority).
 
 Depends (met):
 

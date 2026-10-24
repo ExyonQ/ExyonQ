@@ -20,6 +20,7 @@
 pub mod attach;
 pub mod cache_metrics;
 pub mod cache_serve;
+pub mod dns_refresh;
 pub mod errors;
 pub mod forward;
 pub mod headers;
@@ -62,6 +63,7 @@ pub use cache_metrics::{
     note_proxy_rejection, reset_proxy_cache_metrics_for_tests,
 };
 pub use cache_serve::{serve_proxy_with_cache, PROXY_CACHE_NAMESPACE};
+pub use dns_refresh::{append_dns_prometheus, DnsPeer, DnsRefreshSupervisor};
 pub use errors::ProxyConfigError;
 pub use forward::ForwardingHeaders;
 pub use headers::{
@@ -69,6 +71,7 @@ pub use headers::{
     request_headers_safe_for_proxy, strip_hop_by_hop_headers, ContentLengthParse,
     FIXED_HOP_BY_HOP_HEADERS, REQUEST_UPSTREAM_STRIP_HEADERS, RESPONSE_HOP_BY_HOP_HEADERS,
 };
+pub use health::append_health_prometheus;
 pub use hyper_client::{
     build_incoming_client, get_empty_body_client, hyper_client_config, set_hyper_client_config,
     HyperClientConfig, ProxyClient,
@@ -82,14 +85,16 @@ pub use proxy_cache::{
     build_materialized_response, load_get_for_cache, prepare_proxy_cache_load, ProxyCacheLoad,
 };
 pub use runtime::{
-    forward_websocket_by_cluster, global_hyper_metrics, load_get_for_cache_by_cluster, ProxyRuntime,
+    forward_websocket_by_cluster, global_hyper_metrics, load_get_for_cache_by_cluster, AffinityCtx,
+    ProxyRuntime, ResolveSelection,
 };
 pub use runtime_diag::{
     emit_map_unknown, emit_no_eligible, emit_upstream_class, RtFailCtx, EXY_RT_0001, EXY_RT_0002,
     EXY_RT_0003, EXY_RT_0004, EXY_RT_0005,
 };
 pub use selector::{
-    endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, SelectionOutcome,
+    endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, PassivePeer,
+    SelectionOutcome,
 };
 pub use spike::run_spike_proxy;
 pub use sse::{

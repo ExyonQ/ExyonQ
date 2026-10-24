@@ -283,8 +283,8 @@ fn classify_and_apply(
 fn q03_fail_closed_error(file: &str, line: u32, name: &str) -> Option<String> {
     let n = name.trim_start_matches('<').to_ascii_lowercase();
     let (code, alt) = match n.as_str() {
-        "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride"
-        | "authtype" | "authuserfile" | "authname" | "authgroupfile" => (
+        "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authtype"
+        | "authuserfile" | "authname" | "authgroupfile" => (
             "EXY-HTACCESS-0003",
             "use WAF ip_filter / [[route]] access (F6) — overlay never enforces ACL",
         ),
@@ -307,9 +307,7 @@ fn q03_fail_closed_error(file: &str, line: u32, name: &str) -> Option<String> {
         ),
         _ => return None,
     };
-    Some(format!(
-        "{code} {file}:{line} `{name}` — {alt}"
-    ))
+    Some(format!("{code} {file}:{line} `{name}` — {alt}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

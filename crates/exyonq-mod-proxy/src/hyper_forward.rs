@@ -357,12 +357,16 @@ pub async fn attempt_forward_empty_body_with_headers(
             Ok(inner) => inner,
             Err(_) => {
                 warn!(budget_ms = budget.as_millis(), "upstream attempt timeout");
+                // NG-08: attempt elapsed against this peer.
+                upstream.passive.record(false);
                 return Err(UpstreamAttemptClass::TimedOut);
             }
         }
     };
     match result {
         Ok(resp) => {
+            // NG-08: upstream responded — passive health success.
+            upstream.passive.record(true);
             let (mut parts, body) = resp.into_parts();
             strip_hop_by_hop_headers(&mut parts.headers);
 
@@ -383,6 +387,8 @@ pub async fn attempt_forward_empty_body_with_headers(
         Err(err) => {
             let class = classify_hyper_error(&err);
             warn!(%err, ?class, "upstream error");
+            // NG-08: transport failure against this peer.
+            upstream.passive.record(false);
             Err(class)
         }
     }
@@ -444,6 +450,7 @@ pub async fn forward_get_streaming_with_proto(
     let timeout = upstream_timeout_for_path(upstream.timeout, path_and_query);
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(resp)) => {
+            upstream.passive.record(true);
             let (mut parts, body) = resp.into_parts();
             strip_hop_by_hop_headers(&mut parts.headers);
 
@@ -455,6 +462,7 @@ pub async fn forward_get_streaming_with_proto(
         }
         Ok(Err(err)) => {
             warn!(%err, "upstream error");
+            upstream.passive.record(false);
             note_502(metrics);
             bad_gateway()
         }
@@ -463,6 +471,7 @@ pub async fn forward_get_streaming_with_proto(
                 timeout_ms = upstream.timeout.as_millis(),
                 "upstream timeout"
             );
+            upstream.passive.record(false);
             note_504(metrics);
             gateway_timeout()
         }
@@ -515,6 +524,7 @@ pub async fn forward_request(
     let timeout = upstream_timeout_for_path(upstream.timeout, &path_and_query);
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(resp)) => {
+            upstream.passive.record(true);
             let (mut parts, body) = resp.into_parts();
             strip_hop_by_hop_headers(&mut parts.headers);
 
@@ -523,6 +533,7 @@ pub async fn forward_request(
         }
         Ok(Err(err)) => {
             warn!(%err, "upstream error");
+            upstream.passive.record(false);
             note_502(metrics);
             bad_gateway()
         }
@@ -531,6 +542,7 @@ pub async fn forward_request(
                 timeout_ms = upstream.timeout.as_millis(),
                 "upstream timeout"
             );
+            upstream.passive.record(false);
             note_504(metrics);
             gateway_timeout()
         }
@@ -569,9 +581,13 @@ pub async fn forward_request_complete(
     let request = client.request(req);
     let timeout = upstream_timeout_for_path(upstream.timeout, &path_and_query);
     let resp = match tokio::time::timeout(timeout, request).await {
-        Ok(Ok(resp)) => resp,
+        Ok(Ok(resp)) => {
+            upstream.passive.record(true);
+            resp
+        }
         Ok(Err(err)) => {
             warn!(%err, "upstream error");
+            upstream.passive.record(false);
             note_502(metrics);
             return bad_gateway();
         }
@@ -580,6 +596,7 @@ pub async fn forward_request_complete(
                 timeout_ms = upstream.timeout.as_millis(),
                 "upstream timeout"
             );
+            upstream.passive.record(false);
             note_504(metrics);
             return gateway_timeout();
         }
@@ -597,6 +614,9 @@ pub async fn forward_request_complete(
             if let Some(expected) = declared {
                 if bytes.len() as u64 != expected {
                     warn!(expected, got = bytes.len(), "upstream body collect error");
+                    // NG-08: truncated body mid-exchange is a transport failure
+                    // (net outcome: head success + body failure = one fail).
+                    upstream.passive.record(false);
                     note_502(metrics);
                     return bad_gateway();
                 }
@@ -613,6 +633,7 @@ pub async fn forward_request_complete(
         }
         Err(err) => {
             warn!(%err, "upstream body collect error");
+            upstream.passive.record(false);
             note_502(metrics);
             bad_gateway()
         }

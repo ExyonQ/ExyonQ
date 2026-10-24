@@ -1,8 +1,8 @@
 # ADR-055 — `.htaccess` fail-closed for non-applied directives (Q-03 / v0.6 F2)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** Cap htaccess overlay (rewrite-only), EXY-HTACCESS-* registry
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** Cap htaccess overlay (rewrite-only), EXY-HTACCESS-* registry  
 **Contract:** CONDITIONAL ACCEPT — security/header directives must never publish silently
 
 ## Context
@@ -22,17 +22,17 @@ Every error line includes **file:line**, stable code, and an **exact alternative
 
 ### Still silent-ok (v0 overlay)
 
-Executed: `DirectoryIndex`, `Redirect`, `RewriteEngine`, `RewriteRule`/`RewriteCond` (limited), `Options -Indexes`.
+Executed: `DirectoryIndex`, `Redirect`, `RewriteEngine`, `RewriteRule`/`RewriteCond` (limited), `Options -Indexes`.  
 `parsed:` (RedirectMatch, RewriteBase, unsupported Options tokens) remain non-fatal unless listed above.
 
 ### Non-goals
 
-- Full Apache `.htaccess` execution
-- Auto-migration of `Require` into WAF rules
-- Changing Cap040 drain / Q-05 WebSocket guarantees
+- Full Apache `.htaccess` execution  
+- Auto-migration of `Require` into WAF rules  
+- Changing Cap040 drain / Q-05 WebSocket guarantees  
 
 ## Consequences
 
-- `compile_and_publish` retains prior overlay on these errors (`EXY-HTACCESS-0005` path).
-- `exyonqctl htaccess explain` classifies the same names as FORBIDDEN/UNSUPPORTED.
+- `compile_and_publish` retains prior overlay on these errors (`EXY-HTACCESS-0005` path).  
+- `exyonqctl htaccess explain` classifies the same names as FORBIDDEN/UNSUPPORTED.  
 - Residual broad overlay: `F1-R05` (DEFER_LATER) remains for full Header/Expires/Auth product support.

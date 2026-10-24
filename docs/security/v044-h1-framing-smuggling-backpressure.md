@@ -9,7 +9,7 @@ FOUNDATION_WITH_BODY = FORCE_CLOSE
 UPSTREAM_TRAILING_BYTES = POISON (no pool reuse after response — fail-closed)
 ```
 
-Independent audit: `INDEPENDENT_SMUGGLING_AUDIT = PASS`
+Independent audit: `INDEPENDENT_SMUGGLING_AUDIT = PASS`  
 Evidence: `.exyonq-local/evidence/competitive-frontier-request-bodies-backpressure/20260828-224420/security-audit.md`
 
 ## Slowloris / absolute header deadline (L4-P2-001)

@@ -312,6 +312,14 @@ async fn async_main() -> anyhow::Result<()> {
                 .map_err(|_| anyhow::anyhow!("observability runtime already registered"))?;
             // Q-04 / ADR-057: FPC counters on /metrics for `exyonqctl cache stats`.
             exyonq_module_api::register_prometheus_appender(exyonq_core::append_fpc_prometheus);
+            // NG-09: upstream DNS re-resolve counters on /metrics.
+            exyonq_module_api::register_prometheus_appender(
+                exyonq_mod_proxy::append_dns_prometheus,
+            );
+            // NG-10: active health probe counters + state gauge on /metrics.
+            exyonq_module_api::register_prometheus_appender(
+                exyonq_mod_proxy::append_health_prometheus,
+            );
             exyonq_reload_runtime::register_reload_runtime()
                 .map_err(|_| anyhow::anyhow!("reload runtime already registered"))?;
             l2_coord_lab::maybe_install_l2_coord_lab(&app_config)?;
@@ -668,8 +676,9 @@ mod htaccess_overlay_tests {
             try_uri: None,
             try_uri_dir: None,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
+            cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         });
         config.pools_fcgi.insert(
             "php".into(),
@@ -714,8 +723,9 @@ mod htaccess_overlay_tests {
             try_uri: None,
             try_uri_dir: None,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
+            cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         });
         assert!(compile_htaccess_site_bindings(&config).is_empty());
     }

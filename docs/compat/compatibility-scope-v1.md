@@ -1,6 +1,6 @@
 # Compatibility scope V1
 
-**Status:** active for ExyonQ 0.5.0
+**Status:** active for ExyonQ 0.4.11 cut  
 **Rule:** offline importers only — ExyonQ never reads Apache/NGINX config at runtime.
 
 ## Declared sources
@@ -19,14 +19,17 @@ In scope for successful TOML emit when product IR already exists:
 - `DocumentRoot` + optional `DirectoryIndex` → static route
 - `Alias` → extra static routes
 - `Redirect` / safe literal `RewriteRule … [R=…]` → redirect routes
+- Patterned `RewriteRule` (`$1..$9`, `[L]`/`[R=…]`/`[NC]`) → `match.regex` + `rewrite` rule (ADR-048 / NG-02)
+- Minimal `RewriteCond` (`%{REQUEST_URI|HTTP_HOST|QUERY_STRING|HTTP:Header}`, AND) → `rewrite.when`
 - `SSLEngine` + cert/key → `[[server]].tls`
 - Authority-only `ProxyPass` → `[[upstream]]` + proxy route
+- `ProxyPassReverse <local-path> <remote-url>` → `[[route.location_rewrite]]` (F3-R20: `Location`/`Content-Location`/`URI`)
 - PHP-FPM via `ProxyPassMatch` / `FilesMatch`+`SetHandler` → `[[fcgi_pool]]` + fastcgi route
 
 Still **REJECTED_UNSUPPORTED** (blocks clean migration until product grows):
 
-- `ErrorDocument`, `AuthType` / `Require`, `ProxyPassReverse`
-- Regex `RewriteRule` / `RewriteCond` / `RedirectMatch`
+- `ErrorDocument`, `AuthType` / `Require`
+- Advanced rewrite: `RewriteCond [OR]` / `!` / unlisted vars / flags `QSA|PT|END|…`; `RedirectMatch`
 - `ProxyPass` with upstream path, balancers, variables
 - `Include` / `IncludeOptional`
 - Unknown directives (never silent)

@@ -21,7 +21,7 @@
 
 use exyonq_module_api::cache_purge::{CachePurgePort, CachePurgeSocketConfig};
 use exyonq_module_api::kernel_control::{
-    ControlPlaneService, KernelControlPort, OpsCommand, OpsCommandOutcome,
+    ControlPlaneService, KernelControlPort, MemberRequest, OpsCommand, OpsCommandOutcome,
 };
 use serde::Serialize;
 use std::io::ErrorKind;
@@ -44,14 +44,92 @@ pub const CONTROL_SOCKET_MODE: u32 = 0o600;
 
 /// Parse one control line into a known command (case-insensitive).
 pub fn parse_command_line(line: &str) -> Result<OpsCommand, String> {
-    match line.trim().to_ascii_lowercase().as_str() {
+    let line = line.trim();
+    let lower = line.to_ascii_lowercase();
+    match lower.as_str() {
         "reload" => Ok(OpsCommand::Reload),
         "status" => Ok(OpsCommand::Status),
         "drain" => Ok(OpsCommand::Drain),
         "shutdown" => Ok(OpsCommand::Shutdown),
         "" => Err("empty command".into()),
+        _ if lower.starts_with("member ") => {
+            let req = parse_member_args(&line["member ".len()..])?;
+            Ok(if req.endpoint_id.is_some() {
+                OpsCommand::MemberSet
+            } else {
+                OpsCommand::MemberList
+            })
+        }
         other => Err(format!("unknown command: {other}")),
     }
+}
+
+/// AP-01: parse `member list [upstream=<name>]` /
+/// `member set <id> [upstream=<name>] [enabled=<bool>|status=<E|D>] [weight=<u32>|loadfactor=<u32>]`.
+pub fn parse_member_args(args: &str) -> Result<MemberRequest, String> {
+    let mut req = MemberRequest::default();
+    let mut toks = args.split_whitespace();
+    let verb = toks.next().unwrap_or("");
+    match verb {
+        "list" => {
+            for tok in toks {
+                req.upstream = Some(
+                    tok.strip_prefix("upstream=")
+                        .ok_or_else(|| format!("unknown member arg: {tok}"))?
+                        .to_string(),
+                );
+            }
+            return Ok(req);
+        }
+        "set" => {
+            req.endpoint_id = Some(
+                toks.next()
+                    .ok_or("member set requires <endpoint_id>")?
+                    .to_string(),
+            );
+        }
+        other => return Err(format!("unknown member verb: {other}")),
+    }
+    for tok in toks {
+        let (key, val) = tok
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value: {tok}"))?;
+        match key.to_ascii_lowercase().as_str() {
+            "upstream" => req.upstream = Some(val.to_string()),
+            "enabled" => {
+                req.enabled = Some(match val.to_ascii_lowercase().as_str() {
+                    "true" | "1" | "on" | "enabled" => true,
+                    "false" | "0" | "off" | "disabled" => false,
+                    _ => return Err(format!("invalid enabled value: {val}")),
+                })
+            }
+            "status" => {
+                req.enabled = Some(match val.to_ascii_uppercase().as_str() {
+                    "E" | "ENABLED" => true,
+                    "D" | "DISABLED" => false,
+                    _ => return Err(format!("unsupported status: {val}")),
+                })
+            }
+            "weight" | "loadfactor" => {
+                req.weight = Some(
+                    val.parse::<u32>()
+                        .map_err(|_| format!("invalid weight: {val}"))?,
+                )
+            }
+            "route" => {
+                return Err(
+                    "route is config-time endpoint identity; change it in config + reload".into(),
+                )
+            }
+            other => return Err(format!("unknown member key: {other}")),
+        }
+    }
+    if req.enabled.is_none() && req.weight.is_none() {
+        return Err(
+            "member set requires at least one of enabled=/status=/weight=/loadfactor=".into(),
+        );
+    }
+    Ok(req)
 }
 
 #[derive(Serialize)]
@@ -70,6 +148,9 @@ struct ControlResponseJson<'a> {
     reload_in_progress: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<&'a str>,
+    /// AP-01: member rows for member_list/member_set outcomes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<serde_json::Value>,
 }
 
 fn command_label(command: OpsCommand) -> &'static str {
@@ -78,6 +159,8 @@ fn command_label(command: OpsCommand) -> &'static str {
         OpsCommand::Status => "status",
         OpsCommand::Drain => "drain",
         OpsCommand::Shutdown => "shutdown",
+        OpsCommand::MemberList => "member_list",
+        OpsCommand::MemberSet => "member_set",
     }
 }
 
@@ -94,6 +177,10 @@ fn to_json(outcome: &OpsCommandOutcome) -> ControlResponseJson<'_> {
         draining: outcome.snapshot.draining,
         reload_in_progress: outcome.snapshot.reload_in_progress,
         version: outcome.snapshot.version.as_deref(),
+        payload: outcome
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str(p).ok()),
     }
 }
 
@@ -107,6 +194,7 @@ async fn dispatch_command(
         OpsCommand::Status => port.read_status(true),
         OpsCommand::Drain => port.request_drain(),
         OpsCommand::Shutdown => port.request_shutdown(),
+        OpsCommand::MemberList | OpsCommand::MemberSet => unreachable!(),
     }
 }
 
@@ -124,10 +212,13 @@ struct UnknownControlResponse<'a> {
     version: Option<&'a str>,
 }
 
-fn unknown_json(outcome: &OpsCommandOutcome) -> UnknownControlResponse<'_> {
+fn unknown_json<'a>(
+    outcome: &'a OpsCommandOutcome,
+    command: &'static str,
+) -> UnknownControlResponse<'a> {
     UnknownControlResponse {
         ok: false,
-        command: "unknown",
+        command,
         generation: outcome.snapshot.generation,
         fingerprint: outcome.snapshot.fingerprint.clone(),
         error: outcome.error.clone().unwrap_or_default(),
@@ -310,7 +401,7 @@ async fn handle_client(
             let mut base = port.read_status(false);
             base.ok = false;
             base.error = Some(err);
-            let payload = serde_json::to_string(&unknown_json(&base))? + "\n";
+            let payload = serde_json::to_string(&unknown_json(&base, "unknown"))? + "\n";
             // LET-197 / SUB-LET-CTRL-WRITE-FALSE-OK: handle_client's Result includes
             // control response delivery. Discarding write_response Err then returning
             // Ok(()) reported false success while the client never received the reply.
@@ -321,7 +412,28 @@ async fn handle_client(
 
     let parsed = parse_command_line(&command_line);
     let is_unknown = parsed.is_err();
+    // Keep the member verb in the error label instead of a bare "unknown".
+    let mut tokens = command_line.split_whitespace();
+    let error_label: &'static str = match (tokens.next(), tokens.next()) {
+        (Some("member"), Some("list")) => "member_list",
+        (Some("member"), Some("set")) => "member_set",
+        _ => "unknown",
+    };
     let outcome = match parsed {
+        Ok(cmd @ (OpsCommand::MemberList | OpsCommand::MemberSet)) => {
+            match parse_member_args(command_line.trim()["member ".len()..].trim()) {
+                Ok(req) if cmd == OpsCommand::MemberList => {
+                    port.member_list(req.upstream.as_deref())
+                }
+                Ok(req) => port.member_set(&req),
+                Err(err) => {
+                    let mut base = port.read_status(false);
+                    base.ok = false;
+                    base.error = Some(err);
+                    base
+                }
+            }
+        }
         Ok(cmd) => dispatch_command(cmd, &config_path, &port).await,
         Err(err) => {
             let mut base = port.read_status(false);
@@ -332,7 +444,7 @@ async fn handle_client(
     };
 
     let payload = if is_unknown {
-        serde_json::to_string(&unknown_json(&outcome))? + "\n"
+        serde_json::to_string(&unknown_json(&outcome, error_label))? + "\n"
     } else {
         serde_json::to_string(&to_json(&outcome))? + "\n"
     };
@@ -482,6 +594,7 @@ mod tests {
                 },
                 error: None,
                 code: None,
+                payload: None,
             }
         }
 
@@ -512,6 +625,7 @@ mod tests {
                 },
                 error: None,
                 code: None,
+                payload: None,
             }
         }
     }
@@ -524,6 +638,45 @@ mod tests {
         assert!(parse_command_line("nope").is_err());
     }
 
+    #[test]
+    fn parses_member_commands() {
+        assert_eq!(
+            parse_command_line("member list").unwrap(),
+            OpsCommand::MemberList
+        );
+        assert_eq!(
+            parse_command_line("member list upstream=backend").unwrap(),
+            OpsCommand::MemberList
+        );
+        assert_eq!(
+            parse_command_line("member set ep-b weight=0").unwrap(),
+            OpsCommand::MemberSet
+        );
+        assert_eq!(
+            parse_command_line("member set ep-a upstream=up enabled=false weight=3").unwrap(),
+            OpsCommand::MemberSet
+        );
+        assert_eq!(
+            parse_command_line("member set ep-a status=D loadfactor=5").unwrap(),
+            OpsCommand::MemberSet
+        );
+        assert!(parse_command_line("member").is_err());
+        assert!(parse_command_line("member set ep-a").is_err()); // no field pairs
+        assert!(parse_command_line("member frobnicate ep-a weight=1").is_err());
+        assert!(parse_command_line("member set ep-a weight=abc").is_err());
+        assert!(parse_command_line("member set ep-a route=x").is_err()); // unsupported key
+
+        let req = parse_member_args("set ep-a upstream=up enabled=off loadfactor=7").unwrap();
+        assert_eq!(req.endpoint_id.as_deref(), Some("ep-a"));
+        assert_eq!(req.upstream.as_deref(), Some("up"));
+        assert_eq!(req.enabled, Some(false));
+        assert_eq!(req.weight, Some(7));
+
+        let req = parse_member_args("list").unwrap();
+        assert!(req.endpoint_id.is_none());
+        assert!(req.upstream.is_none());
+    }
+
     #[tokio::test]
     async fn unknown_command_maps_to_error_outcome() {
         let port = Arc::new(StubPort);
@@ -531,7 +684,7 @@ mod tests {
         base.ok = false;
         base.error = Some("unknown command: foo".into());
         assert!(!base.ok);
-        let json = unknown_json(&base);
+        let json = unknown_json(&base, "unknown");
         assert_eq!(json.command, "unknown");
     }
 

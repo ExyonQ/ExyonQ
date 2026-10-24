@@ -137,7 +137,9 @@ mod tests {
 
     #[test]
     fn dns_heuristics() {
-        assert!(looks_like_dns("dns error: failed to lookup address information"));
+        assert!(looks_like_dns(
+            "dns error: failed to lookup address information"
+        ));
         assert!(looks_like_dns("Name or service not known"));
         assert!(!looks_like_dns("Connection refused (os error 61)"));
         assert_eq!(cause_for_connect(Some("dns error")), "dns");

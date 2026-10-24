@@ -24,7 +24,7 @@ mod endpoint_set_property_tests;
 mod error;
 mod full_page_cache;
 mod logging;
-mod modules;
+pub mod modules;
 mod registry;
 mod static_preload;
 mod upstream_health;
@@ -52,7 +52,7 @@ pub use logging::{
     FileLoggingConfig, FileRotationConfig, JournaldLoggingConfig, LogFormat, LoggingConfig,
     OtelLoggingConfig, OtlpProtocol, SyslogLoggingConfig,
 };
-pub use modules::{CompressionConfig, MetricsConfig, ModulesConfig, RateLimitConfig};
+pub use modules::{CompressionConfig, MetricsConfig, ModulesConfig, RateLimitConfig, RealIpConfig};
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
 pub use static_preload::{
     StaticEncodingCacheConfig, StaticPreloadConfig, StaticSectionConfig,
@@ -166,12 +166,30 @@ pub struct ServerConfig {
     /// TOML keys are strings (`"404"`) for stable serde.
     #[serde(default)]
     pub error_pages: HashMap<String, String>,
+    /// NG-06 / F3: PROXY protocol v1/v2 for real client IP behind LBs.
+    /// If enabled, the listener expects a PROXY header before any TLS/HTTP bytes.
+    #[serde(default)]
+    pub proxy_protocol: Option<ProxyProtocolConfig>,
 }
 
 impl ServerConfig {
     pub fn server_name_list(&self) -> Vec<String> {
         self.server_name.to_vec()
     }
+}
+
+/// NG-06 / F3: PROXY protocol configuration.
+/// If enabled, the listener expects a PROXY v1/v2 header before any TLS/HTTP bytes.
+/// If `trusted` is set, only connections from those CIDRs may send PROXY headers.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyProtocolConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Trusted proxy CIDRs. If empty, accept PROXY from any peer (unsafe).
+    /// Example: `trusted = ["10.0.0.0/8", "192.168.0.0/16"]`
+    #[serde(default)]
+    pub trusted: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -259,6 +277,24 @@ pub struct RouteConfig {
     /// ADR-062 / F1-R19: outbound client response headers (route-scoped `add_header` / `Header set`).
     #[serde(default)]
     pub response_headers: Vec<ResponseHeaderConfig>,
+    /// F3-R20: response `Location`/`Content-Location`/`URI` prefix rewrite
+    /// (`ProxyPassReverse` / `proxy_redirect`).
+    #[serde(default)]
+    pub location_rewrite: Vec<LocationRewriteConfig>,
+}
+
+/// F3-R20: one response-location rewrite rule (`ProxyPassReverse` /
+/// `proxy_redirect`). When an upstream response `Location`,
+/// `Content-Location` or `URI` header starts with `from` (scheme+authority
+/// compared case-insensitively, path case-sensitively), that prefix is
+/// replaced by `to`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocationRewriteConfig {
+    /// Upstream URL prefix as seen by the backend (e.g. `http://backend/`).
+    pub from: String,
+    /// Public prefix the client must see (`/app` path or absolute URL).
+    pub to: String,
 }
 
 /// ADR-062 / F1-R19: one outbound client response header.
@@ -302,9 +338,7 @@ impl CacheHeadersConfig {
         if mime.is_empty() {
             return None;
         }
-        self.by_mime
-            .get(mime)
-            .or_else(|| self.by_mime.get("*"))
+        self.by_mime.get(mime).or_else(|| self.by_mime.get("*"))
     }
 
     /// `Cache-Control` value for a content-type, if configured.
@@ -669,6 +703,30 @@ pub struct UpstreamConfig {
     pub max_connect_retries: u8,
     /// Cap024: opt-in active HTTP health checks (default disabled).
     pub health_check: UpstreamHealthCheckConfig,
+    /// NG-07: cookie name minted/read by `CookieAffinity`. Normalized to
+    /// [`DEFAULT_STICKY_COOKIE`] when that policy is configured without a name.
+    pub sticky_cookie: Option<String>,
+    /// NG-07: request header name whose value keys `HeaderAffinity`
+    /// (required for that policy).
+    pub sticky_header: Option<String>,
+    /// NG-09: periodic DNS re-resolve interval for hostname endpoints.
+    /// 0 = off (nginx parity: no `resolver` configured → no periodic refresh).
+    /// Per-dial resolution already picks up IP changes for new connections;
+    /// this adds scheduled re-resolution + `exyonq_upstream_dns_*` observability.
+    pub dns_refresh_ms: u64,
+}
+
+/// NG-09: upper bound for `dns_refresh_ms` (24h).
+pub const MAX_DNS_REFRESH_MS: u64 = 86_400_000;
+
+/// NG-07: default route-cookie name for `cookie_affinity`.
+pub const DEFAULT_STICKY_COOKIE: &str = "EXYONQ_ROUTE";
+
+/// RFC 9110 token check for header names and cookie names used as affinity keys.
+fn is_http_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
 }
 
 impl UpstreamConfig {
@@ -685,6 +743,9 @@ impl UpstreamConfig {
             timeout_ms,
             default_max_connect_retries(),
             UpstreamHealthCheckConfig::default(),
+            None,
+            None,
+            0,
         )
         .expect("valid legacy upstream")
     }
@@ -701,7 +762,15 @@ impl UpstreamConfig {
         timeout_ms: u64,
         max_connect_retries: u8,
         health_check: UpstreamHealthCheckConfig,
+        sticky_cookie: Option<String>,
+        sticky_header: Option<String>,
+        dns_refresh_ms: u64,
     ) -> Result<Self, ConfigError> {
+        if dns_refresh_ms > MAX_DNS_REFRESH_MS {
+            return Err(ConfigError::Parse(format!(
+                "upstream `{name}`: dns_refresh_ms={dns_refresh_ms} exceeds max {MAX_DNS_REFRESH_MS}"
+            )));
+        }
         // Cap021 v1: only 0..=1; larger Envoy-style budgets rejected until later admission.
         if max_connect_retries > 1 {
             return Err(ConfigError::Parse(format!(
@@ -715,6 +784,53 @@ impl UpstreamConfig {
             )));
         }
         health_check.validate(&name)?;
+        // NG-07: header affinity is meaningless without a key source — fail
+        // closed at config load (same class as other upstream parse errors).
+        let sticky_header = match sticky_header {
+            Some(h)
+                if h.trim().is_empty()
+                    && selection_policy != EndpointSelectionPolicy::HeaderAffinity =>
+            {
+                None
+            }
+            Some(h) => {
+                let h = h.trim();
+                if !is_http_token(h) {
+                    return Err(ConfigError::Parse(format!(
+                        "upstream `{name}`: sticky_header `{h}` is not a valid HTTP token"
+                    )));
+                }
+                Some(h.to_string())
+            }
+            None => None,
+        };
+        if matches!(selection_policy, EndpointSelectionPolicy::HeaderAffinity)
+            && sticky_header.is_none()
+        {
+            return Err(ConfigError::Parse(format!(
+                "upstream `{name}`: selection_policy=header_affinity requires non-empty sticky_header"
+            )));
+        }
+        let sticky_cookie = match sticky_cookie {
+            Some(c) if c.trim().is_empty() => {
+                return Err(ConfigError::Parse(format!(
+                    "upstream `{name}`: sticky_cookie must be non-empty when set"
+                )))
+            }
+            Some(c) => {
+                let c = c.trim();
+                if !is_http_token(c) {
+                    return Err(ConfigError::Parse(format!(
+                        "upstream `{name}`: sticky_cookie `{c}` is not a valid HTTP token"
+                    )));
+                }
+                Some(c.to_string())
+            }
+            None if matches!(selection_policy, EndpointSelectionPolicy::CookieAffinity) => {
+                Some(DEFAULT_STICKY_COOKIE.to_string())
+            }
+            None => None,
+        };
         let target_trimmed = target
             .as_ref()
             .map(|t| t.trim().to_string())
@@ -753,6 +869,9 @@ impl UpstreamConfig {
             timeout_ms,
             max_connect_retries,
             health_check,
+            sticky_cookie,
+            sticky_header,
+            dns_refresh_ms,
         })
     }
 
@@ -811,6 +930,13 @@ struct RawUpstreamConfig {
     max_connect_retries: u8,
     #[serde(default)]
     health_check: UpstreamHealthCheckConfig,
+    #[serde(default)]
+    sticky_cookie: Option<String>,
+    #[serde(default)]
+    sticky_header: Option<String>,
+    /// NG-09: 0 = periodic re-resolve disabled.
+    #[serde(default)]
+    dns_refresh_ms: u64,
 }
 
 impl TryFrom<RawUpstreamConfig> for UpstreamConfig {
@@ -826,6 +952,9 @@ impl TryFrom<RawUpstreamConfig> for UpstreamConfig {
             raw.timeout_ms,
             raw.max_connect_retries,
             raw.health_check,
+            raw.sticky_cookie,
+            raw.sticky_header,
+            raw.dns_refresh_ms,
         )
     }
 }
@@ -1042,6 +1171,7 @@ impl AppConfig {
             validate_htaccess_overlay(route, &pools_fcgi)?;
             validate_proxy_set_headers(route, &maps)?;
             validate_response_headers(route)?;
+            validate_location_rewrites(route)?;
             if let Some(upstream) = &route.upstream {
                 if !upstreams.contains_key(upstream) {
                     return Err(ConfigError::UnknownUpstream {
@@ -1093,6 +1223,7 @@ impl AppConfig {
         waf::validate_waf(&raw.waf)?;
         validate_metrics_config(&raw.modules.metrics, &raw.server)?;
         validate_ratelimit_config(&raw.modules.ratelimit)?;
+        raw.modules.real_ip.validate()?;
         if let Err(message) = validate_logging(&raw.logging) {
             return Err(ConfigError::Parse(message));
         }
@@ -1723,9 +1854,7 @@ fn validate_rewrite_replacement_template(template: &str) -> Result<(), ConfigErr
             // Named vars: $uri / $host
             let start = i + 1;
             let mut j = start;
-            while j < bytes.len()
-                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
-            {
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
                 j += 1;
             }
             if j == start {
@@ -1982,6 +2111,43 @@ fn validate_proxy_set_headers(
             )));
         }
         validate_header_template(&h.value, maps)?;
+    }
+    Ok(())
+}
+
+/// F3-R20: compile-time checks for `[[route.location_rewrite]]`.
+fn validate_location_rewrites(route: &RouteConfig) -> Result<(), ConfigError> {
+    if route.location_rewrite.is_empty() {
+        return Ok(());
+    }
+    if route.upstream.is_none() {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: location_rewrite requires upstream (F3-R20)",
+            route.name
+        )));
+    }
+    for r in &route.location_rewrite {
+        for (what, v) in [("from", r.from.as_str()), ("to", r.to.as_str())] {
+            if v.is_empty() || v.bytes().any(|b| b <= 0x20 || b == 0x7f) || v.contains('$') {
+                return Err(ConfigError::Parse(format!(
+                    "route `{}`: invalid location_rewrite {what} `{v}`",
+                    route.name
+                )));
+            }
+        }
+        if !(r.from.starts_with("http://") || r.from.starts_with("https://")) {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: location_rewrite from must be an absolute http(s) URL (`{}`)",
+                route.name, r.from
+            )));
+        }
+        if !r.to.starts_with('/') && !(r.to.starts_with("http://") || r.to.starts_with("https://"))
+        {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: location_rewrite to must be a `/` path or absolute http(s) URL (`{}`)",
+                route.name, r.to
+            )));
+        }
     }
     Ok(())
 }
@@ -3946,6 +4112,9 @@ root = "/tmp"
             MAX_UPSTREAM_TIMEOUT_MS + 1,
             1,
             UpstreamHealthCheckConfig::default(),
+            None,
+            None,
+            0,
         )
         .unwrap_err();
         let msg = err.to_string();
@@ -3964,6 +4133,9 @@ root = "/tmp"
                 ms,
                 1,
                 UpstreamHealthCheckConfig::default(),
+                None,
+                None,
+                0,
             )
             .expect("bound ok");
         }
@@ -4022,6 +4194,75 @@ enabled = true
             err.contains("scrape_bearer_token") && err.contains("LA-CAP054-008"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn ng11_real_ip_enabled_requires_trusted() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/tmp"
+[modules.real_ip]
+enabled = true
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(err.contains("trusted"), "{err}");
+    }
+
+    #[test]
+    fn ng11_real_ip_rejects_bad_cidr_and_bad_header() {
+        let base = |trusted: &str, header: &str| {
+            format!(
+                r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = {{ path = "/" }}
+root = "/tmp"
+[modules.real_ip]
+enabled = true
+trusted = [{trusted}]
+header = {header}
+"#
+            )
+        };
+        let err = AppConfig::parse_str(&base(r#""not-a-cidr""#, r#""x-forwarded-for""#))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not-a-cidr"), "{err}");
+        let err = AppConfig::parse_str(&base(r#""10.0.0.0/8""#, r#""bad header""#))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("header"), "{err}");
+        AppConfig::parse_str(&base(r#""10.0.0.0/8", "192.0.2.10""#, r#""x-real-ip""#))
+            .expect("valid real_ip config");
+    }
+
+    #[test]
+    fn ng11_real_ip_disabled_skips_validation() {
+        // Disabled module ignores malformed entries — never consulted at runtime.
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/tmp"
+[modules.real_ip]
+enabled = false
+trusted = ["garbage"]
+"#;
+        AppConfig::parse_str(toml).expect("disabled real_ip skips validation");
     }
 
     #[test]
@@ -4178,7 +4419,10 @@ name = "Cache-Control"
 value = "no-store"
 "#;
         let err = AppConfig::parse_str(toml).unwrap_err().to_string();
-        assert!(err.contains("denylist") || err.contains("Cache-Control"), "{err}");
+        assert!(
+            err.contains("denylist") || err.contains("Cache-Control"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -4194,5 +4438,181 @@ match = { regex = "^/x$" }
 rewrite = { pattern = "^/x$", replacement = "/h/$host$uri", flag = "last" }
 "#;
         AppConfig::parse_str(toml).expect("rewrite $host/$uri ok");
+    }
+
+    #[test]
+    fn ng07_upstream_endpoints_and_policy_parse() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+[[upstream]]
+name = "b"
+endpoints = [
+    { address = "10.0.0.1", port = 8001, weight = 3 },
+    { address = "10.0.0.2", port = 8001 },
+]
+selection_policy = "least_conn"
+"#;
+        let cfg = AppConfig::parse_str(toml).expect("parse");
+        let up = &cfg.upstreams["b"];
+        assert_eq!(up.endpoint_set.endpoints().len(), 2);
+        assert_eq!(up.selection_policy, EndpointSelectionPolicy::LeastConn);
+        assert!(
+            up.endpoint_set.endpoints().iter().any(|e| e.weight == 3),
+            "weight flag must reach the endpoint"
+        );
+    }
+
+    #[test]
+    fn ng09_dns_refresh_ms_parses_and_bounds() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+[[upstream]]
+name = "b"
+endpoints = [{ address = "backend.internal", port = 8001 }]
+dns_refresh_ms = 5000
+"#;
+        let cfg = AppConfig::parse_str(toml).expect("parse");
+        assert_eq!(cfg.upstreams["b"].dns_refresh_ms, 5_000);
+        // Bound check: over MAX_DNS_REFRESH_MS must error, not clamp.
+        let err = UpstreamConfig::try_from_parts(
+            "u".into(),
+            Some("http://127.0.0.1:9".into()),
+            Vec::new(),
+            EndpointSelectionPolicy::default(),
+            EndpointFailoverPolicy::default(),
+            1_000,
+            1,
+            UpstreamHealthCheckConfig::default(),
+            None,
+            None,
+            crate::MAX_DNS_REFRESH_MS + 1,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("dns_refresh_ms"), "{err}");
+    }
+
+    #[test]
+    fn ng07_header_affinity_requires_sticky_header() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+[[upstream]]
+name = "b"
+target = "http://10.0.0.1:80"
+selection_policy = "header_affinity"
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(err.contains("sticky_header"), "{err}");
+    }
+
+    #[test]
+    fn ng07_cookie_affinity_defaults_sticky_cookie() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+[[upstream]]
+name = "b"
+target = "http://10.0.0.1:80"
+selection_policy = "cookie_affinity"
+"#;
+        let cfg = AppConfig::parse_str(toml).expect("parse");
+        assert_eq!(
+            cfg.upstreams["b"].sticky_cookie.as_deref(),
+            Some(DEFAULT_STICKY_COOKIE)
+        );
+    }
+
+    #[test]
+    fn ng07_sticky_cookie_empty_or_invalid_rejected() {
+        for bad in ["", "bad name", "semi;colon", "comma,sep"] {
+            let toml = format!(
+                r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = {{ path = "/" }}
+upstream = "b"
+[[upstream]]
+name = "b"
+target = "http://10.0.0.1:80"
+selection_policy = "cookie_affinity"
+sticky_cookie = "{bad}"
+"#,
+            );
+            let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+            assert!(
+                err.contains("sticky_cookie"),
+                "bad cookie `{bad}` must error, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn ng07_sticky_header_invalid_token_rejected() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+[[upstream]]
+name = "b"
+target = "http://10.0.0.1:80"
+selection_policy = "header_affinity"
+sticky_header = "x bad name"
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(err.contains("sticky_header"), "{err}");
+    }
+
+    #[test]
+    fn ng07_ambiguous_target_and_endpoints_rejected() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+[[upstream]]
+name = "b"
+target = "http://10.0.0.1:80"
+endpoints = [{ address = "10.0.0.2", port = 80 }]
+"#;
+        assert!(AppConfig::parse_str(toml).is_err());
     }
 }

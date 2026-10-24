@@ -633,7 +633,7 @@ NO_FRAME_RELEASE_BEFORE_FULL_WRITE = YES
 | `Cancelled` | drain/shutdown/deadline | — | abort | NO | NO | cancel | cancel |
 | `InternalInvariant` | shell bug | 500 | poison | NO | NO | poison | internal |
 
-\*Cap021 connect-only, bounded by `RetryPolicyView`
+\*Cap021 connect-only, bounded by `RetryPolicyView`  
 \*\*pre-commit timeout may retry if class proven connect-only
 
 Existing `UpstreamAttemptClass` remains upstream attempt oracle — **mapped into** `ProxyError`, not parallel taxonomy.

@@ -10,10 +10,8 @@ P14CLEAN_GITHUB_INITIAL_VERSION = v0.4.0
 P14CLEAN_GITHUB_PREVIOUS_LEGACY_VERSION = v0.3.3
 P14CLEAN_GITHUB_REUSE_LEGACY_TAGS = NO
 P14CLEAN_GITHUB_IMMUTABLE_RELEASE_WARNING_ACK = YES
-PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.6.0.1
-WORKSPACE_VERSION = 0.6.0
-WORKSPACE_PUBLICATION = PUBLISHED
+PUBLICATION_STATUS = PRIVATE_ONLY
+PUBLIC_OPENING = NOT_AUTHORIZED
 LATEST_CHANGED = NO
 ```
 
@@ -27,215 +25,43 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ### Notes
 
-- Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
+- Public **v0.4.11** published on exyonq-github (see below). Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
 ---
 
-## [0.6.0] — 2026-10-18
-
-Product version 0.6.0. Builds on the 0.5.0 public tree. GitHub release/source archive: **v0.6.0.1**. Images: `ghcr.io/exyonq/exyonq:0.6.0.1`, `ghcr.io/exyonq/exyonq-wordpress:0.6.0.1`, `exyonq/exyonq:0.6.0.1`, and `exyonq/exyonq-wordpress:0.6.0.1`, all `linux/amd64` and `linux/arm64`. No `:latest` tag. Docker Hub tags `:0.6.0` were removed.
-
-### Added
-
-- `.htaccess` fail-closed diagnostics for security/header directives that are not applied.
-- `X-Cache` / `X-Cache-Reason` plus `exyonqctl cache stats|explain`.
-- WebSocket and keepalive guarantees across reload/drain (live tunnels survive; new upgrades rejected under drain).
-- `exyonqctl config explain` provenance (`--path` / `--pointer`).
-- Reload route diff summary (`routes_added` / `routes_removed` + fingerprint).
-- FCGI pool saturation diagnostics and `exyonq_fcgi_*` Prometheus metrics.
-- Minimal `cache_headers.by_mime` / `ExpiresByType` controls.
-- Transition `response_headers` + rewrite `$uri`/`$host`.
-
-### Changed
-
-- Official modules accept the 0.6.x core line (`>=0.1.0, <0.7.0`).
-- Coordinated OpenTelemetry stack 0.33.1 + `tracing-opentelemetry` 0.34.0 (post-0.5.0 main).
-- Dependabot cargo/GHA pins merged on main after v0.5.0 (brotli 9, toml 1.1, getrandom 0.4, ipnetwork 0.21, GHA pins).
-
-### Notes
-
-- Wasmtime 49.0.2 advisories remain open (same posture as 0.5.0) unless cleared in this cut.
-
-## [0.5.0] — 2026-10-18
-
-Product version 0.5.0. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.5.0`, `ghcr.io/exyonq/exyonq-wordpress:0.5.0`, `exyonq/exyonq:0.5.0`, and `exyonq/exyonq-wordpress:0.5.0`, all `linux/amd64` and `linux/arm64`. No `:latest` tag. The server image is Debian bookworm slim with glibc binaries. v0.4.13 remains the previous scratch image.
-
-### Added
-
-- Route match regex and suffix, rewrite captures, `try_files` fallback, error pages, and variables / `map` / `proxy_set_headers`.
-- Operational surfaces for lint, diagnostics, htaccess fail-closed, config provenance, FastCGI metrics, WebSocket drain, reload diff, and `X-Cache`.
-- Cache header and `ExpiresByType` controls.
-- Response header rules (`add_header` / `Header set`) and rewrite variables `$uri` / `$host`.
-
-### Fixed
-
-- The server image ships a valid default page, so `GET /` returns 200.
-- Official modules accept the 0.5.x core line, so metrics can start.
-- The WordPress image uses an `.htaccess` the 0.5 compiler accepts, so `/` reaches the installer.
-
-### Not in this publication
-
-- No `:latest` tag.
-- Phase 1 remains not closed.
-- Wasmtime stays at 49.0.2. `cargo deny` still reports component-model panic advisories for that pin.
-
----
-
-## [0.4.13] — 2026-10-14
-
-Product version 0.4.13. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.13`, `ghcr.io/exyonq/exyonq-wordpress:0.4.13`, `exyonq/exyonq:0.4.13`, and `exyonq/exyonq-wordpress:0.4.13`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-### Fixed
-
-- **WordPress installer / FastCGI static assets:** existing non-PHP files under an `htaccess = "overlay"` FastCGI route (for example `/wp-admin/css/*.css` and `/wp-admin/js/*.js`) are served from disk instead of being forwarded to php-fpm. Previously php-fpm rejected them with `403` (`security.limit_extensions`), which broke the installer UI so account creation could not complete reliably in a browser.
-- Defense in depth in the FastCGI dispatch path: resolved scripts that are not `.php` / `.phtml` / `.phar` are served statically.
-
-### Changed
-
-- Workspace product version **→ 0.4.13**.
-- Security audit artifact: `docs/security/audit-v0.4.13.md`.
-- Publish gate for WordPress images requires full installer account creation and login (not only `GET /` → install.php).
-- `rustls` **0.23.45 → 0.23.46** (RUSTSEC-2026-0346 Medium and related Low advisories).
-
-### Limitations (honest)
-
-- Phase 1 remains NOT_CLOSED; no production-wide “everything verified” claim.
-- No official benchmark publication for this tag.
-- Lab dataplane / soak closure work is not part of this cut.
-
-## [0.4.12] — 2026-10-12
-
-Product version 0.4.12. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.12`, `ghcr.io/exyonq/exyonq-wordpress:0.4.12`, `exyonq/exyonq:0.4.12`, and `exyonq/exyonq-wordpress:0.4.12`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-### Lineage
-
-Based on `main` @ `46935e068c6aeb91ed6add96f235a41ec6bf016a` (Dependabot [#40](https://github.com/ExyonQ/ExyonQ/pull/40) `wat` 1.261.0 + [#43](https://github.com/ExyonQ/ExyonQ/pull/43) `crypto-common` 0.1.7). Lab `release/v0.4.4-integration` tip is not an ancestor and was not merged into this cut.
-
-### Changed
-
-- Workspace product version **→ 0.4.12**.
-- Security audit artifact: `docs/security/audit-v0.4.12.md`.
-- WASM host pins already on `main`: `wat = "=1.261.0"`, `crypto-common = "=0.1.7"`.
-
-### Limitations (honest)
-
-- Phase 1 remains NOT_CLOSED; no production-wide “everything verified” claim.
-- No official benchmark publication for this tag.
-- Lab dataplane / soak closure work is not part of this cut.
-
-## [0.4.11] — 2026-10-12
-
-Product version 0.4.11. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.11`, `ghcr.io/exyonq/exyonq-wordpress:0.4.11`, `exyonq/exyonq:0.4.11`, and `exyonq/exyonq-wordpress:0.4.11`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-### Lineage
-
-Based on `main` @ `94d9ad61ee15bf004f446e2bd5f97a85cff50b32` (post-0.4.10 docs + Wasmtime 49.0.2 line). Lab `release/v0.4.4-integration` tip is not an ancestor (unrelated histories) and was not merged into this cut.
-
-### Added
-
-- **Apache → ExyonQ equivalent importer** (`exyonq-compat-apache` / `exyonq-compat migrate --from apache`): maps VirtualHost static sites plus `Alias`, `Redirect`, safe literal `RewriteRule … [R=…]`, `SSLEngine`+certs, authority-only `ProxyPass`, and PHP-FPM (`ProxyPassMatch` / `FilesMatch`+`SetHandler`) onto existing IR. Fail-closed for Auth, `ErrorDocument`, `ProxyPassReverse`, regex rewrite, and path-bearing `ProxyPass`.
-- Phase 0 catalog / scope: `docs/compat/APACHE_DIRECTIVE_CATALOG_V1.md`, `docs/compat/compatibility-scope-v1.md`, `compat/apache/APACHE_STATIC_VHOST_MVP.md`.
-
-### Changed
-
-- Workspace product version **→ 0.4.11**.
-- Security audit artifact: `docs/security/audit-v0.4.11.md`.
-
-### Limitations (honest)
-
-- No “full Apache substitution” claim; Gate A corpus not closed.
-- `TOTAL_COMPAT_PROMISE` remains forbidden until dual-arch Gate A evidence.
-
-## [0.4.10] — 2026-10-11
-
-Product version 0.4.10. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.10`, `ghcr.io/exyonq/exyonq-wordpress:0.4.10`, `exyonq/exyonq:0.4.10`, and `exyonq/exyonq-wordpress:0.4.10`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-### Lineage
-
-Based on tag `v0.4.9` (`1973f35191b61ec77ce6721523e14867cefb7c6c`). Branch `release/v0.4.4-integration` tip `e7a649f` is not an ancestor of this publish line (unrelated histories); those Netcup dataplane production-hole commits were **not** merged into this cut. Do not treat integration HEAD as the 0.4.10 tag base.
-
-### Shipped mejoras (carry-forward from the 0.4.9 line, published as 0.4.10)
-
-- Static deny: `.php`, `.phtml`, `.phar`, and dotfile / `.ht*` names on static routes return **403** on the Linux epoll path. `.well-known` stays reachable. `allow_sensitive = true` is the opt-in.
-- WordPress stock `.htaccess` compiles (`E=HTTP_AUTHORIZATION`); watcher recompiles only when a file named `.htaccess` changes; `Authorization` reaches PHP as `HTTP_AUTHORIZATION`; `/` uses `index.php` when that is the front controller and `DirectoryIndex` is absent.
-- Shared product/artifact version: `Server` and `exyonq --version` use `EXYONQ_ARTIFACT_VERSION`.
-- Cache purge: a comment purges that post URL; a menu purges tag `menu`; a URL that is not cached does not empty the site.
-
-Useful capacity framing for operators: traffic + acceptable latency + error budget + saturation — not RPS alone.
-
-## [0.4.9] — 2026-10-09
-
-Product version 0.4.9. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.9`, `ghcr.io/exyonq/exyonq-wordpress:0.4.9`, `exyonq/exyonq:0.4.9`, and `exyonq/exyonq-wordpress:0.4.9`, all `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-A static route denies `.php`, `.phtml`, `.phar`, and dotfile names. `.well-known` stays reachable. `allow_sensitive = true` on that route is the opt-in. The stock WordPress `.htaccess` compiles, including `E=HTTP_AUTHORIZATION`, and `GET /` uses `index.php` when that file is the front controller and `DirectoryIndex` is absent. `Authorization` is passed to PHP as `HTTP_AUTHORIZATION`. The `.htaccess` watcher recompiles only when a file named `.htaccess` changes. A comment purges that post URL. A menu purges the tag `menu`. A URL that is not cached does not empty the site. `Server` and `exyonq --version` use `EXYONQ_ARTIFACT_VERSION`.
-
-## [0.4.8] — 2026-10-08
-
-Product version 0.4.8. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.8` and `ghcr.io/exyonq/exyonq-wordpress:0.4.8`, both `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-The official server image serves a default page on port 8080. The WordPress image starts with a configuration the server accepts, and `/` reaches the WordPress installer. `exyonq --version` reports Cargo, product, and artifact version `0.4.8`.
-
-## [0.4.7] — 2026-10-07
-
-Product version 0.4.7. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.7` and `ghcr.io/exyonq/exyonq-wordpress:0.4.7`, both `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-One HTTPS listener can present a different certificate for each server name. The first certificate is used when the name is not listed. A redirect location may contain `{host}` and `{path}`, so an HTTP listener can send the client to HTTPS without dropping the request path. `exyonq --version` reports Cargo, product, and artifact version `0.4.7`.
-
-## [0.4.6] — 2026-10-07
-
-Product version 0.4.6. The GitHub release includes the Linux amd64 and arm64 binaries. Images: `ghcr.io/exyonq/exyonq:0.4.6` and `ghcr.io/exyonq/exyonq-wordpress:0.4.6`, both `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-This cut carries the 0.4.5 WordPress page cache onto the current main line, including the dependency updates already merged there. `exyonq --version` reports Cargo, product, and artifact version `0.4.6`.
-
-## [0.4.5] — 2026-10-07
-
-Scratch image `ghcr.io/exyonq/exyonq:0.4.5` and WordPress image `ghcr.io/exyonq/exyonq-wordpress:0.4.5`, both `linux/amd64` and `linux/arm64`. No `:latest` tag.
-
-The WordPress image turns the page cache on. Anonymous HTML is kept for 300 seconds. At startup ExyonQ creates `/run/exyonq/cache-purge.sock`, the token file, and the site index. Publishing a post sends `purge site` and that purge is accepted.
-
----
-
-## [0.4.4.1] — 2026-10-03
-
-Published release. Scratch runtime image for `linux/amd64` and `linux/arm64`, plus the matching static musl tarballs. Contact: contact@exyonq.org. Security: security@exyonq.org.
-
----
-
-## [0.4.4] — published release
+## [0.4.11] — published on exyonq-github
 
 ```text
+RELEASE_AUTHORITY = exyonq-github
 PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.4
-GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.4
-GHCR = ghcr.io/exyonq/exyonq:0.4.4
+PUBLIC_RELEASE = v0.4.11
+RELEASE_COMMIT = 37364553677fd9283bebf9e36ea514e4e157ef9a
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.11
+GHCR = ghcr.io/exyonq/exyonq:0.4.11 @ sha256:d48d8af7f15b874ffaa14cee652e1e7da364b4d53dc234e45b42c9f9e043da4e
+GHCR_WP = ghcr.io/exyonq/exyonq-wordpress:0.4.11 @ sha256:be578cb4e3eafd7032c904e0fa78195f8d469f23a3d2f4f0957d08cf011883e1
 LATEST_CHANGED = NO
-TAGGED_COMMIT = 8f3336f783dc546bdaad4a60b5501568bf688b3a
+TOTAL_COMPAT_PROMISE = FORBIDDEN (Gate A not closed)
 ```
+
+### Added
+
+- **Apache → ExyonQ equivalent importer** (`exyonq-compat-apache` / `exyonq-compat migrate --from apache`): maps `VirtualHost` static sites plus `Alias`, `Redirect`, safe literal `RewriteRule … [R=…]`, `SSLEngine`+certs, authority-only `ProxyPass`, and PHP-FPM (`ProxyPassMatch` / `FilesMatch`+`SetHandler`) onto existing IR (`static` / `redirect` / `tls` / `upstream` / `fcgi_pool`).
+- Phase 0 catalog + scope: `docs/compat/APACHE_DIRECTIVE_CATALOG_V1.md`, `docs/compat/compatibility-scope-v1.md`, `compat/apache/APACHE_STATIC_VHOST_MVP.md`.
 
 ### Changed
 
-- Workspace product version **0.4.3 → 0.4.4**.
-- Rust toolchain **1.98.1**.
-- Production Linux binaries are musl and statically linked (`scripts/release/build-production.sh`).
-- Dependency line moved to the current stables used by the product: Wasmtime 49.0.1, quiche 0.30.0, s2n-quic 1.89.0, tachyon-quic 0.3.0, rustls 0.23.45, hyper 1.11.1, OpenTelemetry 0.33.0, redis 1.7.1.
-- `instant-acme` stays on the published 0.8.5 API. `third_party/instant-acme` is that release with `base64` 0.23, because 0.9.0 is not on crates.io.
-- Dataplane fixes reproduced by independent Netcup oracles: static host routing, epoll inline access and request id, wire metrics, proxy upstream body completion, WAF challenge host, compression and rate-limit exemptions.
+- Workspace product version **0.4.3 → 0.4.11** on this lab integration line (Cargo/CLI/`--version` identity for the 0.4.11 cut).
+- Release tooling allowlists accept **0.4.11** (retaining 0.4.0–0.4.10).
+- Proxy raw upstream: connect timeout / idle probe / checkout-within-budget (P4/P5 path; kit re-cell pending).
+- HTTP/3 provider dependency: yanked `s2n-quic-h3` path replaced with `tachyon-quic` so the workspace resolves.
 
-### Fixed
+### Limitations (honest)
 
-- `Cargo.lock` on the tagged commit still said `0.4.3` and still listed `exyonq-bench`, so `cargo build --locked` could not run. The lock now matches workspace `0.4.4` and no longer lists `exyonq-bench`.
-- Release manifest allowlist now accepts `0.4.4`. `generate-release-manifest.sh` rejected it before.
-- Added `docs/security/audit-v0.4.4.md` and `docs/release/v0.4.4.md`, which `release.yml` requires before it publishes. `.gitignore` now tracks `docs/release/` so that body file can be committed.
-- Removed unused `write_raw_proxy_response`. `release.yml` builds with `-Dwarnings`, and that dead function was the warning.
-
-### Not in this publication
-
-- Benchmark suites, development HTML, and local evidence packs stay out of this tree.
-- No GitHub Release, no `ghcr.io/exyonq/exyonq:0.4.4`, and no `:latest` tag.
-- No claim that a public official benchmark was updated.
+- Still **REJECTED_UNSUPPORTED**: `AuthType`/`Require`, `ErrorDocument`, `ProxyPassReverse`, regex `RewriteRule`/`RewriteCond`, `Include` expansion.
+- No “full Apache substitution” claim until Gate A corpus on Netcup AMD64 + Oracle ARM64.
+- Official AMD64 P4/P5 confirm cells after campaign binary rebuild remain **pending**.
 
 ---
-
 
 ## [0.4.3] — private release (published on exyonq-github)
 

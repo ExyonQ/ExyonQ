@@ -39,6 +39,7 @@ pub mod kernel_observation;
 pub mod observability_runtime;
 pub mod proxy_dispatch;
 pub mod proxy_wire;
+pub mod real_ip;
 pub mod reload_runtime;
 pub mod response_observation;
 pub mod rewrite_engine;

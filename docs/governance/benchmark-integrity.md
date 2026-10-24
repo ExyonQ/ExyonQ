@@ -3,7 +3,7 @@
 ```text
 POLICY_ID = EXYONQ-BENCHMARK-INTEGRITY-ZERO-SHORTCUTS
 POLICY_STATUS = MANDATORY
-LOCAL_RULE = editor rules, not release content
+CURSOR_RULE = .cursor/rules/exyonq-benchmark-integrity-zero-shortcuts.mdc
 GATE = scripts/gates/benchmark-integrity-gate.sh
 FAIL_MODE = FAIL_CLOSED
 ```

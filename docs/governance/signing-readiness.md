@@ -3,9 +3,9 @@
 ```text
 DOCUMENT_ROLE = SIGNING_GOVERNANCE_READINESS
 PRODUCTION_SIGNING_EXECUTED = YES
-PUBLIC_RELEASE = v0.4.13
-PUBLICATION_STATUS = PUBLISHED
-FINAL_PUBLISHED_RELEASE_HEAD = 41cfb23626cc18b0699d6c41d27e3def9d682024
+PUBLIC_RELEASE = v0.4.3
+PUBLICATION_STATUS = PRIVATE_V043_RELEASE_COMPLETE
+FINAL_PUBLISHED_RELEASE_HEAD = 3a8af75dd0939e5aae2f4d09b842573499e15a1c
 AUTHORIZES_TAG = NO   # this document alone never authorizes a future tag
 AUTHORIZES_GHCR = NO
 AUTHORIZES_GITHUB_RELEASE = NO
@@ -51,7 +51,7 @@ V043_PRODUCTION_SIGNING = PASS
 | `scripts/release/tests/p14sign-phase3.sh` / `p14sign-phase5-proof.sh` | Ephemeral **TEST_ONLY** / **NON_PRODUCTION** fixtures |
 
 Production release signing remains an **explicit manual owner ceremony**.
-Agents must not access private signing media. Signing-volume paths are forbidden in-repo.
+Cursor agents must not access private signing media (`EXYONQ-SIGNING-A` volume paths are forbidden in-repo).
 
 ## Readiness vs execution
 
@@ -61,9 +61,13 @@ Agents must not access private signing media. Signing-volume paths are forbidden
 | Verify scripts present | YES |
 | Ephemeral selftests allowed | YES (marked non-production) |
 | Production private keys in repo | NO (forbidden) |
-| Production signing executed in this remediation | **NO** |
+| Production signing executed in GRC-R5F remediation (historical) | **NO** |
+| Production signing executed for private v0.4.3 (CURRENT) | **YES** |
 
 ```text
-SIGNATURE_VERIFICATION = PASS   # tooling + public trust path
-PRODUCTION_SIGNING_EXECUTED = NO
+SIGNATURE_VERIFICATION = PASS   # tooling + public trust path + v0.4.3 ceremony
+PRODUCTION_SIGNING_EXECUTED = YES
+SSH_TAG_SIGNATURE_STATUS = PASS
+COSIGN_BLOB_SIGNATURE_STATUS = PASS
+COSIGN_OCI_SIGNATURE_STATUS = PASS
 ```

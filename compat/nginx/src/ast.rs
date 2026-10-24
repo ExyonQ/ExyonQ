@@ -60,10 +60,29 @@ pub struct ParsedServer {
     pub loc: SourceLoc,
 }
 
+/// NG-07: nginx upstream load-balancing method (`least_conn`, `ip_hash`,
+/// `hash … consistent`, `sticky cookie <name>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NginxLbMethod {
+    LeastConn,
+    IpHash,
+    ConsistentHash,
+    StickyCookie,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedUpstream {
     pub name: String,
+    /// Raw `server` lines — first whitespace token is the endpoint; later
+    /// tokens are flags (`weight=N`, `backup`, `down`, `max_fails`, …).
     pub servers: Vec<String>,
+    /// NG-07: at most one LB method per block (nginx rejects duplicates).
+    pub method: Option<NginxLbMethod>,
+    /// NG-07: cookie name from `sticky cookie <name>` (nginx-plus directive).
+    pub sticky_cookie: Option<String>,
+    /// NG-09: `resolver ... valid=T` re-resolve interval (ms); resolver
+    /// addresses are ignored — ExyonQ resolves via system DNS.
+    pub dns_refresh_ms: Option<u64>,
     pub loc: SourceLoc,
 }
 
@@ -73,6 +92,10 @@ pub struct AnalyzedConfig {
     pub upstreams: Vec<ParsedUpstream>,
     /// NG-05 / ADR-051: parsed `map $src $dst { … }` blocks.
     pub maps: Vec<ParsedMap>,
+    /// NG-11: accumulated `set_real_ip_from` CIDRs across http/server contexts.
+    pub real_ip_trusted: Vec<String>,
+    /// NG-11: last `real_ip_header` seen wins (nginx innermost-wins ≈ last).
+    pub real_ip_header: Option<String>,
 }
 
 /// Nginx `map` block reduced to IR-friendly fields (Exact only).

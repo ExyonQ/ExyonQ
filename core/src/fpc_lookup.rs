@@ -38,9 +38,7 @@ pub enum FpcGateResult {
     /// Eligible request with no entry — continue backend, then optional insert.
     Miss(FpcMissContext),
     /// FPC enabled but this request skipped — attach `X-Cache: bypass` + reason.
-    Bypass {
-        reason: &'static str,
-    },
+    Bypass { reason: &'static str },
     /// FPC not configured / disabled for this process — no X-Cache header.
     Skip,
 }

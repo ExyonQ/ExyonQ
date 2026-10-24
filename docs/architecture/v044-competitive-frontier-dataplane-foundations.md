@@ -1,7 +1,7 @@
 # V044 Competitive Frontier dataplane foundations (Phase 1)
 
-**WIP:** `V044_COMPETITIVE_FRONTIER_DATAPLANE_FOUNDATIONS`
-**Phase:** 1 — foundations only (STOP; Phase 2 not authorized)
+**WIP:** `V044_COMPETITIVE_FRONTIER_DATAPLANE_FOUNDATIONS`  
+**Phase:** 1 — foundations only (STOP; Phase 2 not authorized)  
 **Parent:** CFR-B (`d94856663f42ffce16a3c0ccc1291feb4d7083e4`)
 
 ## Owner-frozen architecture

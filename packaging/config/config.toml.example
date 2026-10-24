@@ -62,7 +62,5 @@ timeout_ms = 30000
 
 [modules.metrics]
 enabled = true
-path = "/metrics"
-health_path = "/exyonq-metrics-health"
-# Required when listen is not loopback. Replace before use.
-scrape_bearer_token = "replace-this-token"
+metrics_path = "/metrics"
+health_path = "/health"

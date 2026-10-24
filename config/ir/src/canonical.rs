@@ -261,6 +261,14 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
             );
         }
     }
+    // F3-R20: ProxyPassReverse-equivalent rules are runtime-effective; a reload
+    // that changes only location_rewrite must not be canonicalized as a no-op.
+    if !route.location_rewrite.is_empty() {
+        map.insert(
+            "location_rewrite".into(),
+            serde_json::to_value(&route.location_rewrite).expect("location_rewrite serialize"),
+        );
+    }
     serde_json::Value::Object(map)
 }
 
@@ -389,6 +397,18 @@ fn canonical_upstream(upstream: &UpstreamConfig) -> serde_json::Value {
             "admin_state".into(),
             serde_json::Value::String(format!("{:?}", ep.admin_state).to_ascii_lowercase()),
         );
+        map.insert(
+            "max_fails".into(),
+            serde_json::Value::Number(ep.max_fails.into()),
+        );
+        map.insert(
+            "fail_timeout_ms".into(),
+            serde_json::Value::Number(ep.fail_timeout_ms.into()),
+        );
+        map.insert(
+            "slow_start_ms".into(),
+            serde_json::Value::Number(ep.slow_start_ms.into()),
+        );
     } else {
         let endpoints: Vec<serde_json::Value> = upstream
             .endpoint_set
@@ -414,6 +434,18 @@ fn canonical_upstream(upstream: &UpstreamConfig) -> serde_json::Value {
                     "admin_state".into(),
                     serde_json::Value::String(format!("{:?}", ep.admin_state).to_ascii_lowercase()),
                 );
+                e.insert(
+                    "max_fails".into(),
+                    serde_json::Value::Number(ep.max_fails.into()),
+                );
+                e.insert(
+                    "fail_timeout_ms".into(),
+                    serde_json::Value::Number(ep.fail_timeout_ms.into()),
+                );
+                e.insert(
+                    "slow_start_ms".into(),
+                    serde_json::Value::Number(ep.slow_start_ms.into()),
+                );
                 serde_json::Value::Object(e)
             })
             .collect();
@@ -435,6 +467,26 @@ fn canonical_upstream(upstream: &UpstreamConfig) -> serde_json::Value {
         "timeout_ms".into(),
         serde_json::Value::Number(upstream.timeout_ms.into()),
     );
+    // NG-07: sticky identity must fingerprint or reload NO_OPs affinity changes.
+    if let Some(cookie) = &upstream.sticky_cookie {
+        map.insert(
+            "sticky_cookie".into(),
+            serde_json::Value::String(cookie.clone()),
+        );
+    }
+    if let Some(header) = &upstream.sticky_header {
+        map.insert(
+            "sticky_header".into(),
+            serde_json::Value::String(header.clone()),
+        );
+    }
+    // NG-09: omit default (=0) to preserve fingerprint for legacy configs.
+    if upstream.dns_refresh_ms != 0 {
+        map.insert(
+            "dns_refresh_ms".into(),
+            serde_json::Value::Number(upstream.dns_refresh_ms.into()),
+        );
+    }
     // Cap021: omit default (=1) to preserve fingerprint for legacy configs.
     if upstream.max_connect_retries != 1 {
         map.insert(
@@ -472,6 +524,23 @@ fn canonical_upstream_health_check(hc: &crate::UpstreamHealthCheckConfig) -> ser
         "unhealthy_threshold".into(),
         serde_json::Value::Number(hc.unhealthy_threshold.into()),
     );
+    if !hc.expect_status.is_empty() {
+        map.insert(
+            "expect_status".into(),
+            serde_json::Value::Array(
+                hc.expect_status
+                    .iter()
+                    .map(|c| serde_json::Value::Number((*c).into()))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(b) = &hc.expect_body {
+        map.insert("expect_body".into(), serde_json::Value::String(b.clone()));
+    }
+    if let Some(h) = &hc.expect_header {
+        map.insert("expect_header".into(), serde_json::Value::String(h.clone()));
+    }
     serde_json::Value::Object(map)
 }
 

@@ -100,20 +100,18 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.5.0 \
+  --build-arg EXYONQ_VERSION=0.7.0 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
 
-# Official image. Runtime stage is debian:bookworm-slim (glibc). Pass the tag commit as EXYONQ_GIT_REVISION.
+# Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --provenance=mode=max \
-  --sbom=true \
-  --build-arg EXYONQ_VERSION=0.5.0 \
+  --build-arg EXYONQ_VERSION=0.7.0 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t exyonq/exyonq:0.5.0-local .
+  -t ghcr.io/exyonq/exyonq:0.7.0 .
 ```
 
 ## CI
@@ -127,15 +125,5 @@ OCI publish (`docker` job) encodes the canonical contract explicitly:
 - SBOM attestation: enabled
 - tags: `ghcr.io/exyonq/exyonq:<version>` only (no `:latest`)
 - revision/version/source via build-args + OCI labels
-
-
-Published images are **0.6.0.1** on GHCR and Docker Hub. There is no `:latest` tag. Docker Hub no longer carries `:0.6.0`.
-
-```bash
-docker pull ghcr.io/exyonq/exyonq:0.6.0.1
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.6.0.1
-docker pull exyonq/exyonq:0.6.0.1
-docker pull exyonq/exyonq-wordpress:0.6.0.1
-```
 
 Signing (cosign/minisign) is optional follow-up when infra is ready.

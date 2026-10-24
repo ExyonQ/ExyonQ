@@ -1,8 +1,8 @@
 # ADR-047 — Route match: `regex` / `suffix` (NG-01 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-17
-**Roadmap:** F1 / v0.5 NG-01
+**Status:** Accepted  
+**Date:** 2026-10-17  
+**Roadmap:** F1 / v0.5 NG-01  
 **Public contract:** [docs/config/route-match.md](../config/route-match.md)
 
 ## Context
@@ -29,17 +29,17 @@ Regex load bounds: pattern length ≤ 256 bytes; must compile; reject empty. No 
 
 Among routes that **match** the request:
 
-1. `host_rank`: exact named host (2) > `*.wildcard` (1) > hostless (0) — Cap033 unchanged
-2. `kind_rank`: regex (3) = suffix (3) > prefix (1) > catch-all prefix `/` (0)
-3. `pattern_len`: longer regex/suffix/path string wins within the same kind
+1. `host_rank`: exact named host (2) > `*.wildcard` (1) > hostless (0) — Cap033 unchanged  
+2. `kind_rank`: regex (3) = suffix (3) > prefix (1) > catch-all prefix `/` (0)  
+3. `pattern_len`: longer regex/suffix/path string wins within the same kind  
 4. **Tie:** identical `(host_norm, kind, pattern_key)` at plan build → **fail closed** (duplicate identity). Distinct patterns that somehow tie after (1–3) → prefer **lower original route index** (stable, documented; not nginx-first-regex).
 
 ExyonQ does **not** claim nginx `^~` or “first matching regex in file order” as the product rule.
 
 ### Compilation
 
-- Validate XOR + regex syntax in `exyonq-config-ir` at load.
-- Compile `Regex` once in `RouteIndex::try_new` / plan build. **Never** on the request path.
+- Validate XOR + regex syntax in `exyonq-config-ir` at load.  
+- Compile `Regex` once in `RouteIndex::try_new` / plan build. **Never** on the request path.  
 - Suffix stays literal `ends_with` (not regex).
 
 ### CFD
@@ -48,6 +48,6 @@ ExyonQ does **not** claim nginx `^~` or “first matching regex in file order”
 
 ## Consequences
 
-- Existing TOML with only `match.path` unchanged.
-- Hot path: linear scan; each regex candidate pays `Regex::is_match` after host filter.
+- Existing TOML with only `match.path` unchanged.  
+- Hot path: linear scan; each regex candidate pays `Regex::is_match` after host filter.  
 - Migrator mapping of `location ~` is NG-01 follow-up (compat), not blocking runtime NG-01.
