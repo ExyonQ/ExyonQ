@@ -120,6 +120,7 @@ pub struct ProxyWireAsyncHooks {
         stream: BoxedWireStream,
         head: bytes::Bytes,
         rest: bytes::Bytes,
+        real_ip: Option<crate::real_ip::RealIpTrust>,
     ) -> ProxyWireServeFuture,
 }
 
@@ -142,6 +143,15 @@ pub fn serve_proxy_wire(
     stream: BoxedWireStream,
     head: bytes::Bytes,
     rest: bytes::Bytes,
+    real_ip: Option<crate::real_ip::RealIpTrust>,
 ) -> ProxyWireServeFuture {
-    (async_hooks().serve_proxy_wire)(cluster_id, generation, x_forwarded_for, stream, head, rest)
+    (async_hooks().serve_proxy_wire)(
+        cluster_id,
+        generation,
+        x_forwarded_for,
+        stream,
+        head,
+        rest,
+        real_ip,
+    )
 }

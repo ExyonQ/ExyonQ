@@ -36,7 +36,7 @@ final class ExyonQ_Cache_Client {
 	public function is_configured(): bool {
 		return $this->socket_path() !== ''
 			&& $this->token() !== ''
-			&& $this->site_id() > 0;
+			&& $this->site_id() !== '';
 	}
 
 	public function socket_path(): string {
@@ -55,28 +55,29 @@ final class ExyonQ_Cache_Client {
 	}
 
 	/**
-	 * ExyonQ site_id for the WC3 line.
+	 * ExyonQ site_id for the WC3 line, as a validated decimal string.
 	 *
-	 * PHP integers are platform-sized (typically signed 64-bit). Values that do not
-	 * fit in PHP_INT_MAX must not be used — configure a site_id within PHP int range.
+	 * site_id is a full u64 (stable hash of the route name) and does NOT fit
+	 * PHP_INT_MAX on half the route-name space. Carry it as a string and emit
+	 * it with %s — the server parses it as u64. Only decimal digits, non-zero,
+	 * and <= u64 max are accepted.
 	 */
-	public function site_id(): int {
+	public function site_id(): string {
 		if ( ! defined( 'EXYONQ_CACHE_SITE_ID' ) ) {
-			return 0;
+			return '';
 		}
 		$raw = EXYONQ_CACHE_SITE_ID;
-		if ( is_string( $raw ) ) {
-			if ( ! preg_match( '/^[1-9][0-9]{0,18}$/', $raw ) ) {
-				return 0;
-			}
-			// Reject strings that would overflow a signed 64-bit PHP int on this platform.
-			if ( strlen( $raw ) > strlen( (string) PHP_INT_MAX )
-				|| ( strlen( $raw ) === strlen( (string) PHP_INT_MAX ) && $raw > (string) PHP_INT_MAX ) ) {
-				return 0;
-			}
+		if ( is_int( $raw ) ) {
+			return $raw > 0 ? (string) $raw : '';
 		}
-		$id = (int) $raw;
-		return $id > 0 ? $id : 0;
+		if ( ! is_string( $raw ) || ! preg_match( '/^[1-9][0-9]{0,19}$/', $raw ) ) {
+			return '';
+		}
+		// 20-digit values need the u64 bound check (string compare, no int overflow).
+		if ( strlen( $raw ) === 20 && $raw > '18446744073709551615' ) {
+			return '';
+		}
+		return $raw;
 	}
 
 	/**
@@ -101,9 +102,9 @@ final class ExyonQ_Cache_Client {
 		$site = $this->site_id();
 		$tok  = $this->token();
 		if ( $query === '' ) {
-			$line = sprintf( 'purge url %d %s %s %s %s', $site, $scheme, $host, $path, $tok );
+			$line = sprintf( 'purge url %s %s %s %s %s', $site, $scheme, $host, $path, $tok );
 		} else {
-			$line = sprintf( 'purge url %d %s %s %s %s %s', $site, $scheme, $host, $path, $query, $tok );
+			$line = sprintf( 'purge url %s %s %s %s %s %s', $site, $scheme, $host, $path, $query, $tok );
 		}
 		return $this->send_line( $line );
 	}
@@ -112,7 +113,7 @@ final class ExyonQ_Cache_Client {
 	 * @return array{ok:bool,error?:string,purged_entries?:int,purged_bytes?:int,command?:string}
 	 */
 	public function purge_site(): array {
-		$line = sprintf( 'purge site %d %s', $this->site_id(), $this->token() );
+		$line = sprintf( 'purge site %s %s', $this->site_id(), $this->token() );
 		return $this->send_line( $line );
 	}
 
@@ -127,7 +128,7 @@ final class ExyonQ_Cache_Client {
 		if ( $generation < 0 ) {
 			return $this->fail( 'invalid_generation' );
 		}
-		$line = sprintf( 'purge generation %d %d %s', $this->site_id(), $generation, $this->token() );
+		$line = sprintf( 'purge generation %s %d %s', $this->site_id(), $generation, $this->token() );
 		return $this->send_line( $line );
 	}
 

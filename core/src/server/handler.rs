@@ -31,15 +31,15 @@ use exyonq_cache::{
     CacheKeyParts,
 };
 use exyonq_mod_proxy::{
-    bad_gateway, emit_map_unknown, forward_websocket_by_cluster, is_websocket_upgrade,
-    load_get_for_cache_by_cluster, serve_proxy_with_cache, ProxyClient,
+    bad_gateway, forward_websocket_by_cluster, is_websocket_upgrade, load_get_for_cache_by_cluster,
+    serve_proxy_with_cache, ProxyClient,
 };
 use exyonq_mod_static::{serve_static_with_cache, StaticCacheLoad};
 use exyonq_module_api::kernel_observation::{note_fastcgi_http_501, note_proxy_http_501};
 use exyonq_module_api::static_dispatch::StaticMethod;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{self, HeaderValue};
+use hyper::header::HeaderValue;
 use hyper::{Method, Request, Response, StatusCode};
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -175,11 +175,8 @@ async fn serve_http3_request_bytes(
     let started = std::time::Instant::now();
     let method = req.method().clone();
     let request_path = req.uri().path().to_string();
-    let client_ip = ctx
-        .x_forwarded_for
-        .to_str()
-        .unwrap_or("unknown")
-        .to_string();
+    let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
+    let client_ip = xff.to_str().unwrap_or("unknown").to_string();
     let protocol = "http3";
     let span = match (otel_needed, identity.as_ref()) {
         (true, Some(id)) => {
@@ -206,7 +203,6 @@ async fn serve_http3_request_bytes(
         }
 
         if ctx.ops.is_draining() {
-            emit_rt_draining(req.uri().path());
             return text_response(StatusCode::SERVICE_UNAVAILABLE, "draining");
         }
 
@@ -266,7 +262,7 @@ async fn serve_http3_request_bytes(
             &parts.method,
             &parts.uri,
             request_host_from_parts(&parts.uri, &parts.headers),
-            Some(&ctx.x_forwarded_for),
+            Some(&xff),
             &request_headers,
             budget,
             post_body,
@@ -311,7 +307,8 @@ async fn serve_http3_with_modules(
     ctx: ConnectionContext,
     req: Request<bytes::Bytes>,
 ) -> HandlerResponse {
-    let client_ip = ctx.x_forwarded_for.to_str().unwrap_or("unknown");
+    let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
+    let client_ip = xff.to_str().unwrap_or("unknown");
     let (parts, body) = req.into_parts();
     let req_parts = Request::from_parts(parts.clone(), ());
     let module_req = match exyonq_module_pipeline::module_request_from_parts(&req_parts, client_ip)
@@ -350,7 +347,7 @@ async fn serve_http3_with_modules(
             &method,
             &uri,
             request_host_from_parts(&uri, &parts.headers),
-            Some(&ctx.x_forwarded_for),
+            Some(&xff),
             &headers,
             budget,
             post_body,
@@ -379,11 +376,9 @@ pub async fn serve_connection(
     let started = std::time::Instant::now();
     let method = req.method().clone();
     let request_path = req.uri().path().to_string();
-    let client_ip = ctx
-        .x_forwarded_for
-        .to_str()
-        .unwrap_or("unknown")
-        .to_string();
+    // NG-11: trusted-peer chain resolution; defaults to the socket peer.
+    let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
+    let client_ip = xff.to_str().unwrap_or("unknown").to_string();
     let protocol = "http"; // Hyper path: HTTP/1.1 or HTTP/2
     let span = match (otel_needed, identity.as_ref()) {
         (true, Some(id)) => {
@@ -427,7 +422,6 @@ pub async fn serve_connection(
         // KF-P16-015 / SECINT-003 / Cap040: already-admitted keepalive must still reject *new*
         // non-probe work after drain (including ACME HTTP-01 service paths).
         if ctx.ops.is_draining() {
-            emit_rt_draining(&request_path);
             let mut response = if *req.method() == Method::HEAD {
                 empty_head_response(StatusCode::SERVICE_UNAVAILABLE)
             } else {
@@ -476,7 +470,7 @@ pub async fn serve_connection(
                 if let Some(root_slot) = site_static_root_slot(&ctx.state) {
                     let headers = header_pairs_from_map(req.headers());
                     let header_view = crate::waf::PairsHeaderView(&headers);
-                    let client_ip_addr = client_ip_from_xff(Some(&ctx.x_forwarded_for));
+                    let client_ip_addr = client_ip_from_xff(Some(&xff));
                     let host = request_host(&req);
                     if let Some(reject) = waf_header_gate(
                         &ctx.state,
@@ -572,7 +566,7 @@ pub async fn serve_connection(
             response
         } else {
             let req = inject_client_ip(req, &client_ip);
-            match handle_request(ctx.state, req, Some(&ctx.x_forwarded_for)).await {
+            match handle_request(ctx.state, req, Some(&xff)).await {
                 Ok(response) => response,
                 Err(response) => response,
             }
@@ -667,6 +661,7 @@ fn outcome_from_response(response: &Response<BoxBody>) -> Option<&'static str> {
 /// Bench/minimal-config hot path: sync static, async proxy only when needed.
 async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> Response<BoxBody> {
     let path = req.uri().path();
+    let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
 
     if req.method() == Method::GET || req.method() == Method::HEAD {
         if let Some(response) = crate::acme_http01_adapter::try_http01_response(path) {
@@ -682,7 +677,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
             if let Some(root_slot) = site_static_root_slot(&ctx.state) {
                 let headers = header_pairs_from_map(req.headers());
                 let header_view = crate::waf::PairsHeaderView(&headers);
-                let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
+                let client_ip = client_ip_from_xff(Some(&xff));
                 let host = request_host(&req);
                 if let Some(reject) = waf_header_gate(
                     &ctx.state,
@@ -709,15 +704,10 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
         }
     }
 
-    handle_core_request(
-        &ctx.state,
-        &ctx.proxy_client,
-        req,
-        Some(&ctx.x_forwarded_for),
-    )
-    .await
+    handle_core_request(&ctx.state, &ctx.proxy_client, req, Some(&xff)).await
 }
 
+#[allow(clippy::result_large_err)] // Err is a ready-to-send response, not an error
 async fn handle_request(
     state: Arc<ServerState>,
     req: Request<Incoming>,
@@ -772,6 +762,7 @@ async fn handle_request(
     Ok(handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await)
 }
 
+#[allow(clippy::result_large_err)] // Err is a ready-to-send response, not an error
 async fn handle_request_with_modules(
     state: Arc<ServerState>,
     req: Request<Incoming>,
@@ -915,7 +906,7 @@ async fn handle_core_request_with_body(
 
     let is_proxy_route = state
         .route_index
-        .match_route_index_with_host_and_headers(&path, host.as_deref(), &headers)
+        .match_route_index_with_host(&path, host.as_deref())
         .is_some_and(|(route_idx, _)| state.snapshot.proxy_cluster_for_route(route_idx).is_some());
     let body_limit = if is_proxy_route {
         PROXY_MAX_REQUEST_BODY_BYTES
@@ -1050,11 +1041,10 @@ async fn dispatch_core(
         }
     }
 
-    let Some((route_idx, route)) = state.route_index.match_route_index_with_host_and_headers(
-        path,
-        host.as_deref(),
-        request_headers,
-    ) else {
+    let Some((route_idx, route)) = state
+        .route_index
+        .match_route_index_with_host(path, host.as_deref())
+    else {
         return text_response(StatusCode::NOT_FOUND, "not found");
     };
 
@@ -1114,101 +1104,52 @@ async fn dispatch_core(
         }
     }
 
-    // Cap036 redirect (compiled structural) wins over rewrite when both exist (IR rejects that).
-    // Cap035/NG-02 rewrite uses plan-compiled engines (ADR-048); never recompile on hot path.
+    // Cap035: structural rewrite is a single rematch pass (MAX_REWRITE_ITERATIONS=1).
+    // ORIGINAL path already passed WAF; rematch uses rewritten path + same Host (no host mutation).
+    // Query is preserved via uri_with_path. Second structural rewrite is not applied.
     match crate::structural_route_rules::evaluate_route_structural_rules(route) {
+        exyonq_module_api::RouteRuleOutcome::NoChange => {}
         exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
             return redirect_response_parts(status, location);
         }
-        exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
-            return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
-        }
-        exyonq_module_api::RouteRuleOutcome::InternalRewrite { .. } => {
-            // Literal rewrite is handled via compiled engines below (rewrite_target still set
-            // for Cap035 structural input). Prefer compiled path for rematch/break/redirect.
-        }
-        exyonq_module_api::RouteRuleOutcome::NoChange => {}
-    }
-
-    if let Some(Some(engine)) = state.snapshot.route_rewrites.get(route_idx) {
-        let query = uri.query().unwrap_or("");
-        match exyonq_module_api::apply_compiled_rewrite(
-            engine,
-            exyonq_module_api::RewriteRequest {
-                path: path.as_str(),
-                host: host.as_deref(),
-                query,
-                headers: request_headers,
-            },
-        ) {
-            exyonq_module_api::RewriteApplyOutcome::NoChange => {}
-            exyonq_module_api::RewriteApplyOutcome::Rejected => {
+        exyonq_module_api::RouteRuleOutcome::InternalRewrite { path: rewritten } => {
+            // Fail closed: never rematch/proxy with path≠uri after a parse failure.
+            let Some(next_uri) = uri_with_path(&uri, rewritten) else {
                 return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
-            }
-            exyonq_module_api::RewriteApplyOutcome::Redirect { status, location } => {
-                return redirect_response_parts(status, &location);
-            }
-            exyonq_module_api::RewriteApplyOutcome::Internal {
-                path: rewritten,
-                rematch,
-            } => {
-                let Some(next_uri) = uri_with_path(&uri, &rewritten) else {
-                    return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
-                };
-                uri = next_uri;
-                path = rewritten;
-                if rematch {
-                    let Some((rematch_idx, rematch_route)) = state
-                        .route_index
-                        .match_route_index_with_host(path.as_str(), host.as_deref())
-                    else {
-                        return text_response(StatusCode::NOT_FOUND, "not found");
-                    };
-                    route_idx = rematch_idx;
-                    // Rematch may land on redirect-only; do not chain another rewrite.
-                    match crate::structural_route_rules::evaluate_route_structural_rules(
-                        rematch_route,
-                    ) {
-                        exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
-                            return redirect_response_parts(status, location);
-                        }
-                        exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
-                            return text_response(
-                                StatusCode::BAD_REQUEST,
-                                "invalid redirect location",
-                            );
-                        }
-                        _ => {}
-                    }
+            };
+            uri = next_uri;
+            path = rewritten.to_string();
+            let Some((rematch_idx, rematch_route)) = state
+                .route_index
+                .match_route_index_with_host(path.as_str(), host.as_deref())
+            else {
+                return text_response(StatusCode::NOT_FOUND, "not found");
+            };
+            route_idx = rematch_idx;
+            match crate::structural_route_rules::evaluate_route_structural_rules(rematch_route) {
+                exyonq_module_api::RouteRuleOutcome::NoChange => {}
+                exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
+                    // Rematch landed on a redirect-only route (Cap036 surface).
+                    return redirect_response_parts(status, location);
+                }
+                exyonq_module_api::RouteRuleOutcome::InternalRewrite { .. } => {
+                    // Bound: do not chain structural rewrites.
+                    return text_response(StatusCode::NOT_FOUND, "not found");
+                }
+                exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
+                    return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
                 }
             }
         }
-    } else if let exyonq_module_api::RouteRuleOutcome::InternalRewrite { path: rewritten } =
-        crate::structural_route_rules::evaluate_route_structural_rules(route)
-    {
-        // Fallback for snapshots without compiled rewrite slots (should not happen in prod).
-        let Some(next_uri) = uri_with_path(&uri, rewritten) else {
-            return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
-        };
-        uri = next_uri;
-        path = rewritten.to_string();
-        let Some((rematch_idx, rematch_route)) = state
-            .route_index
-            .match_route_index_with_host(path.as_str(), host.as_deref())
-        else {
-            return text_response(StatusCode::NOT_FOUND, "not found");
-        };
-        route_idx = rematch_idx;
-        if let exyonq_module_api::RouteRuleOutcome::Redirect { status, location } =
-            crate::structural_route_rules::evaluate_route_structural_rules(rematch_route)
-        {
-            return redirect_response_parts(status, location);
+        exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
+            return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
         }
     }
     let path = path.as_str();
 
     // WC2B/WC2C/WC2D: eligibility + L1 lookup; MISS context for static/FastCGI fill.
-    let (fpc_miss, fpc_bypass) = match crate::fpc_lookup::fpc_gate(
+    let mut fpc_bypass_reason: Option<&'static str> = None;
+    let fpc_miss = match crate::fpc_lookup::fpc_gate(
         state,
         route_idx,
         method,
@@ -1219,23 +1160,36 @@ async fn dispatch_core(
         crate::fpc_lookup::FpcGateResult::Hit(hit) => {
             return crate::observability::attach_outcome_hint(hit, "fpc_hit");
         }
-        crate::fpc_lookup::FpcGateResult::Miss(ctx) => (Some(ctx), None),
-        crate::fpc_lookup::FpcGateResult::Bypass { reason } => (None, Some(reason)),
-        crate::fpc_lookup::FpcGateResult::Skip => (None, None),
+        crate::fpc_lookup::FpcGateResult::Miss(ctx) => Some(ctx),
+        crate::fpc_lookup::FpcGateResult::Bypass { reason } => {
+            fpc_bypass_reason = Some(reason);
+            None
+        }
+        crate::fpc_lookup::FpcGateResult::Skip => None,
     };
+    macro_rules! fpc_bypassed {
+        ($resp:expr) => {{
+            let mut r = $resp;
+            crate::fpc_lookup::maybe_apply_bypass(&mut r, fpc_bypass_reason);
+            r
+        }};
+    }
 
     if let Some(root_slot) = static_root_slot_for_route(state, route_idx) {
-        let mut response = if let Some(ctx) = fpc_miss {
-            static_dispatch_fpc_fill(
-                method,
-                root_slot,
-                path,
-                request_headers,
-                materialization_budget_bytes,
-                ctx,
-            )
-            .await
-        } else {
+        if let Some(ctx) = fpc_miss {
+            return fpc_bypassed!(
+                static_dispatch_fpc_fill(
+                    method,
+                    root_slot,
+                    path,
+                    request_headers,
+                    materialization_budget_bytes,
+                    ctx,
+                )
+                .await
+            );
+        }
+        return fpc_bypassed!(
             static_dispatch_maybe_cached(
                 state,
                 route_idx,
@@ -1248,82 +1202,28 @@ async fn dispatch_core(
                 materialization_budget_bytes,
             )
             .await
-        };
-        // NG-03 / ADR-049: static miss → one rematch to fallback_rewrite (query preserved).
-        if response.status() == StatusCode::NOT_FOUND {
-            if let Some(fb) = state
-                .route_index
-                .routes()
-                .get(route_idx)
-                .and_then(|r| r.fallback_rewrite.as_deref())
-            {
-                return apply_fallback_rewrite_rematch(
-                    state,
-                    _proxy_client,
-                    method,
-                    &uri,
-                    host,
-                    x_forwarded_for,
-                    request_headers,
-                    materialization_budget_bytes,
-                    request_body,
-                    fb,
-                )
-                .await;
-            }
-            // NG-04 / ADR-050: custom error body after NG-03.
-            return maybe_custom_error_page(
-                state,
-                StatusCode::NOT_FOUND,
-                "not found",
-                &uri,
-                host.as_deref(),
-                method,
-                request_headers,
-                materialization_budget_bytes,
-            )
-            .await;
-        }
-        crate::fpc_lookup::maybe_apply_bypass(&mut response, fpc_bypass);
-        // F2 / ADR-061: ExpiresByType → Cache-Control on static 200.
-        apply_route_cache_headers(state, route_idx, &mut response);
-        // ADR-062 / F1-R19: route response_headers.
-        apply_route_response_headers(
-            state,
-            route_idx,
-            &mut response,
-            host.as_deref(),
-            path,
         );
-        return response;
     }
 
     // FPC fill for proxy deferred (WC2E). FastCGI fill is WC2D below.
     if let Some(cluster_id) = state.snapshot.proxy_cluster_for_route(route_idx) {
         let _ = fpc_miss;
         let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-        let mut response = proxy_dispatch_maybe_cached(
-            state,
-            route_idx,
-            cluster_id,
-            method,
-            &uri,
-            host.as_deref(),
-            path_and_query,
-            request_headers,
-            x_forwarded_for,
-            request_body,
-        )
-        .await;
-        crate::fpc_lookup::maybe_apply_bypass(&mut response, fpc_bypass);
-        apply_route_response_headers(
-            state,
-            route_idx,
-            &mut response,
-            host.as_deref(),
-            uri.path(),
+        return fpc_bypassed!(
+            proxy_dispatch_maybe_cached(
+                state,
+                route_idx,
+                cluster_id,
+                method,
+                &uri,
+                host.as_deref(),
+                path_and_query,
+                request_headers,
+                x_forwarded_for,
+                request_body,
+            )
+            .await
         );
-        return response;
     }
 
     let remote_addr = x_forwarded_for
@@ -1341,22 +1241,24 @@ async fn dispatch_core(
             state.snapshot.resolve_backend(route_idx),
             Some(Backend::Fastcgi { .. })
         ) {
-            return fastcgi_dispatch_fpc_fill(
-                state,
-                route_idx,
-                method,
-                &uri,
-                fcgi_script_path.as_deref(),
-                &remote_addr,
-                request_headers,
-                fcgi_body,
-                ctx,
-            )
-            .await;
+            return fpc_bypassed!(
+                fastcgi_dispatch_fpc_fill(
+                    state,
+                    route_idx,
+                    method,
+                    &uri,
+                    fcgi_script_path.as_deref(),
+                    &remote_addr,
+                    request_headers,
+                    fcgi_body,
+                    ctx,
+                )
+                .await
+            );
         }
     }
 
-    if let Some(mut response) = fastcgi_dispatch_maybe_cached(
+    if let Some(response) = fastcgi_dispatch_maybe_cached(
         state,
         route_idx,
         method,
@@ -1369,294 +1271,10 @@ async fn dispatch_core(
     )
     .await
     {
-        crate::fpc_lookup::maybe_apply_bypass(&mut response, fpc_bypass);
-        apply_route_response_headers(
-            state,
-            route_idx,
-            &mut response,
-            host.as_deref(),
-            uri.path(),
-        );
-        return response;
+        return fpc_bypassed!(response);
     }
 
-    maybe_custom_error_page(
-        state,
-        StatusCode::NOT_FOUND,
-        "not found",
-        &uri,
-        host.as_deref(),
-        method,
-        request_headers,
-        materialization_budget_bytes,
-    )
-    .await
-}
-
-/// NG-04 / ADR-050: serve mapped error document body; keep original status.
-#[allow(clippy::too_many_arguments)] // rematch carries full request context
-async fn maybe_custom_error_page(
-    state: &ServerState,
-    status: StatusCode,
-    plain: &str,
-    base_uri: &hyper::Uri,
-    host: Option<&str>,
-    method: &Method,
-    request_headers: &[(String, String)],
-    materialization_budget_bytes: Option<u64>,
-) -> Response<BoxBody> {
-    let code = status.as_u16();
-    if !(400..=599).contains(&code) {
-        return text_response(status, plain);
-    }
-    let Some(page_path) = state
-        .config
-        .primary_server()
-        .error_pages
-        .get(&code.to_string())
-        .cloned()
-    else {
-        return text_response(status, plain);
-    };
-    let Some(page_uri) = uri_with_path(base_uri, &page_path) else {
-        return text_response(status, plain);
-    };
-    let Some((route_idx, _)) = state
-        .route_index
-        .match_route_index_with_host(page_path.as_str(), host)
-    else {
-        return text_response(status, plain);
-    };
-    let Some(root_slot) = static_root_slot_for_route(state, route_idx) else {
-        return text_response(status, plain);
-    };
-    tracing::debug!(
-        status = code,
-        path = %page_path,
-        "ng04.error_page rematch"
-    );
-    let served = static_dispatch_maybe_cached(
-        state,
-        route_idx,
-        method,
-        &page_uri,
-        host,
-        root_slot,
-        page_path.as_str(),
-        request_headers,
-        materialization_budget_bytes,
-    )
-    .await;
-    if served.status() == StatusCode::OK {
-        let (mut parts, body) = served.into_parts();
-        parts.status = status;
-        let mut response = Response::from_parts(parts, body);
-        // Rematched error route: only `always=true` headers apply (status 4xx/5xx).
-        apply_route_response_headers(state, route_idx, &mut response, host, page_path.as_str());
-        return response;
-    }
-    text_response(status, plain)
-}
-
-/// NG-03 / ADR-049: rematch once after static miss. Does not re-apply `fallback_rewrite`.
-#[allow(clippy::too_many_arguments)] // rematch carries full request context
-async fn apply_fallback_rewrite_rematch(
-    state: &ServerState,
-    _proxy_client: &ProxyClient,
-    method: &Method,
-    base_uri: &hyper::Uri,
-    host: Option<String>,
-    x_forwarded_for: Option<&HeaderValue>,
-    request_headers: &[(String, String)],
-    materialization_budget_bytes: Option<u64>,
-    request_body: Option<Bytes>,
-    fallback_path: &str,
-) -> Response<BoxBody> {
-    let Some(uri) = uri_with_path(base_uri, fallback_path) else {
-        return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
-    };
-    let Some((route_idx, rematch_route)) = state
-        .route_index
-        .match_route_index_with_host(fallback_path, host.as_deref())
-    else {
-        return maybe_custom_error_page(
-            state,
-            StatusCode::NOT_FOUND,
-            "not found",
-            base_uri,
-            host.as_deref(),
-            method,
-            request_headers,
-            materialization_budget_bytes,
-        )
-        .await;
-    };
-    match crate::structural_route_rules::evaluate_route_structural_rules(rematch_route) {
-        exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
-            return redirect_response_parts(status, location);
-        }
-        exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
-            return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
-        }
-        _ => {}
-    }
-
-    let path = fallback_path;
-    let (fpc_miss, fpc_bypass) = match crate::fpc_lookup::fpc_gate(
-        state,
-        route_idx,
-        method,
-        &uri,
-        host.as_deref(),
-        request_headers,
-    ) {
-        crate::fpc_lookup::FpcGateResult::Hit(hit) => {
-            return crate::observability::attach_outcome_hint(hit, "fpc_hit");
-        }
-        crate::fpc_lookup::FpcGateResult::Miss(ctx) => (Some(ctx), None),
-        crate::fpc_lookup::FpcGateResult::Bypass { reason } => (None, Some(reason)),
-        crate::fpc_lookup::FpcGateResult::Skip => (None, None),
-    };
-
-    if let Some(root_slot) = static_root_slot_for_route(state, route_idx) {
-        if let Some(ctx) = fpc_miss {
-            return static_dispatch_fpc_fill(
-                method,
-                root_slot,
-                path,
-                request_headers,
-                materialization_budget_bytes,
-                ctx,
-            )
-            .await;
-        }
-        let mut response = static_dispatch_maybe_cached(
-            state,
-            route_idx,
-            method,
-            &uri,
-            host.as_deref(),
-            root_slot,
-            path,
-            request_headers,
-            materialization_budget_bytes,
-        )
-        .await;
-        if response.status() == StatusCode::NOT_FOUND {
-            return maybe_custom_error_page(
-                state,
-                StatusCode::NOT_FOUND,
-                "not found",
-                base_uri,
-                host.as_deref(),
-                method,
-                request_headers,
-                materialization_budget_bytes,
-            )
-            .await;
-        }
-        crate::fpc_lookup::maybe_apply_bypass(&mut response, fpc_bypass);
-        apply_route_cache_headers(state, route_idx, &mut response);
-        apply_route_response_headers(
-            state,
-            route_idx,
-            &mut response,
-            host.as_deref(),
-            path,
-        );
-        return response;
-    }
-
-    if let Some(cluster_id) = state.snapshot.proxy_cluster_for_route(route_idx) {
-        let _ = fpc_miss;
-        let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-        let mut response = proxy_dispatch_maybe_cached(
-            state,
-            route_idx,
-            cluster_id,
-            method,
-            &uri,
-            host.as_deref(),
-            path_and_query,
-            request_headers,
-            x_forwarded_for,
-            request_body,
-        )
-        .await;
-        crate::fpc_lookup::maybe_apply_bypass(&mut response, fpc_bypass);
-        apply_route_response_headers(
-            state,
-            route_idx,
-            &mut response,
-            host.as_deref(),
-            uri.path(),
-        );
-        return response;
-    }
-
-    let remote_addr = x_forwarded_for
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("127.0.0.1")
-        .to_string();
-    let fcgi_body = request_body
-        .as_ref()
-        .map(|b| b.to_vec())
-        .unwrap_or_default();
-    if let Some(ctx) = fpc_miss {
-        if matches!(
-            state.snapshot.resolve_backend(route_idx),
-            Some(Backend::Fastcgi { .. })
-        ) {
-            return fastcgi_dispatch_fpc_fill(
-                state,
-                route_idx,
-                method,
-                &uri,
-                None,
-                &remote_addr,
-                request_headers,
-                fcgi_body,
-                ctx,
-            )
-            .await;
-        }
-    }
-
-    if let Some(mut response) = fastcgi_dispatch_maybe_cached(
-        state,
-        route_idx,
-        method,
-        &uri,
-        host.as_deref(),
-        None,
-        &remote_addr,
-        request_headers.to_vec(),
-        fcgi_body,
-    )
-    .await
-    {
-        crate::fpc_lookup::maybe_apply_bypass(&mut response, fpc_bypass);
-        apply_route_response_headers(
-            state,
-            route_idx,
-            &mut response,
-            host.as_deref(),
-            uri.path(),
-        );
-        return response;
-    }
-
-    maybe_custom_error_page(
-        state,
-        StatusCode::NOT_FOUND,
-        "not found",
-        base_uri,
-        host.as_deref(),
-        method,
-        request_headers,
-        materialization_budget_bytes,
-    )
-    .await
+    fpc_bypassed!(text_response(StatusCode::NOT_FOUND, "not found"))
 }
 
 async fn apply_htaccess_adjustment_terminal(
@@ -1753,94 +1371,6 @@ fn materialized_to_response(outcome: execute_backend::ExecuteBackendOutcome) -> 
         .expect("valid static response")
 }
 
-/// F2 / ADR-061: set Cache-Control from route.cache_headers.by_mime when absent.
-fn apply_route_cache_headers(
-    state: &ServerState,
-    route_idx: usize,
-    response: &mut Response<BoxBody>,
-) {
-    let Some(route) = state.route_index.routes().get(route_idx) else {
-        return;
-    };
-    let Some(ch) = route.cache_headers.as_ref() else {
-        return;
-    };
-    insert_cache_control_from_mime(response, ch);
-}
-
-/// ADR-062 / F1-R19: apply route `response_headers` (non-overwrite; status-gated).
-fn apply_route_response_headers(
-    state: &ServerState,
-    route_idx: usize,
-    response: &mut Response<BoxBody>,
-    host: Option<&str>,
-    uri_path: &str,
-) {
-    let Some(route) = state.route_index.routes().get(route_idx) else {
-        return;
-    };
-    if route.response_headers.is_empty() {
-        return;
-    }
-    let status = response.status().as_u16();
-    let host_norm = normalize_response_header_host(host.unwrap_or(""));
-    let ctx = exyonq_config_ir::ResponseHeaderExpandCtx {
-        host: &host_norm,
-        uri: uri_path,
-    };
-    for h in &route.response_headers {
-        if !h.always && !(200..400).contains(&status) {
-            continue;
-        }
-        let name_lower = h.name.to_ascii_lowercase();
-        if response
-            .headers()
-            .keys()
-            .any(|k| k.as_str().eq_ignore_ascii_case(&name_lower))
-        {
-            continue;
-        }
-        let value = exyonq_config_ir::expand_response_header_template(&h.value, &ctx);
-        if let (Ok(name), Ok(hv)) = (
-            http::header::HeaderName::from_bytes(h.name.as_bytes()),
-            HeaderValue::from_str(&value),
-        ) {
-            response.headers_mut().insert(name, hv);
-        }
-    }
-}
-
-fn normalize_response_header_host(host: &str) -> String {
-    let trimmed = host.trim_end_matches('.').to_ascii_lowercase();
-    match trimmed.rsplit_once(':') {
-        Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => name.to_string(),
-        _ => trimmed,
-    }
-}
-
-fn insert_cache_control_from_mime(
-    response: &mut Response<BoxBody>,
-    ch: &exyonq_config_ir::CacheHeadersConfig,
-) {
-    if response.status() != StatusCode::OK {
-        return;
-    }
-    if response.headers().contains_key(header::CACHE_CONTROL) {
-        return;
-    }
-    let ct = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let Some(value) = ch.cache_control_for(ct) else {
-        return;
-    };
-    if let Ok(hv) = HeaderValue::from_str(&value) {
-        response.headers_mut().insert(header::CACHE_CONTROL, hv);
-    }
-}
-
 /// HTTP context for FastCGI dispatch (handler → execute_backend seam).
 struct FcgiHttpContext<'a> {
     method: &'a Method,
@@ -1910,35 +1440,10 @@ async fn execute_fastcgi_backend(
                 }
             };
 
-            // Defense in depth: existing non-PHP under a FastCGI route is static.
-            // php-fpm security.limit_extensions rejects .css/.js with 403 otherwise.
-            if !fcgi_script_name_is_php(&dispatch_request.script_name) {
-                let Some(static_method) = static_method_from_hyper(http.method) else {
-                    return Some(execute_backend::ExecuteBackendOutcome {
-                        status: 405,
-                        headers: Vec::new(),
-                        body: b"method not allowed".to_vec(),
-                    });
-                };
-                return Some(
-                    execute_backend::serve_static_resolved_path_with_budget(
-                        static_method,
-                        std::path::Path::new(&dispatch_request.script_filename),
-                        None,
-                    )
-                    .await,
-                );
-            }
-
             execute_backend::execute_backend(backend, Some(dispatch_request), None, None).await
         }
         _ => None,
     }
-}
-
-fn fcgi_script_name_is_php(script_name: &str) -> bool {
-    let lower = script_name.to_ascii_lowercase();
-    lower.ends_with(".php") || lower.ends_with(".phtml") || lower.ends_with(".phar")
 }
 
 /// Plan 08 PR2-A/PR5-B1-real: terminal response for FastCGI contract backend.
@@ -1983,7 +1488,9 @@ async fn fastcgi_dispatch_fpc_fill(
         outcome
             .headers
             .retain(|(n, _)| !n.eq_ignore_ascii_case("content-length"));
-        return fcgi_response_from_outcome(outcome);
+        let mut resp = fcgi_response_from_outcome(outcome);
+        crate::fpc_lookup::apply_x_cache(resp.headers_mut(), "miss");
+        return resp;
     }
 
     let Some(outcome) = execute_fastcgi_backend(state, route_idx, http).await else {
@@ -2426,7 +1933,7 @@ async fn static_dispatch_fpc_fill(
 ) -> Response<BoxBody> {
     // HEAD must not populate (or overwrite) a GET representation.
     if *method == Method::HEAD {
-        return static_dispatch_via_service(
+        let mut resp = static_dispatch_via_service(
             method,
             root_slot,
             request_path,
@@ -2434,6 +1941,8 @@ async fn static_dispatch_fpc_fill(
             materialization_budget_bytes,
         )
         .await;
+        crate::fpc_lookup::apply_x_cache(resp.headers_mut(), "miss");
+        return resp;
     }
 
     let load = static_load_for_cache_via_service(
@@ -2450,7 +1959,9 @@ async fn static_dispatch_fpc_fill(
             exyonq_module_api::static_dispatch::MATERIALIZATION_BUDGET_EXCEEDED_HEADER,
         ) && value == "1"
     }) {
-        return budget_exceeded_marker_response!();
+        let mut resp = budget_exceeded_marker_response!();
+        crate::fpc_lookup::apply_x_cache_bypass(resp.headers_mut(), "budget");
+        return resp;
     }
 
     // Live reload may publish N+1 while static origin was in flight (symmetric FastCGI WC2D).
@@ -2477,16 +1988,13 @@ async fn static_dispatch_fpc_fill(
         if name.eq_ignore_ascii_case("content-type") {
             has_content_type = true;
         }
-        if name.eq_ignore_ascii_case(crate::fpc_lookup::X_CACHE_HEADER) {
-            continue;
-        }
         builder = builder.header(name.as_str(), value.as_str());
     }
     if !has_content_type && !client_body.is_empty() {
         builder = builder.header("content-type", "application/octet-stream");
     }
     let fallback_body = client_body.clone();
-    let mut response = builder
+    let mut resp = builder
         .body(
             Full::from(client_body)
                 .map_err(|never| match never {})
@@ -2513,9 +2021,8 @@ async fn static_dispatch_fpc_fill(
                         .expect("minimal status response")
                 })
         });
-    // Q-04: FPC miss path still returns origin body — mark observable miss.
-    crate::fpc_lookup::apply_x_cache(response.headers_mut(), "miss");
-    response
+    crate::fpc_lookup::apply_x_cache(resp.headers_mut(), "miss");
+    resp
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2682,8 +2189,12 @@ async fn proxy_dispatch_maybe_cached(
     let xff = x_forwarded_for.cloned();
     let req_headers = request_headers.to_vec();
     let max_bytes = policy.max_object_bytes;
+    // NG-07: cookie_affinity route token travels beside the cache load —
+    // appended to the client response only, never into cached headers.
+    let route_cookie = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let cookie_slot = std::sync::Arc::clone(&route_cookie);
 
-    serve_proxy_with_cache(
+    let mut resp = serve_proxy_with_cache(
         global_response_cache(),
         global_singleflight(),
         key,
@@ -2692,17 +2203,30 @@ async fn proxy_dispatch_maybe_cached(
         method,
         policy,
         || async move {
-            load_get_for_cache_by_cluster(
+            let (load, cookie) = load_get_for_cache_by_cluster(
                 cluster_id,
                 &path_and_query,
                 xff.as_ref(),
                 max_bytes,
                 &req_headers,
             )
-            .await
+            .await;
+            if let Ok(mut slot) = cookie_slot.lock() {
+                *slot = cookie;
+            }
+            load
         },
     )
-    .await
+    .await;
+    if let Some(cookie) = route_cookie.lock().ok().and_then(|c| c.clone()) {
+        // NG-07: never pin the client on a failed response.
+        if resp.status().as_u16() < 500 {
+            if let Ok(v) = HeaderValue::from_str(&cookie) {
+                resp.headers_mut().append(hyper::header::SET_COOKIE, v);
+            }
+        }
+    }
+    resp
 }
 
 // TECH_DEBT_HANDLER_ARITY = DEFERRED_POST_V043
@@ -2734,21 +2258,12 @@ async fn proxy_contract_target(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("127.0.0.1");
     let body = request_body.map(|b| b.to_vec());
-    let outbound_headers = apply_proxy_set_headers(
-        state,
-        route_idx,
-        request_headers.to_vec(),
-        host,
-        remote_addr,
-        path_and_query,
-        scheme,
-    );
     let request = execute_backend::build_proxy_dispatch_request(
         *cluster_id,
         method,
         path_and_query,
         host.map(str::to_string),
-        outbound_headers,
+        request_headers.to_vec(),
         body,
         remote_addr,
         scheme,
@@ -2910,21 +2425,12 @@ async fn proxy_route_target(
             return reject;
         }
     }
-    let outbound_headers = apply_proxy_set_headers(
-        state,
-        route_idx,
-        headers,
-        host.as_deref(),
-        remote_addr.as_str(),
-        &path_and_query,
-        scheme,
-    );
     let request = execute_backend::build_proxy_dispatch_request(
         cluster_id,
         method,
         path_and_query,
         host,
-        outbound_headers,
+        headers,
         body,
         remote_addr,
         scheme,
@@ -2934,63 +2440,6 @@ async fn proxy_route_target(
         note_proxy_http_501();
     }
     execute_backend::proxy_outcome_to_hyper(outcome)
-}
-
-/// Q-02 / ADR-054: drain reject diagnostic (failure-only).
-fn emit_rt_draining(path: &str) {
-    tracing::warn!(
-        code = "EXY-RT-0006",
-        cause = "draining",
-        path,
-        "EXY-RT-0006: request rejected while draining"
-    );
-}
-
-/// NG-05 / ADR-051: expand `proxy_set_headers` onto the outbound upstream header list.
-fn apply_proxy_set_headers(
-    state: &ServerState,
-    route_idx: usize,
-    mut headers: Vec<(String, String)>,
-    host: Option<&str>,
-    remote_addr: &str,
-    request_uri: &str,
-    scheme: &str,
-) -> Vec<(String, String)> {
-    let Some(route) = state.route_index.routes().get(route_idx) else {
-        return headers;
-    };
-    if route.proxy_set_headers.is_empty() {
-        return headers;
-    }
-    let host_norm = host
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .trim_end_matches('.');
-    let request_headers_snapshot = headers.clone();
-    let ctx = exyonq_config_ir::HeaderExpandCtx {
-        host: host_norm,
-        remote_addr,
-        request_uri,
-        scheme,
-        request_headers: &request_headers_snapshot,
-        maps: &state.config.maps,
-    };
-    let mut expanded: Vec<(String, String)> = Vec::with_capacity(route.proxy_set_headers.len());
-    for h in &route.proxy_set_headers {
-        let (value, notes) = exyonq_config_ir::expand_header_template_with_notes(&h.value, &ctx);
-        for note in notes {
-            let exyonq_config_ir::MapExpandNote::UnknownMap { name } = note;
-            emit_map_unknown(&name, request_uri, Some(host_norm));
-        }
-        expanded.push((h.name.clone(), value));
-    }
-    for (name, value) in expanded {
-        headers.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
-        headers.push((name, value));
-    }
-    headers
 }
 
 fn empty_head_response(status: StatusCode) -> Response<BoxBody> {
@@ -3175,6 +2624,29 @@ fn client_ip_from_xff(x_forwarded_for: Option<&HeaderValue>) -> std::net::IpAddr
     crate::waf::parse_client_ip(x_forwarded_for.and_then(|v| v.to_str().ok()))
 }
 
+/// NG-11: effective client-IP header for this request. Disabled → returns the
+/// connection peer unchanged. Trusted peer → resolved from the configured
+/// forwarding header (last occurrence wins, nginx semantics).
+fn effective_xff(
+    state: &ServerState,
+    peer: &HeaderValue,
+    headers: &hyper::HeaderMap,
+) -> HeaderValue {
+    let Some(trust) =
+        exyonq_module_api::real_ip::RealIpTrust::from_config(&state.config.modules.real_ip)
+    else {
+        return peer.clone();
+    };
+    let peer_ip = crate::waf::parse_client_ip(peer.to_str().ok());
+    let inbound = headers
+        .get_all(trust.header.as_str())
+        .iter()
+        .next_back()
+        .and_then(|v| v.to_str().ok());
+    HeaderValue::from_str(&trust.resolve(peer_ip, inbound).to_string())
+        .unwrap_or_else(|_| peer.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3205,8 +2677,10 @@ mod tests {
             r#match: RouteMatch {
                 path: path.into(),
                 host: None,
-
-                ..Default::default()
+                suffix: None,
+                regex: None,
+                header: None,
+                header_value: None,
             },
             upstream: None,
             root: None,
@@ -3222,115 +2696,8 @@ mod tests {
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         }
-    }
-
-    #[test]
-    fn apply_route_response_headers_status_gate() {
-        use exyonq_config_ir::ResponseHeaderConfig;
-
-        let mut response: Response<BoxBody> = Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(
-                Full::from(bytes::Bytes::from_static(b"x"))
-                    .map_err(|n| match n {})
-                    .boxed(),
-            )
-            .unwrap();
-        // Simulate always=false skip + always=true apply without ServerState:
-        let headers = vec![
-            ResponseHeaderConfig {
-                name: "X-Only-Ok".into(),
-                value: "no".into(),
-                always: false,
-            },
-            ResponseHeaderConfig {
-                name: "X-Always".into(),
-                value: "yes".into(),
-                always: true,
-            },
-        ];
-        let status = response.status().as_u16();
-        for h in &headers {
-            if !h.always && !(200..400).contains(&status) {
-                continue;
-            }
-            response.headers_mut().insert(
-                http::header::HeaderName::from_bytes(h.name.as_bytes()).unwrap(),
-                HeaderValue::from_str(&h.value).unwrap(),
-            );
-        }
-        assert!(response.headers().get("x-only-ok").is_none());
-        assert_eq!(
-            response
-                .headers()
-                .get("x-always")
-                .and_then(|v| v.to_str().ok()),
-            Some("yes")
-        );
-    }
-
-    #[test]
-    fn insert_cache_control_from_mime_sets_header() {
-        use exyonq_config_ir::{CacheHeadersConfig, MimeCacheHeader};
-        use http_body_util::Empty;
-        let mut by_mime = std::collections::BTreeMap::new();
-        by_mime.insert(
-            "text/css".into(),
-            MimeCacheHeader {
-                max_age: 60,
-                immutable: false,
-            },
-        );
-        let ch = CacheHeadersConfig { by_mime };
-        let mut response: Response<BoxBody> = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "text/css")
-            .body(
-                Empty::<bytes::Bytes>::new()
-                    .map_err(|never| match never {})
-                    .boxed(),
-            )
-            .unwrap();
-        insert_cache_control_from_mime(&mut response, &ch);
-        let cc = response
-            .headers()
-            .get(header::CACHE_CONTROL)
-            .and_then(|v| v.to_str().ok());
-        assert_eq!(cc, Some("public, max-age=60"));
-    }
-
-    #[test]
-    fn insert_cache_control_respects_existing_header() {
-        use exyonq_config_ir::{CacheHeadersConfig, MimeCacheHeader};
-        use http_body_util::Empty;
-        let mut by_mime = std::collections::BTreeMap::new();
-        by_mime.insert(
-            "text/css".into(),
-            MimeCacheHeader {
-                max_age: 60,
-                immutable: false,
-            },
-        );
-        let ch = CacheHeadersConfig { by_mime };
-        let mut response: Response<BoxBody> = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "text/css")
-            .header("cache-control", "no-store")
-            .body(
-                Empty::<bytes::Bytes>::new()
-                    .map_err(|never| match never {})
-                    .boxed(),
-            )
-            .unwrap();
-        insert_cache_control_from_mime(&mut response, &ch);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::CACHE_CONTROL)
-                .and_then(|v| v.to_str().ok()),
-            Some("no-store")
-        );
     }
 
     async fn state_for(
@@ -3357,145 +2724,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn error_pages_404_preserves_status_and_body() {
-        // NG-04 / ADR-050: custom 404 body, status stays 404.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("404.html"), b"CUSTOM-404").unwrap();
-        std::fs::write(dir.path().join("ok.txt"), b"OK").unwrap();
-        let mut site = route("site", "/");
-        site.root = Some(dir.path().to_path_buf());
-        let mut pages = HashMap::new();
-        pages.insert("404".into(), "/404.html".into());
-        let config = AppConfig {
-            config_version: 1,
-            includes: Vec::new(),
-            servers: vec![ServerConfig {
-                listen: "127.0.0.1:8080".into(),
-                server_name: ServerNames::None,
-                routes: vec!["site".into()],
-                tls: None,
-                http3_listen: None,
-                error_pages: pages,
-            }],
-            routes: vec![site],
-            upstreams: HashMap::new(),
-            pools_fcgi: HashMap::new(),
-            cache_policies: HashMap::new(),
-            maps: Default::default(),
-            modules: Default::default(),
-            static_section: Default::default(),
-            full_page_cache: Default::default(),
-            http3: Default::default(),
-            waf: Default::default(),
-            logging: Default::default(),
-        };
-        let (state, _static_guard, _proxy_guard) = state_for(config).await;
-
-        let hit = dispatch_core(
-            &state,
-            &state.proxy_client,
-            &Method::GET,
-            &Uri::from_static("/ok.txt"),
-            None,
-            None,
-            &[],
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(hit.status(), StatusCode::OK);
-
-        let miss = dispatch_core(
-            &state,
-            &state.proxy_client,
-            &Method::GET,
-            &Uri::from_static("/missing"),
-            None,
-            None,
-            &[],
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(miss.status(), StatusCode::NOT_FOUND);
-        let body = http_body_util::BodyExt::collect(miss.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        assert_eq!(&body[..], b"CUSTOM-404");
-    }
-
-    #[tokio::test]
-    async fn fallback_rewrite_spa_serves_index_on_miss() {
-        // NG-03 / ADR-049: try_files $uri /index.html
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("index.html"), b"SPA-INDEX").unwrap();
-        std::fs::write(dir.path().join("asset.js"), b"ASSET").unwrap();
-        let mut spa = route("spa", "/");
-        spa.root = Some(dir.path().to_path_buf());
-        spa.fallback_rewrite = Some("/index.html".into());
-        spa.try_uri = Some(true);
-        spa.try_uri_dir = Some(false);
-        let config = AppConfig {
-            config_version: 1,
-            includes: Vec::new(),
-            servers: vec![ServerConfig {
-                listen: "127.0.0.1:8080".into(),
-                server_name: ServerNames::None,
-                routes: vec!["spa".into()],
-                tls: None,
-                http3_listen: None,
-                error_pages: Default::default(),
-            }],
-            routes: vec![spa],
-            upstreams: HashMap::new(),
-            pools_fcgi: HashMap::new(),
-            cache_policies: HashMap::new(),
-            maps: Default::default(),
-            modules: Default::default(),
-            static_section: Default::default(),
-            full_page_cache: Default::default(),
-            http3: Default::default(),
-            waf: Default::default(),
-            logging: Default::default(),
-        };
-        let (state, _static_guard, _proxy_guard) = state_for(config).await;
-
-        let hit = dispatch_core(
-            &state,
-            &state.proxy_client,
-            &Method::GET,
-            &Uri::from_static("/asset.js"),
-            None,
-            None,
-            &[],
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(hit.status(), StatusCode::OK);
-
-        let miss = dispatch_core(
-            &state,
-            &state.proxy_client,
-            &Method::GET,
-            &Uri::from_static("/app/route"),
-            None,
-            None,
-            &[],
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(miss.status(), StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(miss.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        assert_eq!(&body[..], b"SPA-INDEX");
-    }
-
-    #[tokio::test]
     async fn dispatch_static_via_backend_table_get() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("page.html"), b"via-backend-table").unwrap();
@@ -3510,12 +2738,14 @@ mod tests {
                 routes: vec!["assets".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![assets],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),
@@ -3556,12 +2786,14 @@ mod tests {
                 routes: vec!["assets".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![assets],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),
@@ -3588,71 +2820,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rewrite_pattern_last_capture_rematch_static() {
-        // NG-02: patterned last rewrite rematches onto a static route.
-        let dir = tempfile::tempdir().unwrap();
-        // Route prefix `/posts` strips to relative `hello.html` under filesystem root.
-        std::fs::write(dir.path().join("hello.html"), b"NG02-HELLO").unwrap();
-        let mut blog = route("blog", "/blog");
-        blog.rewrite = Some(exyonq_config_ir::RewriteConfig::Rule(
-            exyonq_config_ir::RewriteRuleConfig {
-                pattern: r"^/blog/(.*)$".into(),
-                replacement: "/posts/$1.html".into(),
-                flag: exyonq_config_ir::RewriteFlagConfig::Last,
-                when: vec![],
-            },
-        ));
-        let mut posts = route("posts", "/posts");
-        posts.root = Some(dir.path().to_path_buf());
-        let config = AppConfig {
-            config_version: 1,
-            includes: Vec::new(),
-            servers: vec![ServerConfig {
-                listen: "127.0.0.1:8080".into(),
-                server_name: ServerNames::None,
-                routes: vec!["blog".into(), "posts".into()],
-                tls: None,
-                http3_listen: None,
-                error_pages: Default::default(),
-            }],
-            routes: vec![blog, posts],
-            upstreams: HashMap::new(),
-            pools_fcgi: HashMap::new(),
-            cache_policies: HashMap::new(),
-            maps: Default::default(),
-            modules: Default::default(),
-            static_section: Default::default(),
-            full_page_cache: Default::default(),
-            http3: Default::default(),
-            waf: Default::default(),
-            logging: Default::default(),
-        };
-        let (state, _static_guard, _proxy_guard) = state_for(config).await;
-        assert!(
-            state.snapshot.route_rewrites[0].is_some(),
-            "compiled rewrite present"
-        );
-        let response = dispatch_core(
-            &state,
-            &state.proxy_client,
-            &Method::GET,
-            &Uri::from_static("/blog/hello"),
-            None,
-            None,
-            &[],
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        assert_eq!(&body[..], b"NG02-HELLO");
-    }
-
-    #[tokio::test]
     async fn rewrite_static_via_backend_table() {
         // Cap035 contract: rewrite-only route rematches onto a distinct static route.
         let dir = tempfile::tempdir().unwrap();
@@ -3671,12 +2838,14 @@ mod tests {
                 routes: vec!["legacy".into(), "app".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![legacy, app],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),
@@ -3724,12 +2893,14 @@ mod tests {
                 routes: vec!["assets".into(), "api".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![assets, api],
             upstreams,
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),
@@ -3848,12 +3019,14 @@ mod tests {
                 routes: vec!["assets".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![assets],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),
@@ -3898,12 +3071,14 @@ mod tests {
                 routes: vec!["legacy".into(), "rw".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![redir, rewrite],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),
@@ -3934,12 +3109,14 @@ mod tests {
                 routes: vec!["site".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![site],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),
@@ -3983,12 +3160,14 @@ mod tests {
                 routes: vec!["site".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![site],
             upstreams: HashMap::new(),
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+
             maps: Default::default(),
 
             modules: Default::default(),

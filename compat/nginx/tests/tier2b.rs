@@ -84,41 +84,34 @@ fn tier2b_named_location_unsupported() {
 fn tier2b_add_header_response_headers() {
     let (toml, report) = migrate_fixture("tier2b-add-header.conf");
     assert!(
-        report.entries.iter().any(|e| {
-            e.directive == "add_header" && e.status == NginxCompatStatus::Supported
-        }),
+        report
+            .entries
+            .iter()
+            .any(|e| { e.directive == "add_header" && e.status == NginxCompatStatus::Supported }),
         "{:?}",
         report.entries
     );
-    assert!(
-        toml.contains("[[route.response_headers]]"),
-        "{toml}"
-    );
+    assert!(toml.contains("[[route.response_headers]]"), "{toml}");
     let cfg = AppConfig::parse_str(&toml).expect("parse");
     let root = cfg
         .routes
         .iter()
         .find(|r| r.r#match.path == "/" && r.root.is_some())
         .expect("root route");
-    assert!(
-        root.response_headers
-            .iter()
-            .any(|h| h.name == "X-Frame-Options" && !h.always)
-    );
-    assert!(
-        root.response_headers
-            .iter()
-            .any(|h| h.name == "X-Content-Type-Options" && h.always)
-    );
+    assert!(root
+        .response_headers
+        .iter()
+        .any(|h| h.name == "X-Frame-Options" && !h.always));
+    assert!(root
+        .response_headers
+        .iter()
+        .any(|h| h.name == "X-Content-Type-Options" && h.always));
     let api = cfg
         .routes
         .iter()
         .find(|r| r.upstream.is_some())
         .expect("api");
-    assert!(api
-        .response_headers
-        .iter()
-        .any(|h| h.name == "X-Api-Tag"));
+    assert!(api.response_headers.iter().any(|h| h.name == "X-Api-Tag"));
 }
 
 #[test]

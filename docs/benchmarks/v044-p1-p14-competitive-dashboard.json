@@ -1,0 +1,516 @@
+{
+  "schema_version": 1,
+  "title": "ExyonQ v0.4.4 \u2014 P1\u2013P14 competitive scoreboard",
+  "generated_for_wip": "V044_P1_DEFAULT_WORKER_GEOMETRY_8",
+  "policy": "docs/governance/performance-competitive-admission.md",
+  "public_benchmark_claims": "FORBIDDEN",
+  "axes_note": "ENGINEERING_BASELINE != COMPETITIVE_WIN != MIGRATION_VALUE != MARKET_READINESS",
+  "executive": {
+    "profiles_technically_closed": 3,
+    "profiles_competitively_won": 1,
+    "profiles_migration_value_proven": 0,
+    "profiles_not_measured_current": 11,
+    "exyonq_vs_nginx_overall": "MIXED",
+    "exyonq_vs_ols_overall": "MIXED",
+    "notes": [
+      "P1 engineering baseline remains CLOSED; competitive win/migration value remain NOT_PROVEN after geometry-8 default (NGINX RPS gap \u2248 \u22128.8%, narrowed from \u2248 \u221212.5%).",
+      "No fake aggregate score \u2014 overall fields are qualitative until a weighted model is owner-approved.",
+      "P2: ExyonQ now leads RPS and CPU vs NGINX/OLS in geom8 session; still loses P95/P99 to OLS and RSS to NGINX \u2192 COMPETITIVE_WIN=NOT_PROVEN; migration PARTIAL.",
+      "P3 competitive win preserved (YES) after default geometry change; RPS vs prior seal \u2248 +5.5% (no rollback).",
+      "PARALLELISM_UNDERUTIL = CLOSED_FIXED_AND_REBENCHMARKED. Doc: docs/governance/v044-p1-default-worker-geometry-8.md. P4 not started.",
+      "Architecture fitness remains TARGETED_ARCHITECTURAL_EVOLUTION. Stage/handle/roots findings from AB3 preserved as NOT_MATERIAL."
+    ]
+  },
+  "profiles": [
+    {
+      "profile": "P1",
+      "scale": "V1",
+      "label": "Static 1 KiB HTTP/1.1 keepalive",
+      "authority": "CURRENT_AUTHORITY",
+      "measurement_date": "2026-08-22",
+      "source_head": "ade997a362e60d1dc6eafc984da454930600845a",
+      "source_tree": "4ae6ffc7528d0881be23fcac246c345dcb9a1606",
+      "binary_sha256": "e28c0abe18587f2d911d492be64cbec42372383e011417a6c578be52da5ba459",
+      "evidence_path": ".exyonq-local/evidence/v044-p1-default-worker-geometry-8-20260822T035125Z/",
+      "evidence_netcup": "/root/exyonq-v044-p1-seal-06742e1b/.exyonq-local-evidence/v044-p1-default-worker-geometry-8-20260822T035125Z/",
+      "meter": {
+        "primary": "docker-stats core-ms/req (geom8 three-way harness; same-session)",
+        "companion": "NOT_MEASURED this session (cgroup companion optional)",
+        "note": "Absolute core-ms not comparable to prior 0.01x-scale live-3way without renormalization"
+      },
+      "rps": {
+        "exyonq": 154061.83,
+        "nginx": 168894.55,
+        "ols": 133497.57,
+        "winner": "NGINX",
+        "exyonq_vs_nginx_percent": -8.78,
+        "exyonq_vs_ols_percent": 15.4,
+        "vs_prior_exyonq_seal_percent": 8.54,
+        "repetitions": {
+          "exyonq": [
+            155395.71,
+            134645.28,
+            162990.84,
+            154061.83,
+            137303.91
+          ],
+          "nginx": [
+            168988.9,
+            160843.02,
+            167967.51,
+            176739.82,
+            168894.55
+          ],
+          "ols": [
+            133497.57,
+            121840.66,
+            132210.61,
+            135197.23,
+            136578.58
+          ]
+        },
+        "cv": {
+          "exyonq": 0.083,
+          "nginx": 0.033,
+          "ols": 0.044
+        }
+      },
+      "cpu_per_req": {
+        "unit": "core-ms/req",
+        "exyonq": 0.130296,
+        "nginx": 0.161478,
+        "ols": 0.122088,
+        "winner": "OLS",
+        "exyonq_vs_nginx_percent": -19.31,
+        "exyonq_vs_ols_percent": 6.72
+      },
+      "memory": {
+        "unit": "MiB RSS (docker stats avg)",
+        "exyonq_avg": 13.86,
+        "nginx_avg": 8.422,
+        "ols_avg": 13.97,
+        "winner": "NGINX"
+      },
+      "latency_ms": {
+        "p50": {
+          "exyonq": 0.79,
+          "nginx": 0.73,
+          "ols": 0.98,
+          "winner": "NGINX"
+        },
+        "p95": {
+          "exyonq": 1.29,
+          "nginx": 1.15,
+          "ols": 1.5,
+          "winner": "NGINX"
+        },
+        "p99": {
+          "exyonq": 1.71,
+          "nginx": 1.55,
+          "ols": 1.81,
+          "winner": "NGINX"
+        }
+      },
+      "reliability": {
+        "series_errors": "NOT_MEASURED",
+        "pct_probe_notes": "Probe artifacts separated; series medians remain authority",
+        "winner": "NOT_MEASURED"
+      },
+      "stability": {
+        "note": "RPS CV; nginx lowest",
+        "winner": "NGINX"
+      },
+      "states": {
+        "technical_correctness": "PASS",
+        "engineering_baseline": "CLOSED",
+        "performance_competitiveness": "MIXED",
+        "competitive_win": "NOT_PROVEN",
+        "migration_value": "NOT_PROVEN",
+        "migration_value_vs_nginx": "NOT_PROVEN",
+        "migration_value_vs_ols": "PARTIAL",
+        "market_readiness": "NOT_READY"
+      },
+      "why_migrate_from_nginx": "CPU/request better (~\u221219% same-session core-ms) and RPS gap narrowed to \u2248\u22128.8%, but still loses RPS, P50/P95/P99, and uses higher RSS. Not a proven migration case.",
+      "why_migrate_from_ols": "Material RPS edge (~+15%) and better latency; CPU/request still slightly behind OLS. PARTIAL only.",
+      "caveats": [
+        "Authority HEAD ade997a3 geom8 image; worker env unset (product defaults \u2192 8/8/8 on 8-CPU cpuset).",
+        "Prior seal 06742e1b / binary 09301dc8 SUPERSEDED for current competitive numbers.",
+        "docker-stats core-ms absolute scale differs from older live-3way companion; use within-session ratios."
+      ],
+      "historical_superseded": [
+        {
+          "label": "Root1+Root3 live-3way (pre-FD)",
+          "authority": "HISTORICAL",
+          "exyonq_rps": 150317.86,
+          "nginx_rps": 158753.8,
+          "ols_rps": 132838.55,
+          "cpu_vs_nginx_percent": -2.94,
+          "cpu_vs_ols_percent": 28.56,
+          "doc": "docs/governance/v044-p1-cpu-efficiency-live-3way.md"
+        },
+        {
+          "label": "Post-FD-reuse pre-H1",
+          "authority": "SUPERSEDED",
+          "exyonq_rps": 180108,
+          "nginx_rps": 157198,
+          "ols_rps": 131326,
+          "cpu_vs_nginx_percent": -22.32,
+          "cpu_vs_ols_percent": 4.02,
+          "doc": "docs/governance/v044-p1-fd-reuse-repair.md",
+          "note": "Do not carry +4.02% as current"
+        },
+        {
+          "label": "Post-H1 seal 06742e1b (pre geometry-8 default)",
+          "authority": "SUPERSEDED",
+          "exyonq_rps": 141937.78,
+          "nginx_rps": 162268.07,
+          "ols_rps": 138943.97,
+          "doc": "docs/governance/v044-p1-final-post-repair-baseline.md"
+        }
+      ],
+      "attribution_status": "SUPERSEDED_BY_GEOMETRY8_REPAIR",
+      "root_cause_status": "PARALLELISM_UNDERUTIL_CLOSED_FIXED_AND_REBENCHMARKED",
+      "next_value_wip": "NONE_AUTO \u2014 owner review only; P4 not started",
+      "attribution_evidence": ".exyonq-local/evidence/v044-p1-competitive-deficit-attr-20260821T211202Z/",
+      "attribution_summary": {
+        "shared_roots": [
+          "R1_PARALLELISM_UNDERUTIL (RPS+latency vs NGINX) \u2014 STRONGLY_SUPPORTED class; fix HYPOTHESIS",
+          "R2_PROCESS_IMAGE_RSS (binary Private_Clean + anon) \u2014 STRONGLY_SUPPORTED; FD cache NOT_PRIMARY",
+          "R3_OLS_SYSTEM_CPU (+4.3 us/req system) \u2014 STRONGLY_SUPPORTED"
+        ],
+        "recommended_root": "NONE",
+        "case": "C2",
+        "pss_mib": {
+          "exyonq": 20.2,
+          "nginx_sum": 10.7,
+          "ols_sum": 15.1
+        },
+        "note": "Scoreboard metric numbers unchanged (seal authority). Attribution notes only."
+      },
+      "governance_doc": "docs/governance/v044-p1-default-worker-geometry-8.md",
+      "case": "G1"
+    },
+    {
+      "profile": "P2",
+      "scale": "V1",
+      "label": "Static 64 KiB HTTP/1.1 keepalive",
+      "authority": "CURRENT_AUTHORITY",
+      "measurement_date": "2026-08-22",
+      "source_head": "ade997a362e60d1dc6eafc984da454930600845a",
+      "source_tree": "4ae6ffc7528d0881be23fcac246c345dcb9a1606",
+      "binary_sha256": "e28c0abe18587f2d911d492be64cbec42372383e011417a6c578be52da5ba459",
+      "evidence_path": ".exyonq-local/evidence/v044-p1-default-worker-geometry-8-20260822T035125Z/",
+      "evidence_netcup": "/root/exyonq-v044-p1-seal-06742e1b/.exyonq-local-evidence/v044-p1-default-worker-geometry-8-20260822T035125Z/",
+      "governance_doc": "docs/governance/v044-p1-default-worker-geometry-8.md",
+      "meter": {
+        "primary": "docker-stats core-ms/req (geom8 three-way harness; same-session)",
+        "companion": "NOT_MEASURED this session"
+      },
+      "rps": {
+        "exyonq": 104040.87,
+        "nginx": 90212.37,
+        "ols": 101791.34,
+        "winner": "EXYONQ",
+        "exyonq_vs_nginx_percent": 15.33,
+        "exyonq_vs_ols_percent": 2.21,
+        "vs_prior_exyonq_seal_percent": 6.24,
+        "repetitions": {
+          "exyonq": [
+            106947.65,
+            104040.87,
+            104319.67,
+            102347.83,
+            96051.7
+          ],
+          "nginx": [
+            92564.24,
+            88001.67,
+            90212.37,
+            98495.21,
+            85166.26
+          ],
+          "ols": [
+            102926.24,
+            106687.58,
+            100460.16,
+            96125.03,
+            101791.34
+          ]
+        },
+        "cv": {
+          "exyonq": 0.04,
+          "nginx": 0.056,
+          "ols": 0.038
+        }
+      },
+      "cpu_per_req": {
+        "unit": "core-ms/req",
+        "exyonq": 0.197415,
+        "nginx": 0.23501,
+        "ols": 0.226157,
+        "winner": "EXYONQ",
+        "exyonq_vs_nginx_percent": -16.0,
+        "exyonq_vs_ols_percent": -12.71
+      },
+      "memory": {
+        "unit": "MiB RSS (docker stats avg)",
+        "exyonq_avg": 21.64,
+        "nginx_avg": 13.14,
+        "ols_avg": 19.27,
+        "winner": "NGINX"
+      },
+      "latency_ms": {
+        "p50": {
+          "exyonq": 1.2,
+          "nginx": 1.29,
+          "ols": 1.23,
+          "winner": "EXYONQ"
+        },
+        "p95": {
+          "exyonq": 1.87,
+          "nginx": 2.03,
+          "ols": 1.82,
+          "winner": "OLS"
+        },
+        "p99": {
+          "exyonq": 2.41,
+          "nginx": 2.5,
+          "ols": 2.27,
+          "winner": "OLS"
+        }
+      },
+      "reliability": {
+        "series_errors": "NOT_MEASURED",
+        "classification": "NOT_PROVEN",
+        "winner": "NOT_PROVEN",
+        "note": "pct-probe connection-closed counts are probe artifacts when present"
+      },
+      "stability": {
+        "note": "RPS CV; OLS lowest",
+        "winner": "OLS"
+      },
+      "states": {
+        "technical_correctness": "PASS",
+        "engineering_baseline": "CLOSED",
+        "performance_competitiveness": "MIXED",
+        "competitive_win": "NOT_PROVEN",
+        "migration_value": "PARTIAL",
+        "migration_value_vs_nginx": "PARTIAL",
+        "migration_value_vs_ols": "PARTIAL",
+        "market_readiness": "NOT_READY"
+      },
+      "why_migrate_from_nginx": "Wins RPS (~+15%) and CPU (~\u221216% core-ms) and P50; still higher RSS and not a full Pareto win.",
+      "why_migrate_from_ols": "Slight RPS and clear CPU wins with much better P50; loses P95/P99 tails \u2192 PARTIAL.",
+      "caveats": [
+        "Same geom8 session as P1/P3; prior P2-C2 numbers SUPERSEDED for current authority.",
+        "P2 reliability still not elevated to SERVER_REQUEST_FAILURES proof."
+      ],
+      "transfer_geometry": {
+        "bytes_per_request": 65536,
+        "sendfile_calls_per_req": "NOT_MEASURED",
+        "tcp_outsegs_per_mib": "NOT_MEASURED"
+      },
+      "case": "G1-P2",
+      "next_causal_measurement_proposal": "NONE"
+    },
+    {
+      "profile": "P3",
+      "scale": "V1",
+      "label": "Static 1 MiB HTTP/1.1 keepalive",
+      "authority": "CURRENT_AUTHORITY",
+      "measurement_date": "2026-08-22",
+      "source_head": "ade997a362e60d1dc6eafc984da454930600845a",
+      "source_tree": "4ae6ffc7528d0881be23fcac246c345dcb9a1606",
+      "binary_sha256": "e28c0abe18587f2d911d492be64cbec42372383e011417a6c578be52da5ba459",
+      "evidence_path": ".exyonq-local/evidence/v044-p1-default-worker-geometry-8-20260822T035125Z/",
+      "evidence_netcup": "/root/exyonq-v044-p1-seal-06742e1b/.exyonq-local-evidence/v044-p1-default-worker-geometry-8-20260822T035125Z/",
+      "governance_doc": "docs/governance/v044-p1-default-worker-geometry-8.md",
+      "meter": {
+        "primary": "docker-stats core-ms/req (geom8 three-way harness; same-session)",
+        "companion": "NOT_MEASURED this session"
+      },
+      "rps": {
+        "exyonq": 8683.29,
+        "nginx": 8594.32,
+        "ols": 8709.37,
+        "winner": "OLS",
+        "exyonq_vs_nginx_percent": 1.04,
+        "exyonq_vs_ols_percent": -0.3,
+        "vs_prior_exyonq_seal_percent": 5.54,
+        "repetitions": {
+          "exyonq": [
+            8283.31,
+            8246.28,
+            8683.29,
+            8818.31,
+            8885.59
+          ],
+          "nginx": [
+            8371.21,
+            8466.69,
+            8594.32,
+            8707.06,
+            8740.77
+          ],
+          "ols": [
+            8522.91,
+            8871.84,
+            8646.94,
+            8709.37,
+            8921.5
+          ]
+        },
+        "cv": {
+          "exyonq": 0.035,
+          "nginx": 0.018,
+          "ols": 0.019
+        }
+      },
+      "throughput_mib_s": {
+        "exyonq": 8683.29,
+        "nginx": 8594.32,
+        "ols": 8709.37,
+        "winner": "OLS",
+        "note": "1 MiB payload \u2192 MiB/s \u2248 RPS"
+      },
+      "cpu_per_req": {
+        "unit": "core-ms/req",
+        "exyonq": 1.146478,
+        "nginx": 1.151272,
+        "ols": 1.207068,
+        "winner": "EXYONQ",
+        "exyonq_vs_nginx_percent": -0.42,
+        "exyonq_vs_ols_percent": -5.02
+      },
+      "cpu_per_mib": {
+        "unit": "core-ms/MiB",
+        "exyonq": 1.146478,
+        "nginx": 1.151272,
+        "ols": 1.207068,
+        "winner": "EXYONQ",
+        "note": "1 MiB payload \u2192 equals core-ms/req"
+      },
+      "memory": {
+        "unit": "MiB RSS (docker stats avg)",
+        "exyonq_avg": 71.95,
+        "nginx_avg": 58.82,
+        "ols_avg": 65.26,
+        "winner": "NGINX"
+      },
+      "latency_ms": {
+        "p50": {
+          "exyonq": 13.95,
+          "nginx": 14.37,
+          "ols": 16.92,
+          "winner": "EXYONQ"
+        },
+        "p95": {
+          "exyonq": 19.7,
+          "nginx": 20.28,
+          "ols": 25.42,
+          "winner": "EXYONQ"
+        },
+        "p99": {
+          "exyonq": 25.37,
+          "nginx": 25.73,
+          "ols": 31.77,
+          "winner": "EXYONQ"
+        }
+      },
+      "reliability": {
+        "server_errors": "NOT_MEASURED",
+        "classification": "NOT_PROVEN",
+        "winner": "NOT_PROVEN",
+        "note": "PROBE_TOOL_CONNECTION_CLOSURES separated from SERVER_REQUEST_FAILURES"
+      },
+      "stability": {
+        "winner": "NGINX",
+        "note": "lowest RPS CV among trio"
+      },
+      "states": {
+        "technical_correctness": "PASS",
+        "engineering_baseline": "CLOSED",
+        "performance_competitiveness": "AHEAD",
+        "competitive_win": "YES",
+        "migration_value": "PARTIAL",
+        "migration_value_vs_nginx": "PARTIAL",
+        "migration_value_vs_ols": "PARTIAL",
+        "market_readiness": "NOT_READY"
+      },
+      "why_migrate_from_nginx": "Near-equal/slightly higher RPS with better latency and CPU at geom8 defaults; RSS still higher \u2192 PARTIAL.",
+      "why_migrate_from_ols": "Near-equal RPS with much better latency and lower CPU; RSS mixed \u2192 PARTIAL.",
+      "caveats": [
+        "P3 competitive win preserved after geometry-8 default; no >3% RPS regression vs prior seal.",
+        "P4 not started."
+      ],
+      "case": "G1-P3",
+      "next_causal_measurement_proposal": "NONE"
+    }
+  ],
+  "placeholders": [
+    {
+      "profile": "P4",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P5",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P6",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P7",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P8",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P9",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P10",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P11",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P12",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P13",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    },
+    {
+      "profile": "P14",
+      "scale": "V1",
+      "status": "NOT_STARTED_CURRENT_CYCLE"
+    }
+  ],
+  "scale_dimensions": [
+    "V1",
+    "V10",
+    "V100",
+    "V1000"
+  ],
+  "scale_note": "Only V1 rows populated where measured; V10\u2013V1000 remain NOT_MEASURED until authorized.",
+  "attribution_wip": "V044_P1_COMPETITIVE_DEFICIT_ATTRIBUTION",
+  "attribution_doc": "docs/governance/v044-p1-competitive-deficit-attribution.md"
+}

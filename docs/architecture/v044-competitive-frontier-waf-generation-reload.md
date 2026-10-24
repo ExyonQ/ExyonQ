@@ -51,7 +51,7 @@ Deny ⇒ no upstream write (Darwin hit-counter E2E + Netcup 403 `waf denied`).
 
 ## Evidence
 
-`.exyonq-local/evidence/competitive-frontier-waf-generation-reload/20260828-212500/`
+`.exyonq-local/evidence/competitive-frontier-waf-generation-reload/20260828-212500/`  
 Binary SHA256: `a0d79d8f3f7aeea03b7d53b2a6e25e7d6802d83912a197a9caf1653e74d2184f`
 
 ## Phase 4

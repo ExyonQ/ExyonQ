@@ -1,8 +1,8 @@
 # ADR-060 — FastCGI pool saturation diagnostics (Q-08 / v0.6 F2)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** Cap FastCGI ConnPool, `fcgi-saturation-policy-v1.md`, metrics composition root
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** Cap FastCGI ConnPool, `fcgi-saturation-policy-v1.md`, metrics composition root  
 **Contract:** CONDITIONAL ACCEPT — actionable log on pool busy + `exyonq_fcgi_*` on `/metrics`
 
 ## Context
@@ -23,5 +23,5 @@ QUEJAS_OLS §2.6: operators see opaque LSAPI deadlock messages with no timeout, 
 
 ## Consequences
 
-- Saturating a pool produces a grep-friendly warn and scrapable `exyonq_fcgi_*` series.
+- Saturating a pool produces a grep-friendly warn and scrapable `exyonq_fcgi_*` series.  
 - Operators raise `max_concurrency` / `checkout_timeout_ms` or fix PHP-FPM using the recommendation text.

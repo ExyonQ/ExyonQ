@@ -23,6 +23,7 @@ fn redirect_config() -> AppConfig {
             routes: vec!["root".into()],
             tls: None,
             http3_listen: None,
+            proxy_protocol: None,
             error_pages: Default::default(),
         }],
         routes: vec![RouteConfig {
@@ -48,8 +49,9 @@ fn redirect_config() -> AppConfig {
             try_uri: None,
             try_uri_dir: None,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
+            cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         }],
         upstreams: HashMap::from([(
             "backend".into(),

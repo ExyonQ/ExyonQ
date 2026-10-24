@@ -21,6 +21,11 @@ EOF
 fi
 
 export EXYONQ_CACHE_PURGE_SOCKET=/run/exyonq/cache-purge.sock
+# Token de purge por arranque: compartido entre ExyonQ (env) y el mu-plugin (wp-config define).
+export EXYONQ_CACHE_PURGE_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+# site_id = stable_fpc_site_id("wordpress") — debe coincidir con [[route]] name="wordpress"
+# en packaging/release/conf/wordpress.toml.
+EXYONQ_WP_SITE_ID=18218855368947783640
 
 if [ ! -f /var/www/html/wp-config.php ]; then
   php -r 'echo file_get_contents("https://api.wordpress.org/secret-key/1.1/salt/");' > /tmp/wp-salts.php
@@ -33,6 +38,11 @@ define( 'DB_HOST', 'localhost' );
 define( 'DB_CHARSET', 'utf8' );
 define( 'DB_COLLATE', '' );
 EOF
+  cat >> /var/www/html/wp-config.php << EOF
+define( 'EXYONQ_CACHE_PURGE_SOCKET', '${EXYONQ_CACHE_PURGE_SOCKET}' );
+define( 'EXYONQ_CACHE_PURGE_TOKEN', '${EXYONQ_CACHE_PURGE_TOKEN}' );
+define( 'EXYONQ_CACHE_SITE_ID', '${EXYONQ_WP_SITE_ID}' );
+EOF
   cat /tmp/wp-salts.php >> /var/www/html/wp-config.php
   cat >> /var/www/html/wp-config.php << 'EOF'
 $table_prefix = 'wp_';
@@ -44,7 +54,9 @@ require_once ABSPATH . 'wp-settings.php';
 EOF
   rm -f /tmp/wp-salts.php
   chown www-data:www-data /var/www/html/wp-config.php
+  chmod 0640 /var/www/html/wp-config.php
 fi
 
 php-fpm --daemonize
-exec runuser -u www-data -- /usr/local/bin/exyonq serve -c /etc/exyonq/wordpress.toml
+# su(1) exists in both util-linux (Debian) and busybox (Wolfi); runuser does not.
+exec su -s /bin/sh www-data -c '/usr/local/bin/exyonq serve -c /etc/exyonq/wordpress.toml'

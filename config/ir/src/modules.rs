@@ -26,6 +26,75 @@ pub struct ModulesConfig {
     pub compression: CompressionConfig,
     #[serde(default)]
     pub ratelimit: RateLimitConfig,
+    #[serde(default)]
+    pub real_ip: RealIpConfig,
+}
+
+/// NG-11: trust-aware client-IP resolution (nginx `set_real_ip_from` +
+/// `real_ip_header`). When the immediate peer is inside `trusted`, the real
+/// client IP is recovered from `header` (right-to-left, skipping trusted
+/// hops). Default: disabled — the socket peer is always the client IP and
+/// client-supplied forwarding headers can never spoof it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RealIpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Trusted proxy CIDRs / IPs (e.g. `"10.0.0.0/8"`, `"192.0.2.10"`).
+    #[serde(default)]
+    pub trusted: Vec<String>,
+    /// Header carrying the forwarded chain (nginx `real_ip_header`).
+    #[serde(default = "default_real_ip_header")]
+    pub header: String,
+}
+
+fn default_real_ip_header() -> String {
+    "x-forwarded-for".to_string()
+}
+
+impl Default for RealIpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trusted: Vec::new(),
+            header: default_real_ip_header(),
+        }
+    }
+}
+
+impl RealIpConfig {
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.trusted.is_empty() {
+            return Err(crate::ConfigError::Parse(
+                "modules.real_ip: enabled requires at least one trusted CIDR".into(),
+            ));
+        }
+        for t in &self.trusted {
+            let ok = t.parse::<ipnetwork::IpNetwork>().is_ok()
+                || t.trim().parse::<std::net::IpAddr>().is_ok();
+            if !ok {
+                return Err(crate::ConfigError::Parse(format!(
+                    "modules.real_ip.trusted entry `{t}` is not a CIDR or IP"
+                )));
+            }
+        }
+        let name = self.header.trim();
+        let token_ok = !name.is_empty()
+            && name.len() <= 128
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+        if !token_ok {
+            return Err(crate::ConfigError::Parse(format!(
+                "modules.real_ip.header `{}` is not a valid header name",
+                self.header
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

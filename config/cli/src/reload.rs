@@ -44,14 +44,8 @@ pub fn route_identity(route: &RouteConfig) -> String {
     let host = route.r#match.host.as_deref().unwrap_or("*");
     let (kind, pat) = match route.r#match.kind() {
         Some(RouteMatchKind::Prefix) => ("prefix", route.r#match.path.as_str()),
-        Some(RouteMatchKind::Suffix) => (
-            "suffix",
-            route.r#match.suffix.as_deref().unwrap_or(""),
-        ),
-        Some(RouteMatchKind::Regex) => (
-            "regex",
-            route.r#match.regex.as_deref().unwrap_or(""),
-        ),
+        Some(RouteMatchKind::Suffix) => ("suffix", route.r#match.suffix.as_deref().unwrap_or("")),
+        Some(RouteMatchKind::Regex) => ("regex", route.r#match.regex.as_deref().unwrap_or("")),
         None => ("?", ""),
     };
     format!("{}@{}:{}:{}", route.name, host, kind, pat)
@@ -272,7 +266,12 @@ pub fn classify_reload_diff(
     current_fingerprint: Option<&str>,
     current_generation: Option<u64>,
 ) -> ToolResult {
-    classify_reload_diff_with(path, current_fingerprint, current_generation, ReloadDiffOptions::default())
+    classify_reload_diff_with(
+        path,
+        current_fingerprint,
+        current_generation,
+        ReloadDiffOptions::default(),
+    )
 }
 
 pub fn classify_reload_diff_with(

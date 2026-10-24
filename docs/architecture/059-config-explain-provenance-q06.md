@@ -1,8 +1,8 @@
 # ADR-059 — `config explain` value provenance (Q-06 / v0.6 F2)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** `exyonq-config-merge` includes (config_version = 2), P1.4 lexicon explain
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** `exyonq-config-merge` includes (config_version = 2), P1.4 lexicon explain  
 **Contract:** CONDITIONAL ACCEPT — show effective value + origin (file:line) + precedence; lexicon mode unchanged
 
 ## Context
@@ -25,5 +25,5 @@ QUEJAS_OLS §2.2 / QUEJAS_APACHE §2.3: layered includes make operators ask “w
 
 ## Consequences
 
-- Operators debug include chains without reading every fragment by hand.
+- Operators debug include chains without reading every fragment by hand.  
 - Lexicon and provenance share one UX entrypoint; scripts should pass `--path` + `--pointer` explicitly.

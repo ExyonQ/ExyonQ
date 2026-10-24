@@ -4,17 +4,7 @@
 
 | Version   | Supported |
 |-----------|-----------|
-| 0.5.0     | Yes, current published release |
-| 0.4.13    | Yes |
-| 0.4.12    | Yes |
-| 0.4.11    | Yes |
-| 0.4.10    | Yes |
-| 0.4.9     | Yes |
-| 0.4.8     | Yes |
-| 0.4.7     | Yes |
-| 0.4.6     | Yes |
-| 0.4.4.1   | Yes |
-| 0.4.4     | Yes |
+| 0.4.x     | Yes (integration / pre-release staging) |
 | 0.3.x     | Security fixes only until superseded |
 | < 0.3     | No |
 
@@ -32,28 +22,26 @@ bash scripts/verify-release-audit.sh X.Y.Z
 cargo xtask security pre-release --version X.Y.Z
 ```
 
-For **v0.4.4.1**, the audit artifact is [`docs/security/audit-v0.4.4.1.md`](docs/security/audit-v0.4.4.1.md).
+Until a release audit is owner-authorized and signed off for a given version, that version remains unpublished.
+
+For **v0.4.3**:
 
 ```text
-PUBLICATION_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.6.0.1
-WORKSPACE_VERSION = 0.6.0
-WORKSPACE_PUBLICATION = PUBLISHED
-GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.6.0.1
-GHCR = ghcr.io/exyonq/exyonq:0.6.0.1
-DOCKER_HUB = exyonq/exyonq:0.6.0.1
-WASMTIME = 49.0.2
-RUSTSEC_2026_0222 = patched range includes >=47.0.3; pin is 49.0.2
-AUDIT = docs/security/audit-v0.6.0.md
+CURRENT_RELEASE_AUDIT = docs/security/audit-v0.4.3.md
+PUBLICATION_STATUS = PRIVATE_V043_RELEASE_COMPLETE
+PUBLIC_RELEASE = v0.4.3
+RELEASE_AUTHORITY = exyonq-github
+RUSTSEC_2026_0222_EXCEPTION_STATUS = ACTIVE_WAIVER
+VULNERABILITY_FIXED = NO
+WAIVED_FOR_V043 = YES
+EXPIRY_REVIEW = v0.4.4
 ```
-
-v0.4.4 remains published. v0.4.3 remains the previous private release. Its Wasmtime 45.0.2 waiver expired for review at v0.4.4 and is not carried forward.
 
 Canonical security SoT index: [`docs/security/README.md`](docs/security/README.md).
 
 ## Reporting a vulnerability
 
-Email security reports to security@exyonq.org. General contact is contact@exyonq.org. Do not open public issues for exploitable vulnerabilities.
+Email security reports to the maintainers (see repository contacts). Do not open public issues for exploitable vulnerabilities.
 
 Include:
 

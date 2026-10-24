@@ -22,6 +22,7 @@ p8tp-platform-cork = []
 
 [dependencies]
 anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
 async-trait.workspace = true
 bytes.workspace = true
 http.workspace = true
@@ -36,6 +37,7 @@ tracing.workspace = true
 exyonq-cache = { workspace = true }
 exyonq-module-api = { path = "../../module-api" }
 exyonq-linux-ffi = { path = "../exyonq-linux-ffi", features = ["tokio-io"] }
+http-body.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

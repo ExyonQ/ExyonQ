@@ -49,6 +49,15 @@ pub struct UpstreamHealthCheckConfig {
     pub healthy_threshold: u32,
     #[serde(default = "default_unhealthy_threshold")]
     pub unhealthy_threshold: u32,
+    /// NG-10: expected probe response statuses; empty = any 2xx.
+    #[serde(default)]
+    pub expect_status: Vec<u16>,
+    /// NG-10: substring that must appear within the first 64 KiB of the body.
+    #[serde(default)]
+    pub expect_body: Option<String>,
+    /// NG-10: `"Name"` = header must be present; `"Name: value"` = value match.
+    #[serde(default)]
+    pub expect_header: Option<String>,
 }
 
 impl Default for UpstreamHealthCheckConfig {
@@ -60,6 +69,9 @@ impl Default for UpstreamHealthCheckConfig {
             path: DEFAULT_HEALTH_PATH.to_string(),
             healthy_threshold: DEFAULT_HEALTHY_THRESHOLD,
             unhealthy_threshold: DEFAULT_UNHEALTHY_THRESHOLD,
+            expect_status: Vec::new(),
+            expect_body: None,
+            expect_header: None,
         }
     }
 }
@@ -112,8 +124,64 @@ impl UpstreamHealthCheckConfig {
             )));
         }
         validate_health_path(upstream, &self.path)?;
+        for code in &self.expect_status {
+            // 1xx is never surfaced as a final response status — such an
+            // expectation can never match and would pin the peer unhealthy.
+            if !(200..=599).contains(code) {
+                return Err(ConfigError::Parse(format!(
+                    "upstream `{upstream}`: health_check.expect_status code {code} must be 200..=599"
+                )));
+            }
+        }
+        if let Some(body) = &self.expect_body {
+            if body.is_empty() || body.len() > MAX_EXPECT_BODY_LEN {
+                return Err(ConfigError::Parse(format!(
+                    "upstream `{upstream}`: health_check.expect_body length must be 1..={MAX_EXPECT_BODY_LEN}"
+                )));
+            }
+            // Control chars would render via `{:?}` as `\u{XX}` — invalid TOML.
+            if body.chars().any(|c| c < '\x20' || c == '\x7f') {
+                return Err(ConfigError::Parse(format!(
+                    "upstream `{upstream}`: health_check.expect_body must not contain control characters"
+                )));
+            }
+        }
+        if let Some(h) = &self.expect_header {
+            validate_expect_header(upstream, h)?;
+        }
         Ok(())
     }
+}
+
+const MAX_EXPECT_BODY_LEN: usize = 4096;
+
+/// NG-10: `"Name"` (presence) or `"Name: value"` (exact value match after
+/// trimming) — header name must be a valid HTTP token.
+fn validate_expect_header(upstream: &str, spec: &str) -> Result<(), ConfigError> {
+    let (name, value) = match spec.split_once(':') {
+        Some((n, v)) => (n.trim(), Some(v.trim())),
+        None => (spec.trim(), None),
+    };
+    let token_ok = !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+    if !token_ok {
+        return Err(ConfigError::Parse(format!(
+            "upstream `{upstream}`: health_check.expect_header `{spec}` has an invalid header name"
+        )));
+    }
+    if let Some(v) = value {
+        // to_str() only yields visible ASCII; a non-ASCII value can never
+        // match, and control chars break the TOML renderer's `{:?}` escaping.
+        if v.len() > 1024 || !v.is_ascii() || v.chars().any(|c| c < '\x20' || c == '\x7f') {
+            return Err(ConfigError::Parse(format!(
+                "upstream `{upstream}`: health_check.expect_header value invalid"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_health_path(upstream: &str, path: &str) -> Result<(), ConfigError> {
@@ -169,5 +237,55 @@ mod tests {
             ..Default::default()
         };
         assert!(c.validate("u").is_err());
+    }
+
+    #[test]
+    fn ng10_expect_fields_parse_and_validate() {
+        let c: UpstreamHealthCheckConfig = toml::from_str(
+            r#"enabled = true
+               expect_status = [200, 204]
+               expect_body = "READY"
+               expect_header = "X-Health: pass""#,
+        )
+        .unwrap();
+        assert_eq!(c.expect_status, vec![200, 204]);
+        c.validate("u").unwrap();
+
+        for bad in [
+            UpstreamHealthCheckConfig {
+                enabled: true,
+                expect_status: vec![99],
+                ..Default::default()
+            },
+            // 1xx never surfaces as a final status — unreachable expectation.
+            UpstreamHealthCheckConfig {
+                enabled: true,
+                expect_status: vec![101],
+                ..Default::default()
+            },
+            UpstreamHealthCheckConfig {
+                enabled: true,
+                expect_header: Some("Bad Header".into()),
+                ..Default::default()
+            },
+            // Control chars break the TOML renderer's `{:?}` escaping.
+            UpstreamHealthCheckConfig {
+                enabled: true,
+                expect_body: Some("a\u{7f}".into()),
+                ..Default::default()
+            },
+            UpstreamHealthCheckConfig {
+                enabled: true,
+                expect_header: Some("X-H: v\u{e9}e".into()),
+                ..Default::default()
+            },
+            UpstreamHealthCheckConfig {
+                enabled: true,
+                expect_body: Some("x".repeat(5000)),
+                ..Default::default()
+            },
+        ] {
+            assert!(bad.validate("u").is_err());
+        }
     }
 }

@@ -37,7 +37,7 @@ final class ExyonQ_Cache_CLI {
 		WP_CLI::log( 'multisite=' . ( is_multisite() ? 'yes(deferred)' : 'no' ) );
 		WP_CLI::log( 'configured=' . ( ! empty( $probe['configured'] ) ? 'yes' : 'no' ) );
 		WP_CLI::log( 'socket_configured=' . ( $client->socket_path() !== '' ? 'yes' : 'no' ) );
-		WP_CLI::log( 'site_id_configured=' . ( $client->site_id() > 0 ? 'yes' : 'no' ) );
+		WP_CLI::log( 'site_id_configured=' . ( $client->site_id() !== '' ? 'yes' : 'no' ) );
 		WP_CLI::log( 'reachable=' . ( ! empty( $probe['reachable'] ) ? 'yes' : 'no' ) );
 		WP_CLI::log( 'auth=' . ( $probe['auth'] ?? 'unknown' ) );
 		if ( ! empty( $probe['error'] ) ) {

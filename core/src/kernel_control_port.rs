@@ -168,4 +168,53 @@ impl KernelControlPort for CoreKernelControlPort {
     fn read_status(&self, include_version: bool) -> OpsCommandOutcome {
         self.outcome(true, OpsCommand::Status, None, include_version)
     }
+
+    fn member_list(&self, upstream: Option<&str>) -> OpsCommandOutcome {
+        let runtime = exyonq_mod_proxy::wire_conn::pinned_runtime();
+        match runtime.member_list(upstream) {
+            Ok(rows) => {
+                let payload = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into());
+                self.outcome(true, OpsCommand::MemberList, None, false)
+                    .with_payload(payload)
+            }
+            Err(err) => self.outcome(false, OpsCommand::MemberList, Some(err), false),
+        }
+    }
+
+    fn member_set(
+        &self,
+        req: &exyonq_module_api::kernel_control::MemberRequest,
+    ) -> OpsCommandOutcome {
+        let Some(endpoint_id) = req.endpoint_id.as_deref() else {
+            return self.outcome(
+                false,
+                OpsCommand::MemberSet,
+                Some("member set requires endpoint_id".into()),
+                false,
+            );
+        };
+        let runtime = exyonq_mod_proxy::wire_conn::pinned_runtime();
+        match runtime.member_set(
+            req.upstream.as_deref(),
+            endpoint_id,
+            req.enabled,
+            req.weight,
+        ) {
+            Ok(row) => {
+                crate::observability::emit_audit(crate::observability::AuditEvent {
+                    action: "member_set",
+                    result: "success",
+                    detail: Some(&format!(
+                        "upstream={} id={} enabled={} weight={}",
+                        row.upstream, row.endpoint_id, row.enabled, row.weight
+                    )),
+                    request_id: None,
+                });
+                let payload = serde_json::to_string(&row).unwrap_or_else(|_| "{}".into());
+                self.outcome(true, OpsCommand::MemberSet, None, false)
+                    .with_payload(payload)
+            }
+            Err(err) => self.outcome(false, OpsCommand::MemberSet, Some(err), false),
+        }
+    }
 }

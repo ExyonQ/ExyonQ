@@ -21,7 +21,7 @@ Usage:
     [--test-fixture] \
     [--force]
 
-Without --test-fixture, only versions 0.4.0–0.4.11 are accepted.
+Without --test-fixture, only versions 0.4.0–0.4.11, 0.7.0 are accepted.
 With --test-fixture, approved fixture versions only
 (0.0.0-p14sign-fixture or 0.4.0-test.p14sign5).
 Legacy 0.3.x / 0.2.x / 0.1.x are always forbidden.

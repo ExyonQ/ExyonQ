@@ -11,8 +11,8 @@ PARENT = WG-B / EC-A
 PRODUCT_MUTATION = NO
 ```
 
-Governance: [`../governance/v044-runtime-topology-parallelism-budget-audit.md`](../governance/v044-runtime-topology-parallelism-budget-audit.md)
-Performance companion: [`../performance/v044-runtime-topology-parallelism-budget-audit.md`](../performance/v044-runtime-topology-parallelism-budget-audit.md)
+Governance: [`../governance/v044-runtime-topology-parallelism-budget-audit.md`](../governance/v044-runtime-topology-parallelism-budget-audit.md)  
+Performance companion: [`../performance/v044-runtime-topology-parallelism-budget-audit.md`](../performance/v044-runtime-topology-parallelism-budget-audit.md)  
 Evidence: `.exyonq-local/evidence/runtime-topology-parallelism/20260827-173800/`
 
 ## Primary answer
@@ -83,7 +83,7 @@ Documented in G1 / `runtime_parallelism.rs` / governance `v044-p1-default-worker
 
 ## Classification
 
-**CASE = RT-C** — independent parallelism fan-out proven.
+**CASE = RT-C** — independent parallelism fan-out proven.  
 Not RT-B (no duplicate Tokio runtime). Block B owner **PROVEN**.
 
 ## Next experiment (proposal only)

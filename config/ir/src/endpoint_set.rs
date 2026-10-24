@@ -19,7 +19,7 @@
 //! Dense plan `BackendId` (u32 table index) lives in `exyonq-runtime-plan` and
 //! must not be conflated with [`UserBackendId`].
 
-use crate::ConfigError;
+use crate::{ConfigError, MAX_UPSTREAM_TIMEOUT_MS};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
@@ -220,11 +220,31 @@ fn validate_hostname(s: &str) -> Result<(), ConfigError> {
 }
 
 /// Selection policy (separate from failover).
+///
+/// NG-07: affinity modes and alternative algorithms. Hash-based policies use
+/// weighted rendezvous (HRW) selection over the currently live endpoints of the
+/// preferred priority band: the same key maps to the same endpoint while the
+/// live set is stable, and only the departed endpoint's keys are remapped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EndpointSelectionPolicy {
     #[default]
     WeightedRoundRobin,
+    /// nginx `least_conn`: pick the live endpoint with fewest in-flight requests.
+    LeastConn,
+    /// Power of two choices: sample two live endpoints, pick the less loaded.
+    PowerOfTwo,
+    /// nginx `hash $uri consistent`: rendezvous hash on the request path+query.
+    ConsistentHash,
+    /// Sticky cookie: the response carries a `Set-Cookie` route token naming the
+    /// selected endpoint; later requests presenting it are pinned there while
+    /// the endpoint stays live.
+    CookieAffinity,
+    /// nginx `ip_hash`: rendezvous hash on the client IP (leftmost
+    /// `X-Forwarded-For` token, i.e. the real client behind PROXY protocol).
+    SourceAffinity,
+    /// Rendezvous hash on a configured request header (`sticky_header`).
+    HeaderAffinity,
 }
 
 /// Failover policy (separate from selection).
@@ -245,11 +265,23 @@ pub struct Endpoint {
     pub weight: u32,
     pub priority: u32,
     pub admin_state: AdminEndpointState,
+    /// NG-08: passive health — consecutive-failure threshold inside
+    /// `fail_timeout_ms` that bans the endpoint (`0` disables accounting).
+    pub max_fails: u32,
+    /// NG-08: passive health window/ban duration in milliseconds (nginx
+    /// `fail_timeout` serves both roles). Must be > 0.
+    pub fail_timeout_ms: u64,
+    /// NG-08: weight ramp duration after a ban expires (`0` disables ramp).
+    pub slow_start_ms: u64,
 }
 
 impl Endpoint {
     pub const DEFAULT_WEIGHT: u32 = 1;
     pub const DEFAULT_PRIORITY: u32 = 0;
+    /// NG-08: nginx defaults — one failed attempt bans the peer for 10 s.
+    pub const DEFAULT_MAX_FAILS: u32 = 1;
+    pub const DEFAULT_FAIL_TIMEOUT_MS: u64 = 10_000;
+    pub const DEFAULT_SLOW_START_MS: u64 = 0;
 
     /// Build http:// URI for single-endpoint legacy/execution (hostname preserved; no DNS at compile).
     pub fn to_http_uri_string(&self) -> String {
@@ -326,13 +358,16 @@ impl EndpointSet {
             .iter()
             .map(|ep| {
                 format!(
-                    "{}|{}|{}|{}|{}|{:?}",
+                    "{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
                     ep.endpoint_id.as_str(),
                     ep.address.as_host_str(),
                     ep.port,
                     ep.weight,
                     ep.priority,
-                    ep.admin_state
+                    ep.admin_state,
+                    ep.max_fails,
+                    ep.fail_timeout_ms,
+                    ep.slow_start_ms
                 )
             })
             .collect()
@@ -353,10 +388,27 @@ pub struct RawEndpointConfig {
     pub priority: u32,
     #[serde(default)]
     pub admin_state: AdminEndpointState,
+    /// NG-08 passive health (`0` disables failure accounting).
+    #[serde(default = "default_max_fails")]
+    pub max_fails: u32,
+    /// NG-08 passive health window/ban duration ms (nginx `fail_timeout`).
+    #[serde(default = "default_fail_timeout_ms")]
+    pub fail_timeout_ms: u64,
+    /// NG-08 post-ban weight ramp ms (`0` disables).
+    #[serde(default)]
+    pub slow_start_ms: u64,
 }
 
 fn default_weight() -> u32 {
     Endpoint::DEFAULT_WEIGHT
+}
+
+fn default_max_fails() -> u32 {
+    Endpoint::DEFAULT_MAX_FAILS
+}
+
+fn default_fail_timeout_ms() -> u64 {
+    Endpoint::DEFAULT_FAIL_TIMEOUT_MS
 }
 
 /// Deterministic endpoint id from desired address/port/weight/priority (no runtime).
@@ -378,6 +430,16 @@ pub fn deterministic_endpoint_id(
 
 pub fn endpoint_from_raw(raw: RawEndpointConfig) -> Result<Endpoint, ConfigError> {
     let address = EndpointAddress::parse(&raw.address)?;
+    // NG-08: bound like upstream timeout_ms — an unbounded fail_timeout must
+    // not wrap the ban deadline (fail-open) nor panic on overflow.
+    if raw.fail_timeout_ms == 0
+        || raw.fail_timeout_ms > MAX_UPSTREAM_TIMEOUT_MS
+        || raw.slow_start_ms > MAX_UPSTREAM_TIMEOUT_MS
+    {
+        return Err(ConfigError::InvalidUpstreamTarget {
+            value: format!("{}:{}", raw.address, raw.port),
+        });
+    }
     let endpoint_id = match raw.id {
         Some(id) => EndpointId::new(id)?,
         None => deterministic_endpoint_id(&address, raw.port, raw.weight, raw.priority),
@@ -389,6 +451,9 @@ pub fn endpoint_from_raw(raw: RawEndpointConfig) -> Result<Endpoint, ConfigError
         weight: raw.weight,
         priority: raw.priority,
         admin_state: raw.admin_state,
+        max_fails: raw.max_fails,
+        fail_timeout_ms: raw.fail_timeout_ms,
+        slow_start_ms: raw.slow_start_ms,
     })
 }
 
@@ -421,6 +486,9 @@ pub fn endpoint_from_http_target(target: &str) -> Result<Endpoint, ConfigError> 
         weight,
         priority,
         admin_state: AdminEndpointState::Enabled,
+        max_fails: Endpoint::DEFAULT_MAX_FAILS,
+        fail_timeout_ms: Endpoint::DEFAULT_FAIL_TIMEOUT_MS,
+        slow_start_ms: Endpoint::DEFAULT_SLOW_START_MS,
     })
 }
 
@@ -508,6 +576,9 @@ mod tests {
             weight: 1,
             priority: 0,
             admin_state: AdminEndpointState::Enabled,
+            max_fails: Endpoint::DEFAULT_MAX_FAILS,
+            fail_timeout_ms: Endpoint::DEFAULT_FAIL_TIMEOUT_MS,
+            slow_start_ms: Endpoint::DEFAULT_SLOW_START_MS,
         };
         let ep2 = Endpoint {
             endpoint_id: id,
@@ -516,6 +587,9 @@ mod tests {
             weight: 2,
             priority: 1,
             admin_state: AdminEndpointState::Disabled,
+            max_fails: Endpoint::DEFAULT_MAX_FAILS,
+            fail_timeout_ms: Endpoint::DEFAULT_FAIL_TIMEOUT_MS,
+            slow_start_ms: Endpoint::DEFAULT_SLOW_START_MS,
         };
         let err = EndpointSet::from_endpoints(vec![ep1, ep2]).unwrap_err();
         assert!(matches!(err, ConfigError::DuplicateEndpointId { .. }));

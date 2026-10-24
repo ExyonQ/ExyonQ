@@ -27,7 +27,6 @@ mod tests {
         clear_kernel_observation_for_tests, kernel_observation_registration_test_gate,
         note_fastcgi_http_501, KernelObservationTestGuard,
     };
-    use exyonq_module_api::observability_runtime::clear_prometheus_appenders_for_tests;
     use std::sync::Arc;
 
     #[test]
@@ -53,6 +52,5 @@ mod tests {
             Err(ObservabilityRegisterError::KernelObservationAlreadyRegistered)
         );
         clear_kernel_observation_for_tests();
-        clear_prometheus_appenders_for_tests();
     }
 }

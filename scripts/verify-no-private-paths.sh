@@ -12,17 +12,6 @@ PRIVATE_PREFIXES=(
   benchmarks/caos-tests/
   benchmark-dev/
   docs/benchmarks-dev/
-  scripts/r3/
-  scripts/reality/
-  scripts/smoke/
-  scripts/soak/
-  scripts/allocator/
-  scripts/architecture/
-  scripts/integrity/
-  scripts/fault/
-  scripts/operations/
-  scripts/dev/
-  scripts/remote/
 )
 
 fail=0

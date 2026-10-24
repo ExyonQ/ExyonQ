@@ -82,6 +82,13 @@ struct ProxyDraft {
     target: String,
 }
 
+/// ProxyPassReverse <local-path> <remote-url> draft.
+#[derive(Debug, Clone)]
+struct ProxyReverseDraft {
+    local_path: String,
+    remote_url: String,
+}
+
 #[derive(Debug, Clone)]
 struct PhpDraft {
     address: String,
@@ -108,6 +115,8 @@ struct VirtualHostDraft {
     rewrites: Vec<RewriteDraft>,
     aliases: Vec<AliasDraft>,
     proxies: Vec<ProxyDraft>,
+    /// F3-R20: ProxyPassReverse <local-path> <remote-url> rows.
+    proxy_reverses: Vec<ProxyReverseDraft>,
     php: Option<PhpDraft>,
     /// NG-04 / ADR-050: status code → absolute path.
     error_pages: Vec<(u16, String)>,
@@ -654,20 +663,14 @@ fn handle_vhost_directive(line: usize, name: &str, args: &str, state: &mut Parse
         return;
     }
     if eq_ci(name, "ProxyPassReverse") {
-        // No ExyonQ Location-rewrite yet — declare difference if pair matches ProxyPass.
-        state.notes.push(CompatNote {
-            level: CompatLevel::Approximated,
-            message: format!(
-                "line {line}: ProxyPassReverse has no IR equivalent yet; ignored for mapping (document manually)"
-            ),
-        });
-        // Still reject to avoid silent semantic drop of reverse Location fixups.
-        reject(
-            state,
-            line,
-            name,
-            "no ExyonQ equivalent for response Location rewrite (ProxyPassReverse); remove or wait for product support",
-        );
+        match parse_proxy_pass_reverse(args) {
+            Ok(r) => {
+                if let Some(d) = state.current.as_mut() {
+                    d.proxy_reverses.push(r);
+                }
+            }
+            Err(msg) => reject(state, line, name, msg),
+        }
         return;
     }
     if eq_ci(name, "ProxyPassMatch") {
@@ -851,7 +854,12 @@ fn handle_vhost_directive(line: usize, name: &str, args: &str, state: &mut Parse
                     ),
                 });
             } else {
-                reject(state, line, name, "Header outside <VirtualHost> not supported");
+                reject(
+                    state,
+                    line,
+                    name,
+                    "Header outside <VirtualHost> not supported",
+                );
             }
         } else if !tokens.is_empty()
             && matches!(
@@ -869,7 +877,12 @@ fn handle_vhost_directive(line: usize, name: &str, args: &str, state: &mut Parse
                 ),
             );
         } else {
-            reject(state, line, name, "Header expects `set Name Value` (ADR-062)");
+            reject(
+                state,
+                line,
+                name,
+                "Header expects `set Name Value` (ADR-062)",
+            );
         }
         return;
     }
@@ -966,7 +979,9 @@ fn parse_expires_duration(spec: &str) -> Result<u64, String> {
         }
     }
     if spec.starts_with('M') || spec.starts_with('m') {
-        return Err("modification-based Expires (M####) not supported; use A#### or access plus …".into());
+        return Err(
+            "modification-based Expires (M####) not supported; use A#### or access plus …".into(),
+        );
     }
     // "access plus 1 month"
     let lower = spec.to_ascii_lowercase();
@@ -1133,6 +1148,31 @@ fn parse_proxy_pass(args: &str) -> Result<ProxyDraft, String> {
     Ok(ProxyDraft {
         path_prefix: path.trim_end_matches('/').to_string(),
         target,
+    })
+}
+
+/// ProxyPassReverse <local-path> <remote-url> → route location_rewrite.
+/// The 1-arg `<Location>` form is rejected: this importer does not track
+/// Location-container scope.
+fn parse_proxy_pass_reverse(args: &str) -> Result<ProxyReverseDraft, String> {
+    let mut parts = args.split_whitespace();
+    let path = parts
+        .next()
+        .map(unquote)
+        .ok_or("ProxyPassReverse requires local path and remote URL")?;
+    let remote = parts.next().map(unquote).ok_or(
+        "ProxyPassReverse 1-arg <Location> form not supported; give <local-path> <remote-url>",
+    )?;
+    if parts.next().is_some() {
+        return Err("ProxyPassReverse extra arguments not supported".into());
+    }
+    if !path.starts_with('/') {
+        return Err("ProxyPassReverse path must start with /".into());
+    }
+    let remote = normalize_proxy_target(remote)?;
+    Ok(ProxyReverseDraft {
+        local_path: path.trim_end_matches('/').to_string(),
+        remote_url: remote,
     })
 }
 
@@ -1655,7 +1695,26 @@ fn render_toml(state: &ParseState) -> Result<String> {
                 "match = {{ path = \"{}\" }}\n",
                 escape_toml(&path)
             ));
-            route_blocks.push_str(&format!("upstream = \"{uname}\"\n\n"));
+            route_blocks.push_str(&format!("upstream = \"{uname}\"\n"));
+            // F3-R20: ProxyPassReverse rows whose local path binds this route.
+            for r in vh
+                .proxy_reverses
+                .iter()
+                .filter(|r| r.local_path == p.path_prefix)
+            {
+                // Apache semantics: trailing-slash symmetric prefix swap —
+                // `from` keeps its '/', so `to` must too.
+                route_blocks.push_str("[[route.location_rewrite]]\n");
+                route_blocks.push_str(&format!(
+                    "from = \"{}/\"\n",
+                    escape_toml(r.remote_url.trim_end_matches('/'))
+                ));
+                route_blocks.push_str(&format!(
+                    "to = \"{}/\"\n",
+                    escape_toml(path.trim_end_matches('/'))
+                ));
+            }
+            route_blocks.push('\n');
         }
 
         // PHP FastCGI (primary site route when present).
@@ -1902,6 +1961,51 @@ Listen 8080
     }
 
     #[test]
+    fn migrates_proxy_pass_reverse_to_location_rewrite() {
+        let src = r#"
+Listen 8080
+<VirtualHost *:8080>
+    ServerName example.com
+    DocumentRoot /var/www/html
+    ProxyPass /app http://backend.internal/
+    ProxyPassReverse /app http://backend.internal/
+</VirtualHost>
+"#;
+        let (toml, report) = migrate(src).expect("migrate");
+        assert!(toml.contains("[[route.location_rewrite]]"), "{toml}");
+        assert!(
+            toml.contains("from = \"http://backend.internal/\""),
+            "{toml}"
+        );
+        assert!(toml.contains("to = \"/app/\""), "{toml}");
+        assert!(
+            !report
+                .unsupported
+                .iter()
+                .any(|r| r.contains("ProxyPassReverse")),
+            "ProxyPassReverse must migrate, not reject: {report:?}"
+        );
+    }
+
+    #[test]
+    fn proxy_pass_reverse_without_matching_pass_is_retained_for_route_match() {
+        // A reverse whose local path has no ProxyPass pair yields no rewrite —
+        // report stays clean but nothing is emitted for it.
+        let src = r#"
+Listen 8080
+<VirtualHost *:8080>
+    ServerName example.com
+    DocumentRoot /var/www/html
+    ProxyPass /app http://backend.internal/
+    ProxyPassReverse /other http://other.internal/
+</VirtualHost>
+"#;
+        let (toml, report) = migrate(src).expect("migrate");
+        assert!(!toml.contains("other.internal"), "{toml}");
+        assert!(report.unsupported.is_empty(), "{report:?}");
+    }
+
+    #[test]
     fn migrates_header_set_to_response_headers() {
         let conf = r#"
 Listen 80
@@ -1913,10 +2017,7 @@ Listen 80
 </VirtualHost>
 "#;
         let (toml, report) = migrate(conf).expect("migrate");
-        assert!(
-            toml.contains("[[route.response_headers]]"),
-            "{toml}"
-        );
+        assert!(toml.contains("[[route.response_headers]]"), "{toml}");
         assert!(toml.contains("name = \"X-Frame-Options\""), "{toml}");
         assert!(toml.contains("always = true"), "{toml}");
         assert!(
@@ -1951,7 +2052,10 @@ Listen 8080
             "{toml}"
         );
         assert!(toml.contains("max_age = 86400"), "{toml}");
-        assert!(toml.contains("[route.cache_headers.by_mime.\"*\"]"), "{toml}");
+        assert!(
+            toml.contains("[route.cache_headers.by_mime.\"*\"]"),
+            "{toml}"
+        );
         assert!(toml.contains("max_age = 3600"), "{toml}");
     }
 
@@ -2244,11 +2348,7 @@ Include conf.d/vhost.conf
         let root = std::env::temp_dir().join(format!("exyonq-ap07-miss-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
-            root.join("httpd.conf"),
-            "Include missing.conf\nListen 80\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("httpd.conf"), "Include missing.conf\nListen 80\n").unwrap();
         let (res, report) = migrate_path_with_report(&root.join("httpd.conf"));
         assert!(res.is_err());
         assert!(

@@ -1,7 +1,7 @@
 # ADR-048 — Rewrite with captures and flags (NG-02 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-17
+**Status:** Accepted  
+**Date:** 2026-10-17  
 **Depends on:** ADR-047 (NG-01 match)
 
 ## Context
@@ -30,10 +30,10 @@ Cap035 supports only a literal absolute-path `rewrite = "/target"` with a single
 
 `when` is an AND list of conditions (optional). Each entry may set one of:
 
-- `path` — regex against request path
-- `host` — exact host (Cap033 normalize)
-- `query` — regex against raw query (no `?`)
-- `header` — header name must be present and non-empty
+- `path` — regex against request path  
+- `host` — exact host (Cap033 normalize)  
+- `query` — regex against raw query (no `?`)  
+- `header` — header name must be present and non-empty  
 - `header_value` — if set with `header`, exact value match (case-sensitive for value)
 
 Empty `when` → always apply when pattern matches.
@@ -46,7 +46,7 @@ Pattern and `when.path` / `when.query` compile at plan build (with match.regex).
 
 Only `$1`…`$9` and `$$`. No named captures, no nginx variables (`$uri`, `$host`). After expansion:
 
-- `last`/`break`: must be a Cap035-valid absolute path (no `?`/`#`/authority)
+- `last`/`break`: must be a Cap035-valid absolute path (no `?`/`#`/authority)  
 - `redirect`/`permanent`: Cap036 location rules (absolute path or absolute URL; no CTL)
 
 ### Migrator
@@ -55,6 +55,6 @@ Only `$1`…`$9` and `$$`. No named captures, no nginx variables (`$uri`, `$host
 
 ## Consequences
 
-- Existing Cap035 configs unchanged.
-- Break enables front-controller patterns without rematch loops.
+- Existing Cap035 configs unchanged.  
+- Break enables front-controller patterns without rematch loops.  
 - Query injection via `$1` into path is fail-closed for last/break (no `?` in path). Apache OR/`!`/QSA/PT/END and broad `.htaccess`: SoT [`F1_RESIDUALS`](../../ROADMAP%20EXYONQ/F1_RESIDUALS.md) `F1-R03`…`F1-R07`.

@@ -1,8 +1,8 @@
 # ADR-050 — Custom error pages (NG-04 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-17
-**Depends on:** Cap035 rematch, ADR-049 (ordering vs `fallback_rewrite`)
+**Status:** Accepted  
+**Date:** 2026-10-17  
+**Depends on:** Cap035 rematch, ADR-049 (ordering vs `fallback_rewrite`)  
 **Contract:** CONDITIONAL ACCEPT (`exyonq-architecture-contract` 2026-10-17)
 
 ## Context

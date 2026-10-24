@@ -9,9 +9,9 @@ PRODUCT_MUTATION = NO
 CONTROL_IS_PRODUCT = NO
 ```
 
-Governance: [`../governance/v044-specialized-proxy-event-loop-control.md`](../governance/v044-specialized-proxy-event-loop-control.md)
-Performance: [`../performance/v044-specialized-proxy-event-loop-control.md`](../performance/v044-specialized-proxy-event-loop-control.md)
-Evidence: `.exyonq-local/evidence/specialized-proxy-event-loop/20260827-183032/`
+Governance: [`../governance/v044-specialized-proxy-event-loop-control.md`](../governance/v044-specialized-proxy-event-loop-control.md)  
+Performance: [`../performance/v044-specialized-proxy-event-loop-control.md`](../performance/v044-specialized-proxy-event-loop-control.md)  
+Evidence: `.exyonq-local/evidence/specialized-proxy-event-loop/20260827-183032/`  
 Source: `.exyonq-local/experiments/specialized-proxy-event-loop/` (ADR-021)
 
 ---

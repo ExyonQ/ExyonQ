@@ -26,6 +26,7 @@ pub mod handler;
 #[cfg(target_os = "linux")]
 mod hyper_handoff;
 pub(crate) mod io;
+pub mod proxy_protocol;
 pub(crate) mod proxy_request_body;
 #[cfg(target_os = "linux")]
 pub use hyper_handoff::{spawn_hyper_handoff, xff_from_peer};
@@ -216,6 +217,7 @@ async fn accept_loop(
     proxy_client: ProxyClient,
     tls_acceptor: SharedTlsAcceptor,
     ops: Arc<LifecycleState>,
+    proxy_protocol_config: Option<exyonq_config_ir::ProxyProtocolConfig>,
 ) {
     let mut shutdown_rx = ops.shutdown_rx();
     loop {
@@ -232,7 +234,7 @@ async fn accept_loop(
                 continue;
             }
         };
-        let (stream, peer) = match accept_result {
+        let (stream, mut peer) = match accept_result {
             Ok(conn) => conn,
             Err(err) => {
                 warn!(%err, "accept error");
@@ -242,6 +244,26 @@ async fn accept_loop(
         let _ = stream.set_nodelay(true);
         let conn_state = reload::SharedServerState::clone(&state);
         let proxy_client = proxy_client.clone();
+
+        // NG-06 / F3: detect and parse PROXY protocol header.
+        // If enabled and present, replaces peer.ip() with the real client IP.
+        let (stream, _proxy_header) =
+            match read_proxy_header(stream, &proxy_protocol_config, peer.ip()).await {
+                Ok((stream, Some(hdr))) => {
+                    // LOCAL / UNSPEC headers carry no addresses: keep real peer.
+                    if !hdr.source.ip().is_unspecified() {
+                        peer = hdr.source;
+                    }
+                    (stream, Some(hdr))
+                }
+                Ok((stream, None)) => (stream, None),
+                Err(err) => {
+                    // Fail-closed: enabled listener requires a valid PROXY header.
+                    warn!(%err, %peer, "dropping connection: invalid PROXY protocol header");
+                    continue;
+                }
+            };
+
         let x_forwarded_for = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"));
         let acceptor = tls_acceptor.snapshot();
@@ -287,6 +309,85 @@ async fn accept_loop(
             .await;
         });
     }
+}
+
+/// Max time a client has to send the PROXY header on an enabled listener.
+/// Real LBs send it immediately; this bound only guards against stalls.
+const PROXY_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// NG-06 / F3: read PROXY protocol header from incoming stream.
+///
+/// Returns `(stream, Option<ProxyHeader>)` on success.
+/// If `proxy_protocol` is not enabled in config, returns `(stream, None)`.
+/// If enabled, the header is mandatory (fail-closed, like nginx
+/// `listen ... proxy_protocol`): missing, malformed or untrusted → Err.
+async fn read_proxy_header(
+    mut stream: tokio::net::TcpStream,
+    config: &Option<exyonq_config_ir::ProxyProtocolConfig>,
+    peer_ip: std::net::IpAddr,
+) -> anyhow::Result<(tokio::net::TcpStream, Option<proxy_protocol::ProxyHeader>)> {
+    let cfg = match config.as_ref() {
+        Some(c) if c.enabled => c,
+        _ => return Ok((stream, None)),
+    };
+
+    // Trusted CIDRs: PROXY headers are only honored from these peers.
+    // Since the header is mandatory on an enabled listener, an untrusted
+    // peer effectively cannot connect here. Invalid CIDRs fail closed.
+    if !cfg.trusted.is_empty() {
+        let nets: Vec<ipnetwork::IpNetwork> =
+            cfg.trusted.iter().filter_map(|c| c.parse().ok()).collect();
+        if !nets.iter().any(|net| net.contains(peer_ip)) {
+            anyhow::bail!("PROXY protocol: untrusted peer {peer_ip}");
+        }
+    }
+
+    let hdr = match tokio::time::timeout(PROXY_READ_TIMEOUT, read_proxy_header_inner(&mut stream))
+        .await
+    {
+        Ok(Ok(hdr)) => hdr,
+        Ok(Err(err)) => return Err(err),
+        Err(_) => anyhow::bail!("timeout waiting for PROXY header"),
+    };
+    Ok((stream, Some(hdr)))
+}
+
+async fn read_proxy_header_inner(
+    stream: &mut tokio::net::TcpStream,
+) -> anyhow::Result<proxy_protocol::ProxyHeader> {
+    // First 6 bytes disambiguate: "PROXY " (v1) vs v2 signature prefix.
+    let mut sig = [0u8; 6];
+    stream.read_exact(&mut sig).await?;
+    let mut buf = sig.to_vec();
+
+    if sig == *proxy_protocol::V1_PREFIX {
+        // v1: read until CRLF (max line 107 bytes, we already have 6).
+        loop {
+            let mut b = [0u8; 1];
+            stream.read_exact(&mut b).await?;
+            buf.push(b[0]);
+            if buf.ends_with(b"\r\n") {
+                break;
+            }
+            if buf.len() >= 108 {
+                anyhow::bail!("PROXY v1 header exceeds max length");
+            }
+        }
+    } else if sig == proxy_protocol::V2_SIGNATURE[..6] {
+        // v2: 12-byte signature + ver/cmd + fam/trans + len (16 total),
+        // then `len` bytes of addresses/TLVs.
+        let mut rest = [0u8; 10];
+        stream.read_exact(&mut rest).await?;
+        buf.extend_from_slice(&rest);
+        let len = u16::from_be_bytes([buf[14], buf[15]]) as usize;
+        buf.resize(16 + len, 0);
+        stream.read_exact(&mut buf[16..]).await?;
+    } else {
+        anyhow::bail!("missing PROXY protocol header");
+    }
+
+    let (hdr, _consumed) = proxy_protocol::parse(&buf).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(hdr)
 }
 
 /// Run on an explicit listen address (used in tests).
@@ -620,18 +721,21 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     }
 
     let mut tasks = Vec::with_capacity(workers);
+    let proxy_protocol_config = config.primary_server().proxy_protocol.clone();
     for _ in 0..workers {
         let listener = bind_tuned(listen).await?;
         let state = reload::SharedServerState::clone(&shared);
         let proxy_client = proxy_client.clone();
         let acceptor = shared_tls.clone();
         let ops_worker = Arc::clone(&ops);
+        let pp_config = proxy_protocol_config.clone();
         tasks.push(tokio::spawn(accept_loop(
             listener,
             state,
             proxy_client,
             acceptor,
             ops_worker,
+            pp_config,
         )));
     }
 

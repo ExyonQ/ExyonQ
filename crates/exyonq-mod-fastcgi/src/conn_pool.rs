@@ -18,8 +18,8 @@
 use crate::caps::{FCGI_CONNECT_TIMEOUT, FCGI_READ_TIMEOUT, FCGI_WRITE_TIMEOUT};
 use crate::client::ForwardResponse;
 use crate::commit::CommitStage;
-use crate::fcgi_stream::{FcgiStream, PoolEndpoint};
 use crate::diagnostics::{endpoint_display, format_saturation_message, SaturationKind};
+use crate::fcgi_stream::{FcgiStream, PoolEndpoint};
 use crate::metrics;
 use crate::pooled_forward::forward_on_stream_budgeted;
 use crate::record::FCGI_KEEP_CONN;

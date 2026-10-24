@@ -109,6 +109,12 @@ rust-project.json
 .cargo/config.toml.local
 
 # --- Always exclude from this clean publication tree ---
+# Local-only files: never track, never push (EXYONQ-SEC-PUBLIC-PUBLICATION-NEVER-LAB-MATERIAL).
+/.gitignore
+/.dockerignore
+/Cargo.lock.pre
+/Cargo.lock.surg
+/fuzz/artifacts/
 /docs/
 /benchmarks/
 /results/
@@ -168,7 +174,7 @@ This repository is a **clean source publication** of the product tree (compile /
 ## Build
 
 ```bash
-cargo build -p exyonq -p exyonqctl --release --locked
+cargo auditable build -p exyonq -p exyonqctl --release --locked
 ```
 
 ```bash

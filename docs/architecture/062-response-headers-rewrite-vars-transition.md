@@ -1,9 +1,9 @@
 # ADR-062 — Transition pack: route `response_headers` + rewrite `$uri`/`$host`
 
-**Status:** Accepted (orchestrator + architecture-contract **CONDITIONAL ACCEPT**)
-**Date:** 2026-10-18
-**Closes (partial):** `F1-R19` (primary), `F1-R07`, narrow `F1-R15` (templates only)
-**Amends:** ADR-048 (rewrite vars), ADR-051 (response templates subset), ADR-061 (non-goals)
+**Status:** Accepted (orchestrator + architecture-contract **CONDITIONAL ACCEPT**)  
+**Date:** 2026-10-18  
+**Closes (partial):** `F1-R19` (primary), `F1-R07`, narrow `F1-R15` (templates only)  
+**Amends:** ADR-048 (rewrite vars), ADR-051 (response templates subset), ADR-061 (non-goals)  
 **Does not claim:** NG-17 complete, F5 complete, 100% nginx/apache parity, F1 DoD reopen
 
 ## Context
@@ -38,7 +38,7 @@ Reject: `Connection`, `Transfer-Encoding`, `Keep-Alive`, `Upgrade`, `TE`, `Trail
 
 ### 3. Response template allowlist (narrow R15)
 
-Literals + `$host` + `$uri` only (`$uri` = path only, no query).
+Literals + `$host` + `$uri` only (`$uri` = path only, no query).  
 **Not** `$1`–`$9`, `$remote_addr`, `$scheme`, `$request_uri`, `$map`, `$http_*`, `$cookie_*`.
 
 ### 4. Runtime

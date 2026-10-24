@@ -121,3 +121,16 @@ fn tier1_strict_exit_on_partial() {
     .expect("migrate");
     assert_ne!(output.exit_code(true), 0);
 }
+
+#[test]
+fn ng06_listen_proxy_protocol_maps_to_ir() {
+    let (toml, _) =
+        migrate("server { listen 8080 proxy_protocol; root /srv/x; }").expect("migrate");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let pp = cfg.servers[0]
+        .proxy_protocol
+        .as_ref()
+        .expect("proxy_protocol must map to IR");
+    assert!(pp.enabled);
+    assert!(toml.contains("proxy_protocol = { enabled = true"));
+}

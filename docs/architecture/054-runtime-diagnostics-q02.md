@@ -1,8 +1,8 @@
 # ADR-054 — Runtime `EXY-RT-*` diagnostics (Q-02 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** ADR-051 (maps/headers), Cap021 (connect retry), Cap040 (drain probes)
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** ADR-051 (maps/headers), Cap021 (connect retry), Cap040 (drain probes)  
 **Contract:** CONDITIONAL ACCEPT (`exyonq-architecture-contract` — checklist below)
 
 ## Context

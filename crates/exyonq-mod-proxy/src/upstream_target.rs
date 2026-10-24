@@ -18,7 +18,7 @@
 //! No implicit response-body cache. Explicit Plan 12 `[[cache_policy]]` lives
 //! outside this type (`serve_proxy_with_cache`).
 
-use crate::selector::endpoint_transport_identity;
+use crate::selector::{endpoint_transport_identity, EndpointAdmin, PassivePeer};
 use crate::{build_uri, preseed_path_uris, UpstreamDescriptor};
 use http::Uri;
 use hyper::header::HeaderValue;
@@ -36,6 +36,14 @@ pub struct UpstreamTarget {
     pub max_connect_retries: u8,
     /// Stable peer key for request-local exclusion on retry (`scheme://host:port`).
     pub peer_key: String,
+    /// NG-08: passive health peer state (ban/ramp). Transport paths record
+    /// attempt outcomes here; for multi-endpoint clusters the same `Arc` is
+    /// shared with the selector's `EndpointSpec`. `disabled()` for targets
+    /// built without endpoint health config.
+    pub passive: Arc<PassivePeer>,
+    /// AP-01: hot admin state shared with the member table — keep-alive pins
+    /// must drop a cached target when `member set` disables/drains it.
+    pub admin: Arc<EndpointAdmin>,
     path_uris: Arc<HashMap<String, Uri>>,
 }
 
@@ -62,6 +70,8 @@ impl UpstreamTarget {
             timeout: desc.timeout,
             max_connect_retries: desc.max_connect_retries,
             peer_key,
+            passive: Arc::new(PassivePeer::disabled()),
+            admin: Arc::new(EndpointAdmin::new(true, 1)),
             path_uris: Arc::new(preseed_path_uris(&base)),
         })
     }

@@ -77,9 +77,11 @@ fn q03_header_and_expires_fail_closed() {
         content: "Header set X-Frame-Options SAMEORIGIN\nExpiresActive On\n".into(),
     }];
     let out = compile_from_discovered("site", Path::new("/virtual"), 1, files).expect("compile");
-    assert!(out.report.errors.iter().any(|e| {
-        e.contains("EXY-HTACCESS-0002") && e.to_ascii_lowercase().contains("header")
-    }));
+    assert!(out
+        .report
+        .errors
+        .iter()
+        .any(|e| { e.contains("EXY-HTACCESS-0002") && e.to_ascii_lowercase().contains("header") }));
     assert!(out.report.errors.iter().any(|e| {
         e.contains("EXY-HTACCESS-0002") && e.to_ascii_lowercase().contains("expires")
     }));
@@ -120,10 +122,7 @@ fn q03_publish_blocked_when_require_present() {
     )
     .expect("write");
     let err = compile_and_publish(&site, &publisher).expect_err("must fail");
-    assert!(
-        err.to_string().contains("EXY-HTACCESS-0003"),
-        "err={err}"
-    );
+    assert!(err.to_string().contains("EXY-HTACCESS-0003"), "err={err}");
     assert_eq!(publisher.overlay_generation(), gen_ok);
 }
 

@@ -92,8 +92,7 @@ pub fn explain_provenance(config_path: &Path, pointer: &str, format: OutputForma
         winner: false,
     });
 
-    let mut rank = 2u32;
-    for b in &matching {
+    for (rank, b) in (2u32..).zip(matching.iter()) {
         layers.push(LayerOut {
             rank,
             kind: b.layer,
@@ -102,7 +101,6 @@ pub fn explain_provenance(config_path: &Path, pointer: &str, format: OutputForma
             note: format!("assignment value {}", b.value_display),
             winner: false,
         });
-        rank += 1;
     }
 
     if matching.is_empty() {
@@ -240,9 +238,9 @@ fn resolve_effective(root: &JsonValue, pointer: &str) -> Result<JsonValue, Strin
                     .ok_or_else(|| format!("unknown key `{pointer}` (index {i} out of range)"))?;
             }
             Seg::Name(field, name) => {
-                let arr = cur
-                    .as_array()
-                    .ok_or_else(|| format!("unknown key `{pointer}` (expected array before name=)"))?;
+                let arr = cur.as_array().ok_or_else(|| {
+                    format!("unknown key `{pointer}` (expected array before name=)")
+                })?;
                 let found = arr.iter().find(|el| {
                     el.get(field)
                         .and_then(|v| v.as_str())
@@ -305,13 +303,7 @@ fn collect_bindings(config_path: &Path) -> Result<Vec<Binding>, String> {
         toml::from_str(&root_src).map_err(|e| format!("parse {}: {e}", config_path.display()))?;
 
     let mut out = Vec::new();
-    index_value(
-        &root_src,
-        config_path,
-        "root",
-        &root_val,
-        &mut out,
-    );
+    index_value(&root_src, config_path, "root", &root_val, &mut out);
 
     let includes = root_val
         .get("include")
@@ -329,8 +321,8 @@ fn collect_bindings(config_path: &Path) -> Result<Vec<Binding>, String> {
         let frag_path = base.join(rel);
         let frag_src = std::fs::read_to_string(&frag_path)
             .map_err(|e| format!("read {}: {e}", frag_path.display()))?;
-        let frag_val: toml::Value = toml::from_str(&frag_src)
-            .map_err(|e| format!("parse {}: {e}", frag_path.display()))?;
+        let frag_val: toml::Value =
+            toml::from_str(&frag_src).map_err(|e| format!("parse {}: {e}", frag_path.display()))?;
         index_value(&frag_src, &frag_path, "include", &frag_val, &mut out);
     }
     Ok(out)
@@ -438,8 +430,7 @@ fn scan_document(src: &str, file: &Path, layer: &'static str, out: &mut Vec<Bind
 fn strip_comment(line: &str) -> String {
     let mut out = String::new();
     let mut in_str = false;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
+    for c in line.chars() {
         if c == '"' {
             in_str = !in_str;
             out.push(c);

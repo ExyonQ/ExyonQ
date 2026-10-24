@@ -37,6 +37,6 @@ When `EXYONQ_SDP_P1=1` (Linux, cleartext):
 
 ## Holds
 
-PXDP / body relay / P6 / H2 / H3 / WS / CONNECT = HOLD
-Cap067 / Tokio / Hyper role-scoped = PRESERVE
+PXDP / body relay / P6 / H2 / H3 / WS / CONNECT = HOLD  
+Cap067 / Tokio / Hyper role-scoped = PRESERVE  
 PUSH / MERGE / TAG / RELEASE = NO

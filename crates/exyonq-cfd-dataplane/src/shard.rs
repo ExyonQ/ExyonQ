@@ -2103,7 +2103,7 @@ fn cleanup_conn(
     obs.closed_connections.fetch_add(1, Ordering::Relaxed);
     let _ = obs
         .active_connections
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
             Some(v.saturating_sub(1))
         });
 }

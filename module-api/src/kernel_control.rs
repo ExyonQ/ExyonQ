@@ -29,6 +29,21 @@ pub enum OpsCommand {
     Status,
     Drain,
     Shutdown,
+    /// AP-01: list balancer members (optionally scoped to one upstream).
+    MemberList,
+    /// AP-01: hot member mutation (enable/disable/weight).
+    MemberSet,
+}
+
+/// AP-01: parsed `member` command arguments carried beside the command tag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberRequest {
+    /// Endpoint id (`member set <id>`); `None` for `member list`.
+    pub endpoint_id: Option<String>,
+    /// Optional upstream scope; unset = any unambiguous member id.
+    pub upstream: Option<String>,
+    pub enabled: Option<bool>,
+    pub weight: Option<u32>,
 }
 
 /// Neutral kernel status snapshot (no secrets, no full config).
@@ -53,6 +68,8 @@ pub struct OpsCommandOutcome {
     pub error: Option<String>,
     /// Stable diagnostic code when present (e.g. EXY-RELOAD-0008).
     pub code: Option<String>,
+    /// AP-01: optional JSON payload (member rows for MemberList/MemberSet).
+    pub payload: Option<String>,
 }
 
 impl OpsCommandOutcome {
@@ -72,7 +89,14 @@ impl OpsCommandOutcome {
             snapshot,
             error,
             code,
+            payload: None,
         }
+    }
+
+    /// Attach a JSON payload (member rows).
+    pub fn with_payload(mut self, payload: impl Into<String>) -> Self {
+        self.payload = Some(payload.into());
+        self
     }
 
     /// Parse a leading stable diagnostic id (`EXY-FAMILY-NNNN`) from a human/JSON message.
@@ -122,6 +146,24 @@ pub trait KernelControlPort: Send + Sync {
     fn request_drain(&self) -> OpsCommandOutcome;
     fn request_shutdown(&self) -> OpsCommandOutcome;
     fn read_status(&self, include_version: bool) -> OpsCommandOutcome;
+
+    /// AP-01: member table for `exyonqctl server list`. Default: unsupported.
+    fn member_list(&self, _upstream: Option<&str>) -> OpsCommandOutcome {
+        let mut o = self.read_status(false);
+        o.command = OpsCommand::MemberList;
+        o.ok = false;
+        o.error = Some("member control unsupported".into());
+        o
+    }
+
+    /// AP-01: hot member mutation for `exyonqctl server set`. Default: unsupported.
+    fn member_set(&self, _req: &MemberRequest) -> OpsCommandOutcome {
+        let mut o = self.read_status(false);
+        o.command = OpsCommand::MemberSet;
+        o.ok = false;
+        o.error = Some("member control unsupported".into());
+        o
+    }
 }
 
 /// Module-owned control plane (unix socket, command parsing, JSON formatting).

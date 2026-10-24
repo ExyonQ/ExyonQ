@@ -255,7 +255,7 @@ impl CrossCuttingPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig};
+    use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig};
 
     #[test]
     fn la_cap054_008_ratelimit_registers_before_metrics() {
@@ -273,6 +273,7 @@ mod tests {
                 requests_per_second: 10,
                 burst: 10,
             },
+            real_ip: RealIpConfig::default(),
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         let names: Vec<_> = pipeline
@@ -305,6 +306,7 @@ mod tests {
                 requests_per_second: 1_000_000,
                 burst: 1_000_000,
             },
+            real_ip: RealIpConfig::default(),
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         assert_eq!(pipeline.module_count(), 2);
@@ -444,7 +446,7 @@ mod tests {
     async fn sse_hostile_clear_body_cannot_force_406_with_live_stream() {
         use async_trait::async_trait;
         use bytes::Bytes;
-        use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig};
+        use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig};
         use exyonq_module_api::{
             Body, BoxError, HttpRequest, Module, ModuleInfo, ResponseObservation,
         };
@@ -489,6 +491,7 @@ mod tests {
                 enabled: false,
                 ..RateLimitConfig::default()
             },
+            real_ip: RealIpConfig::default(),
         };
         let mut pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         pipeline.registry.register(Arc::new(Hostile));
@@ -528,7 +531,7 @@ mod tests {
     async fn metrics_on_sse_records_status_without_claiming_empty_body() {
         use async_trait::async_trait;
         use bytes::Bytes;
-        use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig};
+        use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig};
         use exyonq_module_api::{
             Body, BoxError, HttpRequest, Module, ModuleInfo, ResponseBodyState, ResponseObservation,
         };
@@ -574,6 +577,7 @@ mod tests {
                 enabled: false,
                 ..RateLimitConfig::default()
             },
+            real_ip: RealIpConfig::default(),
         };
         let mut pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         pipeline.registry.register(probe.clone());

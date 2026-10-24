@@ -66,6 +66,32 @@ pub fn is_websocket_upgrade(headers: &hyper::HeaderMap) -> bool {
     connection_has_token(headers, "upgrade") && upgrade.eq_ignore_ascii_case("websocket")
 }
 
+/// Headers forwarded to the upstream during the WS handshake. Strips
+/// hop-by-hop + the client-controlled forwarding chain (NG-11: the effective
+/// XFF is re-injected by the caller — the same contract as runtime.rs).
+fn ws_forward_headers(req_headers: &hyper::HeaderMap) -> hyper::HeaderMap {
+    let mut out = req_headers.clone();
+    crate::headers::strip_hop_by_hop_headers(&mut out);
+    for name in [
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "x-forwarded-host",
+        "forwarded",
+        exyonq_module_api::CLIENT_IP_HEADER,
+    ] {
+        out.remove(name);
+    }
+    out.insert(UPGRADE, HeaderValue::from_static("websocket"));
+    out.insert(CONNECTION, HeaderValue::from_static("Upgrade"));
+    if let Some(key) = req_headers.get(SEC_WEBSOCKET_KEY) {
+        out.insert(SEC_WEBSOCKET_KEY, key.clone());
+    }
+    if let Some(ver) = req_headers.get(SEC_WEBSOCKET_VERSION) {
+        out.insert(SEC_WEBSOCKET_VERSION, ver.clone());
+    }
+    out
+}
+
 pub async fn forward_websocket(
     _client: &ProxyClient,
     upstream: &UpstreamTarget,
@@ -99,17 +125,7 @@ pub async fn forward_websocket(
     let mut upstream_builder = Request::builder()
         .method(req.method())
         .uri(upstream.uri_for(&path_and_query));
-    let mut forward_headers = req.headers().clone();
-    // Remove Connection-nominated hop fields, then restore WebSocket upgrade markers.
-    crate::headers::strip_hop_by_hop_headers(&mut forward_headers);
-    forward_headers.insert(UPGRADE, HeaderValue::from_static("websocket"));
-    forward_headers.insert(CONNECTION, HeaderValue::from_static("Upgrade"));
-    if let Some(key) = req.headers().get(SEC_WEBSOCKET_KEY) {
-        forward_headers.insert(SEC_WEBSOCKET_KEY, key.clone());
-    }
-    if let Some(ver) = req.headers().get(SEC_WEBSOCKET_VERSION) {
-        forward_headers.insert(SEC_WEBSOCKET_VERSION, ver.clone());
-    }
+    let forward_headers = ws_forward_headers(req.headers());
     for (name, value) in forward_headers.iter() {
         upstream_builder = upstream_builder.header(name, value);
     }
@@ -127,14 +143,20 @@ pub async fn forward_websocket(
     );
     let upstream_response = match tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, upstream_request).await
     {
-        Ok(Ok(response)) => response,
+        Ok(Ok(response)) => {
+            // NG-08: upstream answered the handshake — passive success.
+            upstream.passive.record(true);
+            response
+        }
         Ok(Err(err)) => {
             warn!(%err, "websocket upstream error");
+            upstream.passive.record(false);
             metrics.responses_502.fetch_add(1, Ordering::Relaxed);
             return bad_gateway();
         }
         Err(_) => {
             warn!("websocket handshake timeout");
+            upstream.passive.record(false);
             metrics.responses_504.fetch_add(1, Ordering::Relaxed);
             return gateway_timeout();
         }
@@ -447,6 +469,39 @@ mod tests {
             .unwrap();
         let n = stream.read(&mut buf).await.unwrap();
         parse_ws_text(&buf[..n]).expect("ws echo frame")
+    }
+
+    #[test]
+    fn ws_forward_headers_strip_client_forwarding_chain() {
+        let mut req_headers = hyper::HeaderMap::new();
+        req_headers.insert("x-forwarded-for", HeaderValue::from_static("6.6.6.6"));
+        req_headers.append("x-forwarded-for", HeaderValue::from_static("7.7.7.7"));
+        req_headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        req_headers.insert("x-forwarded-host", HeaderValue::from_static("evil"));
+        req_headers.insert("forwarded", HeaderValue::from_static("for=evil"));
+        req_headers.insert(
+            exyonq_module_api::CLIENT_IP_HEADER,
+            HeaderValue::from_static("8.8.8.8"),
+        );
+        req_headers.insert(SEC_WEBSOCKET_KEY, HeaderValue::from_static("abc123"));
+        req_headers.insert(SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13"));
+        req_headers.insert("x-custom", HeaderValue::from_static("keep"));
+
+        let out = super::ws_forward_headers(&req_headers);
+        for name in [
+            "x-forwarded-for",
+            "x-forwarded-proto",
+            "x-forwarded-host",
+            "forwarded",
+            exyonq_module_api::CLIENT_IP_HEADER,
+        ] {
+            assert!(!out.contains_key(name), "leaked {name}");
+        }
+        assert_eq!(out.get("x-custom").unwrap(), "keep");
+        assert_eq!(out.get(UPGRADE).unwrap(), "websocket");
+        assert_eq!(out.get(CONNECTION).unwrap(), "Upgrade");
+        assert_eq!(out.get(SEC_WEBSOCKET_KEY).unwrap(), "abc123");
+        assert_eq!(out.get(SEC_WEBSOCKET_VERSION).unwrap(), "13");
     }
 
     #[test]

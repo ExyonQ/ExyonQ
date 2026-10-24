@@ -78,6 +78,8 @@ pub use conn_pool::{
     next_pool_generation, ConnPool, ConnPoolConfig, ConnPoolSet, ConnPoolStats,
     DEFAULT_FCGI_IDLE_TIMEOUT,
 };
+#[cfg(unix)]
+pub use diagnostics::{endpoint_display, format_saturation_message, SaturationKind};
 pub use encode::{
     append_length, decode_forward_response, decode_forward_response_with_stderr,
     encode_begin_request_frame, encode_begin_request_frame_with_flags, encode_params_body,
@@ -91,8 +93,6 @@ pub use exyonq_module_api::fcgi_dispatch::{
 pub use fcgi_stream::{FcgiStream, PoolEndpoint};
 #[cfg(test)]
 pub use metrics::fcgi_metric_test_gate;
-#[cfg(unix)]
-pub use diagnostics::{endpoint_display, format_saturation_message, SaturationKind};
 pub use metrics::{
     append_fcgi_prometheus, fcgi_inflight_current, fcgi_recovery_seconds, fcgi_responses_200_total,
     fcgi_responses_501_success_not_authorized_total, fcgi_responses_501_total,

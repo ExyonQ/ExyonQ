@@ -35,8 +35,9 @@ fn r(name: &str, m: RouteMatch) -> RouteConfig {
         try_uri: None,
         try_uri_dir: None,
         proxy_set_headers: Vec::new(),
-    cache_headers: None,
-            response_headers: Vec::new(),
+        cache_headers: None,
+        response_headers: Vec::new(),
+        location_rewrite: Vec::new(),
     }
 }
 

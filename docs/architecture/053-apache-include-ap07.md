@@ -1,8 +1,8 @@
 # ADR-053 — Apache `Include` / `IncludeOptional` (AP-07 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** Apache importer allowlist (rewrite / ErrorDocument), nginx `compat/nginx` include loader (limits mirror)
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** Apache importer allowlist (rewrite / ErrorDocument), nginx `compat/nginx` include loader (limits mirror)  
 **Contract:** CONDITIONAL ACCEPT (`exyonq-architecture-contract` — checklist in this ADR)
 
 ## Context

@@ -32,6 +32,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 /// Hard cap on decoded TE body for raw→CL conversion (fail closed above).
+#[cfg(test)]
 const RAW_TE_DECODE_MAX: usize = 256 * 1024;
 
 /// Parsed known-length upstream GET response (headers stripped of hop-by-hop).
@@ -162,30 +163,6 @@ fn checkin(key: String, stream: TcpStream) {
     guard.entry(key).or_default().push(stream);
 }
 
-/// Hot-path raw GET: CL body, or finite TE decoded to CL. Errors → Hyper fallback.
-/// The whole dial, write, and read is bounded by the upstream timeout so a
-/// paused peer cannot pin the client until the kernel gives up.
-pub async fn get_known_length(
-    target: &UpstreamTarget,
-    path_and_query: &str,
-    x_forwarded_for: Option<&HeaderValue>,
-) -> io::Result<RawGetResponse> {
-    // timeout_ms = 0 is already elapsed. A zero tokio timeout still polls the
-    // future first and a localhost upstream can answer before the timer wins.
-    if target.timeout.is_zero() {
-        return Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout"));
-    }
-    match tokio::time::timeout(
-        target.timeout,
-        get_known_length_within(target, path_and_query, x_forwarded_for),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout")),
-    }
-}
-
 /// Write the upstream response to the client as bytes arrive.
 ///
 /// A known Content-Length is declared up front and each read is flushed.
@@ -195,6 +172,7 @@ pub async fn stream_get_to_client<C>(
     target: &UpstreamTarget,
     path_and_query: &str,
     x_forwarded_for: Option<&HeaderValue>,
+    route_cookie: Option<&str>,
     client: &mut C,
     client_close: bool,
 ) -> io::Result<u16>
@@ -206,28 +184,44 @@ where
     }
     let (key, host, port) = endpoint_key(target)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "upstream missing authority"))?;
-    let mut upstream = checkout(&key, &host, port).await?;
-    let result = tokio::time::timeout(
-        target.timeout,
-        stream_on(
+    // Dial inside the timeout budget: a blackholed connect must not pin the
+    // request until the kernel gives up, and its failure is a passive outcome.
+    let dial_and_stream = async {
+        let mut upstream = checkout(&key, &host, port).await?;
+        let r = stream_on(
             &mut upstream,
             target,
             path_and_query,
             x_forwarded_for,
+            route_cookie,
             client,
             client_close,
-        ),
-    )
-    .await;
+        )
+        .await;
+        Ok::<(TcpStream, io::Result<(u16, bool)>), io::Error>((upstream, r))
+    };
+    let result = tokio::time::timeout(target.timeout, dial_and_stream).await;
     match result {
-        Ok(Ok((status, poolable))) => {
+        Ok(Ok((upstream, Ok((status, poolable))))) => {
             if poolable {
                 checkin(key, upstream);
             }
             Ok(status)
         }
-        Ok(Err(err)) => Err(err),
-        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout")),
+        // stream_on already classified the attempt: failure if the error was
+        // upstream-side before/around the response head, success once a head
+        // arrived — even when the error is ours (parse limits) or the
+        // client's (downstream write).
+        Ok(Ok((_, Err(err)))) => Err(err),
+        // checkout/dial failure against this peer.
+        Ok(Err(err)) => {
+            target.passive.record(false);
+            Err(err)
+        }
+        Err(_) => {
+            target.passive.record(false);
+            Err(io::Error::new(io::ErrorKind::TimedOut, "upstream timeout"))
+        }
     }
 }
 
@@ -236,6 +230,7 @@ async fn stream_on<U, C>(
     target: &UpstreamTarget,
     path_and_query: &str,
     x_forwarded_for: Option<&HeaderValue>,
+    route_cookie: Option<&str>,
     client: &mut C,
     client_close: bool,
 ) -> io::Result<(u16, bool)>
@@ -263,32 +258,55 @@ where
         push_slice(&mut req_buf, &mut n, b"\r\n")?;
     }
     push_slice(&mut req_buf, &mut n, b"Connection: keep-alive\r\n\r\n")?;
-    upstream.write_all(&req_buf[..n]).await?;
+    // NG-08: only upstream-side failures blame the peer. Once a complete
+    // response head arrives the attempt is a success — matching the hyper
+    // path — even when our raw parser cannot represent it (204/304,
+    // close-delimited) or a later client write fails.
+    let blame = |e: io::Error| {
+        target.passive.record(false);
+        e
+    };
+    upstream.write_all(&req_buf[..n]).await.map_err(blame)?;
 
     let mut buf = [0u8; MAX_HEADER];
     let mut filled = 0usize;
     let header_end = loop {
         if filled >= MAX_HEADER {
-            return Err(io::Error::new(
+            return Err(blame(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "headers too large",
-            ));
+            )));
         }
-        let n = upstream.read(&mut buf[filled..]).await?;
+        let n = upstream.read(&mut buf[filled..]).await.map_err(blame)?;
         if n == 0 {
-            return Err(io::Error::new(
+            return Err(blame(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "upstream closed before headers",
-            ));
+            )));
         }
         filled += n;
         if let Some(end) = find_header_end(&buf[..filled]) {
             break end;
         }
     };
+    target.passive.record(true);
     let head = &buf[..header_end];
     let after_headers = header_end + 4;
-    let (status, reason, passthrough, mode) = parse_response_head(head)?;
+    let (status, reason, mut passthrough, mode) = parse_response_head(head)?;
+    // NG-07: cookie_affinity route token is client-facing only — appended to
+    // the passthrough head, never written into the upstream request, and never
+    // minted on a failed upstream response.
+    if let Some(cookie) = route_cookie.filter(|_| status < 500) {
+        if !passthrough
+            .iter()
+            .any(|(n, v)| n.eq_ignore_ascii_case(b"set-cookie") && v.as_ref() == cookie.as_bytes())
+        {
+            passthrough.push((
+                Bytes::from_static(b"set-cookie"),
+                Bytes::copy_from_slice(cookie.as_bytes()),
+            ));
+        }
+    }
     let mut pending = Vec::new();
     if after_headers < filled {
         pending.extend_from_slice(&buf[after_headers..filled]);
@@ -457,27 +475,6 @@ where
     }
 }
 
-async fn get_known_length_within(
-    target: &UpstreamTarget,
-    path_and_query: &str,
-    x_forwarded_for: Option<&HeaderValue>,
-) -> io::Result<RawGetResponse> {
-    let (key, host, port) = endpoint_key(target)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "upstream missing authority"))?;
-
-    let mut stream = checkout(&key, &host, port).await?;
-    match get_known_length_on(&mut stream, target, path_and_query, x_forwarded_for).await {
-        Ok((resp, poolable)) => {
-            if poolable {
-                checkin(key, stream);
-            }
-            // else: drop stream — TE decode must not recycle chunked upstream sockets.
-            Ok(resp)
-        }
-        Err(err) => Err(err),
-    }
-}
-
 fn push_slice(dst: &mut [u8], off: &mut usize, src: &[u8]) -> io::Result<()> {
     let end = off
         .checked_add(src.len())
@@ -491,6 +488,7 @@ fn push_slice(dst: &mut [u8], off: &mut usize, src: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 async fn get_known_length_on(
     stream: &mut TcpStream,
     target: &UpstreamTarget,
@@ -518,29 +516,37 @@ async fn get_known_length_on(
         push_slice(&mut req_buf, &mut n, b"\r\n")?;
     }
     push_slice(&mut req_buf, &mut n, b"Connection: keep-alive\r\n\r\n")?;
-    stream.write_all(&req_buf[..n]).await?;
+    // NG-08: only upstream-side failures blame the peer (dial/write/head
+    // read/timeout). A received response head is a successful attempt —
+    // including valid heads our parser cannot stream (204/close-delimited).
+    let blame = |e: io::Error| {
+        target.passive.record(false);
+        e
+    };
+    stream.write_all(&req_buf[..n]).await.map_err(blame)?;
 
     let mut buf = [0u8; MAX_HEADER];
     let mut filled = 0usize;
     let header_end = loop {
         if filled >= MAX_HEADER {
-            return Err(io::Error::new(
+            return Err(blame(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "headers too large",
-            ));
+            )));
         }
-        let n = stream.read(&mut buf[filled..]).await?;
+        let n = stream.read(&mut buf[filled..]).await.map_err(blame)?;
         if n == 0 {
-            return Err(io::Error::new(
+            return Err(blame(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "upstream closed before headers",
-            ));
+            )));
         }
         filled += n;
         if let Some(end) = find_header_end(&buf[..filled]) {
             break end;
         }
     };
+    target.passive.record(true);
 
     let head = &buf[..header_end];
     let after_headers = header_end + 4;
@@ -600,6 +606,7 @@ async fn get_known_length_on(
 
 /// Decode HTTP/1.1 chunked body into application bytes. Fail closed on trailers,
 /// extensions, size overflow, or total > [`RAW_TE_DECODE_MAX`].
+#[cfg(test)]
 async fn decode_chunked_body<R: AsyncRead + Unpin>(
     stream: &mut R,
     mut pending: Vec<u8>,
@@ -847,7 +854,7 @@ fn parse_u64_digits(raw: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{UpstreamDescriptor, UpstreamTarget};
+    use crate::{PassivePeer, UpstreamDescriptor, UpstreamTarget};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::Duration;
@@ -1010,6 +1017,81 @@ mod tests {
         assert_eq!(parse_hex_usize(b"10"), Some(16));
         assert_eq!(parse_hex_usize(b"0"), Some(0));
         assert!(parse_hex_usize(b"gg").is_none());
+    }
+
+    /// NG-08 regression: a valid upstream response head our raw parser cannot
+    /// stream (204/close-delimited — no CL/TE) is a successful attempt, not a
+    /// transport failure. Recording it as fail would ban a healthy peer on
+    /// every request (max_fails=1 default).
+    #[tokio::test]
+    async fn head_received_parse_limitation_records_success_not_ban() {
+        let mut target = target_for(1);
+        target.passive = Arc::new(PassivePeer::new(1, 10_000, 0));
+        let (mut upstream, mut server) = tokio::io::duplex(8192);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            let _ = server.read(&mut buf).await;
+            server
+                .write_all(b"HTTP/1.1 204 No Content\r\nServer: test\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let mut client = tokio::io::sink();
+        let r = stream_on(&mut upstream, &target, "/", None, None, &mut client, false).await;
+        assert!(r.is_err(), "CL-less response is outside raw parser scope");
+        assert_eq!(target.passive.fails(), 0, "a received head is a success");
+        assert!(!target.passive.is_banned());
+    }
+
+    /// NG-08 regression: a downstream client write failure must not blame the
+    /// peer — only upstream-side failures count.
+    #[tokio::test]
+    async fn client_write_error_does_not_blame_peer() {
+        struct FailWriter;
+        impl tokio::io::AsyncWrite for FailWriter {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+                _buf: &[u8],
+            ) -> std::task::Poll<io::Result<usize>> {
+                std::task::Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "client gone",
+                )))
+            }
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        let mut target = target_for(1);
+        target.passive = Arc::new(PassivePeer::new(1, 10_000, 0));
+        let (mut upstream, mut server) = tokio::io::duplex(8192);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            let _ = server.read(&mut buf).await;
+            server
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let mut client = FailWriter;
+        let r = stream_on(&mut upstream, &target, "/", None, None, &mut client, false).await;
+        assert!(r.is_err(), "client write failure propagates");
+        assert_eq!(
+            target.passive.fails(),
+            0,
+            "client error is not an upstream fail"
+        );
+        assert!(!target.passive.is_banned());
     }
 
     #[tokio::test]

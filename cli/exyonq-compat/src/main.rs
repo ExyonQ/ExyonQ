@@ -78,8 +78,10 @@ fn migrate_command(
     let (toml_result, migration_report): (anyhow::Result<String>, MigrationReport) = match from {
         // AP-07: path-based Full migrate expands `include` from disk.
         SourceFormat::Nginx => {
-            match exyonq_compat_nginx::migrate_file(input, &exyonq_compat_nginx::MigrateOptions::default())
-            {
+            match exyonq_compat_nginx::migrate_file(
+                input,
+                &exyonq_compat_nginx::MigrateOptions::default(),
+            ) {
                 Ok(out) => {
                     let legacy = out.report.to_legacy(exyonq_compat_nginx::IMPORTER_NAME);
                     (

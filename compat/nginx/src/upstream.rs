@@ -1,9 +1,13 @@
 //! NGINX upstream block resolution for Tier 2A offline import.
 
-use crate::ast::ParsedUpstream;
+use crate::ast::{NginxLbMethod, ParsedUpstream};
 use crate::limits::{MAX_GENERATED_ENDPOINTS, MAX_SERVERS_PER_UPSTREAM, MAX_UPSTREAM_BLOCKS};
 use crate::report::{CompatStatus, CompatibilityReport, SourceLoc};
-use exyonq_config_ir::{FcgiPoolConfig, UpstreamConfig, DEFAULT_FCGI_MAX_CONCURRENCY};
+use exyonq_config_ir::{
+    AdminEndpointState, Endpoint, EndpointFailoverPolicy, EndpointSelectionPolicy, FcgiPoolConfig,
+    RawEndpointConfig, UpstreamConfig, UpstreamHealthCheckConfig, DEFAULT_FCGI_MAX_CONCURRENCY,
+    DEFAULT_UPSTREAM_TIMEOUT_MS,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -101,6 +105,9 @@ pub fn classify_endpoint(raw: &str) -> EndpointKind {
         EndpointKind::Http
     } else if endpoint.contains(':') && !endpoint.starts_with('/') {
         EndpointKind::TcpFastcgi
+    } else if !endpoint.is_empty() && !endpoint.starts_with('/') {
+        // Bare hostname — nginx `server host;` defaults to port 80.
+        EndpointKind::Http
     } else {
         EndpointKind::Invalid
     }
@@ -119,7 +126,8 @@ pub fn http_target_url(endpoint: &str) -> Option<String> {
     let endpoint = endpoint.split_whitespace().next().unwrap_or(endpoint);
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
         Some(endpoint.to_string())
-    } else if looks_like_host_port(endpoint) {
+    } else if looks_like_host_port(endpoint) || !endpoint.contains(':') {
+        // host:port → as-is; bare hostname → nginx default port 80 downstream.
         Some(format!("http://{endpoint}"))
     } else {
         None
@@ -152,56 +160,214 @@ pub fn map_http_upstreams(
             );
             continue;
         }
-        let primary = block.servers.first().and_then(|s| http_target_url(s));
-        let Some(target) = primary else {
-            report.push(
-                &block.loc,
-                "upstream",
-                CompatStatus::Error,
-                format!("upstream `{name}` has no valid HTTP endpoint"),
-                None,
-            );
-            continue;
-        };
-        let endpoint_count = block.servers.len();
-        if endpoint_count > 1 {
-            for server in block.servers.iter().skip(1) {
+        // NG-07: every `server` member maps to an endpoint; `weight=`/`down`/
+        // `backup` flags map to weight/admin_state/priority; the block LB
+        // method maps to selection_policy.
+        let mut raws: Vec<RawEndpointConfig> = Vec::with_capacity(block.servers.len());
+        let mut ok = true;
+        for server in &block.servers {
+            let mut tokens = server.split_whitespace();
+            let endpoint_token = tokens.next().unwrap_or(server.as_str());
+            let Some(url) = http_target_url(server) else {
+                continue;
+            };
+            if url.starts_with("https://") {
                 report.push(
                     &block.loc,
                     "server",
-                    CompatStatus::Partial,
+                    CompatStatus::Unsupported,
                     format!(
-                        "upstream `{name}` extra endpoint `{server}` not represented (IR single target; using first)"
+                        "upstream `{name}` https endpoint `{endpoint_token}` not mapped (IR upstreams are HTTP)"
                     ),
-                    Some(format!("upstream.{name}.endpoints={endpoint_count}")),
+                    None,
+                );
+                ok = false;
+                break;
+            }
+            let host_port = url.trim_start_matches("http://");
+            let (address, port) = match host_port.rsplit_once(':') {
+                Some((h, p)) => (h, p.parse::<u16>().unwrap_or(80)),
+                None => (host_port, 80),
+            };
+            let mut weight = Endpoint::DEFAULT_WEIGHT;
+            let mut admin_state = AdminEndpointState::default();
+            let mut priority = 0u32;
+            // NG-08: nginx server-level passive health parameters.
+            let mut max_fails = Endpoint::DEFAULT_MAX_FAILS;
+            let mut fail_timeout_ms = Endpoint::DEFAULT_FAIL_TIMEOUT_MS;
+            let mut slow_start_ms = Endpoint::DEFAULT_SLOW_START_MS;
+            for flag in tokens {
+                if let Some(w) = flag.strip_prefix("weight=") {
+                    match w.parse::<u32>() {
+                        Ok(v) => weight = v,
+                        Err(_) => {
+                            report.push(
+                                &block.loc,
+                                "server",
+                                CompatStatus::Error,
+                                format!(
+                                    "upstream `{name}` endpoint `{endpoint_token}` has malformed weight `{w}`"
+                                ),
+                                None,
+                            );
+                            ok = false;
+                        }
+                    }
+                // NG-08: `max_fails=` bare integer (fail-closed on junk).
+                } else if let Some(v) = flag.strip_prefix("max_fails=") {
+                    match v.parse::<u32>() {
+                        Ok(n) => max_fails = n,
+                        Err(_) => {
+                            report.push(
+                                &block.loc,
+                                "server",
+                                CompatStatus::Error,
+                                format!(
+                                    "upstream `{name}` endpoint `{endpoint_token}` has malformed max_fails `{v}`"
+                                ),
+                                None,
+                            );
+                            ok = false;
+                        }
+                    }
+                // NG-08: `fail_timeout=`/`slow_start=` accept nginx time
+                // syntax (bare seconds, or ms/s/m/h/d/w/M/y suffixes).
+                } else if let Some(v) = flag.strip_prefix("fail_timeout=") {
+                    match parse_nginx_time_ms(v) {
+                        Some(ms) if ms > 0 => fail_timeout_ms = ms,
+                        _ => {
+                            report.push(
+                                &block.loc,
+                                "server",
+                                CompatStatus::Error,
+                                format!(
+                                    "upstream `{name}` endpoint `{endpoint_token}` has invalid fail_timeout `{v}`"
+                                ),
+                                None,
+                            );
+                            ok = false;
+                        }
+                    }
+                } else if let Some(v) = flag.strip_prefix("slow_start=") {
+                    match parse_nginx_time_ms(v) {
+                        Some(ms) => slow_start_ms = ms,
+                        None => {
+                            report.push(
+                                &block.loc,
+                                "server",
+                                CompatStatus::Error,
+                                format!(
+                                    "upstream `{name}` endpoint `{endpoint_token}` has invalid slow_start `{v}`"
+                                ),
+                                None,
+                            );
+                            ok = false;
+                        }
+                    }
+                // NG-07: `down` → disabled endpoint; `backup` → spare band.
+                } else if flag == "down" {
+                    admin_state = AdminEndpointState::Disabled;
+                } else if flag == "backup" {
+                    priority = 1;
+                // NG-08: bare `max_fails`/`fail_timeout`/`slow_start` (no `=`)
+                // — nginx rejects a missing parameter; fail closed.
+                } else if matches!(flag, "max_fails" | "fail_timeout" | "slow_start") {
+                    report.push(
+                        &block.loc,
+                        "server",
+                        CompatStatus::Error,
+                        format!(
+                            "upstream `{name}` endpoint `{endpoint_token}` has bare `{flag}` (missing `=value`)"
+                        ),
+                        None,
+                    );
+                    ok = false;
+                }
+            }
+            if !ok {
+                break;
+            }
+            // nginx tolerates identical `server` lines — fold duplicates into
+            // weight (same effective share without a duplicate endpoint id).
+            // NG-08: differing passive-health params are NOT identical rows —
+            // keep them separate instead of letting the first silently win.
+            if let Some(existing) = raws.iter_mut().find(|e| {
+                e.address == address
+                    && e.port == port
+                    && e.priority == priority
+                    && e.admin_state == admin_state
+                    && e.max_fails == max_fails
+                    && e.fail_timeout_ms == fail_timeout_ms
+                    && e.slow_start_ms == slow_start_ms
+            }) {
+                existing.weight = existing.weight.saturating_add(weight);
+                continue;
+            }
+            raws.push(RawEndpointConfig {
+                id: None,
+                address: address.to_string(),
+                port,
+                weight,
+                priority,
+                admin_state,
+                max_fails,
+                fail_timeout_ms,
+                slow_start_ms,
+            });
+        }
+        if !ok || raws.is_empty() {
+            if raws.is_empty() && ok {
+                report.push(
+                    &block.loc,
+                    "upstream",
+                    CompatStatus::Error,
+                    format!("upstream `{name}` has no valid HTTP endpoint"),
+                    None,
                 );
             }
-            report.push(
-                &block.loc,
-                "upstream",
-                CompatStatus::Partial,
-                format!(
-                    "upstream `{name}` has {endpoint_count} HTTP endpoints; ExyonQ IR uses first only (`{target}`)"
-                ),
-                Some(format!("upstream.{name} → target={target}")),
-            );
-        } else {
-            report.push(
-                &block.loc,
-                "upstream",
-                CompatStatus::Supported,
-                format!("upstream `{name}` → ExyonQ upstream `{target}`"),
-                Some(format!("upstream.{name}.endpoints=1")),
-            );
+            continue;
         }
-        out.insert(
+        let policy = match block.method {
+            Some(NginxLbMethod::LeastConn) => EndpointSelectionPolicy::LeastConn,
+            Some(NginxLbMethod::IpHash) => EndpointSelectionPolicy::SourceAffinity,
+            Some(NginxLbMethod::ConsistentHash) => EndpointSelectionPolicy::ConsistentHash,
+            Some(NginxLbMethod::StickyCookie) => EndpointSelectionPolicy::CookieAffinity,
+            None => EndpointSelectionPolicy::default(),
+        };
+        match UpstreamConfig::try_from_parts(
             name.clone(),
-            UpstreamConfig::legacy(
-                name.clone(),
-                target,
-                exyonq_config_ir::DEFAULT_UPSTREAM_TIMEOUT_MS,
-            ),
-        );
+            None,
+            raws,
+            policy,
+            EndpointFailoverPolicy::default(),
+            DEFAULT_UPSTREAM_TIMEOUT_MS,
+            1,
+            UpstreamHealthCheckConfig::default(),
+            block.sticky_cookie.clone(),
+            None,
+            block.dns_refresh_ms.unwrap_or(0),
+        ) {
+            Ok(cfg) => {
+                let n = cfg.endpoint_set.endpoints().len();
+                report.push(
+                    &block.loc,
+                    "upstream",
+                    CompatStatus::Supported,
+                    format!("upstream `{name}` → ExyonQ upstream ({n} endpoint(s))"),
+                    Some(format!("upstream.{name}.endpoints={n}")),
+                );
+                out.insert(name.clone(), cfg);
+            }
+            Err(e) => {
+                report.push(
+                    &block.loc,
+                    "upstream",
+                    CompatStatus::Error,
+                    format!("upstream `{name}` rejected by IR: {e}"),
+                    None,
+                );
+            }
+        }
     }
     report.summary.http_upstreams_generated = out.len();
     out
@@ -413,4 +579,38 @@ pub fn resolve_fastcgi_upstream_ref(
         );
     }
     Some(name.to_string())
+}
+
+/// NG-08: nginx `time` syntax → milliseconds. Bare number = seconds
+/// (nginx semantics); suffixes `ms s m h d w M y`. Returns `None` on
+/// malformed input or overflow — callers fail closed.
+pub(crate) fn parse_nginx_time_ms(s: &str) -> Option<u64> {
+    const SECOND: u64 = 1_000;
+    const MINUTE: u64 = 60 * SECOND;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    const MONTH: u64 = 30 * DAY;
+    const YEAR: u64 = 365 * DAY;
+    let (digits, multiplier) = if let Some(n) = s.strip_suffix("ms") {
+        (n, 1u64)
+    } else if let Some(n) = s.strip_suffix('s') {
+        (n, SECOND)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, MINUTE)
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, HOUR)
+    } else if let Some(n) = s.strip_suffix('d') {
+        (n, DAY)
+    } else if let Some(n) = s.strip_suffix('w') {
+        (n, WEEK)
+    } else if let Some(n) = s.strip_suffix('M') {
+        (n, MONTH)
+    } else if let Some(n) = s.strip_suffix('y') {
+        (n, YEAR)
+    } else {
+        (s, SECOND)
+    };
+    let value: u64 = digits.parse().ok()?;
+    value.checked_mul(multiplier)
 }

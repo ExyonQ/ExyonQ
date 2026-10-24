@@ -80,7 +80,7 @@ if [[ ! "$EXYONQ_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 ws6_log "building exyonq + exyonqctl target=$TARGET profile=$PROFILE locked=yes source_revision=$EXYONQ_SOURCE_REVISION official=$EXYONQ_OFFICIAL_RELEASE"
-cargo build -p exyonq -p exyonqctl --"$PROFILE" --locked --target "$TARGET" "${FEATURES[@]}"
+cargo auditable build -p exyonq -p exyonqctl --"$PROFILE" --locked --target "$TARGET" "${FEATURES[@]}"
 
 BIN_ROOT="$WORKSPACE/target/$TARGET/$PROFILE"
 EXYONQ_BIN="$BIN_ROOT/exyonq"

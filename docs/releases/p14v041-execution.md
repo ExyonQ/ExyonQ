@@ -43,7 +43,7 @@ P14V041_FREEZE_AMENDMENT =
   → 94f29a9 → 43805eb; remote main FF only
 
 P14V041_BRANCH = release/p14v041
-P14V041_WORKTREE = exyonq-lab-wt-p14v041
+P14V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-laboratorio-wt-p14v041
 P14V041_TAG = v0.4.1
 P14V041_AMBIENT_LAB_DIRT_IMPORTED = NO
 P14V041_PREHISTCLEAN_HISTORY_IMPORTED = NO
@@ -52,7 +52,7 @@ P14V041_PREHISTCLEAN_HISTORY_IMPORTED = NO
 Ambient lab (untouched during close):
 
 ```text
-AMBIENT_PATH = exyonq-lab
+AMBIENT_PATH = /Volumes/Lexar/Cursor/exyonq-laboratorio
 AMBIENT_BRANCH = perf/p8o-finite-sse-batch
 ```
 
@@ -142,6 +142,6 @@ Tag `v0.4.1` points at `43805eb` (annotated SSH-signed).
 ## Notes
 
 - Product/publication work executed only in `release/p14v041` worktree; ambient dirt preserved.
-- Official signing (tag SSH, Cosign blob, Cosign OCI) performed manually in Terminal.app; verification used public material only.
+- Official signing (tag SSH, Cosign blob, Cosign OCI) performed manually in Terminal.app; Cursor verified with public material only.
 - No `latest` mutation; repository and GHCR remain private.
 - This ledger update may land as a post-tag documentation commit on `main` and does not move `v0.4.1`.

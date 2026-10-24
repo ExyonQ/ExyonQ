@@ -89,7 +89,7 @@ export EXYONQ_ARTIFACT_VERSION="$TARGET_RC_VERSION"
 
 ws6_log "WS4 build arch=$ARCH target=$TARGET source=$SOURCE_VERSION rc=$TARGET_RC_VERSION head=$HEAD12"
 
-cargo build -p exyonq -p exyonqctl --"$PROFILE" --locked --target "$TARGET"
+cargo auditable build -p exyonq -p exyonqctl --"$PROFILE" --locked --target "$TARGET"
 
 BIN_ROOT="$WORKSPACE/target/$TARGET/$PROFILE"
 EXYONQ_BIN="$BIN_ROOT/exyonq"

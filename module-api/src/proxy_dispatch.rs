@@ -61,6 +61,13 @@ pub struct ProxyCompiledEndpoint {
     pub priority: u32,
     /// Desired admin eligibility (`Enabled` only). Drain/Disabled ⇒ false.
     pub admin_enabled: bool,
+    /// NG-08: passive health — failures inside `fail_timeout_ms` that ban the
+    /// endpoint (`0` disables accounting).
+    pub max_fails: u32,
+    /// NG-08: passive health window/ban duration ms (nginx `fail_timeout`).
+    pub fail_timeout_ms: u64,
+    /// NG-08: post-ban weight ramp ms (`0` disables).
+    pub slow_start_ms: u64,
 }
 
 /// Cap024 active HTTP health-check parameters compiled into the proxy slot.
@@ -72,6 +79,13 @@ pub struct ProxyHealthCheckCompiled {
     pub path: String,
     pub healthy_threshold: u32,
     pub unhealthy_threshold: u32,
+    /// NG-10: accepted probe statuses; empty = any 2xx.
+    pub expect_status: Vec<u16>,
+    /// NG-10: substring required within the first 64 KiB of the probe body.
+    pub expect_body: Option<String>,
+    /// NG-10: `(name, None)` = header must be present; `(name, Some(v))` =
+    /// exact value match (trimmed).
+    pub expect_header: Option<(String, Option<String>)>,
 }
 
 impl Default for ProxyHealthCheckCompiled {
@@ -83,8 +97,25 @@ impl Default for ProxyHealthCheckCompiled {
             path: "/health".into(),
             healthy_threshold: 2,
             unhealthy_threshold: 3,
+            expect_status: Vec::new(),
+            expect_body: None,
+            expect_header: None,
         }
     }
+}
+
+/// NG-07: compiled endpoint selection policy (mirrors config IR
+/// `EndpointSelectionPolicy`; module-api cannot depend on config-ir).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ProxySelectionPolicy {
+    #[default]
+    WeightedRoundRobin,
+    LeastConn,
+    PowerOfTwo,
+    ConsistentHash,
+    CookieAffinity,
+    SourceAffinity,
+    HeaderAffinity,
 }
 
 /// Compiled proxy cluster metadata in snapshot (slot-only in core after KD3.6).
@@ -111,6 +142,18 @@ pub struct ProxyCompiledSlot {
     pub endpoints: Box<[ProxyCompiledEndpoint]>,
     /// Cap024: active health check (default disabled).
     pub health_check: ProxyHealthCheckCompiled,
+    /// NG-07: endpoint selection/affinity policy for this cluster.
+    pub selection_policy: ProxySelectionPolicy,
+    /// NG-07: sticky cookie name (`CookieAffinity`); normalized at compile time.
+    pub sticky_cookie: Option<String>,
+    /// NG-07: request header keying `HeaderAffinity`.
+    pub sticky_header: Option<String>,
+    /// NG-09: periodic DNS re-resolve interval for hostname endpoints
+    /// (0 = disabled; nginx `resolver` parity is opt-in).
+    pub dns_refresh_ms: u64,
+    /// F3-R20: response `Location`/`Content-Location`/`URI` prefix rewrites
+    /// (`from` upstream prefix → `to` public prefix).
+    pub location_rewrites: Vec<(String, String)>,
 }
 
 impl ProxyCompiledSlot {
@@ -139,8 +182,16 @@ impl ProxyCompiledSlot {
                 weight: 1,
                 priority: 0,
                 admin_enabled: true,
+                max_fails: 1,
+                fail_timeout_ms: 10_000,
+                slow_start_ms: 0,
             }]),
             health_check: ProxyHealthCheckCompiled::default(),
+            selection_policy: ProxySelectionPolicy::default(),
+            sticky_cookie: None,
+            sticky_header: None,
+            dns_refresh_ms: 0,
+            location_rewrites: Vec::new(),
         }
     }
 }

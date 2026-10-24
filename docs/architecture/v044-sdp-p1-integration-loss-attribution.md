@@ -12,7 +12,7 @@ ENTRY_HEAD = d94856663f42ffce16a3c0ccc1291feb4d7083e4
 ENTRY_TREE = ac059750141ee48f141c543cccbd641652bf49fb
 ```
 
-Governance: [`../governance/v044-sdp-p1-integration-loss-attribution.md`](../governance/v044-sdp-p1-integration-loss-attribution.md)
+Governance: [`../governance/v044-sdp-p1-integration-loss-attribution.md`](../governance/v044-sdp-p1-integration-loss-attribution.md)  
 Parents: [`v044-sdp-p1-value-gate-results.md`](v044-sdp-p1-value-gate-results.md), [`v044-specialized-proxy-event-loop-control.md`](v044-specialized-proxy-event-loop-control.md)
 
 ---
@@ -35,7 +35,7 @@ Outcome: **IL-F** (no credible path to competitive target), with **IL-B** (distr
 
 ## Comparability
 
-Cross-campaign absolute RPS is only **PARTIAL** (ExyonQ floor and OLS drifted; EP-C ExyonQ compose had PXDP env, SDP A0 did not).
+Cross-campaign absolute RPS is only **PARTIAL** (ExyonQ floor and OLS drifted; EP-C ExyonQ compose had PXDP env, SDP A0 did not).  
 **User/system CPU pattern** and within-campaign A0 vs A1 are **STRONG**.
 
 | DIMENSION | EP-C | SDP-P1 | PERF | CORRECTNESS |
@@ -77,7 +77,7 @@ Live same-stack 1-rep confirmed user/system pattern; absolute RPS contaminated b
 
 ## Feature / root summary
 
-Dominant: **ROOT-19** Cap067/Tokio process residency + distributed **REQUIRED_PRODUCT** edges (plan, routing, generation, incomplete WAF/headers).
+Dominant: **ROOT-19** Cap067/Tokio process residency + distributed **REQUIRED_PRODUCT** edges (plan, routing, generation, incomplete WAF/headers).  
 Syscall geometry is **not** the loss (SDP system CPU better than EP-C).
 
 ```text

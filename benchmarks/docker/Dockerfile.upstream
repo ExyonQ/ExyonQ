@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+# Independent real HTTP upstream peer for the benchmark compose stack.
+# Builds tools/upstream (standalone crate; not a product workspace member).
+
+FROM rust:1.94-bookworm AS builder
+WORKDIR /build
+COPY tools/upstream/ ./
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/exyonq-upstream /usr/local/bin/exyonq-upstream
+COPY benchmarks/scenarios/payloads/www /bench/www
+COPY benchmarks/scenarios/payloads/health.txt /bench/health.txt
+ENV UPSTREAM_HOST=0.0.0.0
+ENV UPSTREAM_PORT=9000
+ENV BENCH_WWW=/bench/www
+EXPOSE 9000
+CMD ["exyonq-upstream"]

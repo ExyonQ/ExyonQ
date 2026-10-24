@@ -344,7 +344,14 @@ pub(crate) fn evaluate_wire_waf(
     // MAC and grant cookie bind this value; a Cap067 issue with `host:port`
     // cannot be redeemed by the Hyper POST to `/.exyonq/waf-challenge`.
     let host = wire_host_from_pairs(&header_pairs).map(strip_host_port);
-    let client_ip = crate::waf::parse_client_ip(x_forwarded_for.to_str().ok());
+    // NG-11: peer is the socket peer; a trusted peer may recover the real
+    // client from the configured forwarding header in `head`.
+    let peer_ip = crate::waf::parse_client_ip(x_forwarded_for.to_str().ok());
+    let client_ip =
+        match exyonq_module_api::real_ip::RealIpTrust::from_config(&state.config.modules.real_ip) {
+            Some(trust) => trust.resolve_from_pairs(peer_ip, &header_pairs),
+            None => peer_ip,
+        };
     crate::waf::inspect_request_headers(
         state.waf.as_ref(),
         parse_wire_method(head),
@@ -493,8 +500,23 @@ where
         return ProxyWireOutcome::Fallback(stream, head, rest);
     }
 
+    // NG-11: effective client IP — trusted peers recover the real client from
+    // the configured forwarding header; untrusted peers stay at the socket
+    // peer (spoof-proof). Resolved per request; the same value feeds rate
+    // limiting, WAF, access logs and the XFF sent upstream.
+    let real_ip =
+        exyonq_module_api::real_ip::RealIpTrust::from_config(&state.config.modules.real_ip);
+    let request_xff = match real_ip.as_ref() {
+        Some(trust) => {
+            let peer = crate::waf::parse_client_ip(x_forwarded_for.to_str().ok());
+            HeaderValue::from_str(&trust.resolve_from_pairs(peer, &header_pairs).to_string())
+                .unwrap_or_else(|_| x_forwarded_for.clone())
+        }
+        None => x_forwarded_for.clone(),
+    };
+
     // Wire-cheap Cap055: admit before WAF / upstream (same process limiter as Hyper).
-    let client_ip = x_forwarded_for.to_str().unwrap_or("127.0.0.1");
+    let client_ip = request_xff.to_str().unwrap_or("127.0.0.1");
     match exyonq_module_api::wire_admit(client_ip) {
         exyonq_module_api::WireAdmit::Allow => {}
         exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
@@ -508,7 +530,7 @@ where
                 head.as_ref(),
                 429,
                 "wire_rate_limited",
-                x_forwarded_for.to_str().ok(),
+                request_xff.to_str().ok(),
                 observability::duration_ms(started),
             );
             return ProxyWireOutcome::Handled;
@@ -523,7 +545,7 @@ where
                 &mut stream,
                 &reject,
                 head.as_ref(),
-                x_forwarded_for.to_str().ok(),
+                request_xff.to_str().ok(),
                 started,
             )
             .await;
@@ -533,19 +555,23 @@ where
     }
 
     let started = Instant::now();
+    // NG-11: the hook receives the socket peer — keep-alive requests resolve
+    // their own chain per request inside wire_conn against this peer.
     let xff = x_forwarded_for.to_str().unwrap_or("127.0.0.1").to_string();
     let boxed = exyonq_mod_proxy::box_wire_stream(stream);
     // Bench/edge hot path: access logging is usually off — do not Bytes::clone the
     // request head solely for a no-op emit (refcount churn on every P4 wire GET).
     let head_for_access = observability::access_event_required().then(|| head.clone());
-    match proxy_wire::serve_proxy_wire(cluster_id, generation, xff, boxed, head, rest).await {
+    match proxy_wire::serve_proxy_wire(cluster_id, generation, xff, boxed, head, rest, real_ip)
+        .await
+    {
         Ok(status) => {
             if let Some(ref h) = head_for_access {
                 emit_wire_access(
                     h.as_ref(),
                     status,
                     "proxy_wire",
-                    x_forwarded_for.to_str().ok(),
+                    request_xff.to_str().ok(),
                     observability::duration_ms(started),
                 );
             }
@@ -557,7 +583,7 @@ where
                     h.as_ref(),
                     502,
                     "proxy_wire_error",
-                    x_forwarded_for.to_str().ok(),
+                    request_xff.to_str().ok(),
                     observability::duration_ms(started),
                 );
             }
@@ -1079,8 +1105,10 @@ mod tests {
             r#match: RouteMatch {
                 path: "/site".into(),
                 host: None,
-
-                ..Default::default()
+                suffix: None,
+                regex: None,
+                header: None,
+                header_value: None,
             },
             upstream: None,
             root,
@@ -1090,20 +1118,16 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            fallback_rewrite: None,
-            try_uri: None,
-            try_uri_dir: None,
-            proxy_set_headers: Vec::new(),
-        cache_headers: None,
-            response_headers: Vec::new(),
         };
         let api = RouteConfig {
             name: "api".into(),
             r#match: RouteMatch {
                 path: "/api".into(),
                 host: None,
-
-                ..Default::default()
+                suffix: None,
+                regex: None,
+                header: None,
+                header_value: None,
             },
             upstream: Some("backend".into()),
             root: None,
@@ -1113,12 +1137,6 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            fallback_rewrite: None,
-            try_uri: None,
-            try_uri_dir: None,
-            proxy_set_headers: Vec::new(),
-        cache_headers: None,
-            response_headers: Vec::new(),
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1134,13 +1152,13 @@ mod tests {
                 routes: vec!["site".into(), "api".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![site, api],
             upstreams,
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
-            maps: Default::default(),
             modules: Default::default(),
             static_section: Default::default(),
             full_page_cache: Default::default(),
@@ -1885,14 +1903,16 @@ mod ws_tunnel_tests {
         port
     }
 
-    fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
+    pub(super) fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
         let api = RouteConfig {
             name: "api".into(),
             r#match: RouteMatch {
                 path: "/api".into(),
                 host: None,
-
-                ..Default::default()
+                suffix: None,
+                regex: None,
+                header: None,
+                header_value: None,
             },
             upstream: Some("backend".into()),
             root: None,
@@ -1902,12 +1922,13 @@ mod ws_tunnel_tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            cache_headers: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1923,7 +1944,8 @@ mod ws_tunnel_tests {
                 routes: vec!["api".into()],
                 tls: None,
                 http3_listen: None,
-                error_pages: Default::default(),
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
             }],
             routes: vec![api],
             upstreams,
@@ -1939,7 +1961,7 @@ mod ws_tunnel_tests {
         }
     }
 
-    struct WireTunnelTestHooks {
+    pub(super) struct WireTunnelTestHooks {
         _gate: tokio::sync::MutexGuard<'static, ()>,
         _static: StaticDispatchTestGuard,
         _proxy: crate::execute_backend::ProxyDispatchTestGuard,
@@ -1947,7 +1969,7 @@ mod ws_tunnel_tests {
 
     static WS_TUNNEL_TEST_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    async fn install_cli_hooks() -> WireTunnelTestHooks {
+    pub(super) async fn install_cli_hooks() -> WireTunnelTestHooks {
         let gate = WS_TUNNEL_TEST_GATE.lock().await;
         let static_runtime = Arc::new(exyonq_mod_static::StaticRuntime::new());
         let static_service: Arc<dyn StaticDispatchService> = static_runtime.clone();
@@ -2302,5 +2324,364 @@ mod ws_tunnel_tests {
         assert!(compute_wire_inspection_active(true, false, true));
         // Env-resolved Block over IR Disabled is signature_active=true at composition.
         assert!(compute_wire_inspection_active(true, false, true));
+    }
+}
+
+/// NG-06 / F3: real-socket E2E for PROXY protocol on the accept loop.
+#[cfg(test)]
+mod proxy_protocol_e2e_tests {
+    use super::ws_tunnel_tests::{install_cli_hooks, minimal_proxy_config};
+    use exyonq_config_ir::ProxyProtocolConfig;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// Raw TCP upstream that answers with the received X-Forwarded-For value.
+    async fn spawn_xff_echo_upstream() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let mut req = Vec::new();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                        while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                            let n = s.read(&mut buf).await.unwrap_or(0);
+                            if n == 0 {
+                                break;
+                            }
+                            req.extend_from_slice(&buf[..n]);
+                        }
+                    })
+                    .await;
+                    let text = String::from_utf8_lossy(&req);
+                    let xff = text
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("x-forwarded-for:")
+                                .map(|v| v.trim().to_string())
+                        })
+                        .unwrap_or_default();
+                    let body = format!("xff={xff}");
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = s.write_all(resp.as_bytes()).await;
+                    let _ = s.shutdown().await;
+                });
+            }
+        });
+        port
+    }
+
+    async fn spawn_server(pp: Option<ProxyProtocolConfig>) -> (u16, u16) {
+        let upstream_port = spawn_xff_echo_upstream().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listen_port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let mut config = minimal_proxy_config(listen_port, upstream_port);
+        config.servers[0].proxy_protocol = pp;
+        let listen_addr: std::net::SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
+        tokio::spawn(async move {
+            let _ = crate::server::run_on(listen_addr, config).await;
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        (listen_port, upstream_port)
+    }
+
+    async fn roundtrip(listen_port: u16, bytes: &[u8]) -> Option<String> {
+        let mut stream = TcpStream::connect(("127.0.0.1", listen_port))
+            .await
+            .unwrap();
+        stream.write_all(bytes).await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let mut resp = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        resp.extend_from_slice(&buf[..n]);
+                        if resp.windows(4).any(|w| w == b"\r\n\r\n") {
+                            let pos = resp.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                            let head = String::from_utf8_lossy(&resp[..pos]).into_owned();
+                            if let Some(len) = head
+                                .lines()
+                                .find_map(|l| {
+                                    l.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .map(|v| v.trim().to_string())
+                                })
+                                .and_then(|v| v.parse::<usize>().ok())
+                            {
+                                if resp.len() - pos >= len {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        if resp.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&resp).to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_v1_sets_real_client_ip() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server(Some(ProxyProtocolConfig {
+            enabled: true,
+            trusted: Vec::new(),
+        }))
+        .await;
+
+        let mut req = b"PROXY TCP4 203.0.113.7 10.0.0.1 56324 443\r\n".to_vec();
+        req.extend_from_slice(
+            format!("GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        );
+        let resp = roundtrip(port, &req).await.expect("response expected");
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+        assert!(
+            resp.contains("xff=203.0.113.7"),
+            "PROXY source IP must reach upstream via XFF, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_v2_sets_real_client_ip() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server(Some(ProxyProtocolConfig {
+            enabled: true,
+            trusted: Vec::new(),
+        }))
+        .await;
+
+        let mut req = Vec::new();
+        req.extend_from_slice(b"\x0D\x0A\x0D\x0A\x00\x0D\x0A\x51\x55\x49\x54\x0A");
+        req.push(0x21); // v2 + PROXY
+        req.push(0x11); // INET + STREAM
+        req.extend_from_slice(&[0x00, 0x0C]); // len = 12
+        req.extend_from_slice(&[203, 0, 113, 9]); // src ip
+        req.extend_from_slice(&[10, 0, 0, 1]); // dst ip
+        req.extend_from_slice(&[0xC0, 0x38]); // src port 49208
+        req.extend_from_slice(&[0x01, 0xBB]); // dst port 443
+        req.extend_from_slice(
+            format!("GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        );
+        let resp = roundtrip(port, &req).await.expect("response expected");
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+        assert!(
+            resp.contains("xff=203.0.113.9"),
+            "PROXY v2 source IP must reach upstream via XFF, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn enabled_listener_rejects_missing_header() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server(Some(ProxyProtocolConfig {
+            enabled: true,
+            trusted: Vec::new(),
+        }))
+        .await;
+
+        let req = format!("GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+        assert!(
+            roundtrip(port, req.as_bytes()).await.is_none(),
+            "enabled listener must drop connections without PROXY header"
+        );
+    }
+
+    #[tokio::test]
+    async fn enabled_listener_rejects_untrusted_peer() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server(Some(ProxyProtocolConfig {
+            enabled: true,
+            trusted: vec!["10.9.9.0/24".into()],
+        }))
+        .await;
+
+        // Peer is 127.0.0.1 — not in trusted range: dropped even with valid header.
+        let mut req = b"PROXY TCP4 203.0.113.7 10.0.0.1 56324 443\r\n".to_vec();
+        req.extend_from_slice(
+            format!("GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes(),
+        );
+        assert!(
+            roundtrip(port, &req).await.is_none(),
+            "untrusted peer must be dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_v2_local_command_keeps_real_peer() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server(Some(ProxyProtocolConfig {
+            enabled: true,
+            trusted: Vec::new(),
+        }))
+        .await;
+
+        let mut req = Vec::new();
+        req.extend_from_slice(b"\x0D\x0A\x0D\x0A\x00\x0D\x0A\x51\x55\x49\x54\x0A");
+        req.push(0x20); // v2 + LOCAL
+        req.push(0x00); // UNSPEC
+        req.extend_from_slice(&[0x00, 0x00]); // len = 0
+        req.extend_from_slice(
+            format!("GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        );
+        let resp = roundtrip(port, &req).await.expect("response expected");
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+        assert!(
+            resp.contains("xff=127.0.0.1"),
+            "LOCAL must keep the real peer IP, got: {resp}"
+        );
+    }
+
+    async fn spawn_server_real_ip(real_ip: exyonq_config_ir::RealIpConfig) -> (u16, u16) {
+        let upstream_port = spawn_xff_echo_upstream().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listen_port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let mut config = minimal_proxy_config(listen_port, upstream_port);
+        config.modules.real_ip = real_ip;
+        let listen_addr: std::net::SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
+        tokio::spawn(async move {
+            let _ = crate::server::run_on(listen_addr, config).await;
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        (listen_port, upstream_port)
+    }
+
+    fn real_ip_cfg(trusted: &[&str]) -> exyonq_config_ir::RealIpConfig {
+        exyonq_config_ir::RealIpConfig {
+            enabled: true,
+            trusted: trusted.iter().map(|s| s.to_string()).collect(),
+            header: "x-forwarded-for".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn ng11_trusted_peer_xff_reaches_upstream() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server_real_ip(real_ip_cfg(&["127.0.0.1"])).await;
+
+        // Peer is loopback (trusted) → the forwarded client wins.
+        let req = format!(
+            "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Forwarded-For: 203.0.113.55\r\nConnection: close\r\n\r\n"
+        );
+        let resp = roundtrip(port, req.as_bytes())
+            .await
+            .expect("response expected");
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+        assert!(
+            resp.contains("xff=203.0.113.55"),
+            "trusted peer XFF must resolve the client IP, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ng11_two_proxy_chain_reaches_upstream() {
+        let _hooks = install_cli_hooks().await;
+        // Trust loopback peer plus an intermediate proxy hop.
+        let (port, _) = spawn_server_real_ip(real_ip_cfg(&["127.0.0.1", "10.8.0.0/16"])).await;
+
+        let req = format!(
+            "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Forwarded-For: 198.51.100.7, 10.8.1.2\r\nConnection: close\r\n\r\n"
+        );
+        let resp = roundtrip(port, req.as_bytes())
+            .await
+            .expect("response expected");
+        assert!(
+            resp.contains("xff=198.51.100.7"),
+            "first untrusted hop (the client) must win, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ng11_untrusted_peer_cannot_spoof_xff() {
+        let _hooks = install_cli_hooks().await;
+        // Peer 127.0.0.1 is NOT trusted → client-supplied XFF ignored.
+        let (port, _) = spawn_server_real_ip(real_ip_cfg(&["10.9.9.0/24"])).await;
+
+        let req = format!(
+            "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Forwarded-For: 6.6.6.6\r\nConnection: close\r\n\r\n"
+        );
+        let resp = roundtrip(port, req.as_bytes())
+            .await
+            .expect("response expected");
+        assert!(
+            resp.contains("xff=127.0.0.1"),
+            "untrusted peer must keep socket IP upstream, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ng11_disabled_ignores_xff() {
+        let _hooks = install_cli_hooks().await;
+        let mut cfg = real_ip_cfg(&["127.0.0.1"]);
+        cfg.enabled = false;
+        let (port, _) = spawn_server_real_ip(cfg).await;
+
+        let req = format!(
+            "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Forwarded-For: 6.6.6.6\r\nConnection: close\r\n\r\n"
+        );
+        let resp = roundtrip(port, req.as_bytes())
+            .await
+            .expect("response expected");
+        assert!(
+            resp.contains("xff=127.0.0.1"),
+            "disabled module must keep socket peer upstream, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ng11_hyper_path_resolves_trusted_xff() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server_real_ip(real_ip_cfg(&["127.0.0.1"])).await;
+
+        // POST is not wire-eligible → canonical Hyper path must resolve the
+        // same trusted XFF (no wire/hyper divergence).
+        let req = format!(
+            "POST /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Forwarded-For: 203.0.113.66\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let resp = roundtrip(port, req.as_bytes())
+            .await
+            .expect("response expected");
+        assert!(
+            resp.contains("xff=203.0.113.66"),
+            "hyper path must resolve trusted XFF, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ng11_hyper_path_untrusted_spoof_rejected() {
+        let _hooks = install_cli_hooks().await;
+        let (port, _) = spawn_server_real_ip(real_ip_cfg(&["10.9.9.0/24"])).await;
+
+        let req = format!(
+            "POST /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Forwarded-For: 6.6.6.6\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let resp = roundtrip(port, req.as_bytes())
+            .await
+            .expect("response expected");
+        assert!(
+            resp.contains("xff=127.0.0.1"),
+            "untrusted POST must keep socket peer upstream, got: {resp}"
+        );
     }
 }

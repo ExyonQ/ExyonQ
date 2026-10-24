@@ -22,8 +22,8 @@
 //! `EXYONQ_P2B_PROTECTORS=1 cargo test -p exyonq-mod-proxy --test p2b_linux_protectors -- --nocapture`
 
 use exyonq_mod_proxy::{
-    endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, ProxyRuntime,
-    SelectionOutcome,
+    endpoint_transport_identity, EndpointSelector, EndpointSpec, FailoverMode, PassivePeer,
+    ProxyRuntime, SelectionOutcome,
 };
 use exyonq_module_api::proxy_dispatch::{
     ProxyCompiledEndpoint, ProxyCompiledSlot, ProxyDispatchOutcome, ProxyDispatchRequest,
@@ -75,6 +75,8 @@ fn ep(id: &str, host: &str, weight: u32, priority: u32) -> EndpointSpec {
         weight,
         priority,
         admin_enabled: true,
+        passive: Arc::new(PassivePeer::disabled()),
+        admin: Arc::new(exyonq_mod_proxy::selector::EndpointAdmin::new(true, weight)),
     }
 }
 
@@ -281,6 +283,11 @@ fn single_slot(target: &str) -> ProxyCompiledSlot {
         failover_priority_bands: false,
         endpoints: Box::new([]),
         health_check: Default::default(),
+        selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+        sticky_cookie: None,
+        sticky_header: None,
+        dns_refresh_ms: 0,
+        location_rewrites: Vec::new(),
     }
 }
 
@@ -301,8 +308,16 @@ fn multi_one_slot(target: &str) -> ProxyCompiledSlot {
             weight: 1,
             priority: 0,
             admin_enabled: true,
+            max_fails: 1,
+            fail_timeout_ms: 10_000,
+            slow_start_ms: 0,
         }]),
         health_check: Default::default(),
+        selection_policy: exyonq_module_api::proxy_dispatch::ProxySelectionPolicy::default(),
+        sticky_cookie: None,
+        sticky_header: None,
+        dns_refresh_ms: 0,
+        location_rewrites: Vec::new(),
     }
 }
 

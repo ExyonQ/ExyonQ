@@ -15,4 +15,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 # Product H3 default (s2n). Quinn legacy is rollback-only and exclusive — do not enable here.
-exyonq-core = { workspace = true, default-features = false, features = ["http3-provider-s2n"] }

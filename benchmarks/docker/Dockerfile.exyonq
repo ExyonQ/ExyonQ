@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+
+FROM rust:1.94-bookworm AS builder
+WORKDIR /app
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY core ./core
+COPY config ./config
+COPY addon-api ./addon-api
+COPY addon-sdk ./addon-sdk
+COPY module-api ./module-api
+COPY modules ./modules
+COPY crates ./crates
+COPY compat ./compat
+COPY cli ./cli
+COPY tests ./tests
+COPY xtask ./xtask
+COPY wasm/exyonq-wasm-host ./wasm/exyonq-wasm-host
+# ALLOCATOR_FEATURE: empty (system / default) or allocator-jemalloc.
+# Mimalloc is not a product feature. Default empty = system allocator.
+ARG ALLOCATOR_FEATURE=
+RUN if [ -n "$ALLOCATOR_FEATURE" ]; then \
+      cargo build --release -p exyonq -p exyonqctl --features "$ALLOCATOR_FEATURE"; \
+    else \
+      cargo build --release -p exyonq -p exyonqctl; \
+    fi
+
+FROM debian:bookworm-slim
+ARG ALLOCATOR_FEATURE=
+LABEL exyonq.allocator_feature="${ALLOCATOR_FEATURE:-system}"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl openssl bash \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/exyonq /usr/local/bin/exyonq
+COPY --from=builder /app/target/release/exyonqctl /usr/local/bin/exyonqctl
+COPY benchmarks/configs/exyonq/bench.toml /bench/bench.toml
+COPY benchmarks/configs/exyonq/bench-modules.toml /bench/bench-modules.toml
+COPY benchmarks/configs/exyonq/bench-tls.toml /bench/bench-tls.toml
+COPY benchmarks/configs/exyonq/bench-http3.toml /bench/bench-http3.toml
+COPY benchmarks/scenarios/payloads/www /bench/www
+COPY benchmarks/scenarios/payloads/health.txt /bench/health.txt
+COPY benchmarks/docker/exyonq-entrypoint.sh /entrypoint.sh
+COPY benchmarks/docker/exyonq-env.sh /bench/exyonq-env.sh
+COPY scripts/test-tls/generate-ephemeral-tls.sh /usr/local/bin/generate-ephemeral-tls.sh
+RUN chmod +x /entrypoint.sh /bench/exyonq-env.sh /usr/local/bin/generate-ephemeral-tls.sh
+# TLS private keys are generated at container start (not copied, not baked into the image).
+EXPOSE 8080 8443 8443/udp 8444/udp
+# Async Tokio accept path. Worker geometry defaults derive from process
+# available_parallelism (cpuset-aware) unless EXYONQ_*_THREADS are set.
+# Do not pin EXYONQ_WORKER_THREADS / EXYONQ_ACCEPT_WORKERS here — that caused
+# Cap067 under-parallelism when EPOLL_POOL stayed at the old hardcoded 4.
+ENV EXYONQ_EDGE_STATIC=1
+ENV EXYONQ_CONFIG=/bench/bench.toml
+ENV EXYONQ_CONTROL_SOCKET=/tmp/exyonq.sock
+ENTRYPOINT ["/entrypoint.sh"]

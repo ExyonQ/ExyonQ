@@ -1,8 +1,8 @@
 # ADR-049 — `try_files` / `fallback_rewrite` (NG-03 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-17
-**Depends on:** ADR-047 (NG-01 match), ADR-048 (NG-02 rewrite), Cap035 rematch
+**Status:** Accepted  
+**Date:** 2026-10-17  
+**Depends on:** ADR-047 (NG-01 match), ADR-048 (NG-02 rewrite), Cap035 rematch  
 **Contract:** CONDITIONAL ACCEPT (`exyonq-architecture-contract` 2026-10-17)
 
 ## Context

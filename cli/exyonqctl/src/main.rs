@@ -107,6 +107,13 @@ enum Command {
         #[arg(long, global = true)]
         token: Option<String>,
     },
+    /// AP-01: balancer member table (list/set without reload).
+    Server {
+        #[command(subcommand)]
+        command: ServerCommand,
+        #[arg(short, long, global = true)]
+        socket: Option<PathBuf>,
+    },
     /// FPC observability (Q-04 / ADR-057): stats + explain.
     Cache {
         #[command(subcommand)]
@@ -116,6 +123,32 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServerCommand {
+    /// List balancer members (optionally scoped to one upstream).
+    List {
+        /// Limit output to one upstream name.
+        #[arg(long)]
+        upstream: Option<String>,
+        #[arg(long, value_enum, default_value_t = ControlOutFormat::Human)]
+        format: ControlOutFormat,
+    },
+    /// Hot member mutation: `exyonqctl server set <id> weight=0` — no reload.
+    Set {
+        /// Endpoint id (must be unambiguous across upstreams unless --upstream).
+        id: String,
+        /// Member fields: weight=N (alias loadfactor=N), enabled=true|false
+        /// (alias status=E|D). At least one required.
+        #[arg(required = true, num_args = 1..)]
+        pairs: Vec<String>,
+        /// Scope the endpoint id to one upstream.
+        #[arg(long)]
+        upstream: Option<String>,
+        #[arg(long, value_enum, default_value_t = ControlOutFormat::Human)]
+        format: ControlOutFormat,
     },
 }
 
@@ -470,6 +503,9 @@ struct ControlResponse {
     reload_in_progress: Option<bool>,
     #[serde(default)]
     version: Option<String>,
+    /// AP-01: member rows for member_list/member_set.
+    #[serde(default)]
+    payload: Option<serde_json::Value>,
 }
 
 fn main() -> ExitCode {
@@ -489,6 +525,7 @@ fn main() -> ExitCode {
             socket,
             token,
         }) => run_purge(command, socket, token),
+        Some(Command::Server { command, socket }) => run_server(command, socket),
         Some(Command::Cache { command }) => run_cache(command),
         Some(Command::Config { command }) => run_config(command),
         None => {
@@ -1227,9 +1264,10 @@ fn htaccess_explain(path: &Path, format: DiagFormat) -> ExitCode {
         let class = match name.as_str() {
             "directoryindex" | "redirect" | "rewriteengine" | "options" => "SUPPORTED",
             "rewriterule" | "rewritecond" => "SUPPORTED_LIMITED",
-            "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride"
-            | "authtype" | "authuserfile" | "authname" | "authgroupfile" | "php_value"
-            | "php_flag" => "FORBIDDEN",
+            "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authtype"
+            | "authuserfile" | "authname" | "authgroupfile" | "php_value" | "php_flag" => {
+                "FORBIDDEN"
+            }
             "header" | "expiresactive" | "expiresbytype" | "expiresdefault" => "UNSUPPORTED",
             n if n.starts_with('<') => "UNSUPPORTED",
             _ => "UNSUPPORTED",
@@ -1404,11 +1442,8 @@ fn http_get_text(url: &str) -> Result<String, String> {
         .parse()
         .or_else(|_| format!("{hostport}:80").parse())
         .map_err(|e| format!("bad host:port in metrics url: {e}"))?;
-    let mut stream = std::net::TcpStream::connect_timeout(
-        &addr,
-        std::time::Duration::from_secs(3),
-    )
-    .map_err(|e| format!("connect {addr}: {e}"))?;
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3))
+        .map_err(|e| format!("connect {addr}: {e}"))?;
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .ok();
@@ -1598,6 +1633,54 @@ fn run_reload(config: Option<PathBuf>, socket: Option<PathBuf>) -> ExitCode {
     }
 }
 
+/// AP-01: `exyonqctl server list|set` — hot member table on the ops socket.
+fn run_server(command: ServerCommand, socket: Option<PathBuf>) -> ExitCode {
+    // The control line is whitespace-delimited — a token containing spaces or
+    // control chars would smuggle extra key=value fields into the command.
+    fn clean_token(v: &str) -> bool {
+        !v.is_empty() && v.chars().all(|c| !c.is_whitespace() && !c.is_control())
+    }
+    match command {
+        ServerCommand::List { upstream, format } => {
+            let cmd = match upstream {
+                Some(u) => {
+                    if !clean_token(&u) {
+                        eprintln!("exyonqctl server list: upstream must not contain whitespace");
+                        return ExitCode::from(2);
+                    }
+                    format!("member list upstream={u}")
+                }
+                None => "member list".to_string(),
+            };
+            run_control(&cmd, socket, format)
+        }
+        ServerCommand::Set {
+            id,
+            pairs,
+            upstream,
+            format,
+        } => {
+            let bad = !clean_token(&id)
+                || upstream.as_deref().is_some_and(|u| !clean_token(u))
+                || pairs.iter().any(|p| !clean_token(p));
+            if bad {
+                eprintln!(
+                    "exyonqctl server set: id/upstream/pairs must not contain whitespace or control characters"
+                );
+                return ExitCode::from(2);
+            }
+            let mut cmd = format!("member set {id}");
+            if let Some(u) = upstream {
+                cmd.push_str(&format!(" upstream={u}"));
+            }
+            for p in pairs {
+                cmd.push_str(&format!(" {p}"));
+            }
+            run_control(&cmd, socket, format)
+        }
+    }
+}
+
 fn run_control(command: &str, socket: Option<PathBuf>, format: ControlOutFormat) -> ExitCode {
     let socket_path = match control_socket(socket) {
         Ok(p) => p,
@@ -1684,6 +1767,31 @@ fn print_response(response: ControlResponse, format: ControlOutFormat) -> ExitCo
             print!(" code={code}");
         }
         println!();
+        if let Some(payload) = &response.payload {
+            // AP-01: member rows — one per line for a member_list array,
+            // single object for member_set.
+            if let Some(rows) = payload.as_array() {
+                for row in rows {
+                    println!(
+                        "  upstream={} endpoint_id={} enabled={} weight={} selectable={}",
+                        row["upstream"].as_str().unwrap_or(""),
+                        row["endpoint_id"].as_str().unwrap_or(""),
+                        row["enabled"].as_bool().unwrap_or(false),
+                        row["weight"].as_u64().unwrap_or(0),
+                        row["selectable"].as_bool().unwrap_or(false),
+                    );
+                }
+            } else if payload.is_object() {
+                println!(
+                    "  upstream={} endpoint_id={} enabled={} weight={} selectable={}",
+                    payload["upstream"].as_str().unwrap_or(""),
+                    payload["endpoint_id"].as_str().unwrap_or(""),
+                    payload["enabled"].as_bool().unwrap_or(false),
+                    payload["weight"].as_u64().unwrap_or(0),
+                    payload["selectable"].as_bool().unwrap_or(false),
+                );
+            }
+        }
         if let Some(err) = &response.error {
             // Informational note on success (e.g. identical NO_OP).
             eprintln!("  {err}");

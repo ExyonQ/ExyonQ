@@ -84,6 +84,10 @@ pub struct CompiledEndpoint {
     pub priority: u32,
     pub admin_enabled: bool,
     pub http_uri: String,
+    /// NG-08: passive health threshold/window/ramp (nginx semantics).
+    pub max_fails: u32,
+    pub fail_timeout_ms: u64,
+    pub slow_start_ms: u64,
 }
 
 /// Execution gate for proxy product path (P2A foundation + P2B productive multi).
@@ -600,6 +604,9 @@ fn compile_proxy_compiled_slots(
                     exyonq_config_ir::AdminEndpointState::Enabled
                 ),
                 http_uri: ep.to_http_uri_string(),
+                max_fails: ep.max_fails,
+                fail_timeout_ms: ep.fail_timeout_ms,
+                slow_start_ms: ep.slow_start_ms,
             })
             .collect();
         let eligible = compiled_endpoints
@@ -645,6 +652,9 @@ fn compile_proxy_compiled_slots(
                         weight: ep.weight,
                         priority: ep.priority,
                         admin_enabled: ep.admin_enabled,
+                        max_fails: ep.max_fails,
+                        fail_timeout_ms: ep.fail_timeout_ms,
+                        slow_start_ms: ep.slow_start_ms,
                     },
                 )
                 .collect();
@@ -660,6 +670,18 @@ fn compile_proxy_compiled_slots(
                 endpoint_execution,
             },
         );
+        // F3-R20: route location_rewrite rules ride on the cluster slot so both
+        // serving paths can apply them by cluster_id.
+        let location_rewrites: Vec<(String, String)> = config
+            .routes
+            .iter()
+            .filter(|r| r.upstream.as_deref() == Some(name.as_str()))
+            .flat_map(|r| {
+                r.location_rewrite
+                    .iter()
+                    .map(|lr| (lr.from.clone(), lr.to.clone()))
+            })
+            .collect();
         let hc = &upstream.health_check;
         slots.push(ProxyCompiledSlot {
             cluster_id: cluster_id as u32,
@@ -688,10 +710,41 @@ fn compile_proxy_compiled_slots(
                 path: hc.path.clone(),
                 healthy_threshold: hc.healthy_threshold,
                 unhealthy_threshold: hc.unhealthy_threshold,
+                expect_status: hc.expect_status.clone(),
+                expect_body: hc.expect_body.clone(),
+                expect_header: hc
+                    .expect_header
+                    .as_deref()
+                    .map(|s| match s.split_once(':') {
+                        Some((n, v)) => (n.trim().to_string(), Some(v.trim().to_string())),
+                        None => (s.trim().to_string(), None),
+                    }),
             },
+            selection_policy: compile_selection_policy(upstream.selection_policy),
+            sticky_cookie: upstream.sticky_cookie.clone(),
+            sticky_header: upstream.sticky_header.clone(),
+            dns_refresh_ms: upstream.dns_refresh_ms,
+            location_rewrites,
         });
     }
     Ok(slots.into_boxed_slice())
+}
+
+/// NG-07: config-IR policy → module-api policy (crates cannot share the enum).
+fn compile_selection_policy(
+    policy: exyonq_config_ir::EndpointSelectionPolicy,
+) -> exyonq_module_api::proxy_dispatch::ProxySelectionPolicy {
+    use exyonq_config_ir::EndpointSelectionPolicy as Ir;
+    use exyonq_module_api::proxy_dispatch::ProxySelectionPolicy as Slot;
+    match policy {
+        Ir::WeightedRoundRobin => Slot::WeightedRoundRobin,
+        Ir::LeastConn => Slot::LeastConn,
+        Ir::PowerOfTwo => Slot::PowerOfTwo,
+        Ir::ConsistentHash => Slot::ConsistentHash,
+        Ir::CookieAffinity => Slot::CookieAffinity,
+        Ir::SourceAffinity => Slot::SourceAffinity,
+        Ir::HeaderAffinity => Slot::HeaderAffinity,
+    }
 }
 
 fn compute_snapshot_fingerprint(
@@ -754,8 +807,9 @@ mod tests {
             try_uri: None,
             try_uri_dir: None,
             proxy_set_headers: Vec::new(),
-        cache_headers: None,
+            cache_headers: None,
             response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         }
     }
 
@@ -800,6 +854,7 @@ mod tests {
                 routes: vec!["legacy".into()],
                 tls: None,
                 http3_listen: None,
+                proxy_protocol: None,
                 error_pages: Default::default(),
             }],
             routes: vec![redir],
@@ -840,6 +895,7 @@ mod tests {
                 routes: vec!["api".into()],
                 tls: None,
                 http3_listen: None,
+                proxy_protocol: None,
                 error_pages: Default::default(),
             }],
             routes: vec![api],

@@ -338,8 +338,34 @@ pub fn proxy_outcome_to_hyper(
                 .body(boxed(bytes::Bytes::from(m.body)))
                 .expect("materialized")
         }
-        ProxyDispatchOutcome::Streaming { stream, .. } => exyonq_mod_proxy::take_streaming(stream)
-            .unwrap_or_else(|| text(StatusCode::BAD_GATEWAY, "proxy stream attach failed")),
+        ProxyDispatchOutcome::Streaming {
+            headers, stream, ..
+        } => match exyonq_mod_proxy::take_streaming(stream) {
+            Some(mut response) => {
+                // NG-07: `headers` carries the upstream header set plus
+                // module-appended extras (e.g. the sticky route cookie);
+                // the stored response already has the upstream ones —
+                // append only pairs not already present so nothing dupes.
+                for (name, value) in headers {
+                    let (Ok(name), Ok(value)) = (
+                        hyper::header::HeaderName::from_bytes(name.as_bytes()),
+                        hyper::header::HeaderValue::from_str(&value),
+                    ) else {
+                        continue;
+                    };
+                    let present = response
+                        .headers()
+                        .get_all(&name)
+                        .iter()
+                        .any(|v| v.as_bytes() == value.as_bytes());
+                    if !present {
+                        response.headers_mut().append(name, value);
+                    }
+                }
+                response
+            }
+            None => text(StatusCode::BAD_GATEWAY, "proxy stream attach failed"),
+        },
         ProxyDispatchOutcome::Upgraded(handle) => exyonq_mod_proxy::take_websocket(handle)
             .unwrap_or_else(|| text(StatusCode::BAD_GATEWAY, "proxy upgrade attach failed")),
         ProxyDispatchOutcome::BadGateway => Response::builder()
@@ -805,6 +831,49 @@ mod tests {
         .await
         .expect("Fastcgi");
         assert_eq!(outcome.status, 200);
+    }
+
+    #[test]
+    fn streaming_outcome_appends_minted_cookie_without_duping_upstream_headers() {
+        // NG-07 regression: the route cookie appended into Streaming.headers
+        // must reach the client; upstream headers already live in the stored
+        // response and must not be duplicated.
+        use exyonq_module_api::proxy_dispatch::ProxyDispatchOutcome;
+        use http_body_util::BodyExt;
+        use hyper::header::HeaderValue;
+        use hyper::Response;
+
+        let mut upstream = Response::new(
+            http_body_util::Full::new(bytes::Bytes::from_static(b"ok"))
+                .map_err(|never| match never {})
+                .boxed(),
+        );
+        upstream.headers_mut().insert(
+            hyper::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain"),
+        );
+        let handle = exyonq_mod_proxy::attach::store_streaming_response(upstream);
+
+        let outcome = ProxyDispatchOutcome::Streaming {
+            status: 200,
+            headers: vec![
+                ("content-type".into(), "text/plain".into()),
+                ("set-cookie".into(), "route=ep-a; Path=/".into()),
+            ],
+            stream: handle,
+        };
+        let resp = proxy_outcome_to_hyper(outcome);
+        assert_eq!(
+            resp.headers().get_all("content-type").iter().count(),
+            1,
+            "upstream header must not duplicate"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("set-cookie")
+                .and_then(|v| v.to_str().ok()),
+            Some("route=ep-a; Path=/")
+        );
     }
 
     #[test]

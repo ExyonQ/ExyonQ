@@ -1,8 +1,8 @@
 # ADR-051 — Variables mínimas + `match.header` + `map` (NG-05 / v0.5 F1)
 
-**Status:** Accepted
-**Date:** 2026-10-18
-**Depends on:** ADR-047 (match), Cap033 host AND
+**Status:** Accepted  
+**Date:** 2026-10-18  
+**Depends on:** ADR-047 (match), Cap033 host AND  
 **Contract:** CONDITIONAL ACCEPT (`exyonq-architecture-contract` 2026-10-17)
 
 ## Context

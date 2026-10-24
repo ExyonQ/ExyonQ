@@ -4,12 +4,9 @@
 DOCUMENT = DOCUMENTATION_INDEX.md
 DOCUMENT_ROLE = CANONICAL_DOCUMENTATION_MAP
 AUTHORITY = SOLE inventory of documentation roles for this worktree
-LAST_UPDATED = 2026-10-18
-BRANCH = main
-PUBLIC_RELEASE = v0.6.0.1
-WORKSPACE_VERSION = 0.6.0
-WORKSPACE_PUBLICATION = PUBLISHED
-HEAD = 7af7440ae9461560c8ae979d24d29d026d027952
+LAST_UPDATED = 2026-08-03
+BRANCH = release/v0.4.3-integration
+HEAD = (see git after GRC-R5 remediation commits)
 ```
 
 Companions: [`PROJECT_STATUS.md`](PROJECT_STATUS.md) · [`ROADMAP.md`](ROADMAP.md)
@@ -78,7 +75,7 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
 |------|-------|------------------|------|---------------|--------|---------------------|----------------------|--------------------|---------------|--------------------|
-| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.5.0 | 2026-10 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
+| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.4.2 line | 2026-07 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
 | `ARCHITECTURE.md` | Source-tree architecture | TRACKED | architecture | overview | IMPLEMENTED_REFERENCE | — | layout current | 2026-07 | README | KEEP_ACTIVE |
 | `CHANGELOG.md` | Changelog | TRACKED | release | changelog | HISTORICAL_EVIDENCE | — | partial vs HEAD | UNKNOWN | packaging | REVIEW vs Changeset A/B |
 | `CONTRIBUTING.md` | Contributing | TRACKED | process | guide | IMPLEMENTED_REFERENCE | — | process | UNKNOWN | README | KEEP_ACTIVE |
@@ -106,11 +103,11 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 | `scripts/architecture/README.md` | Architecture scripts | TRACKED | architecture | tooling | IMPLEMENTED_REFERENCE | study reports (local) | gates present | 2026-06+ | verify-phase0 | KEEP_ACTIVE; note study LOCAL_ONLY |
 | `scripts/architecture/fixtures/7b-negative/README.md` | Negative fixtures | TRACKED | architecture | test | IMPLEMENTED_REFERENCE | — | fixtures | UNKNOWN | architecture lint | KEEP_ACTIVE |
 | `scripts/release/tests/fixtures/README.md` | Release fixtures | TRACKED | release | test | IMPLEMENTED_REFERENCE | — | fixtures | UNKNOWN | release tests | KEEP_ACTIVE |
-| `scripts/smoke/K0.4-core-smoke-matrix.md` | K0.4 smoke matrix | TRACKED | smoke | historical-runbook | HISTORICAL_EVIDENCE | ROADMAP R2 for current qual | k0 matrix still referenced | UNKNOWN | k0 scripts | KEEP_ACTIVE or ADD_STATUS_HEADER |
+| `docs/governance/integrity/historical/K0.4-core-qual-matrix.HISTORICAL.md` | K0.4 qual matrix (HISTORICAL / NOT_EVIDENCE) | TRACKED | integrity | historical-runbook | HISTORICAL_EVIDENCE | ROADMAP R2 for current qual | k0 matrix historical | UNKNOWN | k0 scripts | KEEP_ACTIVE; HISTORICAL label |
 | `security/signing/README.md` | Signing README | TRACKED | security | runbook | HISTORICAL_EVIDENCE | TRUST-POLICY + PROJECT_STATUS | living/stale mix | UNKNOWN | release | REVIEW; ADD_STATUS_HEADER |
 | `security/signing/TRUST-POLICY.md` | Trust policy | TRACKED | security | policy | IMPLEMENTED_REFERENCE | — | policy | UNKNOWN | signing | KEEP_ACTIVE |
 | `tests/fixtures/README.md` | Test fixtures | TRACKED | tests | guide | IMPLEMENTED_REFERENCE | — | fixtures | UNKNOWN | tests | KEEP_ACTIVE |
-| `tests/fixtures/tls/README.md` | TLS fixtures policy | TRACKED | security | guide | IMPLEMENTED_REFERENCE | ephemeral TLS scripts | PMZ | UNKNOWN | smokes | KEEP_ACTIVE |
+| `tests/fixtures/tls/README.md` | TLS fixtures policy | TRACKED | security | guide | IMPLEMENTED_REFERENCE | ephemeral TLS scripts | PMZ | UNKNOWN | protocol probes | KEEP_ACTIVE |
 | `.github/pull_request_template.md` | PR template | TRACKED | process | template | IMPLEMENTED_REFERENCE | — | — | UNKNOWN | GitHub | KEEP_ACTIVE |
 
 ### P14 release ledgers (tracked under `docs/releases/`)
@@ -150,8 +147,8 @@ NOT_CANONICAL_UNLESS_PROMOTED = YES
 | `study/reports/KERNEL-AUDIT-v1-archive.md` | Kernel audit v1 archive | architecture | audit | HISTORICAL_EVIDENCE | — | KEEP_LOCAL_ONLY |
 | `study/reports/12-frozen-vs-swappable-checklist.md` | Frozen vs swappable | architecture | checklist | HISTORICAL_EVIDENCE | — | KEEP_LOCAL_ONLY; REVIEW promote |
 | `study/reports/HANDOFF-kernel-official-developer.md` | Kernel handoff | architecture | handoff | HISTORICAL_EVIDENCE | — | KEEP_LOCAL_ONLY |
-| `study/reports/PR-3-EPOLL-GENERATION-SMOKE-AMD64-ARM.md` | PR-3 dual-arch smoke | architecture | evidence | HISTORICAL_EVIDENCE | — | KEEP_LOCAL_ONLY |
-| `study/reports/pr3-smoke-packets/*.tar.gz` | Packed smoke evidence | architecture | packet | GENERATED_REPORT | — | KEEP_LOCAL_ONLY |
+| `study/reports/PR-3-EPOLL-GENERATION-QUAL-AMD64-ARM.md` | PR-3 dual-arch qualification (HISTORICAL / NOT_EVIDENCE) | architecture | evidence | HISTORICAL_EVIDENCE | — | KEEP_LOCAL_ONLY |
+| `study/reports/pr3-qual-packets/*.tar.gz` | Packed qualification evidence (HISTORICAL / NOT_EVIDENCE) | architecture | packet | GENERATED_REPORT | — | KEEP_LOCAL_ONLY |
 
 ### C2. Ignored `docs/**` on disk (beyond force-tracked releases)
 
@@ -163,9 +160,15 @@ NOT_CANONICAL_UNLESS_PROMOTED = YES
 | `docs/benchmarks/**` | Benchmark methodology locals | bench | GENERATED_REPORT / UNKNOWN | KEEP_LOCAL_ONLY |
 | other `docs/*` dirs (roadmap, observability, …) | sparse / empty shells | mixed | UNKNOWN_REVIEW | REVIEW |
 
-### C3. Local editor configuration — LOCAL_ONLY
+### C3. Cursor IDE (`.cursor/**`) — LOCAL_ONLY
 
-Editor rules, agents, plans, and skills stay on the maintainer machine. They are not GitHub release content and they do not redefine `ROADMAP.md`.
+| GROUP | COUNT (approx) | STATUS | RECOMMENDED_ACTION |
+|-------|----------------|--------|--------------------|
+| `.cursor/rules/*.mdc` | ~35 | IMPLEMENTED_REFERENCE (local governance) | KEEP_LOCAL_ONLY; not GitHub release content |
+| `.cursor/agents/*.md` | ~17 | LOCAL tooling | KEEP_LOCAL_ONLY |
+| `.cursor/plans/**` | ~50+ | mixed FUTURE_DESIGN / HISTORICAL / SUPERSEDED | KEEP_LOCAL_ONLY; do not treat as R\* |
+| `.cursor/plans/realizados/**` | archived plans | SUPERSEDED / HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
+| `.cursor/skills/**` | mem0/skills | tooling | KEEP_LOCAL_ONLY |
 
 Notable FUTURE_DESIGN plans (examples; **NOT IMPLEMENTED / NOT CURRENT PRODUCT BEHAVIOR** unless separately proven): `13-distributed-discovery-p2p`, `80-admin-api-control-plane`, `90-exyapp-exyphp`, `91-wasm-h3-mtls-admin-ui`, `94-grpc-lb-ai-gateway`.
 
@@ -177,10 +180,10 @@ Notable historical/active local plans: `00-roadmap-core-modules-migration`, `08-
 |------|--------|--------------------|
 | `graphify-out/**` | GENERATED_REPORT | KEEP_LOCAL_ONLY / DELETE_LATER |
 | `benchmarks/results/**/*.md` | GENERATED_REPORT / HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
-| `waf/exyonq-waf-package-20260726/` editor metadata | UNKNOWN_REVIEW (empty package scaffold) | REVIEW; KEEP_LOCAL_ONLY |
+| `waf/exyonq-waf-package-20260726/.cursor/**` | UNKNOWN_REVIEW (empty package scaffold) | REVIEW; KEEP_LOCAL_ONLY |
 | `.pytest_cache/README.md` | GENERATED_REPORT | DELETE_LATER |
 | `dist/sim/THIRD_PARTY_NOTICES.md` | UNKNOWN_REVIEW | REVIEW |
-| local incident notes | HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
+| `.cursor-local/incidents/**` | HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
 
 ---
 
@@ -208,10 +211,10 @@ Promotion requires: owner allowlist, secret scan, and decision whether `/docs/` 
 
 ## F. Owner review required
 
-1. Whether Phase 0 `study/reports` should be promoted to tracked tree or remain LOCAL_ONLY with scripts still pointing there.
-2. Resolved: the v0.4.3 freeze was published. The current release notes are `CHANGELOG.md` for **v0.5.0**.
-3. Whether ignored `docs/architecture` / `docs/benchmarks` content is stale vs clean publication README claims.
-4. Local plans that still look active versus `ROADMAP.md` R* — close or retarget without creating parallel roadmaps.
+1. Whether Phase 0 `study/reports` should be promoted to tracked tree or remain LOCAL_ONLY with scripts still pointing there.  
+2. Whether `CHANGELOG.md` must mention Changeset A/B before any v0.4.3 freeze.  
+3. Whether ignored `docs/architecture` / `docs/benchmarks` content is stale vs clean publication README claims.  
+4. Cursor plans that still look “active” vs `ROADMAP.md` R\* — close or retarget without creating parallel roadmaps.  
 
 ---
 
@@ -220,15 +223,15 @@ Promotion requires: owner allowlist, secret scan, and decision whether `/docs/` 
 ```text
 DOCUMENTS_TOTAL ≈ 198 paths matching *.md/*.mdc/*.html in scoped walk
 DOCUMENTS_TRACKED = 29 (before this commit) → 32 after adding 3 canonical
-DOCUMENTS_LOCAL_ONLY ≈ 169 (local editor files, study, ignored docs, graphify, waf scaffold)
+DOCUMENTS_LOCAL_ONLY ≈ 169 (incl. .cursor, study, ignored docs, graphify, waf cursor)
 
 DOCUMENTS_CANONICAL = 3 (PROJECT_STATUS, ROADMAP, DOCUMENTATION_INDEX)
 DOCUMENTS_IMPLEMENTED_REFERENCE ≈ 20 tracked product/tooling READMEs + local rules
-DOCUMENTS_FUTURE_DESIGN ≈ local plans 13/80/90/91/94 class + examples TBD
+DOCUMENTS_FUTURE_DESIGN ≈ Cursor plans 13/80/90/91/94 class + examples TBD
 DOCUMENTS_HISTORICAL ≈ P14 ledgers + study reports + realizados plans
 DOCUMENTS_SUPERSEDED ≈ realizados/obsoleto-* + older P14 proposal vs audit
-DOCUMENTS_GENERATED ≈ graphify-out, bench result markdown, smoke packets
+DOCUMENTS_GENERATED ≈ graphify-out, bench result markdown, qualification packets
 DOCUMENTS_UNKNOWN ≈ WP integrations, packaging distributed-cache example, waf scaffold, ignored docs shells
 ```
 
-Exact per-file classification for every local plan name is deferred to follow-up REVIEW passes; none of those files are global-phase authorities.
+Exact per-file classification for every `.cursor/plans/*` name is deferred to follow-up REVIEW passes; none of those files are global-phase authorities.
