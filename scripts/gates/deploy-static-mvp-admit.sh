@@ -5,7 +5,7 @@
 #
 # USAGE:
 #   bash scripts/gates/deploy-static-mvp-admit.sh \
-#     --package-root /Volumes/Lexar/Cursor/temp/<name> \
+#     --package-root <workspace>/temp/<name> \
 #     --host netcup-bench|oracle-quasar \
 #     --label netcup|oracle \
 #     --arch amd64|arm64 \

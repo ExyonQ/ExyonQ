@@ -30,7 +30,7 @@ SECRET_COUNT=1
 UNRELATED_REPOSITORY_COUNT=0
 
 CANDIDATE_BRANCH=local/phase8-remainder-source-cleanliness
-CANDIDATE_WORKTREE=/Volumes/Lexar/Cursor/exyonq-laboratorio/.exyonq-local/worktrees/phase8-remainder-source-cleanliness
+CANDIDATE_WORKTREE=<repo>/.exyonq-local/worktrees/phase8-remainder-source-cleanliness
 CANDIDATE_BASE=cd14277edaf312e27b13c2494e6296f0e2a5192c
 CANDIDATE_ENTRY_TREE=f306b89dbf4caea523d3f36755a6aafdf3d2281f
 CANDIDATE_SOURCE_MANIFEST_PATH=.exyonq-local/evidence/phase8-remainder-source-cleanliness/20260902T143414Z/CANDIDATE_SOURCE/candidate_source_manifest.csv

@@ -66,7 +66,7 @@ def sanitize(obj):
         # Deny-all: any absolute path+file:/// must be rewritten or rejected.
         if s.startswith("path+file:///"):
             for marker in (
-                "/exyonq-laboratorio/",
+                "/exyonq/",
                 "/exyonq-p14v041/",
                 "/exyonq-github/",
                 "/exyonq-phase1-",

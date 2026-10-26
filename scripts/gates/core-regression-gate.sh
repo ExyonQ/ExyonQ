@@ -4,7 +4,7 @@
 # USAGE:
 #   bash scripts/gates/core-regression-gate.sh [--evidence-root DIR] [--run-id ID]
 #
-# Ephemeral state defaults under /Volumes/Lexar/Cursor/temp/ (WIP rule).
+# Ephemeral state defaults under <workspace>/temp/ (WIP rule).
 # Exit 0 only when all four CORE_* axes PASS.
 # Child exit 2 → axis NOT_EXECUTED (ENVIRONMENT); exit 3 → axis BLOCKED.
 # First PRODUCT/HARNESS failure stops the run (fail-closed).
@@ -37,7 +37,7 @@ done
 
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 if [[ -z "$EVIDENCE_ROOT" ]]; then
-  EVIDENCE_ROOT="/Volumes/Lexar/Cursor/temp/exyonq-core-regression-${RUN_ID}"
+  EVIDENCE_ROOT="<workspace>/temp/exyonq-core-regression-${RUN_ID}"
 fi
 mkdir -p "$EVIDENCE_ROOT"/{meta,cases,summary,cleanup,target}
 

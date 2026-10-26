@@ -47,12 +47,12 @@ Only **R\*** identifiers in `ROADMAP.md` answer “what global phase is ExyonQ i
 
 ```text
 WORKTREE_AUTHORITY =
-  /Volumes/Lexar/Cursor/exyonq-laboratorio
+  <repo>
   ROLE = DEVELOPMENT_CANONICAL
   EXYONQ_LAB_ROLE = DEVELOPMENT_INTEGRATION_QUALIFICATION
 
 GITHUB_RELEASE_AUTHORITY =
-  /Volumes/Lexar/Cursor/exyonq-github
+  <repo>
   ROLE = CANONICAL_RELEASE_CLOUD_AUTHORITY
   BRANCH = main
   FINAL_RELEASE_HEAD = 37364553677fd9283bebf9e36ea514e4e157ef9a
