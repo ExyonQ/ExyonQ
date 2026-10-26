@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-addon-sdk"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "exyonq-addon-api",
  "semver",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-cache"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "exyonq-module-api",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-compression"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "brotli",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-config-ir"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "hyper",
  "ipnetwork",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-config-merge"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "exyonq-config-ir",
  "serde",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-control-api"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-core"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -511,11 +511,11 @@ dependencies = [
 
 [[package]]
 name = "exyonq-http3-provider-api"
-version = "0.8.0-dev"
+version = "0.8.0"
 
 [[package]]
 name = "exyonq-http3-provider-s2n"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-linux-ffi"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "libc",
  "tokio",
@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-metrics"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-fastcgi"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -570,7 +570,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-htaccess"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-http3"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-proxy"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-static"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "brotli",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-tls"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "exyonq-module-api",
  "rustls",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-module-api"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-module-pipeline"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-proxy-sdp"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "arc-swap",
  "exyonq-runtime-plan",
@@ -702,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-ratelimit"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-runtime-plan"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "exyonq-config-ir",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-waf-api"
-version = "0.8.0-dev"
+version = "0.8.0"
 
 [[package]]
 name = "fastrand"
