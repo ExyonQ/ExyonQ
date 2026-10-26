@@ -27,14 +27,14 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 RELEASE_AUTHORITY = exyonq-github
 PUBLICATION_STATUS = PUBLISHED
 PUBLIC_RELEASE = v0.8.0
-RELEASE_COMMIT = f814bbf7e206581c1d8fea56e022ef9286d2cf26
+RELEASE_COMMIT = 5f3b64830467b353de42d5a16df1000b6860d6d6
 GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0
-GHCR = ghcr.io/exyonq/exyonq:0.8.0 @ sha256:642e1e79a35dbd65d35402381b182275190e537f9df75a888fb54b536bde44e7
-GHCR_WP = ghcr.io/exyonq/exyonq-wordpress:0.8.0 @ sha256:6fa222fca8cc8b9fb1f0059fdecda000a8e478de4ac65de7a5d02b0f2c00d623
-DOCKERHUB = exyonq/exyonq:0.8.0 @ sha256:642e1e79a35dbd65d35402381b182275190e537f9df75a888fb54b536bde44e7
-DOCKERHUB_WP = exyonq/exyonq-wordpress:0.8.0 @ sha256:6fa222fca8cc8b9fb1f0059fdecda000a8e478de4ac65de7a5d02b0f2c00d623
-LINUX_AMD64 = exyonq-v0.8.0-linux-amd64 @ sha256:71f8ce01f46a2d81ed481da1c96ea60cf783de1a2dc801cabae575c808c9e205
-LINUX_ARM64 = exyonq-v0.8.0-linux-arm64 @ sha256:08952427c5b28f84de7886fc81dcb24a737683aad2b83f701e8f873420529439
+GHCR = ghcr.io/exyonq/exyonq:0.8.0 @ sha256:c30797b7e591f5007542e6a2c695bc54a326b9979e1d78d9aeb24d260a05c425
+GHCR_WP = ghcr.io/exyonq/exyonq-wordpress:0.8.0 @ sha256:1ac976be7af2cb8fed01a75635a49cfeca50809f917262c3a2750f50d18ce28c
+DOCKERHUB = exyonq/exyonq:0.8.0 @ sha256:c30797b7e591f5007542e6a2c695bc54a326b9979e1d78d9aeb24d260a05c425
+DOCKERHUB_WP = exyonq/exyonq-wordpress:0.8.0 @ sha256:1ac976be7af2cb8fed01a75635a49cfeca50809f917262c3a2750f50d18ce28c
+LINUX_AMD64 = exyonq-v0.8.0-linux-amd64 @ sha256:8c1f05a3e36a7432167c14a916f238808086629a22a556bd5e2fb60517621c30
+LINUX_ARM64 = exyonq-v0.8.0-linux-arm64 @ sha256:46f649bdc9ffd43de791a1386b97ff42e47ba3dabfd70092d92624cff9951491
 LATEST_CHANGED = NO
 TOTAL_COMPAT_PROMISE = FORBIDDEN (Gate A not closed)
 ```

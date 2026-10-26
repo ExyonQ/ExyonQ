@@ -30,7 +30,7 @@ docker pull exyonq/exyonq:0.8.0
 docker pull exyonq/exyonq-wordpress:0.8.0
 ```
 
-Release assets on GitHub: `exyonq-v0.8.0-linux-amd64`, `exyonq-v0.8.0-linux-arm64`, and `SHA256SUMS`. Each binary reports `exyonq 0.8.0` and `source_revision=f814bbf7e206581c1d8fea56e022ef9286d2cf26`.
+Release assets on GitHub: `exyonq-v0.8.0-linux-amd64`, `exyonq-v0.8.0-linux-arm64`, and `SHA256SUMS`. Each binary reports `exyonq 0.8.0` and `source_revision=5f3b64830467b353de42d5a16df1000b6860d6d6`.
 
 ## Build
 
