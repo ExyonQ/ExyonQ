@@ -20,6 +20,7 @@ pub fn try_fpc_store_response(
 ) {
     note_fpc_store_attempt();
 
+    let vary_allowlist: Vec<&str> = ctx.vary_allowlist.iter().map(String::as_str).collect();
     let ttl = match fpc_assess_store(
         method,
         status,
@@ -28,6 +29,7 @@ pub fn try_fpc_store_response(
         ctx.max_object_bytes,
         ctx.default_ttl,
         ctx.max_ttl,
+        &vary_allowlist,
     ) {
         Ok(ttl) => ttl,
         Err(reason) => {
@@ -55,7 +57,7 @@ pub fn try_fpc_store_response(
             body,
             None,
             CacheNamespace::new(ctx.namespace),
-            std::sync::Arc::from([]),
+            std::sync::Arc::clone(&ctx.tags),
             NamespaceMetrics::NONE,
         );
     })) {

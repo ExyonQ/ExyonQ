@@ -76,6 +76,10 @@ pub enum BypassReason {
     UnsafeQuery,
     UnsafePath,
     MissingIdentity,
+    /// NG-15: a `[full_page_cache.bypass]` cookie or header is present.
+    ConfiguredBypass,
+    /// OL-01: a `[full_page_cache] private_cookies` cookie is present.
+    PrivateCookie,
     Unknown,
 }
 
@@ -102,6 +106,8 @@ impl BypassReason {
             Self::UnsafeQuery => "unsafe_query",
             Self::UnsafePath => "unsafe_path",
             Self::MissingIdentity => "missing_identity",
+            Self::ConfiguredBypass => "configured_bypass",
+            Self::PrivateCookie => "private_cookie",
             Self::Unknown => "unknown",
         }
     }
@@ -335,15 +341,38 @@ pub fn fpc_path_query_bypass(path: &str, query: &str) -> Option<BypassReason> {
     None
 }
 
-/// Combined FPC eligibility (WC2B). Returns bypass reason or `Ok((canon_path, canon_query))`.
+/// NG-15: request-side FPC policy derived from `[full_page_cache]`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FpcRequestPolicy<'a> {
+    /// Cookies allowed through the gate (their values enter the key).
+    pub safe_cookie_allowlist: &'a [&'a str],
+    /// Query params allowed into the key; any other functional param bypasses.
+    pub functional_query_allowlist: &'a [&'a str],
+    /// Cookies whose presence forces a bypass.
+    pub bypass_cookies: &'a [&'a str],
+    /// Headers whose presence forces a bypass.
+    pub bypass_headers: &'a [&'a str],
+    /// OL-01: cookies that make the request private (never cached).
+    pub private_cookies: &'a [&'a str],
+}
+
+/// Combined FPC eligibility (WC2B + NG-15). Returns bypass reason or
+/// `Ok((canon_path, canon_query))`.
 pub fn fpc_request_evaluate(
     method: &str,
     path: &str,
     query: &str,
     request_headers: &[(String, String)],
-    safe_cookie_allowlist: &[&str],
-    functional_query_allowlist: &[&str],
+    policy: &FpcRequestPolicy<'_>,
 ) -> Result<(String, String), BypassReason> {
+    let safe_cookie_allowlist = policy.safe_cookie_allowlist;
+    let functional_query_allowlist = policy.functional_query_allowlist;
+    if let Some(reason) = fpc_configured_bypass(request_headers, policy) {
+        return Err(reason);
+    }
+    if let Some(reason) = fpc_private_cookie(request_headers, policy.private_cookies) {
+        return Err(reason);
+    }
     let method = method.to_ascii_uppercase();
     if method != "GET" && method != "HEAD" {
         return Err(BypassReason::Method);
@@ -398,10 +427,91 @@ pub fn fpc_request_bypass(
         path,
         query,
         request_headers,
-        safe_cookie_allowlist,
-        &[],
+        &FpcRequestPolicy {
+            safe_cookie_allowlist,
+            ..Default::default()
+        },
     )
     .err()
+}
+
+/// NG-15: `[full_page_cache.bypass]` — presence of a listed cookie or header
+/// (case-insensitive) bypasses the cache.
+fn fpc_configured_bypass(
+    request_headers: &[(String, String)],
+    policy: &FpcRequestPolicy<'_>,
+) -> Option<BypassReason> {
+    if policy
+        .bypass_headers
+        .iter()
+        .any(|name| header_present_ignore_case(request_headers, name))
+    {
+        return Some(BypassReason::ConfiguredBypass);
+    }
+    if policy.bypass_cookies.is_empty() {
+        return None;
+    }
+    let raw = aggregate_cookie_headers(request_headers)?;
+    let names = cookie_header_names(&raw);
+    if policy
+        .bypass_cookies
+        .iter()
+        .any(|denied| names.iter().any(|n| n.eq_ignore_ascii_case(denied)))
+    {
+        return Some(BypassReason::ConfiguredBypass);
+    }
+    None
+}
+
+/// OL-01: a request carrying a configured private cookie is never cached,
+/// whatever else the policy allows (logged-in sessions must not share a cache).
+fn fpc_private_cookie(
+    request_headers: &[(String, String)],
+    private_cookies: &[&str],
+) -> Option<BypassReason> {
+    if private_cookies.is_empty() {
+        return None;
+    }
+    let raw = aggregate_cookie_headers(request_headers)?;
+    let names = cookie_header_names(&raw);
+    private_cookies
+        .iter()
+        .any(|private| names.iter().any(|n| n.eq_ignore_ascii_case(private)))
+        .then_some(BypassReason::PrivateCookie)
+}
+
+/// NG-15: canonical variant material for the cache key — the values of the
+/// keyed cookies and headers, sorted by name. Absent items are omitted;
+/// a present-but-empty value stays distinguishable (`name=`).
+pub fn fpc_vary_variant(
+    request_headers: &[(String, String)],
+    cookies: &[&str],
+    headers: &[&str],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !cookies.is_empty() {
+        if let Some(raw) = aggregate_cookie_headers(request_headers) {
+            for pair in raw.split(';') {
+                let pair = pair.trim();
+                let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+                // Same trim as `cookie_header_names` (gate) — a `name =v`
+                // cookie must key on the same name the gate accepted.
+                let name = name.trim();
+                if cookies.iter().any(|c| c.eq_ignore_ascii_case(name)) {
+                    parts.push(format!("c:{}={}", name.to_ascii_lowercase(), value.trim()));
+                }
+            }
+        }
+    }
+    for name in headers {
+        // Join every instance: a repeated header reaches the origin merged,
+        // so keying only the first value would alias two different requests.
+        if let Some(value) = header_values_joined_ignore_case(request_headers, name) {
+            parts.push(format!("h:{}={}", name.to_ascii_lowercase(), value.trim()));
+        }
+    }
+    parts.sort();
+    parts.join(";")
 }
 
 fn query_has_name(query_lower: &str, name: &str) -> bool {
@@ -667,6 +777,8 @@ impl FpcStoreReject {
 /// Does **not** re-apply Plan 12 “any Cookie → reject” — request eligibility is
 /// already decided by [`fpc_request_evaluate`]. Only GET may populate the store;
 /// HEAD never stores.
+// Eight orthogonal store-gate inputs; bundling them would not reduce coupling.
+#[allow(clippy::too_many_arguments)]
 pub fn fpc_assess_store(
     method: &str,
     status: u16,
@@ -675,6 +787,7 @@ pub fn fpc_assess_store(
     max_object_bytes: usize,
     default_ttl: Duration,
     max_ttl: Duration,
+    vary_allowlist: &[&str],
 ) -> Result<Duration, FpcStoreReject> {
     let method = method.to_ascii_uppercase();
     if method == "HEAD" {
@@ -689,7 +802,7 @@ pub fn fpc_assess_store(
     if header_present_ignore_case(response_headers, "set-cookie") {
         return Err(FpcStoreReject::SetCookie);
     }
-    if let Some(reason) = fpc_response_headers_block_store(response_headers) {
+    if let Some(reason) = fpc_response_headers_block_store(response_headers, vary_allowlist) {
         return Err(reason);
     }
     if body_len > max_object_bytes {
@@ -699,7 +812,10 @@ pub fn fpc_assess_store(
     Ok(ttl)
 }
 
-fn fpc_response_headers_block_store(headers: &[(String, String)]) -> Option<FpcStoreReject> {
+fn fpc_response_headers_block_store(
+    headers: &[(String, String)],
+    vary_allowlist: &[&str],
+) -> Option<FpcStoreReject> {
     if header_present_ignore_case(headers, "content-range") {
         return Some(FpcStoreReject::ContentRange);
     }
@@ -738,9 +854,20 @@ fn fpc_response_headers_block_store(headers: &[(String, String)]) -> Option<FpcS
         }
     }
     if let Some(value) = header_values_joined_ignore_case(headers, "vary") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            // v0: any Vary (including *) → reject.
+        // NG-15: a response may vary only on headers that are part of the key
+        // (otherwise one variant would be served for all requests). `*` never
+        // qualifies.
+        let ok = value
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .all(|token| {
+                token != "*"
+                    && vary_allowlist
+                        .iter()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(token))
+            });
+        if !ok {
             return Some(FpcStoreReject::UnsupportedVary);
         }
     }
@@ -882,8 +1009,7 @@ mod tests {
                 "/a",
                 "",
                 &[("If-None-Match".into(), "W/\"x\"".into())],
-                &[],
-                &[],
+                &FpcRequestPolicy::default(),
             )
             .unwrap_err(),
             BypassReason::Conditional
@@ -1051,6 +1177,151 @@ mod tests {
     }
 
     #[test]
+    fn ng15_vary_variant_separates_keyed_values() {
+        let req = |cookie: &str, lang: &str| {
+            vec![
+                ("cookie".to_string(), cookie.to_string()),
+                ("accept-language".to_string(), lang.to_string()),
+            ]
+        };
+        let a = fpc_vary_variant(
+            &req("wpml=es; other=1", "es"),
+            &["wpml"],
+            &["Accept-Language"],
+        );
+        let b = fpc_vary_variant(
+            &req("wpml=en; other=1", "en"),
+            &["wpml"],
+            &["Accept-Language"],
+        );
+        assert_ne!(a, b);
+        // Non-keyed material never leaks into the variant.
+        let c = fpc_vary_variant(
+            &req("wpml=es; other=2", "es"),
+            &["wpml"],
+            &["Accept-Language"],
+        );
+        assert_eq!(a, c);
+        // Absent cookie vs present-empty stay distinct.
+        let absent = fpc_vary_variant(&req("other=1", "es"), &["wpml"], &["Accept-Language"]);
+        let empty = fpc_vary_variant(&req("wpml=", "es"), &["wpml"], &["Accept-Language"]);
+        assert_ne!(absent, empty);
+    }
+
+    /// OL-01: a configured private cookie always bypasses, even when the
+    /// cookie is otherwise allowlisted (logged-in sessions never share cache).
+    #[test]
+    fn ol01_private_cookie_bypasses_cache() {
+        let logged_in = vec![(
+            "cookie".to_string(),
+            "wordpress_logged_in_abc=1; wpml=es".to_string(),
+        )];
+        let policy = FpcRequestPolicy {
+            safe_cookie_allowlist: &["wpml", "wordpress_logged_in_abc"],
+            functional_query_allowlist: &[],
+            bypass_cookies: &[],
+            bypass_headers: &[],
+            private_cookies: &["wordpress_logged_in_abc"],
+        };
+        assert_eq!(
+            fpc_request_evaluate("GET", "/", "", &logged_in, &policy).unwrap_err(),
+            BypassReason::PrivateCookie
+        );
+        // Anonymous request (only the keyed language cookie) stays eligible.
+        let anon = vec![("cookie".to_string(), "wpml=es".to_string())];
+        assert!(fpc_request_evaluate("GET", "/", "", &anon, &policy).is_ok());
+    }
+
+    #[test]
+    fn ng15_vary_trims_cookie_names_and_joins_repeated_headers() {
+        // `wpml =es` is accepted by the gate (names are trimmed there) and must
+        // key on the same name — otherwise it would alias a request with no cookie.
+        let spaced = vec![("cookie".to_string(), "wpml =es".to_string())];
+        let absent = vec![("cookie".to_string(), "other=1".to_string())];
+        let keyed = fpc_vary_variant(&spaced, &["wpml"], &[]);
+        assert_eq!(keyed, "c:wpml=es");
+        assert_ne!(keyed, fpc_vary_variant(&absent, &["wpml"], &[]));
+
+        // Repeated keyed headers reach the origin merged → must not alias.
+        let single = vec![("accept-language".to_string(), "es".to_string())];
+        let repeated = vec![
+            ("accept-language".to_string(), "es".to_string()),
+            ("accept-language".to_string(), "en".to_string()),
+        ];
+        assert_ne!(
+            fpc_vary_variant(&single, &[], &["Accept-Language"]),
+            fpc_vary_variant(&repeated, &[], &["Accept-Language"])
+        );
+    }
+
+    #[test]
+    fn ng15_configured_bypass_and_keyed_cookies() {
+        let headers = vec![
+            ("cookie".to_string(), "wpml=es".to_string()),
+            ("x-no-cache".to_string(), "1".to_string()),
+        ];
+        let policy = FpcRequestPolicy {
+            safe_cookie_allowlist: &["wpml"],
+            functional_query_allowlist: &[],
+            bypass_cookies: &["wpml"],
+            bypass_headers: &[],
+            private_cookies: &[],
+        };
+        assert_eq!(
+            fpc_request_evaluate("GET", "/", "", &headers, &policy).unwrap_err(),
+            BypassReason::ConfiguredBypass
+        );
+        let policy = FpcRequestPolicy {
+            safe_cookie_allowlist: &["wpml"],
+            functional_query_allowlist: &[],
+            bypass_cookies: &[],
+            bypass_headers: &["X-No-Cache"],
+            private_cookies: &[],
+        };
+        assert_eq!(
+            fpc_request_evaluate("GET", "/", "", &headers, &policy).unwrap_err(),
+            BypassReason::ConfiguredBypass
+        );
+        // Keyed cookie alone is eligible.
+        let headers = vec![("cookie".to_string(), "wpml=es".to_string())];
+        let policy = FpcRequestPolicy {
+            safe_cookie_allowlist: &["wpml"],
+            ..Default::default()
+        };
+        assert!(fpc_request_evaluate("GET", "/", "", &headers, &policy).is_ok());
+    }
+
+    #[test]
+    fn ng15_store_accepts_only_keyed_vary() {
+        let vary = |value: &str| vec![("vary".to_string(), value.to_string())];
+        let store = |headers: &[(String, String)], allow: &[&str]| {
+            fpc_assess_store(
+                "GET",
+                200,
+                headers,
+                1,
+                1024,
+                Duration::from_secs(30),
+                Duration::from_secs(60),
+                allow,
+            )
+        };
+        assert!(store(&vary("Accept-Language"), &["Accept-Language"]).is_ok());
+        assert_eq!(
+            store(&vary("Accept-Language"), &[]).unwrap_err(),
+            FpcStoreReject::UnsupportedVary
+        );
+        assert_eq!(
+            store(&vary("*"), &["Accept-Language"]).unwrap_err(),
+            FpcStoreReject::UnsupportedVary
+        );
+        assert_eq!(
+            store(&vary("Accept-Language, User-Agent"), &["Accept-Language"]).unwrap_err(),
+            FpcStoreReject::UnsupportedVary
+        );
+    }
+
+    #[test]
     fn fpc_path_encoding_bypass_and_query_policy() {
         assert_eq!(fpc_canonicalize_path("/wp-admin/%2e%2e/x"), None);
         assert_eq!(
@@ -1073,7 +1344,8 @@ mod tests {
                 canonical: "a=1&b=2".into()
             }
         );
-        let ok = fpc_request_evaluate("GET", "/blog/", "", &[], &[], &[]).unwrap();
+        let ok =
+            fpc_request_evaluate("GET", "/blog/", "", &[], &FpcRequestPolicy::default()).unwrap();
         assert_eq!(ok.0, "/blog");
         assert_eq!(ok.1, "");
     }
@@ -1088,6 +1360,7 @@ mod tests {
             1024,
             Duration::from_secs(30),
             Duration::from_secs(3600),
+            &[],
         )
         .expect("store");
         assert_eq!(ttl, Duration::from_secs(30));
@@ -1104,6 +1377,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::SetCookie
@@ -1117,6 +1391,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::Private
@@ -1130,6 +1405,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::NoStore
@@ -1143,6 +1419,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::NoCache
@@ -1156,6 +1433,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::UnsupportedVary
@@ -1169,6 +1447,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::UnsupportedVary
@@ -1189,6 +1468,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::ContentEncoding
@@ -1204,6 +1484,7 @@ mod tests {
             1024,
             Duration::from_secs(30),
             Duration::from_secs(60),
+            &[],
         )
         .is_ok());
     }
@@ -1220,6 +1501,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::Streaming
@@ -1237,6 +1519,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::Status
@@ -1250,6 +1533,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::Status
@@ -1263,6 +1547,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::BodyTooLarge
@@ -1276,6 +1561,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::HeadMustNotStore
@@ -1288,6 +1574,7 @@ mod tests {
             1024,
             Duration::from_secs(30),
             Duration::from_secs(60),
+            &[],
         )
         .expect("ttl");
         assert_eq!(ttl, Duration::from_secs(60));
@@ -1300,6 +1587,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::TtlInvalid
@@ -1320,6 +1608,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::Private
@@ -1336,6 +1625,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::NoStore
@@ -1352,6 +1642,7 @@ mod tests {
                 1024,
                 Duration::from_secs(30),
                 Duration::from_secs(60),
+                &[],
             )
             .unwrap_err(),
             FpcStoreReject::UnsupportedVary

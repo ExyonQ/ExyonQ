@@ -65,7 +65,7 @@ async fn sse_progressive_read_without_full_buffer() {
     let upstream = UpstreamTarget::from_descriptor(&desc).unwrap();
     let metrics = Arc::new(ProxyHyperMetrics::default());
 
-    let response = forward_get_streaming(&upstream, "/api/stream", None, &metrics).await;
+    let response = forward_get_streaming(&upstream, "/api/stream", None, &metrics, &[]).await;
     assert_eq!(response.status(), 200);
     assert!(
         response

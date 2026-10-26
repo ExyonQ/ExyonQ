@@ -1,0 +1,21 @@
+# EXYONQ unsafe ratchet baseline (ADR-045 §6)
+#
+# Enforced by scripts/gates/unsafe-allowlist-gate.sh.
+# Format: <occurrences> <path>
+#
+# `unsafe` inside crates/exyonq-linux-ffi/** and crates/exyonq-platform-linux/**
+# is allowlisted by ADR-045 and is not listed here. Every other occurrence is
+# pre-existing debt recorded below: the gate fails when the count grows or a new
+# file appears, and reports entries that can be removed so this list shrinks.
+# Do not add lines without an ADR revision.
+2 core/src/server/io.rs
+2 core/src/server/wire_dispatch.rs
+1 crates/exyonq-cfd-dataplane/src/exclusive.rs
+3 crates/exyonq-cfd-dataplane/src/static_serve.rs
+2 crates/exyonq-mod-static/src/fd_io.rs
+1 crates/exyonq-mod-static/src/root.rs
+9 crates/exyonq-mod-static/src/sendfile.rs
+6 crates/exyonq-mod-static/src/sendfile_fsm.rs
+1 crates/exyonq-mod-static/src/wire_conn.rs
+3 crates/exyonq-ops-runtime/src/control_socket.rs
+3 tools/upstream/src/main.rs

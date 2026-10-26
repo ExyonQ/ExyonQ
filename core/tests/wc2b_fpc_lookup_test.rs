@@ -129,6 +129,7 @@ async fn eligible_hit_serves_without_backend_and_head_has_no_body() {
         path: "/".into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     };
     insert_hit(cache, parts.clone(), b"cached-body");
 
@@ -174,6 +175,7 @@ async fn cookie_bypass_does_not_hit_anonymous_entry() {
             path: "/".into(),
             query: String::new(),
             content_encoding: "identity".into(),
+            vary: String::new(),
         },
         b"secret",
     );
@@ -225,6 +227,7 @@ async fn distinct_site_ids_isolate_keys() {
         path: "/".into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
     let kb = build_storage_cache_key(CacheKeyParts {
         site_id: b,
@@ -239,6 +242,7 @@ async fn distinct_site_ids_isolate_keys() {
         path: "/".into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
     assert_ne!(ka, kb);
 }

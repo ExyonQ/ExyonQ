@@ -11,6 +11,7 @@ TRACKING = force-tracked under /docs/security/** (see .gitignore exceptions)
 | [release-checklist.md](release-checklist.md) | Pre-tag security checklist | Maintainers, rule 103 |
 | [review-checklist.md](review-checklist.md) | Finding format for audits | Audit authors |
 | [private-material-zero.md](private-material-zero.md) | PMZ policy | Scanner + CI + hooks |
+| [tls-hardening.md](tls-hardening.md) | TLS hardening guide: versions/ciphers/curves, OCSP stapling, SNI, ACME | Operators, maintainers |
 | [waiver-requirements.md](waiver-requirements.md) | Waiver field requirements | Exception register |
 | `audit-vX.Y.Z.md` | Per-version release audit | `scripts/verify-release-audit.sh`, `release.yml` |
 

@@ -87,6 +87,7 @@ fn insert(
         path: path.into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
     cache.insert_entry(
         key,
@@ -163,6 +164,7 @@ async fn purge_site_scoped_and_url() {
         path: "/b/x".into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
     assert!(cache.lookup(&key_b).is_some());
     assert!(fpc_purge_success_total() >= 2);
@@ -196,13 +198,53 @@ async fn purge_generation_and_tag_deferred() {
     assert_eq!(out.purged_entries, 1);
     assert_eq!(cache.snapshot().entries, 1);
 
+    // NG-16: tag purge is supported; an unknown tag is a successful no-op.
+    let miss = port.purge(CachePurgeOp::Tag {
+        site_id: site_a,
+        tag: "post:missing".into(),
+    });
+    assert!(miss.ok);
+    assert_eq!(miss.purged_entries, 0);
+    assert_eq!(cache.snapshot().entries, 1);
+
+    // Tagged entry: purged by its tag.
+    let key = build_storage_cache_key(CacheKeyParts {
+        site_id: site_a,
+        namespace: 4,
+        backend_id: be,
+        runtime_generation: 10,
+        policy_generation: 0,
+        route_idx: 0,
+        method: "GET".into(),
+        scheme: "http".into(),
+        host: "example.test".into(),
+        path: "/a/tagged".into(),
+        query: String::new(),
+        content_encoding: "identity".into(),
+        vary: String::new(),
+    });
+    cache.insert_entry(
+        key,
+        site_a,
+        0,
+        10,
+        Duration::from_secs(60),
+        200,
+        vec![],
+        bytes::Bytes::from_static(b"tagged"),
+        None,
+        CacheNamespace::new(4),
+        Arc::from(vec!["post:1".to_string()]),
+        NamespaceMetrics::NONE,
+    );
+    assert_eq!(cache.snapshot().entries, 2);
     let tag = port.purge(CachePurgeOp::Tag {
         site_id: site_a,
         tag: "post:1".into(),
     });
-    assert!(!tag.ok);
-    assert_eq!(tag.error, Some("unsupported_operation"));
-    assert!(fpc_purge_rejected_total("unsupported_operation") >= 1);
+    assert!(tag.ok, "tag purge must be supported");
+    assert_eq!(tag.purged_entries, 1);
+    assert_eq!(cache.snapshot().entries, 1);
 }
 
 #[tokio::test]

@@ -144,6 +144,7 @@ fn test_key(path: &str, query: &str, route: usize, gen: u64) -> exyonq_cache::Ca
         path: path.into(),
         query: query.into(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     })
 }
 

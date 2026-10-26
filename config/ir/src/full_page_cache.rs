@@ -53,6 +53,68 @@ pub struct FullPageCacheConfig {
     /// WC7B1 — optional L2 coordination (default off; no Redis/Lux URLs here).
     #[serde(default)]
     pub distributed_cache: DistributedCacheConfig,
+    /// NG-15 — request material that shapes the cache key (`proxy_cache_key`).
+    #[serde(default, skip_serializing_if = "FpcKeyConfig::is_empty")]
+    pub key: FpcKeyConfig,
+    /// NG-15 — request material that forces a bypass.
+    #[serde(default, skip_serializing_if = "FpcBypassConfig::is_empty")]
+    pub bypass: FpcBypassConfig,
+    /// NG-16: keep expired entries this many seconds so a failing backend can
+    /// be answered with the stale representation (`stale-if-error`).
+    /// 0 = off (expired entries are dropped on lookup).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub stale_if_error_secs: u64,
+    /// OL-01: cookies that mark a request as **private** (logged-in session).
+    /// A request carrying any of them bypasses the shared cache entirely —
+    /// ExyonQ never stores or serves it from FPC. Empty = only the built-in
+    /// hard-deny list applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub private_cookies: Vec<String>,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+/// NG-15: `[full_page_cache.key]` — values folded into the cache key.
+///
+/// `query` names are the only query params that may reach the key (any other
+/// functional param bypasses). `cookies` are the only cookies allowed through
+/// the eligibility gate, and their values enter the key. `headers` values enter
+/// the key and allow a matching response `Vary`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FpcKeyConfig {
+    #[serde(default)]
+    pub query: Vec<String>,
+    #[serde(default)]
+    pub cookies: Vec<String>,
+    #[serde(default)]
+    pub headers: Vec<String>,
+}
+
+impl FpcKeyConfig {
+    /// Empty key config must not perturb the canonical config fingerprint.
+    pub fn is_empty(&self) -> bool {
+        self.query.is_empty() && self.cookies.is_empty() && self.headers.is_empty()
+    }
+}
+
+/// NG-15: `[full_page_cache.bypass]` — presence of any listed item bypasses FPC.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FpcBypassConfig {
+    #[serde(default)]
+    pub cookies: Vec<String>,
+    #[serde(default)]
+    pub headers: Vec<String>,
+}
+
+impl FpcBypassConfig {
+    /// Empty bypass config must not perturb the canonical config fingerprint.
+    pub fn is_empty(&self) -> bool {
+        self.cookies.is_empty() && self.headers.is_empty()
+    }
 }
 
 /// `[full_page_cache.distributed_cache]` — WC7B1/B2/WC7D coordination flags.
@@ -212,6 +274,53 @@ impl Default for DistributedCacheConfig {
     }
 }
 
+impl FullPageCacheConfig {
+    /// NG-15: reject contradictory or malformed key/bypass names when enabled.
+    pub fn validate(&self) -> Result<(), String> {
+        for (field, names) in [
+            ("key.query", &self.key.query),
+            ("key.cookies", &self.key.cookies),
+            ("key.headers", &self.key.headers),
+            ("bypass.cookies", &self.bypass.cookies),
+            ("bypass.headers", &self.bypass.headers),
+        ] {
+            for name in names {
+                if name.trim().is_empty() {
+                    return Err(format!("full_page_cache.{field}: empty name"));
+                }
+                if name.contains(|c: char| c.is_whitespace() || c == ';' || c == '=') {
+                    return Err(format!("full_page_cache.{field}: invalid name {name:?}"));
+                }
+            }
+        }
+        for cookie in &self.private_cookies {
+            if self
+                .key
+                .cookies
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(cookie))
+            {
+                return Err(format!(
+                    "full_page_cache: cookie {cookie:?} is both private and keyed"
+                ));
+            }
+        }
+        for cookie in &self.bypass.cookies {
+            if self
+                .key
+                .cookies
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(cookie))
+            {
+                return Err(format!(
+                    "full_page_cache: cookie {cookie:?} is both keyed and bypassed"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Default for FullPageCacheConfig {
     fn default() -> Self {
         Self {
@@ -223,6 +332,10 @@ impl Default for FullPageCacheConfig {
             max_ttl_seconds: default_fpc_max_ttl_seconds(),
             namespace: default_fpc_namespace(),
             distributed_cache: DistributedCacheConfig::default(),
+            key: FpcKeyConfig::default(),
+            bypass: FpcBypassConfig::default(),
+            stale_if_error_secs: 0,
+            private_cookies: Vec::new(),
         }
     }
 }

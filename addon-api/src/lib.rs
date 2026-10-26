@@ -314,7 +314,18 @@ impl AddonRegistry {
                     host: host_api,
                 });
             }
-            if !desc.core_compat.matches(core_version) {
+            // A pre-release of a line *is* that line for compatibility purposes
+            // (`0.8.0-dev` runs the 0.8 API); semver would otherwise reject it
+            // against any requirement that does not name the same triple.
+            let compat_core = if core_version.pre.is_empty() {
+                core_version.clone()
+            } else {
+                Version {
+                    pre: semver::Prerelease::EMPTY,
+                    ..core_version.clone()
+                }
+            };
+            if !desc.core_compat.matches(&compat_core) {
                 return Err(AddonError::CoreCompatMismatch {
                     addon: desc.name,
                     core: core_version.clone(),

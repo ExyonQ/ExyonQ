@@ -70,6 +70,9 @@ pub struct ResponseCache {
     max_total_bytes: usize,
     /// When set, each `site_id` may hold at most this many stored object bytes.
     max_bytes_per_site: Option<usize>,
+    /// NG-16: how long an expired entry is kept for `stale-if-error`.
+    /// Zero (default) removes expired entries on lookup, as before.
+    stale_retention: Duration,
     inner: RwLock<ResponseCacheInner>,
 }
 
@@ -100,6 +103,7 @@ impl ResponseCache {
             max_entries,
             max_total_bytes,
             max_bytes_per_site,
+            stale_retention: Duration::ZERO,
             inner: RwLock::new(ResponseCacheInner {
                 entries: HashMap::new(),
                 tag_index: HashMap::new(),
@@ -108,6 +112,30 @@ impl ResponseCache {
                 fifo: VecDeque::new(),
                 total_bytes: 0,
             }),
+        }
+    }
+
+    /// NG-16: keep expired entries this long so `stale-if-error` can serve them.
+    pub fn with_stale_retention(mut self, retention: Duration) -> Self {
+        self.stale_retention = retention;
+        self
+    }
+
+    /// NG-16: an expired entry still inside the retention window, or `None`.
+    /// Does not count a hit/miss (the caller decides what the request was).
+    pub fn lookup_stale(&self, key: &CacheKey) -> Option<Arc<CachedEntry>> {
+        if self.stale_retention.is_zero() {
+            return None;
+        }
+        let entry = {
+            let inner = self.inner.read().expect("cache read");
+            inner.entries.get(key).map(Arc::clone)
+        }?;
+        let now = Instant::now();
+        if entry.expires_at <= now && entry.expires_at + self.stale_retention > now {
+            Some(entry)
+        } else {
+            None
         }
     }
 
@@ -128,6 +156,16 @@ impl ResponseCache {
                     note_miss();
                     (metrics.on_miss)();
                 }
+                None
+            }
+            LookupOutcome::Stale => {
+                // NG-16: still inside the retention window — a miss for this
+                // request, but the entry stays for `stale-if-error`.
+                if count_miss_on_failure {
+                    note_miss();
+                    (metrics.on_miss)();
+                }
+                note_expired();
                 None
             }
             LookupOutcome::Expired(entry_id) => {
@@ -189,6 +227,12 @@ impl ResponseCache {
             return LookupOutcome::Miss;
         };
         if entry.expires_at <= Instant::now() {
+            // NG-16: retain inside the stale window; drop otherwise.
+            if !self.stale_retention.is_zero()
+                && entry.expires_at + self.stale_retention > Instant::now()
+            {
+                return LookupOutcome::Stale;
+            }
             return LookupOutcome::Expired(entry.entry_id);
         }
         LookupOutcome::Hit(entry)
@@ -252,6 +296,7 @@ impl ResponseCache {
             self.max_entries,
             self.max_total_bytes,
             self.max_bytes_per_site,
+            self.stale_retention,
         );
 
         index_entry(&mut inner, &key, &entry);
@@ -324,14 +369,39 @@ impl ResponseCache {
         self.purge_keys(&keys)
     }
 
-    pub fn invalidate_tag(&self, tag: &str) {
+    /// Purge every entry carrying `tag`, across sites. Used by internal
+    /// invalidation (a changed static file invalidates all its variants).
+    pub fn invalidate_tag(&self, tag: &str) -> PurgeStats {
         let keys: Vec<CacheKey> = {
             let inner = self.inner.read().expect("cache read");
             inner.tag_index.get(tag).cloned().unwrap_or_default()
         };
-        for key in keys {
-            self.force_remove_key(&key);
-        }
+        self.purge_keys(&keys)
+    }
+
+    /// NG-16: purge the entries of `site_id` tagged `tag`. Tags are shared
+    /// strings across sites and the tag index is global, so this filter is
+    /// what keeps an operator purge tenant-scoped.
+    pub fn invalidate_tag_for_site(&self, site_id: u64, tag: &str) -> PurgeStats {
+        let keys: Vec<CacheKey> = {
+            let inner = self.inner.read().expect("cache read");
+            inner
+                .tag_index
+                .get(tag)
+                .map(|keys| {
+                    keys.iter()
+                        .filter(|key| {
+                            inner
+                                .entries
+                                .get(*key)
+                                .is_some_and(|entry| entry.site_id == site_id)
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        self.purge_keys(&keys)
     }
 
     pub fn invalidate_route_generation(&self, route_idx: usize, generation: u64) {
@@ -424,6 +494,8 @@ impl ResponseCache {
 enum LookupOutcome {
     Hit(Arc<CachedEntry>),
     Miss,
+    /// Expired but still inside the stale retention window (NG-16).
+    Stale,
     Expired(u64),
 }
 
@@ -480,8 +552,9 @@ fn evict_for_insert(
     max_entries: usize,
     max_total_bytes: usize,
     max_bytes_per_site: Option<usize>,
+    stale_retention: Duration,
 ) {
-    purge_expired(inner);
+    purge_expired(inner, stale_retention);
     let mut guard = 0usize;
     while needs_eviction(
         inner,
@@ -534,12 +607,19 @@ fn needs_eviction(
     false
 }
 
-fn purge_expired(inner: &mut ResponseCacheInner) {
+fn purge_expired(inner: &mut ResponseCacheInner, stale_retention: Duration) {
     let now = Instant::now();
     let expired: Vec<CacheKey> = inner
         .entries
         .iter()
-        .filter_map(|(key, entry)| (entry.expires_at <= now).then_some(key.clone()))
+        .filter_map(|(key, entry)| {
+            // NG-16: an entry inside the stale window is not garbage yet —
+            // wiping it on every insert would make stale-if-error unreachable
+            // under normal traffic.
+            let keep_for_stale =
+                !stale_retention.is_zero() && entry.expires_at + stale_retention > now;
+            (entry.expires_at <= now && !keep_for_stale).then_some(key.clone())
+        })
         .collect();
     for key in expired {
         if detach_entry(inner, &key).is_some() {
@@ -609,6 +689,7 @@ mod tests {
             path: path.into(),
             query: "".into(),
             content_encoding: "identity".into(),
+            vary: String::new(),
         })
     }
 
@@ -701,6 +782,122 @@ mod tests {
         assert!(cache.lookup(&sample_key_for_site(2, "/c")).is_some());
         assert!(cache.lookup(&sample_key_for_site(1, "/d")).is_some());
         assert!(cache.metrics_match_store());
+    }
+
+    /// NG-16: inside the retention window an expired entry is a miss for the
+    /// request but stays available to `stale-if-error`.
+    #[test]
+    fn stale_retention_serves_expired_entry_to_stale_lookup() {
+        let cache = ResponseCache::with_limits(10, 1024 * 1024)
+            .with_stale_retention(Duration::from_secs(30));
+        insert_plain(&cache, 1, "/s", b"stale-body", Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(10));
+        let key = sample_key_for_site(1, "/s");
+        assert!(cache.lookup(&key).is_none(), "expired is a miss");
+        let stale = cache.lookup_stale(&key).expect("retained stale entry");
+        assert_eq!(stale.body.as_ref(), b"stale-body");
+    }
+
+    #[test]
+    fn stale_lookup_is_off_without_retention() {
+        let cache = ResponseCache::with_limits(10, 1024 * 1024);
+        insert_plain(&cache, 1, "/s", b"x", Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(10));
+        let key = sample_key_for_site(1, "/s");
+        assert!(cache.lookup(&key).is_none());
+        assert!(
+            cache.lookup_stale(&key).is_none(),
+            "no retention configured"
+        );
+    }
+
+    /// NG-16: tag purge removes exactly the tagged entries and reports counts.
+    #[test]
+    fn invalidate_tag_purges_only_tagged_entries() {
+        let cache = ResponseCache::with_limits(10, 1024 * 1024);
+        let tagged = sample_key_for_site(1, "/tagged");
+        let other = sample_key_for_site(1, "/other");
+        cache.insert_entry(
+            tagged.clone(),
+            1,
+            0,
+            1,
+            Duration::from_secs(60),
+            200,
+            vec![],
+            Bytes::from_static(b"tagged"),
+            None,
+            CacheNamespace::new(4),
+            std::sync::Arc::from(vec!["blog".to_string()]),
+            NamespaceMetrics::NONE,
+        );
+        insert_plain(&cache, 1, "/other", b"other", Duration::from_secs(60));
+        let stats = cache.invalidate_tag("blog");
+        assert_eq!(stats.purged_entries, 1);
+        assert!(cache.lookup(&tagged).is_none());
+        assert!(cache.lookup(&other).is_some());
+    }
+
+    /// F1 (audit): the tag index is global; the operator purge must stay
+    /// inside the requested site.
+    #[test]
+    fn invalidate_tag_for_site_is_tenant_scoped() {
+        let cache = ResponseCache::with_limits(10, 1024 * 1024);
+        for site in [1u64, 2u64] {
+            cache.insert_entry(
+                sample_key_for_site(site, "/blog"),
+                site,
+                0,
+                1,
+                Duration::from_secs(60),
+                200,
+                vec![],
+                Bytes::from_static(b"post"),
+                None,
+                CacheNamespace::new(4),
+                std::sync::Arc::from(vec!["blog".to_string()]),
+                NamespaceMetrics::NONE,
+            );
+        }
+        let stats = cache.invalidate_tag_for_site(1, "blog");
+        assert_eq!(stats.purged_entries, 1);
+        assert!(cache.lookup(&sample_key_for_site(1, "/blog")).is_none());
+        assert!(
+            cache.lookup(&sample_key_for_site(2, "/blog")).is_some(),
+            "site 2 must survive site 1's purge"
+        );
+        // The internal, cross-site variant still purges everything.
+        assert_eq!(cache.invalidate_tag("blog").purged_entries, 1);
+    }
+
+    /// F2 (audit): an insert must not wipe entries still inside the stale window.
+    #[test]
+    fn insert_keeps_entries_inside_stale_window() {
+        let cache = ResponseCache::with_limits(10, 1024 * 1024)
+            .with_stale_retention(Duration::from_secs(30));
+        insert_plain(&cache, 1, "/keep", b"keep", Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(10));
+        insert_plain(&cache, 1, "/new", b"new", Duration::from_secs(60));
+        let stale = cache
+            .lookup_stale(&sample_key_for_site(1, "/keep"))
+            .expect("stale entry must survive another insert");
+        assert_eq!(stale.body.as_ref(), b"keep");
+    }
+
+    /// F3 (audit): stale is bounded by the retention window, not just by
+    /// "expired".
+    #[test]
+    fn stale_lookup_expires_after_the_window() {
+        let cache = ResponseCache::with_limits(10, 1024 * 1024)
+            .with_stale_retention(Duration::from_millis(20));
+        insert_plain(&cache, 1, "/w", b"w", Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(cache.lookup_stale(&sample_key_for_site(1, "/w")).is_some());
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(
+            cache.lookup_stale(&sample_key_for_site(1, "/w")).is_none(),
+            "past the retention window the entry is not stale-servable"
+        );
     }
 
     #[test]

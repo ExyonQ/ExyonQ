@@ -1381,9 +1381,14 @@ impl ProxyRuntime {
             path_key: path_and_query,
         };
         let sel = self.upstream_for_cluster_ctx(cluster_id, &ctx)?;
-        let mut resp =
-            forward_get_streaming(&sel.target, path_and_query, x_forwarded_for, &self.metrics)
-                .await;
+        let mut resp = forward_get_streaming(
+            &sel.target,
+            path_and_query,
+            x_forwarded_for,
+            &self.metrics,
+            request_headers,
+        )
+        .await;
         if let Some(rules) = self.location_rewrite_rules(cluster_id) {
             rewrite_location_header_map(resp.headers_mut(), &rules);
         }

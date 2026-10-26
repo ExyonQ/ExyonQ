@@ -57,6 +57,9 @@ pub struct KernelStatusSnapshot {
     pub version: Option<String>,
     /// True while a structural reload is in PREPARE/COMMIT (P1.4-WS5).
     pub reload_in_progress: bool,
+    /// Q-09: unix-epoch `notAfter` of the primary TLS leaf certificate, when
+    /// TLS is configured and the file parses.
+    pub tls_cert_not_after_epoch: Option<u64>,
 }
 
 /// Outcome of an administrative command.
@@ -297,6 +300,7 @@ mod outcome_code_tests {
             draining: false,
             version: None,
             reload_in_progress: false,
+            tls_cert_not_after_epoch: None,
         }
     }
 

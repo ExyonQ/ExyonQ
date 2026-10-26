@@ -7,7 +7,7 @@ use exyonq_cache::{
     note_fpc_lookup, note_fpc_lookup_error, note_fpc_miss, CacheKey, CacheKeyParts, CachedEntry,
     ResponseCache,
 };
-use exyonq_module_api::fpc_request_evaluate;
+use exyonq_module_api::{fpc_request_evaluate, fpc_vary_variant, FpcRequestPolicy};
 use exyonq_runtime_plan::BackendId;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
@@ -29,6 +29,10 @@ pub struct FpcMissContext {
     pub max_object_bytes: usize,
     pub default_ttl: Duration,
     pub max_ttl: Duration,
+    /// NG-15: headers that may appear in a stored response's `Vary`.
+    pub vary_allowlist: Vec<String>,
+    /// NG-16: invalidation tags bound to the route (purge by tag).
+    pub tags: Arc<[String]>,
 }
 
 /// Result of the FPC gate after BackendId is known.
@@ -82,11 +86,26 @@ pub fn fpc_gate(
 
     let path = uri.path();
     let query = uri.query().unwrap_or("");
+    // NG-15: `[full_page_cache.key]` / `.bypass` drive eligibility and the key.
+    let key_cookies: Vec<&str> = fpc.key_cookies.iter().map(String::as_str).collect();
+    let key_headers: Vec<&str> = fpc.key_headers.iter().map(String::as_str).collect();
+    let key_query: Vec<&str> = fpc.key_query.iter().map(String::as_str).collect();
+    let bypass_cookies: Vec<&str> = fpc.bypass_cookies.iter().map(String::as_str).collect();
+    let bypass_headers: Vec<&str> = fpc.bypass_headers.iter().map(String::as_str).collect();
+    let private_cookies: Vec<&str> = fpc.private_cookies.iter().map(String::as_str).collect();
+    let policy = FpcRequestPolicy {
+        safe_cookie_allowlist: &key_cookies,
+        functional_query_allowlist: &key_query,
+        bypass_cookies: &bypass_cookies,
+        bypass_headers: &bypass_headers,
+        private_cookies: &private_cookies,
+    };
     let (canon_path, canon_query) =
-        match fpc_request_evaluate(method.as_str(), path, query, request_headers, &[], &[]) {
+        match fpc_request_evaluate(method.as_str(), path, query, request_headers, &policy) {
             Ok(v) => v,
             Err(reason) => return bypass(reason.as_str()),
         };
+    let vary = fpc_vary_variant(request_headers, &key_cookies, &key_headers);
 
     let scheme = if state.config.primary_server().tls.is_some() {
         "https"
@@ -106,6 +125,7 @@ pub fn fpc_gate(
         path: canon_path,
         query: canon_query,
         content_encoding: "identity".into(),
+        vary,
     });
 
     let miss_ctx = FpcMissContext {
@@ -118,6 +138,13 @@ pub fn fpc_gate(
         max_object_bytes: fpc.max_object_bytes,
         default_ttl: Duration::from_secs(fpc.default_ttl_secs.max(1)),
         max_ttl: Duration::from_secs(fpc.max_ttl_secs.max(1)),
+        vary_allowlist: key_headers.iter().map(|h| (*h).to_string()).collect(),
+        tags: Arc::from(
+            fpc.route_cache_tags
+                .get(route_idx)
+                .map(|tags| tags.to_vec())
+                .unwrap_or_default(),
+        ),
     };
 
     let entry = match cache.lookup(&key) {
@@ -178,6 +205,20 @@ pub fn maybe_apply_bypass<B>(response: &mut Response<B>, reason: Option<&str>) {
     if let Some(r) = reason {
         apply_x_cache_bypass(response.headers_mut(), r);
     }
+}
+
+/// NG-16: serve the stale representation of `ctx.key` when the backend failed.
+/// `None` when there is no entry inside the stale window.
+pub fn stale_response(
+    ctx: &FpcMissContext,
+    method: &hyper::Method,
+) -> Option<Response<HttpBoxBody>> {
+    let entry = ctx.cache.lookup_stale(&ctx.key)?;
+    exyonq_cache::note_fpc_stale();
+    let head_only = *method == hyper::Method::HEAD;
+    let mut resp = served_entry_to_response(entry.as_ref(), head_only);
+    apply_x_cache(resp.headers_mut(), "stale");
+    Some(resp)
 }
 
 fn served_entry_to_response(entry: &CachedEntry, head_only: bool) -> Response<HttpBoxBody> {

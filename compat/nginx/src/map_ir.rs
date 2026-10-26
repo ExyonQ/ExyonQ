@@ -620,6 +620,7 @@ fn map_location(
             if let Ok(rule) = parse_rewrite(&d.loc, &d.args) {
                 if let Some((status, _from, target)) = is_safe_literal_redirect(&rule) {
                     return Some(RouteConfig {
+                        cache_tags: Vec::new(),
                         name: route_name.to_string(),
                         r#match: route_match.clone(),
                         upstream: None,
@@ -644,6 +645,7 @@ fn map_location(
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
                     return Some(RouteConfig {
+                        cache_tags: Vec::new(),
                         name: route_name.to_string(),
                         r#match: route_match.clone(),
                         upstream: None,
@@ -712,6 +714,7 @@ fn map_location(
         let (fallback_rewrite, try_uri, try_uri_dir) =
             map_location_try_files(location).unwrap_or((None, None, None));
         return Some(RouteConfig {
+            cache_tags: Vec::new(),
             name: route_name.to_string(),
             r#match: route_match,
             upstream: None,
@@ -858,6 +861,7 @@ fn map_proxy(
     let proxy_set_headers = map_location_proxy_set_headers(location, report);
     let location_rewrite = map_location_proxy_redirects(location, target, route_match, report);
     Some(RouteConfig {
+        cache_tags: Vec::new(),
         name: route_name.to_string(),
         r#match: route_match.clone(),
         upstream: Some(upstream_name),
@@ -1251,6 +1255,7 @@ fn map_fastcgi(
             );
         }
         return Some(RouteConfig {
+            cache_tags: Vec::new(),
             name: route_name.to_string(),
             r#match: route_match.clone(),
             upstream: None,
@@ -1319,6 +1324,7 @@ fn map_fastcgi(
                 );
             }
             return Some(RouteConfig {
+                cache_tags: Vec::new(),
                 name: route_name.to_string(),
                 r#match: route_match.clone(),
                 upstream: None,
@@ -1358,6 +1364,7 @@ fn map_fastcgi(
             report,
         )?;
         return Some(RouteConfig {
+            cache_tags: Vec::new(),
             name: route_name.to_string(),
             r#match: route_match.clone(),
             upstream: None,
@@ -1498,6 +1505,7 @@ fn map_return(
                 },
             );
             Some(RouteConfig {
+                cache_tags: Vec::new(),
                 name: route_name.to_string(),
                 r#match: route_match.clone(),
                 upstream: None,
@@ -1596,6 +1604,7 @@ fn server_default_route(
         Some("route.root".into()),
     );
     Some(RouteConfig {
+        cache_tags: Vec::new(),
         name: format!("srv{}_root", server_index + 1),
         r#match: RouteMatch {
             path: "/".into(),

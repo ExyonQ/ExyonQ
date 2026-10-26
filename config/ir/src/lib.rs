@@ -45,7 +45,7 @@ pub use endpoint_set::{
 pub use error::ConfigError;
 pub use full_page_cache::{
     DistributedCacheConfig, DistributedCacheRedisConfig, DistributedCacheSecurityConfig,
-    FullPageCacheConfig,
+    FpcBypassConfig, FpcKeyConfig, FullPageCacheConfig,
 };
 pub use logging::{
     validate_logging, AccessLoggingConfig, AuditLoggingConfig, ConsoleLoggingConfig, ConsoleStream,
@@ -199,9 +199,36 @@ pub struct TlsConfig {
     pub key: PathBuf,
     #[serde(default)]
     pub acme: Option<AcmeConfig>,
+    /// AP-02: reject handshakes whose SNI matches no `server_name` on the
+    /// listener (`SSLStrictSNIVHostCheck` equivalent). Only the first block's
+    /// value applies — it governs the shared socket.
+    #[serde(default)]
+    pub strict_sni: bool,
+    /// NG-12: enabled TLS protocol versions (`TLSv1.2`, `TLSv1.3`). Empty =
+    /// rustls default (both). Only the first block's value applies.
+    #[serde(default)]
+    pub protocols: Vec<String>,
+    /// NG-12: enabled cipher suites (IANA/rustls or OpenSSL AEAD names, or
+    /// `:`-separated list). Empty = rustls default. First block only.
+    #[serde(default)]
+    pub ciphers: Vec<String>,
+    /// NG-12: enabled ECDHE curves (`X25519`, `secp256r1`/`prime256v1`/`P-256`,
+    /// `secp384r1`/`P-384`, or `:`-separated). Empty = rustls default. First block only.
+    #[serde(default)]
+    pub curves: Vec<String>,
+    /// NG-13: DER-encoded OCSP response stapled to this certificate (nginx
+    /// `ssl_stapling_file` equivalent — ExyonQ does not fetch from the
+    /// responder; point this at a file refreshed by your PKI tooling).
+    /// Per-`[[server]]` block, like `cert`/`key`.
+    #[serde(default)]
+    pub ocsp_stapling: Option<PathBuf>,
+    /// NG-13: require `ocsp_stapling` for this block (fail-closed validation
+    /// for must-staple certificates). Rejected without `ocsp_stapling`.
+    #[serde(default)]
+    pub must_staple: bool,
 }
 
-/// Automatic certificate management (ACME v2 / HTTP-01).
+/// Automatic certificate management (ACME v2; HTTP-01 default, DNS-01 opt-in).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AcmeConfig {
@@ -211,6 +238,34 @@ pub struct AcmeConfig {
     pub domains: Vec<String>,
     #[serde(default)]
     pub staging: bool,
+    /// Q-09: `"http-01"` (default) or `"dns-01"`. DNS-01 is required for
+    /// wildcard domains.
+    #[serde(default)]
+    pub challenge: Option<String>,
+    /// Q-09: command invoked to publish/remove the DNS-01 TXT record when
+    /// `challenge = "dns-01"`. Environment: `EXYONQ_ACME_ACTION` =
+    /// `present`|`cleanup`, `EXYONQ_ACME_DOMAIN` (record owner is
+    /// `_acme-challenge.<EXYONQ_ACME_DOMAIN>`, never a `*.` prefix),
+    /// `EXYONQ_ACME_TOKEN`, `EXYONQ_ACME_TXT_VALUE`. `present` must ADD the
+    /// TXT value to the RRset (not replace it): wildcard + apex share one
+    /// `_acme-challenge` name.
+    #[serde(default)]
+    pub dns_hook: Option<String>,
+    /// Q-09: seconds to wait after the hook publishes TXT before telling the
+    /// CA to validate (default 15). Only valid with `challenge = "dns-01"`.
+    #[serde(default)]
+    pub dns_propagation_secs: Option<u64>,
+    /// Path to the persisted ACME account credentials (JSON). Defaults to
+    /// `<cert>.acme-account.json` next to `tls.cert`.
+    #[serde(default)]
+    pub account_path: Option<PathBuf>,
+}
+
+impl AcmeConfig {
+    /// Effective challenge type (`"http-01"` unless configured otherwise).
+    pub fn challenge_type(&self) -> &str {
+        self.challenge.as_deref().unwrap_or("http-01")
+    }
 }
 
 fn default_true() -> bool {
@@ -259,6 +314,10 @@ pub struct RouteConfig {
     pub htaccess: HtaccessMode,
     #[serde(default)]
     pub cache: Option<String>,
+    /// NG-16: invalidation tags for entries served by this route
+    /// (`exyonqctl purge tag <site_id> <tag>`).
+    #[serde(default)]
+    pub cache_tags: Vec<String>,
     /// NG-03 / ADR-049: after static miss under `root`, rematch once to this path.
     #[serde(default)]
     pub fallback_rewrite: Option<String>,
@@ -1160,8 +1219,16 @@ impl AppConfig {
             }
             if let Some(tls) = &server.tls {
                 validate_tls_acme(tls)?;
+                if tls.strict_sni && server.server_name_list().is_empty() {
+                    return Err(ConfigError::Parse(
+                        "tls.strict_sni requires at least one server_name \
+                         (otherwise every TLS handshake is rejected)"
+                            .into(),
+                    ));
+                }
             }
         }
+        validate_shared_listeners(&raw.server)?;
 
         for route in &routes {
             validate_route_match(&route.r#match)?;
@@ -1257,6 +1324,32 @@ impl AppConfig {
             .map(|server| server.listen.as_str())
             .ok_or(ConfigError::MissingServers)?;
         parse_listen(listen)
+    }
+
+    /// Every distinct `listen` address, primary first. Servers sharing one
+    /// address are SNI/certificate variants of the same listener (NG-24);
+    /// a server with a *different* address gets its own socket.
+    pub fn listen_addrs(&self) -> Result<Vec<SocketAddr>, ConfigError> {
+        let mut addrs: Vec<SocketAddr> = Vec::new();
+        for server in &self.servers {
+            let addr = parse_listen(&server.listen)?;
+            if !addrs.contains(&addr) {
+                addrs.push(addr);
+            }
+        }
+        if addrs.is_empty() {
+            return Err(ConfigError::MissingServers);
+        }
+        Ok(addrs)
+    }
+
+    /// `true` when any server bound to `addr` terminates TLS. A listener
+    /// address whose servers are all plaintext stays plaintext (HTTP-01
+    /// challenge listener, redirect-only :80).
+    pub fn listen_uses_tls(&self, addr: SocketAddr) -> bool {
+        self.servers.iter().any(|server| {
+            server.tls.is_some() && parse_listen(&server.listen).is_ok_and(|a| a == addr)
+        })
     }
 
     /// Migrate v1 IR to v2 (adds empty includes, preserves semantics).
@@ -1511,6 +1604,17 @@ fn validate_route_cache(
     route: &RouteConfig,
     cache_policies: &HashMap<String, CachePolicyConfig>,
 ) -> Result<(), ConfigError> {
+    // NG-16: tag names must be usable as purge selectors.
+    for tag in &route.cache_tags {
+        if tag.trim().is_empty()
+            || tag.contains(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        {
+            return Err(ConfigError::Parse(format!(
+                "route {:?} has invalid cache_tags entry {tag:?}",
+                route.name
+            )));
+        }
+    }
     let Some(policy_name) = &route.cache else {
         return Ok(());
     };
@@ -1585,6 +1689,9 @@ fn validate_full_page_cache(cfg: &FullPageCacheConfig) -> Result<(), ConfigError
         return Err(ConfigError::Parse(
             "full_page_cache.max_object_bytes must be <= max_total_bytes".into(),
         ));
+    }
+    if cfg.enabled {
+        cfg.validate().map_err(ConfigError::Parse)?;
     }
     validate_distributed_cache(&cfg.distributed_cache)?;
     Ok(())
@@ -2434,7 +2541,156 @@ pub fn match_header_satisfied(m: &RouteMatch, request_headers: &[(String, String
     }
 }
 
+/// NG-15: a `server_name` must be a usable DNS name or `*.suffix` wildcard —
+/// anything else lands in the SNI map but can never match a handshake.
+fn validate_server_name(name: &str, server_idx: usize) -> Result<(), ConfigError> {
+    let body = name.strip_prefix("*.").unwrap_or(name);
+    let valid = !body.is_empty()
+        && body.len() <= 253
+        && body.split('.').all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    if !valid || (name.contains('*') && !name.starts_with("*.")) {
+        return Err(ConfigError::Parse(format!(
+            "server[{server_idx}] has invalid server_name {name:?}; expected a DNS name or *.suffix wildcard"
+        )));
+    }
+    Ok(())
+}
+
+/// NG-15: `[[server]]` blocks that share a `listen` collapse into one socket.
+/// Enforce the invariants that keep every block meaningful — otherwise the
+/// runtime would silently ignore configured servers/certificates.
+fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError> {
+    if servers.iter().skip(1).any(|s| s.http3_listen.is_some()) {
+        return Err(ConfigError::Parse(
+            "http3_listen is only honored on the first [[server]] block".into(),
+        ));
+    }
+    if servers.iter().skip(1).any(|s| {
+        s.tls
+            .as_ref()
+            .and_then(|t| t.acme.as_ref())
+            .is_some_and(|a| a.enabled)
+    }) {
+        return Err(ConfigError::Parse(
+            "tls.acme is only honored on the first [[server]] block".into(),
+        ));
+    }
+    if servers
+        .iter()
+        .skip(1)
+        .any(|s| s.tls.as_ref().is_some_and(|t| t.strict_sni))
+    {
+        return Err(ConfigError::Parse(
+            "tls.strict_sni is only honored on the first [[server]] block".into(),
+        ));
+    }
+    for (field, check) in [
+        (
+            "tls.protocols",
+            (|t: &TlsConfig| !t.protocols.is_empty()) as fn(&TlsConfig) -> bool,
+        ),
+        ("tls.ciphers", |t| !t.ciphers.is_empty()),
+        ("tls.curves", |t| !t.curves.is_empty()),
+    ] {
+        if servers
+            .iter()
+            .skip(1)
+            .any(|s| s.tls.as_ref().is_some_and(check))
+        {
+            return Err(ConfigError::Parse(format!(
+                "{field} is only honored on the first [[server]] block"
+            )));
+        }
+    }
+    let mut groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (idx, server) in servers.iter().enumerate() {
+        for name in server.server_name_list() {
+            validate_server_name(&name, idx)?;
+        }
+        groups.entry(server.listen.as_str()).or_default().push(idx);
+    }
+    for (listen, idxs) in groups {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let first = &servers[idxs[0]];
+        let mut names = std::collections::HashSet::new();
+        for &idx in &idxs {
+            let server = &servers[idx];
+            if idx != idxs[0] && server.server_name.is_empty() {
+                return Err(ConfigError::Parse(format!(
+                    "server[{idx}] shares listen {listen} with server[{}] but declares no \
+                     server_name; only the first block on a shared listen may omit it",
+                    idxs[0]
+                )));
+            }
+            if server.tls.is_some() != first.tls.is_some() {
+                return Err(ConfigError::Parse(format!(
+                    "servers sharing listen {listen} must all enable TLS or all disable it"
+                )));
+            }
+            if server.proxy_protocol != first.proxy_protocol {
+                return Err(ConfigError::Parse(format!(
+                    "servers sharing listen {listen} must declare identical proxy_protocol"
+                )));
+            }
+            for name in server.server_name_list() {
+                if !names.insert(name.to_ascii_lowercase()) {
+                    return Err(ConfigError::Parse(format!(
+                        "duplicate server_name {name:?} on shared listen {listen}"
+                    )));
+                }
+            }
+        }
+    }
+    // HTTP/3 providers consume only cert/key: strict_sni, crypto policy and
+    // OCSP options would be silently ignored on the QUIC path — reject.
+    if servers[0].http3_listen.is_some()
+        && servers[0].tls.as_ref().is_some_and(|t| {
+            t.strict_sni
+                || !t.protocols.is_empty()
+                || !t.ciphers.is_empty()
+                || !t.curves.is_empty()
+                || t.ocsp_stapling.is_some()
+                || t.must_staple
+        })
+    {
+        return Err(ConfigError::Parse(
+            "http3_listen cannot be combined with tls.strict_sni/protocols/ciphers/curves/\
+             ocsp_stapling/must_staple (HTTP/3 providers do not honor them yet)"
+                .into(),
+        ));
+    }
+    // HTTP/3 listeners load a single certificate; combining them with SNI
+    // multi-cert would silently serve the primary cert for every hostname.
+    if servers[0].http3_listen.is_some()
+        && servers[0].tls.is_some()
+        && servers
+            .iter()
+            .skip(1)
+            .any(|s| s.listen == servers[0].listen && s.tls.is_some())
+    {
+        return Err(ConfigError::Parse(
+            "http3_listen cannot be combined with multiple TLS servers on the same listen \
+             (QUIC does not support SNI multi-certificate yet)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_tls_acme(tls: &TlsConfig) -> Result<(), ConfigError> {
+    validate_tls_crypto(tls)?;
+    if tls.must_staple && tls.ocsp_stapling.is_none() {
+        return Err(ConfigError::Parse(
+            "tls.must_staple requires tls.ocsp_stapling (a DER OCSP response path)".into(),
+        ));
+    }
     if let Some(acme) = &tls.acme {
         if !acme.enabled {
             return Ok(());
@@ -2449,8 +2705,129 @@ fn validate_tls_acme(tls: &TlsConfig) -> Result<(), ConfigError> {
                 "tls.acme.domains must not be empty when acme is enabled".into(),
             ));
         }
+        match acme.challenge_type() {
+            "http-01" => {
+                if acme.dns_hook.is_some() || acme.dns_propagation_secs.is_some() {
+                    return Err(ConfigError::Parse(
+                        "acme.dns_hook/dns_propagation_secs require acme.challenge = \"dns-01\""
+                            .into(),
+                    ));
+                }
+                if acme.domains.iter().any(|d| d.starts_with("*.")) {
+                    return Err(ConfigError::Parse(
+                        "wildcard acme.domains require acme.challenge = \"dns-01\"".into(),
+                    ));
+                }
+            }
+            "dns-01" => {
+                if acme.dns_hook.as_deref().is_none_or(|h| h.trim().is_empty()) {
+                    return Err(ConfigError::Parse(
+                        "acme.challenge = \"dns-01\" requires acme.dns_hook".into(),
+                    ));
+                }
+            }
+            other => {
+                return Err(ConfigError::Parse(format!(
+                    "acme.challenge: unsupported {other:?} (supported: \"http-01\", \"dns-01\")"
+                )));
+            }
+        }
     }
     Ok(())
+}
+
+/// NG-12: fail-closed validation of `tls.protocols`, `tls.ciphers`, `tls.curves`.
+fn validate_tls_crypto(tls: &TlsConfig) -> Result<(), ConfigError> {
+    let mut tls12 = tls.protocols.is_empty();
+    let mut tls13 = tls.protocols.is_empty();
+    for proto in &tls.protocols {
+        match proto.trim() {
+            "TLSv1.2" | "TLS1.2" | "1.2" => tls12 = true,
+            "TLSv1.3" | "TLS1.3" | "1.3" => tls13 = true,
+            other => {
+                return Err(ConfigError::Parse(format!(
+                    "tls.protocols: unsupported protocol {other:?} \
+                     (supported: TLSv1.2, TLSv1.3)"
+                )));
+            }
+        }
+    }
+    if !tls.ciphers.is_empty() {
+        let mut any_12 = false;
+        let mut any_13 = false;
+        let mut count = 0usize;
+        for entry in &tls.ciphers {
+            for token in entry.split(':').map(str::trim).filter(|s| !s.is_empty()) {
+                count += 1;
+                match classify_cipher(token) {
+                    Some(true) => any_13 = true,
+                    Some(false) => any_12 = true,
+                    None => {
+                        return Err(ConfigError::Parse(format!(
+                            "tls.ciphers: unsupported or weak cipher suite {token:?}"
+                        )));
+                    }
+                }
+            }
+        }
+        if count == 0 || !((tls12 && any_12) || (tls13 && any_13)) {
+            return Err(ConfigError::Parse(
+                "tls.ciphers leaves no usable cipher suite for the enabled tls.protocols".into(),
+            ));
+        }
+    }
+    if !tls.curves.is_empty() {
+        let mut count = 0usize;
+        for entry in &tls.curves {
+            for token in entry.split(':').map(str::trim).filter(|s| !s.is_empty()) {
+                count += 1;
+                if !is_supported_curve(token) {
+                    return Err(ConfigError::Parse(format!(
+                        "tls.curves: unsupported group {token:?} \
+                         (supported: X25519, secp256r1/prime256v1/P-256, secp384r1/P-384)"
+                    )));
+                }
+            }
+        }
+        if count == 0 {
+            return Err(ConfigError::Parse(
+                "tls.curves must name at least one group when set".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns `Some(true)` for a TLS 1.3 suite, `Some(false)` for TLS 1.2, `None` if unknown.
+fn classify_cipher(name: &str) -> Option<bool> {
+    match name.to_ascii_uppercase().as_str() {
+        "TLS13_AES_256_GCM_SHA384"
+        | "TLS_AES_256_GCM_SHA384"
+        | "TLS13_AES_128_GCM_SHA256"
+        | "TLS_AES_128_GCM_SHA256"
+        | "TLS13_CHACHA20_POLY1305_SHA256"
+        | "TLS_CHACHA20_POLY1305_SHA256" => Some(true),
+        "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+        | "ECDHE-ECDSA-AES256-GCM-SHA384"
+        | "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+        | "ECDHE-ECDSA-AES128-GCM-SHA256"
+        | "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+        | "ECDHE-ECDSA-CHACHA20-POLY1305"
+        | "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        | "ECDHE-RSA-AES256-GCM-SHA384"
+        | "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+        | "ECDHE-RSA-AES128-GCM-SHA256"
+        | "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+        | "ECDHE-RSA-CHACHA20-POLY1305" => Some(false),
+        _ => None,
+    }
+}
+
+fn is_supported_curve(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "x25519" | "secp256r1" | "prime256v1" | "p-256" | "p256" | "secp384r1" | "p-384" | "p384"
+    )
 }
 
 fn validate_fcgi_pool_address(pool: &str, address: &str) -> Result<(), ConfigError> {
@@ -4614,5 +4991,640 @@ target = "http://10.0.0.1:80"
 endpoints = [{ address = "10.0.0.2", port = 80 }]
 "#;
         assert!(AppConfig::parse_str(toml).is_err());
+    }
+
+    const NG15_TLS: &str = r#"
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+"#;
+
+    fn ng15_config(servers: &str) -> String {
+        format!(
+            r#"
+config_version = 1
+{servers}
+[[route]]
+name = "r"
+match = {{ path = "/" }}
+redirect = {{ status = 301, location = "https://example/" }}
+"#
+        )
+    }
+
+    #[test]
+    fn ng15_accepts_sni_multi_cert_same_listen() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test", "www.a.test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+{NG15_TLS}
+"#
+        ));
+        let config = AppConfig::parse_str(&toml).expect("disjoint names + tls on all blocks");
+        assert_eq!(config.servers.len(), 2);
+    }
+
+    #[test]
+    fn ng15_rejects_duplicate_server_name_same_listen() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test", "B.Test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+{NG15_TLS}
+"#
+        ));
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("duplicate server_name"), "{err}");
+    }
+
+    #[test]
+    fn ng15_rejects_mixed_tls_same_listen() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+"#
+        ));
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("enable TLS or all disable"), "{err}");
+    }
+
+    #[test]
+    fn ng15_rejects_nameless_non_first_server_same_listen() {
+        let toml = ng15_config(
+            r#"
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["r"]
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["r"]
+"#,
+        );
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("only the first block"), "{err}");
+    }
+
+    #[test]
+    fn ng15_rejects_conflicting_proxy_protocol_same_listen() {
+        let toml = ng15_config(
+            r#"
+[[server]]
+listen = "0.0.0.0:8080"
+server_name = ["a.test"]
+routes = ["r"]
+proxy_protocol = { enabled = true }
+[[server]]
+listen = "0.0.0.0:8080"
+server_name = ["b.test"]
+routes = ["r"]
+"#,
+        );
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("proxy_protocol"), "{err}");
+    }
+
+    #[test]
+    fn ng15_rejects_http3_listen_on_non_primary_server() {
+        let toml = ng15_config(
+            r#"
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["r"]
+[[server]]
+listen = "0.0.0.0:8081"
+server_name = ["b.test"]
+routes = ["r"]
+http3_listen = "0.0.0.0:8443"
+"#,
+        );
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("http3_listen"), "{err}");
+    }
+
+    #[test]
+    fn ng15_rejects_http3_with_sni_multi_cert() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+http3_listen = "0.0.0.0:443"
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+{NG15_TLS}
+"#
+        ));
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("QUIC does not support"), "{err}");
+    }
+
+    #[test]
+    fn ng15_rejects_invalid_server_names() {
+        for bad in [
+            "",
+            "a test",
+            "mid*.test",
+            "*",
+            "a..test",
+            "-x.test",
+            "a.test.",
+        ] {
+            let toml = ng15_config(&format!(
+                r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["{bad}"]
+routes = ["r"]
+"#
+            ));
+            assert!(
+                AppConfig::parse_str(&toml).is_err(),
+                "server_name {bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn ng15_accepts_wildcard_server_name() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["*.wild.test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+{NG15_TLS}
+"#
+        ));
+        AppConfig::parse_str(&toml).expect("*.suffix wildcard is valid");
+    }
+
+    #[test]
+    fn ng15_rejects_acme_on_non_primary_server() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+[server.tls.acme]
+enabled = true
+email = "ops@example.com"
+domains = ["b.test"]
+"#
+        ));
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("tls.acme"), "{err}");
+    }
+
+    #[test]
+    fn ap02_rejects_strict_sni_on_non_primary_server() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+strict_sni = true
+"#
+        ));
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("strict_sni"), "{err}");
+    }
+
+    #[test]
+    fn ap02_accepts_strict_sni_on_primary_server() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+strict_sni = true
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+{NG15_TLS}
+"#
+        ));
+        let config = AppConfig::parse_str(&toml).expect("strict_sni on primary is valid");
+        assert!(config.servers[0].tls.as_ref().unwrap().strict_sni);
+    }
+
+    fn ng12_toml(tls_extra: &str) -> String {
+        ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+{tls_extra}
+"#
+        ))
+    }
+
+    #[test]
+    fn ng12_accepts_protocols_ciphers_curves() {
+        let config = AppConfig::parse_str(&ng12_toml(
+            r#"protocols = ["TLSv1.2", "TLSv1.3"]
+ciphers = ["TLS13_AES_256_GCM_SHA384:ECDHE-RSA-AES256-GCM-SHA384"]
+curves = ["X25519", "P-384"]
+"#,
+        ))
+        .expect("valid crypto config");
+        let tls = config.servers[0].tls.as_ref().unwrap();
+        assert_eq!(tls.protocols, ["TLSv1.2", "TLSv1.3"]);
+        assert_eq!(tls.ciphers.len(), 1);
+        assert_eq!(tls.curves.len(), 2);
+    }
+
+    #[test]
+    fn ng12_rejects_unknown_protocol() {
+        let err = AppConfig::parse_str(&ng12_toml(r#"protocols = ["TLSv1.1"]"#))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("tls.protocols"), "{err}");
+    }
+
+    #[test]
+    fn ng12_rejects_unknown_cipher() {
+        let err = AppConfig::parse_str(&ng12_toml(r#"ciphers = ["DES-CBC3-SHA"]"#))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("tls.ciphers"), "{err}");
+    }
+
+    #[test]
+    fn ng12_rejects_cipher_leaving_no_usable_suite() {
+        let err = AppConfig::parse_str(&ng12_toml(
+            r#"protocols = ["TLSv1.3"]
+ciphers = ["ECDHE-RSA-AES256-GCM-SHA384"]
+"#,
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("tls.ciphers"), "{err}");
+    }
+
+    #[test]
+    fn ng12_rejects_unknown_curve() {
+        let err = AppConfig::parse_str(&ng12_toml(r#"curves = ["secp521r1"]"#))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("tls.curves"), "{err}");
+    }
+
+    #[test]
+    fn ap02_rejects_strict_sni_without_server_name() {
+        let toml = ng15_config(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+strict_sni = true
+"#,
+        );
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("strict_sni"), "{err}");
+    }
+
+    fn ng15_fpc_toml(fpc_extra: &str) -> String {
+        ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:8080"
+server_name = ["a.test"]
+routes = ["r"]
+{fpc_extra}
+"#
+        ))
+    }
+
+    #[test]
+    fn ol01_accepts_private_cookies_and_rejects_keyed_overlap() {
+        let config = AppConfig::parse_str(&ng15_fpc_toml(
+            r#"
+[full_page_cache]
+enabled = true
+private_cookies = ["wordpress_logged_in_abc"]
+"#,
+        ))
+        .expect("valid private cookie");
+        assert_eq!(
+            config.full_page_cache.private_cookies,
+            ["wordpress_logged_in_abc"]
+        );
+
+        let err = AppConfig::parse_str(&ng15_fpc_toml(
+            r#"
+[full_page_cache]
+enabled = true
+private_cookies = ["wpml"]
+[full_page_cache.key]
+cookies = ["wpml"]
+"#,
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("both private and keyed"), "{err}");
+    }
+
+    #[test]
+    fn ng16_accepts_cache_tags_and_stale_window() {
+        let config = AppConfig::parse_str(&ng15_fpc_toml(
+            r#"
+[full_page_cache]
+enabled = true
+stale_if_error_secs = 120
+"#,
+        ))
+        .expect("valid stale window");
+        assert_eq!(config.full_page_cache.stale_if_error_secs, 120);
+
+        let toml = r#"
+config_version = 1
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["r"]
+
+[full_page_cache]
+enabled = true
+
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/srv"
+cache_tags = ["blog", "post:1"]
+"#;
+        let config = AppConfig::parse_str(toml).expect("valid cache_tags");
+        assert_eq!(config.routes[0].cache_tags, ["blog", "post:1"]);
+    }
+
+    #[test]
+    fn ng16_rejects_invalid_cache_tag() {
+        let toml = r#"
+config_version = 1
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["r"]
+
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/srv"
+cache_tags = ["bad tag"]
+"#;
+        let err = AppConfig::parse_str(toml).unwrap_err().to_string();
+        assert!(err.contains("cache_tags"), "{err}");
+    }
+
+    #[test]
+    fn ng15_accepts_cache_key_and_bypass() {
+        let config = AppConfig::parse_str(&ng15_fpc_toml(
+            r#"
+[full_page_cache]
+enabled = true
+[full_page_cache.key]
+query = ["page"]
+cookies = ["wpml"]
+headers = ["Accept-Language"]
+[full_page_cache.bypass]
+cookies = ["wordpress_logged_in_x"]
+headers = ["X-No-Cache"]
+"#,
+        ))
+        .expect("valid fpc key/bypass");
+        let fpc = &config.full_page_cache;
+        assert_eq!(fpc.key.query, ["page"]);
+        assert_eq!(fpc.key.cookies, ["wpml"]);
+        assert_eq!(fpc.key.headers, ["Accept-Language"]);
+        assert_eq!(fpc.bypass.headers, ["X-No-Cache"]);
+    }
+
+    #[test]
+    fn ng15_rejects_cookie_both_keyed_and_bypassed() {
+        let err = AppConfig::parse_str(&ng15_fpc_toml(
+            r#"
+[full_page_cache]
+enabled = true
+[full_page_cache.key]
+cookies = ["wpml"]
+[full_page_cache.bypass]
+cookies = ["WPML"]
+"#,
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("both keyed and bypassed"), "{err}");
+    }
+
+    #[test]
+    fn ng15_rejects_invalid_key_names() {
+        for extra in [
+            "[full_page_cache]\nenabled = true\n[full_page_cache.key]\nheaders = [\"\"]",
+            "[full_page_cache]\nenabled = true\n[full_page_cache.key]\nquery = [\"a=b\"]",
+            "[full_page_cache]\nenabled = true\n[full_page_cache.bypass]\nheaders = [\"a b\"]",
+        ] {
+            assert!(
+                AppConfig::parse_str(&ng15_fpc_toml(extra)).is_err(),
+                "{extra}"
+            );
+        }
+    }
+
+    fn q09_toml(domains: &str, acme_extra: &str) -> String {
+        ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+[server.tls.acme]
+email = "ops@a.test"
+domains = {domains}
+{acme_extra}
+"#
+        ))
+    }
+
+    #[test]
+    fn q09_accepts_dns01_with_hook_and_wildcard() {
+        let config = AppConfig::parse_str(&q09_toml(
+            r#"["a.test", "*.a.test"]"#,
+            r#"challenge = "dns-01"
+dns_hook = "/usr/local/bin/acme-dns"
+dns_propagation_secs = 30
+"#,
+        ))
+        .expect("dns-01 with hook and wildcard is valid");
+        let acme = config.servers[0]
+            .tls
+            .as_ref()
+            .unwrap()
+            .acme
+            .as_ref()
+            .unwrap();
+        assert_eq!(acme.challenge_type(), "dns-01");
+        assert_eq!(acme.domains.len(), 2);
+    }
+
+    #[test]
+    fn q09_rejects_dns01_without_hook() {
+        let err = AppConfig::parse_str(&q09_toml(r#"["a.test"]"#, r#"challenge = "dns-01""#))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("dns_hook"), "{err}");
+    }
+
+    #[test]
+    fn q09_rejects_wildcard_with_http01() {
+        let err = AppConfig::parse_str(&q09_toml(r#"["*.a.test"]"#, ""))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("wildcard"), "{err}");
+    }
+
+    #[test]
+    fn q09_rejects_unknown_challenge_and_http01_hook() {
+        for extra in [
+            r#"challenge = "tls-alpn-01""#,
+            r#"dns_hook = "/bin/true""#,
+            r#"dns_propagation_secs = 5"#,
+        ] {
+            assert!(
+                AppConfig::parse_str(&q09_toml(r#"["a.test"]"#, extra)).is_err(),
+                "{extra}"
+            );
+        }
+    }
+
+    #[test]
+    fn ng13_must_staple_requires_ocsp_stapling() {
+        let err = AppConfig::parse_str(&ng12_toml("must_staple = true"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must_staple"), "{err}");
+
+        let config = AppConfig::parse_str(&ng12_toml(
+            r#"ocsp_stapling = "/tmp/ocsp.der"
+must_staple = true"#,
+        ))
+        .expect("must_staple with ocsp_stapling is valid");
+        let tls = config.servers[0].tls.as_ref().unwrap();
+        assert_eq!(
+            tls.ocsp_stapling.as_deref(),
+            Some(std::path::Path::new("/tmp/ocsp.der"))
+        );
+    }
+
+    #[test]
+    fn ng12_rejects_crypto_and_strict_sni_with_http3() {
+        for extra in [
+            r#"protocols = ["TLSv1.3"]"#,
+            r#"ciphers = ["TLS13_AES_256_GCM_SHA384"]"#,
+            r#"curves = ["X25519"]"#,
+            "strict_sni = true",
+        ] {
+            let toml = ng15_config(&format!(
+                r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+http3_listen = "0.0.0.0:443"
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+{extra}
+"#
+            ));
+            let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+            assert!(err.contains("http3_listen"), "{extra}: {err}");
+        }
+    }
+
+    #[test]
+    fn ng12_rejects_crypto_on_non_primary_server() {
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+protocols = ["TLSv1.3"]
+"#
+        ));
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("tls.protocols"), "{err}");
     }
 }

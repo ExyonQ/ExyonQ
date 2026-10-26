@@ -321,6 +321,7 @@ mod tests {
                 draining: false,
                 version: Some("test".to_owned()),
                 reload_in_progress: false,
+                tls_cert_not_after_epoch: None,
             }
         }
     }

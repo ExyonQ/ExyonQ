@@ -21,6 +21,9 @@ pub struct CacheKeyParts {
     /// Prefer [`canonicalize_query`] before assigning.
     pub query: String,
     pub content_encoding: String,
+    /// NG-15: canonical variant material from keyed cookies/headers
+    /// (`fpc_vary_variant`). Empty when no variant is keyed.
+    pub vary: String,
 }
 
 impl CacheKeyParts {
@@ -140,6 +143,7 @@ mod tests {
             path: path.into(),
             query: query.into(),
             content_encoding: "identity".into(),
+            vary: String::new(),
         }
     }
 

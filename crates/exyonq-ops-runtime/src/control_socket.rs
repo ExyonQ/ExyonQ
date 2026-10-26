@@ -151,6 +151,9 @@ struct ControlResponseJson<'a> {
     /// AP-01: member rows for member_list/member_set outcomes.
     #[serde(skip_serializing_if = "Option::is_none")]
     payload: Option<serde_json::Value>,
+    /// Q-09: epoch notAfter of the primary TLS leaf cert, when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tls_cert_not_after_epoch: Option<u64>,
 }
 
 fn command_label(command: OpsCommand) -> &'static str {
@@ -181,6 +184,7 @@ fn to_json(outcome: &OpsCommandOutcome) -> ControlResponseJson<'_> {
             .payload
             .as_deref()
             .and_then(|p| serde_json::from_str(p).ok()),
+        tls_cert_not_after_epoch: outcome.snapshot.tls_cert_not_after_epoch,
     }
 }
 
@@ -591,6 +595,7 @@ mod tests {
                     draining: false,
                     version: None,
                     reload_in_progress: false,
+                    tls_cert_not_after_epoch: None,
                 },
                 error: None,
                 code: None,
@@ -622,6 +627,7 @@ mod tests {
                         None
                     },
                     reload_in_progress: false,
+                    tls_cert_not_after_epoch: None,
                 },
                 error: None,
                 code: None,
@@ -701,6 +707,7 @@ mod tests {
                 draining: false,
                 version: None,
                 reload_in_progress: false,
+                tls_cert_not_after_epoch: None,
             },
             Some("EXY-RELOAD-0002: validation rejected".into()),
             None,

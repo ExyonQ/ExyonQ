@@ -84,6 +84,7 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 | `docs/security/audit-template.md` | Release audit template | TRACKED | security | template | CANONICAL | audit-vX.Y.Z | GRC-R5 | 2026-08-03 | xtask, verify-release-audit | KEEP_ACTIVE |
 | `docs/security/release-checklist.md` | Release security checklist | TRACKED | security | checklist | CANONICAL | — | GRC-R5 | 2026-08-03 | SECURITY.md | KEEP_ACTIVE |
 | `docs/security/private-material-zero.md` | PMZ policy | TRACKED | security | policy | CANONICAL | — | GRC-R5 | 2026-08-03 | scanner/CI | KEEP_ACTIVE |
+| `docs/security/tls-hardening.md` | TLS hardening guide (versions/ciphers/OCSP/SNI/ACME) | TRACKED | security | guide | IMPLEMENTED_REFERENCE | — | security | 2026-10-24 | SECURITY.md | KEEP_ACTIVE |
 | `docs/governance/README.md` | Governance SoT index | TRACKED | governance | index | CANONICAL | — | GRC-R5 | 2026-08-03 | pre-R5 gate | KEEP_ACTIVE |
 | `docs/governance/project-integrity.md` | Project integrity policy | TRACKED | governance | policy | CANONICAL | — | GRC-R5 | 2026-08-03 | integrity gate | KEEP_ACTIVE |
 | `docs/governance/benchmark-integrity.md` | Benchmark integrity policy | TRACKED | governance | policy | CANONICAL | — | GRC-R5 | 2026-08-03 | integrity gate | KEEP_ACTIVE |

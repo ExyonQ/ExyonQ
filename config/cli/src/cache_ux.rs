@@ -2,7 +2,7 @@
 
 use crate::output::{sanitize_control_chars, CliExit, OutputFormat, ToolResult};
 use crate::reload::load_app_for_reload;
-use exyonq_module_api::fpc_request_evaluate;
+use exyonq_module_api::{fpc_request_evaluate, FpcRequestPolicy};
 use std::path::Path;
 
 /// Explain why a URL would (not) enter FPC lookup under the candidate config.
@@ -30,7 +30,55 @@ pub fn cache_explain(config_path: &Path, url: &str, format: OutputFormat) -> Too
     };
 
     let fpc_enabled = cfg.full_page_cache.enabled;
-    let eval = fpc_request_evaluate("GET", &path, &query, &[], &[], &[]);
+    // NG-15: explain reflects the configured key/bypass policy (no request
+    // headers here, so bypass headers cannot trigger).
+    let key_query: Vec<&str> = cfg
+        .full_page_cache
+        .key
+        .query
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let key_cookies: Vec<&str> = cfg
+        .full_page_cache
+        .key
+        .cookies
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let bypass_headers: Vec<&str> = cfg
+        .full_page_cache
+        .bypass
+        .headers
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let bypass_cookies: Vec<&str> = cfg
+        .full_page_cache
+        .bypass
+        .cookies
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let private_cookies: Vec<&str> = cfg
+        .full_page_cache
+        .private_cookies
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let eval = fpc_request_evaluate(
+        "GET",
+        &path,
+        &query,
+        &[],
+        &FpcRequestPolicy {
+            safe_cookie_allowlist: &key_cookies,
+            functional_query_allowlist: &key_query,
+            bypass_cookies: &bypass_cookies,
+            bypass_headers: &bypass_headers,
+            private_cookies: &private_cookies,
+        },
+    );
 
     let (decision, reason, detail_owned): (&str, &str, String) = if !fpc_enabled {
         (

@@ -41,6 +41,7 @@ fn test_key(path: &str) -> exyonq_cache::CacheKey {
         path: path.into(),
         query: "".into(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     })
 }
 

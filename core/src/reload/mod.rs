@@ -24,7 +24,7 @@
 use crate::config::AppConfig;
 use crate::discovery_overlay;
 use crate::server::state::ServerState;
-use crate::tls::{SharedTlsAcceptor, TlsSessionCache, TlsSettings};
+use crate::tls::{SharedTlsAcceptor, SniCert, TlsSessionCache};
 use exyonq_mod_proxy::ProxyClient;
 use exyonq_mod_tls::TlsAcceptor;
 use exyonq_runtime_plan::{compile_runtime_plan, load_config_for_reload};
@@ -158,6 +158,10 @@ pub async fn reload_from_path(
     // Fingerprint compare uses compiled plan content (generation-independent).
     let candidate_plan = compile_runtime_plan(current.generation, config.clone())?;
     if candidate_plan.fingerprint.as_str() == current.fingerprint() {
+        // File-backed TLS material (cert/key/OCSP staple) is outside the
+        // fingerprint: same-path replacement must still take effect on reload.
+        let prepared_tls = prepare_tls_acceptor(&config, tls_session_cache)?;
+        tls_acceptor.install(prepared_tls);
         return Ok(ReloadResult {
             state: current,
             identical_no_op: true,
@@ -339,24 +343,71 @@ fn reject_listen_bind_changes(current: &AppConfig, candidate: &AppConfig) -> any
 }
 
 /// Prepare a TLS acceptor offline (or `None` to clear on commit).
+/// NG-15: every `[[server]]` sharing the primary `listen` contributes its
+/// certificate to the SNI resolver; `servers[0]` remains the default.
 pub fn prepare_tls_acceptor(
     config: &AppConfig,
     tls_session_cache: &TlsSessionCache,
 ) -> anyhow::Result<Option<TlsAcceptor>> {
-    if let Some(tls) = &config.primary_server().tls {
-        let acceptor = SharedTlsAcceptor::prepare(
-            &TlsSettings {
+    if config.primary_server().tls.is_none() {
+        return Ok(None);
+    }
+    let listen = &config.primary_server().listen;
+    let mut certs = Vec::new();
+    for (idx, server) in config.servers.iter().enumerate() {
+        if &server.listen != listen {
+            continue;
+        }
+        let Some(tls) = &server.tls else {
+            return Err(anyhow::anyhow!(
+                "tls prepare: server[{idx}] shares listen {listen} but has no [server.tls]"
+            ));
+        };
+        // ACME bootstrap-from-zero: with acme.enabled the pair may not exist
+        // yet; the listener serves cleartext (HTTP-01) until the bootstrap
+        // publishes the issued certificate via reload_tls_from_config.
+        // Without ACME a missing pair stays fail-closed (load error below).
+        // Only the primary server is provisioned by the ACME bootstrap, so
+        // secondary servers keep fail-closed even with acme enabled.
+        let acme_pending = idx == 0
+            && tls.acme.as_ref().is_some_and(|acme| acme.enabled)
+            && !(tls.cert.exists() && tls.key.exists());
+        if !acme_pending {
+            certs.push(SniCert {
+                names: server.server_name_list(),
                 cert_path: tls.cert.clone(),
                 key_path: tls.key.clone(),
-            },
-            tls_session_cache,
-            &[b"h2", b"http/1.1"],
-        )
-        .map_err(|err| anyhow::anyhow!("tls reload prepare: {err}"))?;
-        Ok(Some(acceptor))
-    } else {
-        Ok(None)
+                ocsp_path: tls.ocsp_stapling.clone(),
+            });
+        }
     }
+    if certs.is_empty() {
+        return Ok(None);
+    }
+    let (strict_sni, crypto) = config
+        .primary_server()
+        .tls
+        .as_ref()
+        .map(|tls| {
+            (
+                tls.strict_sni,
+                crate::tls::TlsCryptoPolicy {
+                    protocols: tls.protocols.clone(),
+                    ciphers: tls.ciphers.clone(),
+                    curves: tls.curves.clone(),
+                },
+            )
+        })
+        .unwrap_or_default();
+    let acceptor = SharedTlsAcceptor::prepare_multi(
+        &certs,
+        strict_sni,
+        &crypto,
+        tls_session_cache,
+        &[b"h2", b"http/1.1"],
+    )
+    .map_err(|err| anyhow::anyhow!("tls reload prepare: {err}"))?;
+    Ok(Some(acceptor))
 }
 
 /// Immediate TLS publish (ACME / certificate publication). Not used by Cap013 config reload.

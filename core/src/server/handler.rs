@@ -32,14 +32,14 @@ use exyonq_cache::{
 };
 use exyonq_mod_proxy::{
     bad_gateway, forward_websocket_by_cluster, is_websocket_upgrade, load_get_for_cache_by_cluster,
-    serve_proxy_with_cache, ProxyClient,
+    serve_proxy_with_cache, ProxyCacheLoad, ProxyClient,
 };
 use exyonq_mod_static::{serve_static_with_cache, StaticCacheLoad};
 use exyonq_module_api::kernel_observation::{note_fastcgi_http_501, note_proxy_http_501};
 use exyonq_module_api::static_dispatch::StaticMethod;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::HeaderValue;
+use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -175,6 +175,8 @@ async fn serve_http3_request_bytes(
     let started = std::time::Instant::now();
     let method = req.method().clone();
     let request_path = req.uri().path().to_string();
+    let request_host = request_host_from_parts(req.uri(), req.headers());
+    let state = Arc::clone(&ctx.state);
     let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
     let client_ip = xff.to_str().unwrap_or("unknown").to_string();
     let protocol = "http3";
@@ -277,7 +279,7 @@ async fn serve_http3_request_bytes(
     .await;
 
     let outcome = outcome_from_response(&response);
-    finish_hyper(
+    let mut response = finish_hyper(
         identity.as_ref(),
         access_needed,
         method.as_str(),
@@ -287,7 +289,14 @@ async fn serve_http3_request_bytes(
         Some(client_ip.as_str()),
         response,
         outcome,
-    )
+    );
+    apply_route_response_headers(
+        &state,
+        &request_path,
+        request_host.as_deref(),
+        &mut response,
+    );
+    response
 }
 
 fn method_not_allowed_h3() -> HandlerResponse {
@@ -376,6 +385,8 @@ pub async fn serve_connection(
     let started = std::time::Instant::now();
     let method = req.method().clone();
     let request_path = req.uri().path().to_string();
+    let request_host_value = request_host(&req);
+    let state = Arc::clone(&ctx.state);
     // NG-11: trusted-peer chain resolution; defaults to the socket peer.
     let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
     let client_ip = xff.to_str().unwrap_or("unknown").to_string();
@@ -587,6 +598,13 @@ pub async fn serve_connection(
     .instrument(span)
     .await;
 
+    let mut result = result;
+    apply_route_response_headers(
+        &state,
+        &request_path,
+        request_host_value.as_deref(),
+        &mut result,
+    );
     Ok(result)
 }
 
@@ -708,7 +726,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
 }
 
 #[allow(clippy::result_large_err)] // Err is a ready-to-send response, not an error
-async fn handle_request(
+async fn handle_request_inner(
     state: Arc<ServerState>,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
@@ -754,15 +772,49 @@ async fn handle_request(
                 return Ok(rate_limit_reject_response(retry_after_secs));
             }
         }
-        let response = handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await;
+        let response_path = req.uri().path().to_string();
+        let response_host = request_host(&req);
+        let mut response =
+            handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await;
+        apply_route_response_headers(
+            &state,
+            &response_path,
+            response_host.as_deref(),
+            &mut response,
+        );
         exyonq_module_api::wire_record_response(response.status().as_u16());
         return Ok(response);
     }
 
-    Ok(handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await)
+    let response_path = req.uri().path().to_string();
+    let response_host = request_host(&req);
+    let mut response = handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await;
+    apply_route_response_headers(
+        &state,
+        &response_path,
+        response_host.as_deref(),
+        &mut response,
+    );
+    Ok(response)
 }
 
 #[allow(clippy::result_large_err)] // Err is a ready-to-send response, not an error
+async fn handle_request(
+    state: Arc<ServerState>,
+    req: Request<Incoming>,
+    x_forwarded_for: Option<&HeaderValue>,
+) -> Result<Response<BoxBody>, Response<BoxBody>> {
+    let path = req.uri().path().to_string();
+    let host = request_host(&req);
+    let mut result = handle_request_inner(state.clone(), req, x_forwarded_for).await;
+    let response = match &mut result {
+        Ok(response) => response,
+        Err(response) => response,
+    };
+    apply_route_response_headers(&state, &path, host.as_deref(), response);
+    result
+}
+
 async fn handle_request_with_modules(
     state: Arc<ServerState>,
     req: Request<Incoming>,
@@ -778,6 +830,37 @@ async fn handle_request_with_modules(
         async move { handle_core_request(&state, &proxy_client, req, xff.as_ref()).await }
     })
     .await
+}
+
+/// ADR-062: apply `[[route.response_headers]]` to a finished response.
+/// `always = false` (default) limits the header to 2xx/3xx, matching
+/// nginx `add_header` without the `always` parameter.
+fn apply_route_response_headers(
+    state: &ServerState,
+    path: &str,
+    host: Option<&str>,
+    response: &mut Response<BoxBody>,
+) {
+    let Some((route_idx, _)) = state.route_index.match_route_index_with_host(path, host) else {
+        tracing::trace!(%path, ?host, "apply_route_response_headers: no route match");
+        return;
+    };
+    let status = response.status();
+    let apply_on_status = status.is_success() || status.is_redirection();
+    let headers = state.snapshot.route_response_headers(route_idx);
+    tracing::trace!(%path, ?host, route_idx, headers_len = headers.len(), ?status, "apply_route_response_headers: applying");
+    for (name, value, always) in headers {
+        if !always && !apply_on_status {
+            continue;
+        }
+        let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) else {
+            continue;
+        };
+        response.headers_mut().insert(name, value);
+    }
 }
 
 async fn handle_core_request(
@@ -1205,10 +1288,23 @@ async fn dispatch_core(
         );
     }
 
-    // FPC fill for proxy deferred (WC2E). FastCGI fill is WC2D below.
+    // WC2E: FPC fill for proxy (NG-15 keys/bypass/vary live in the FPC gate).
     if let Some(cluster_id) = state.snapshot.proxy_cluster_for_route(route_idx) {
-        let _ = fpc_miss;
         let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+        if let Some(ctx) = fpc_miss {
+            return fpc_bypassed!(
+                proxy_dispatch_fpc_fill(
+                    state,
+                    route_idx,
+                    method,
+                    path_and_query,
+                    request_headers,
+                    x_forwarded_for,
+                    ctx,
+                )
+                .await
+            );
+        }
         return fpc_bypassed!(
             proxy_dispatch_maybe_cached(
                 state,
@@ -1483,6 +1579,12 @@ async fn fastcgi_dispatch_fpc_fill(
         let Some(mut outcome) = execute_fastcgi_backend(state, route_idx, http).await else {
             return text_response(StatusCode::NOT_IMPLEMENTED, "not implemented");
         };
+        // NG-16: HEAD falls back to the stale representation like GET.
+        if outcome.status >= 500 {
+            if let Some(stale) = crate::fpc_lookup::stale_response(&ctx, method) {
+                return stale;
+            }
+        }
         // HEAD responses must not carry a body (scripted executors may still return one).
         outcome.body.clear();
         outcome
@@ -1500,6 +1602,13 @@ async fn fastcgi_dispatch_fpc_fill(
     let status = outcome.status;
     let headers = outcome.headers;
     let body = Bytes::from(outcome.body);
+
+    // NG-16: FastCGI 5xx falls back to the stale entry when one exists.
+    if status >= 500 {
+        if let Some(stale) = crate::fpc_lookup::stale_response(&ctx, method) {
+            return stale;
+        }
+    }
 
     // Live reload generation may advance while FastCGI was in flight (SharedServerState swap).
     // Never insert under the lookup-time identity once the process has moved on.
@@ -1616,6 +1725,7 @@ async fn fastcgi_dispatch_maybe_cached(
         path: uri.path().to_string(),
         query: uri.query().unwrap_or("").to_string(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
 
     let max_bytes = policy.max_object_bytes;
@@ -2077,6 +2187,7 @@ async fn static_dispatch_maybe_cached(
         path: request_path.to_string(),
         query: uri.query().unwrap_or("").to_string(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
 
     let req_headers = request_headers.to_vec();
@@ -2183,6 +2294,7 @@ async fn proxy_dispatch_maybe_cached(
         path: uri.path().to_string(),
         query: uri.query().unwrap_or("").to_string(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
 
     let path_and_query = path_and_query.to_string();
@@ -2227,6 +2339,100 @@ async fn proxy_dispatch_maybe_cached(
         }
     }
     resp
+}
+
+/// WC2E/NG-15: proxy dispatch with FPC fill — the miss context carries the
+/// configured key (query/cookies/headers + vary) and the Vary allowlist.
+/// Uses the bounded streaming loader: bodies over `max_object_bytes`, SSE and
+/// unknown-length responses stream through uncached (never collected).
+#[allow(clippy::too_many_arguments)]
+async fn proxy_dispatch_fpc_fill(
+    state: &ServerState,
+    route_idx: usize,
+    method: &Method,
+    path_and_query: &str,
+    request_headers: &[(String, String)],
+    x_forwarded_for: Option<&HeaderValue>,
+    ctx: crate::fpc_lookup::FpcMissContext,
+) -> Response<BoxBody> {
+    let Some(cluster_id) = state.snapshot.proxy_cluster_for_route(route_idx) else {
+        return bad_gateway();
+    };
+    // Cold-key herd is not coalesced here: singleflight lives in the Plan 12
+    // proxy cache, whose key cannot express Vary. Bounded: the first response
+    // is stored, so the herd spans one origin round-trip.
+    let (load, _cookie) = load_get_for_cache_by_cluster(
+        cluster_id,
+        path_and_query,
+        x_forwarded_for,
+        ctx.max_object_bytes,
+        request_headers,
+    )
+    .await;
+
+    match load {
+        ProxyCacheLoad::Materialized {
+            body,
+            status,
+            headers,
+            rejection,
+            ..
+        } => {
+            // NG-16: a failing backend is answered with the stale entry.
+            if status.as_u16() >= 500 {
+                if let Some(stale) = crate::fpc_lookup::stale_response(&ctx, method) {
+                    return stale;
+                }
+            }
+            // Plan 12's raw gate runs on the pre-UTF-8 headers and rejects
+            // Set-Cookie / private / no-store / content-range / any Vary. The
+            // Vary rejection is the one NG-15 relaxes: the FPC assessment below
+            // re-checks it against `key.headers` on the decoded values.
+            let plan12_blocked = !matches!(
+                rejection,
+                None | Some(exyonq_module_api::CacheRejection::ResponseVary)
+            );
+            if !plan12_blocked && *method != Method::HEAD {
+                if crate::reload::active_runtime_generation() == ctx.runtime_generation {
+                    crate::fpc_store::try_fpc_store_response(
+                        &ctx,
+                        method.as_str(),
+                        status.as_u16(),
+                        &headers,
+                        body.clone(),
+                    );
+                } else {
+                    exyonq_cache::note_fpc_store_attempt();
+                    exyonq_cache::note_fpc_store_rejected("generation_mismatch");
+                }
+            }
+            let mut resp = Response::builder()
+                .status(status)
+                .body(Full::new(body).map_err(|never| match never {}).boxed())
+                .expect("valid materialized response");
+            for (name, value) in &headers {
+                if let (Ok(n), Ok(v)) = (
+                    hyper::header::HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(value),
+                ) {
+                    resp.headers_mut().append(n, v);
+                }
+            }
+            crate::fpc_lookup::apply_x_cache(resp.headers_mut(), "miss");
+            resp
+        }
+        ProxyCacheLoad::Passthrough { response, .. } => {
+            // NG-16: passthrough also carries connect failures (502).
+            if response.status().as_u16() >= 500 {
+                if let Some(stale) = crate::fpc_lookup::stale_response(&ctx, method) {
+                    return stale;
+                }
+            }
+            let mut resp = response;
+            crate::fpc_lookup::apply_x_cache(resp.headers_mut(), "miss");
+            resp
+        }
+    }
 }
 
 // TECH_DEBT_HANDLER_ARITY = DEFERRED_POST_V043
@@ -2673,6 +2879,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            cache_tags: Vec::new(),
             name: name.into(),
             r#match: RouteMatch {
                 path: path.into(),

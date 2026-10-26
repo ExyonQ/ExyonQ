@@ -288,15 +288,26 @@ async fn keepalive_pin_dropped_when_peer_banned() {
     // Kill the pinned backend, then r2: the doomed attempt bans the peer and
     // the failover must serve from the live member.
     pinned_task.abort();
+    // `abort()` only schedules cancellation: until the listener is really
+    // closed, r2 can still be served by the "dead" backend and the assertion
+    // below fails for reasons unrelated to the pin being dropped.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        match tokio::net::TcpStream::connect(("127.0.0.1", pinned_port)).await {
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            Err(_) => break,
+        }
+    }
     client
         .write_all(b"GET /api/r2 HTTP/1.1\r\nHost: x\r\n\r\n")
         .await
         .expect("write r2");
     let r2 = read_until(&mut client, b"OK").await;
-    assert!(
-        String::from_utf8_lossy(&r2).starts_with("HTTP/1.1 200"),
-        "r2"
-    );
+    let r2_head = String::from_utf8_lossy(&r2)
+        .chars()
+        .take(200)
+        .collect::<String>();
+    assert!(r2_head.starts_with("HTTP/1.1 200"), "r2: {r2_head}");
 
     // Revive the (banned) pinned backend on the same port.
     let mut revived = None;

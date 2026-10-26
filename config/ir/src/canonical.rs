@@ -186,6 +186,54 @@ fn canonical_server(server: &ServerConfig) -> serde_json::Value {
                 serde_json::to_value(acme).expect("acme serializes"),
             );
         }
+        if tls.strict_sni {
+            tls_map.insert("strict_sni".into(), serde_json::Value::Bool(true));
+        }
+        if !tls.protocols.is_empty() {
+            tls_map.insert(
+                "protocols".into(),
+                serde_json::Value::Array(
+                    tls.protocols
+                        .iter()
+                        .cloned()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        if !tls.ciphers.is_empty() {
+            tls_map.insert(
+                "ciphers".into(),
+                serde_json::Value::Array(
+                    tls.ciphers
+                        .iter()
+                        .cloned()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        if !tls.curves.is_empty() {
+            tls_map.insert(
+                "curves".into(),
+                serde_json::Value::Array(
+                    tls.curves
+                        .iter()
+                        .cloned()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(ocsp) = &tls.ocsp_stapling {
+            tls_map.insert(
+                "ocsp_stapling".into(),
+                serde_json::Value::String(ocsp.display().to_string()),
+            );
+        }
+        if tls.must_staple {
+            tls_map.insert("must_staple".into(), serde_json::Value::Bool(true));
+        }
         map.insert("tls".into(), serde_json::Value::Object(tls_map));
     }
     if let Some(http3) = &server.http3_listen {
@@ -251,6 +299,20 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
     // Cap048: route.cache binds a named cache_policy at request time.
     if let Some(cache) = &route.cache {
         map.insert("cache".into(), serde_json::Value::String(cache.clone()));
+    }
+    // NG-16: tags are runtime-effective for `purge tag`.
+    if !route.cache_tags.is_empty() {
+        map.insert(
+            "cache_tags".into(),
+            serde_json::Value::Array(
+                route
+                    .cache_tags
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
     }
     // F2 / ADR-061: MIME Cache-Control map.
     if let Some(ch) = &route.cache_headers {

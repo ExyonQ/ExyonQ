@@ -61,6 +61,12 @@ impl CoreKernelControlPort {
                 None
             },
             reload_in_progress: reload_in_progress(),
+            tls_cert_not_after_epoch: state
+                .config
+                .primary_server()
+                .tls
+                .as_ref()
+                .and_then(|tls| exyonq_mod_tls::pem_leaf_not_after_epoch(&tls.cert)),
         }
     }
 
@@ -123,6 +129,7 @@ impl KernelControlPort for CoreKernelControlPort {
                         draining: self.lifecycle.is_draining(),
                         version: None,
                         reload_in_progress: reload_in_progress(),
+                        tls_cert_not_after_epoch: None,
                     },
                     note,
                     None,

@@ -126,6 +126,28 @@ async fn bind_tuned(addr: SocketAddr) -> std::io::Result<TcpListener> {
     socket.listen(4096)
 }
 
+/// Wait until `addr` accepts TCP connections. ACME HTTP-01 needs this
+/// process to answer `/.well-known/acme-challenge/<token>`, so the bootstrap
+/// must not start the order before its own listeners are up.
+async fn wait_for_listener(addr: SocketAddr, timeout: Duration) {
+    let probe = if addr.ip().is_unspecified() {
+        match addr {
+            SocketAddr::V4(_) => SocketAddr::from(([127, 0, 0, 1], addr.port())),
+            SocketAddr::V6(_) => SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], addr.port())),
+        }
+    } else {
+        addr
+    };
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if tokio::net::TcpStream::connect(probe).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    warn!(%addr, "listener did not accept before the ACME bootstrap deadline");
+}
+
 fn accept_workers() -> usize {
     crate::server::runtime_parallelism::resolve_accept_workers()
 }
@@ -215,11 +237,12 @@ async fn accept_loop(
     listener: TcpListener,
     state: reload::SharedServerState,
     proxy_client: ProxyClient,
-    tls_acceptor: SharedTlsAcceptor,
+    tls_acceptor: Option<SharedTlsAcceptor>,
     ops: Arc<LifecycleState>,
     proxy_protocol_config: Option<exyonq_config_ir::ProxyProtocolConfig>,
 ) {
     let mut shutdown_rx = ops.shutdown_rx();
+    let local_addr = listener.local_addr().ok();
     loop {
         // KF-P16-014 / P15-WS5-PROBE-002: do not stop accepting on drain_complete.
         // Drain with zero admitted connections must still answer /live and /ready
@@ -266,7 +289,21 @@ async fn accept_loop(
 
         let x_forwarded_for = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0.0.0.0"));
-        let acceptor = tls_acceptor.snapshot();
+        let acceptor = tls_acceptor
+            .as_ref()
+            .and_then(|acceptor| acceptor.snapshot());
+        // Fail-closed on a TLS-intended listener with no cert material
+        // installed (ACME bootstrap-from-zero pending): drop the connection
+        // instead of serving cleartext on a port clients treat as HTTPS.
+        // HTTP-01 is served on the cleartext listener only. Live config
+        // check — a reload removing server.tls installs None intentionally.
+        if acceptor.is_none()
+            && tls_acceptor.is_some()
+            && local_addr
+                .is_some_and(|addr| reload::read_state(&conn_state).config.listen_uses_tls(addr))
+        {
+            continue;
+        }
         let ops_conn = Arc::clone(&ops);
 
         tokio::spawn(async move {
@@ -400,12 +437,76 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     let shared_tls = SharedTlsAcceptor::new();
     reload::reload_tls_acceptor(&config, &shared_tls, &tls_session_cache)?;
 
-    maybe_bootstrap_acme(&config, shared_tls.clone(), tls_session_cache.clone()).await;
-
     let state = ServerState::new(config.clone(), proxy_client.clone()).await?;
     kernel_control_port::mark_process_started();
     let shared = reload::wrap_state(state);
+
+    // ACME bootstrap must run *after* the listeners accept: HTTP-01 is
+    // validated by the CA fetching `/.well-known/acme-challenge/<token>` from
+    // this process, and DNS-01/renewal do not block startup either. Spawn it
+    // behind a readiness gate instead of awaiting it here.
     let ops = LifecycleState::new();
+
+    // NG-25: every distinct `listen` gets its own socket. Servers sharing an
+    // address are SNI/certificate variants of one listener (NG-24); a server
+    // with a different address used to be silently ignored. The primary
+    // address keeps the tuned backend below; additional addresses use the
+    // plain Tokio accept loop, plaintext unless one of their servers has TLS.
+    let extra_listens: Vec<SocketAddr> = config
+        .listen_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|addr| *addr != listen)
+        .collect();
+    if !extra_listens.is_empty() {
+        let mut extra_tasks = Vec::with_capacity(extra_listens.len());
+        for addr in extra_listens {
+            let acceptor = config.listen_uses_tls(addr).then(|| shared_tls.clone());
+            let listener = bind_tuned(addr).await?;
+            info!(
+                %addr,
+                tls = acceptor.is_some(),
+                "exyonq listening (additional listen)"
+            );
+            extra_tasks.push(tokio::spawn(accept_loop(
+                listener,
+                reload::SharedServerState::clone(&shared),
+                proxy_client.clone(),
+                acceptor,
+                Arc::clone(&ops),
+                config.primary_server().proxy_protocol.clone(),
+            )));
+        }
+        let mut shutdown_rx = ops.shutdown_rx();
+        tokio::spawn(async move {
+            let _ = shutdown_rx.changed().await;
+            for task in &extra_tasks {
+                task.abort();
+            }
+        });
+    }
+
+    {
+        let bootstrap_config = config.clone();
+        let bootstrap_tls = shared_tls.clone();
+        let bootstrap_cache = tls_session_cache.clone();
+        let bootstrap_shared = reload::SharedServerState::clone(&shared);
+        tokio::spawn(async move {
+            let Ok(addrs) = bootstrap_config.listen_addrs() else {
+                return;
+            };
+            for addr in addrs {
+                wait_for_listener(addr, Duration::from_secs(30)).await;
+            }
+            maybe_bootstrap_acme(
+                &bootstrap_config,
+                bootstrap_tls,
+                bootstrap_cache,
+                bootstrap_shared,
+            )
+            .await;
+        });
+    }
     // Cap031: tunnel tasks must keep active_connections > 0 after Hyper upgrade handoff.
     {
         let ops_ws = Arc::clone(&ops);
@@ -549,28 +650,38 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         if let Some(http3_listen) = config.primary_server().http3_listen.as_deref() {
             if let Ok(addr) = http3_listen.parse::<SocketAddr>() {
                 if let Some(tls) = config.primary_server().tls.clone() {
-                    let settings = exyonq_mod_http3::Http3Settings {
-                        listen: addr,
-                        tls: TlsSettings {
-                            cert_path: tls.cert,
-                            key_path: tls.key,
-                        },
-                        // Neutral IR string only — no provider types in core.
-                        provider: config.http3.provider.clone(),
-                        max_ack_delay_ms: config.http3.max_ack_delay_ms,
-                        request_body_drain_cap_bytes: config
-                            .http3
-                            .request_body_drain_cap_bytes
-                            .min(usize::MAX as u64)
-                            as usize,
-                        qlog_enabled: config.http3.qlog,
-                    };
-                    http3_runtime_registry::spawn_http3_listener(
-                        settings,
-                        reload::SharedServerState::clone(&shared),
-                        proxy_client.clone(),
-                        Arc::clone(&ops),
-                    );
+                    // ACME bootstrap-from-zero: H3 has no hot-reload; spawn
+                    // only with cert material on disk (restart after first
+                    // issuance to enable H3).
+                    if !tls.cert.exists() || !tls.key.exists() {
+                        warn!(
+                            cert = %tls.cert.display(),
+                            "http3_listen skipped: cert/key not on disk yet"
+                        );
+                    } else {
+                        let settings = exyonq_mod_http3::Http3Settings {
+                            listen: addr,
+                            tls: TlsSettings {
+                                cert_path: tls.cert,
+                                key_path: tls.key,
+                            },
+                            // Neutral IR string only — no provider types in core.
+                            provider: config.http3.provider.clone(),
+                            max_ack_delay_ms: config.http3.max_ack_delay_ms,
+                            request_body_drain_cap_bytes: config
+                                .http3
+                                .request_body_drain_cap_bytes
+                                .min(usize::MAX as u64)
+                                as usize,
+                            qlog_enabled: config.http3.qlog,
+                        };
+                        http3_runtime_registry::spawn_http3_listener(
+                            settings,
+                            reload::SharedServerState::clone(&shared),
+                            proxy_client.clone(),
+                            Arc::clone(&ops),
+                        );
+                    }
                 }
             }
         }
@@ -726,7 +837,7 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         let listener = bind_tuned(listen).await?;
         let state = reload::SharedServerState::clone(&shared);
         let proxy_client = proxy_client.clone();
-        let acceptor = shared_tls.clone();
+        let acceptor = Some(shared_tls.clone());
         let ops_worker = Arc::clone(&ops);
         let pp_config = proxy_protocol_config.clone();
         tasks.push(tokio::spawn(accept_loop(
@@ -782,6 +893,7 @@ async fn maybe_bootstrap_acme(
     config: &AppConfig,
     tls_acceptor: SharedTlsAcceptor,
     tls_session_cache: TlsSessionCache,
+    shared: reload::SharedServerState,
 ) {
     let Some(service) = acme_integration_service() else {
         return;
@@ -789,6 +901,135 @@ async fn maybe_bootstrap_acme(
     let publication = Arc::new(CoreCertificatePublicationPort {
         tls_acceptor,
         tls_session_cache,
+        shared,
     });
     service.bootstrap_if_enabled(config, publication).await;
+}
+
+#[cfg(test)]
+mod acme_pending_fail_closed {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpStream;
+
+    fn toml_with_listen(addr: std::net::SocketAddr, tls_block: &str) -> String {
+        format!(
+            r#"config_version = 1
+
+[[server]]
+listen = "{addr}"
+routes = ["site"]
+{tls_block}
+[[route]]
+name = "site"
+match = {{ path = "/" }}
+root = "tests/fixtures/www"
+index = "index.html"
+"#
+        )
+    }
+
+    const TLS_PENDING: &str = r#"
+[server.tls]
+cert = "/nonexistent/acme-pending/cert.pem"
+key = "/nonexistent/acme-pending/key.pem"
+
+[server.tls.acme]
+email = "ops@example.test"
+domains = ["example.test"]
+"#;
+
+    async fn spawn_accept_loop(listener: TcpListener, config: AppConfig) {
+        let state = ServerState::new(config, build_incoming_client())
+            .await
+            .unwrap();
+        tokio::spawn(accept_loop(
+            listener,
+            reload::wrap_state(state),
+            build_incoming_client(),
+            // Shared acceptor with nothing installed: cert material pending.
+            Some(SharedTlsAcceptor::new()),
+            LifecycleState::new(),
+            None,
+        ));
+    }
+
+    #[tokio::test]
+    async fn tls_pending_listener_drops_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config: AppConfig = toml_with_listen(addr, TLS_PENDING).parse().unwrap();
+        spawn_accept_loop(listener, config).await;
+
+        let mut conn = TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 8];
+        let got = tokio::time::timeout(Duration::from_secs(5), conn.read(&mut buf)).await;
+        assert!(
+            matches!(got, Ok(Ok(0))),
+            "TLS-intended listener without material must drop, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_removing_tls_reopens_cleartext() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config: AppConfig = toml_with_listen(addr, TLS_PENDING).parse().unwrap();
+        let state = ServerState::new(config, build_incoming_client())
+            .await
+            .unwrap();
+        let shared = reload::wrap_state(state);
+        tokio::spawn(accept_loop(
+            listener,
+            reload::SharedServerState::clone(&shared),
+            build_incoming_client(),
+            Some(SharedTlsAcceptor::new()),
+            LifecycleState::new(),
+            None,
+        ));
+
+        // TLS intended, no material: dropped.
+        let mut conn = TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 8];
+        let got = tokio::time::timeout(Duration::from_secs(5), conn.read(&mut buf)).await;
+        assert!(
+            matches!(got, Ok(Ok(0))),
+            "pending TLS must drop, got {got:?}"
+        );
+        drop(conn);
+
+        // Reload swaps in a config without server.tls: cleartext intended.
+        let no_tls: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        let state = ServerState::new(no_tls, build_incoming_client())
+            .await
+            .unwrap();
+        *shared.write().expect("server state lock poisoned") = state;
+
+        let mut conn = TcpStream::connect(addr).await.unwrap();
+        let got = tokio::time::timeout(Duration::from_millis(500), conn.read(&mut buf)).await;
+        assert!(
+            got.is_err(),
+            "listener must serve cleartext once TLS is removed, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleartext_listener_still_serves() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        spawn_accept_loop(listener, config).await;
+
+        // No request written: only assert the gate does not drop a cleartext
+        // connection. (Full request path needs CLI-registered proxy hooks;
+        // out of scope for this gate regression.)
+        let mut conn = TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 8];
+        let got = tokio::time::timeout(Duration::from_millis(500), conn.read(&mut buf)).await;
+        assert!(
+            got.is_err(),
+            "cleartext listener must keep the connection open, got {got:?}"
+        );
+    }
 }

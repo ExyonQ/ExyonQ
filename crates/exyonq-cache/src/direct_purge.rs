@@ -127,6 +127,7 @@ impl CachePurgePort for DirectL1PurgePort {
                     path: canon_path,
                     query: canon_query,
                     content_encoding: "identity".into(),
+                    vary: String::new(),
                 });
                 let stats = self.cache.invalidate_key(&key);
                 if stats.purged_entries == 0 {
@@ -170,6 +171,7 @@ pub fn test_insert(
         path: path.into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
     cache.insert_entry(
         key,
@@ -210,6 +212,7 @@ pub fn test_has(
         path: path.into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
     cache.lookup(&key).is_some()
 }

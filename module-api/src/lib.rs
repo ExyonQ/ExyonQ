@@ -77,10 +77,10 @@ pub use cache::{
     aggregate_cookie_headers, assess_cacheability, cookie_header_names, filter_storable_headers,
     fpc_assess_store, fpc_canonicalize_path, fpc_cookie_bypass, fpc_cookie_name_hard_denied,
     fpc_path_query_bypass, fpc_query_decision, fpc_request_bypass, fpc_request_evaluate,
-    request_eligible_for_cache, BypassReason, CacheRejection, CompiledCachePolicy,
-    FpcQueryDecision, FpcStoreReject, CACHE_DEFAULT_MAX_OBJECT_BYTES, CACHE_DEFAULT_TTL_SECS,
-    CACHE_MAX_ENTRIES, CACHE_MAX_TOTAL_BYTES, CACHE_STORE_HEADER_NAMES,
-    FPC_COOKIE_HARD_DENY_PREFIXES,
+    fpc_vary_variant, request_eligible_for_cache, BypassReason, CacheRejection,
+    CompiledCachePolicy, FpcQueryDecision, FpcRequestPolicy, FpcStoreReject,
+    CACHE_DEFAULT_MAX_OBJECT_BYTES, CACHE_DEFAULT_TTL_SECS, CACHE_MAX_ENTRIES,
+    CACHE_MAX_TOTAL_BYTES, CACHE_STORE_HEADER_NAMES, FPC_COOKIE_HARD_DENY_PREFIXES,
 };
 pub use cache_coordination::{
     event_from_purge_op, invalidation_event_to_purge_op, now_unix_ms, validate_invalidation_event,

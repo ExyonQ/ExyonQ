@@ -411,13 +411,39 @@ fn skip_attempt_timeout_enabled() -> bool {
     on
 }
 
+/// Headers never copied from the client on the cache GET path: connection
+/// management, the ones we set ourselves, and body framing.
+const GET_FORWARD_SKIP_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "te",
+    "trailer",
+    "upgrade",
+    "proxy-connection",
+    "proxy-authorization",
+    "x-forwarded-for",
+    "x-forwarded-proto",
+];
+
 pub async fn forward_get_streaming(
     upstream: &UpstreamTarget,
     path_and_query: &str,
     x_forwarded_for: Option<&HeaderValue>,
     metrics: &ProxyHyperMetrics,
+    request_headers: &[(String, String)],
 ) -> Response<BoxBody> {
-    forward_get_streaming_with_proto(upstream, path_and_query, x_forwarded_for, None, metrics).await
+    forward_get_streaming_with_proto(
+        upstream,
+        path_and_query,
+        x_forwarded_for,
+        None,
+        metrics,
+        request_headers,
+    )
+    .await
 }
 
 pub async fn forward_get_streaming_with_proto(
@@ -426,6 +452,7 @@ pub async fn forward_get_streaming_with_proto(
     x_forwarded_for: Option<&HeaderValue>,
     x_forwarded_proto: Option<&HeaderValue>,
     metrics: &ProxyHyperMetrics,
+    request_headers: &[(String, String)],
 ) -> Response<BoxBody> {
     let mut builder = Request::builder()
         .method(Method::GET)
@@ -439,6 +466,20 @@ pub async fn forward_get_streaming_with_proto(
     }
     if let Some(host) = &upstream.host {
         builder = builder.header(HOST, host.clone());
+    }
+    // The cache path must forward the client request faithfully: keying a
+    // response on a header the origin never saw would cache one variant for all.
+    for (name, value) in request_headers {
+        let lower = name.to_ascii_lowercase();
+        if GET_FORWARD_SKIP_HEADERS.contains(&lower.as_str()) {
+            continue;
+        }
+        if let (Ok(n), Ok(v)) = (
+            hyper::header::HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            builder = builder.header(n, v);
+        }
     }
 
     let req = builder

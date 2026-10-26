@@ -23,11 +23,16 @@ use exyonq_module_api::acme_integration::CertificatePublicationPort;
 pub struct CoreCertificatePublicationPort {
     pub tls_acceptor: SharedTlsAcceptor,
     pub tls_session_cache: TlsSessionCache,
+    /// Live generation state: the ACME module passes the startup config it
+    /// captured, but a renewal must rebuild the acceptor from the *current*
+    /// config or it would roll back policies installed by later reloads.
+    pub shared: reload::SharedServerState,
 }
 
 impl CertificatePublicationPort for CoreCertificatePublicationPort {
-    fn reload_tls_from_config(&self, config: &AppConfig) -> Result<(), String> {
-        reload::reload_tls_acceptor(config, &self.tls_acceptor, &self.tls_session_cache)
+    fn reload_tls_from_config(&self, _config: &AppConfig) -> Result<(), String> {
+        let current = reload::read_state(&self.shared).config.clone();
+        reload::reload_tls_acceptor(&current, &self.tls_acceptor, &self.tls_session_cache)
             .map_err(|err| err.to_string())
     }
 }

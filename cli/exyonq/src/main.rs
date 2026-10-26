@@ -657,6 +657,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_include_fastcgi_pool_document_root() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            cache_tags: Vec::new(),
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),
@@ -704,6 +705,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_empty_without_overlay_routes() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            cache_tags: Vec::new(),
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),

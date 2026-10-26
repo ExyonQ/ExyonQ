@@ -243,6 +243,32 @@ fn head_matches_htaccess_route(state: &ServerState, head: &[u8]) -> bool {
         .is_some()
 }
 
+/// ADR-062: a matched route with `[[route.response_headers]]` must go through the
+/// Hyper path so the configured headers are applied (Cap067 wire does not yet
+/// materialize arbitrary response headers).
+fn wire_route_response_headers_for_head<'a>(
+    state: &'a ServerState,
+    head: &[u8],
+) -> &'a [(String, String, bool)] {
+    let Some(path) = parse_wire_origin_path(head) else {
+        return &[];
+    };
+    let host = parse_wire_header_pairs(head)
+        .into_iter()
+        .find(|(k, _)| k == "host")
+        .map(|(_, v)| {
+            let trimmed = v.trim();
+            strip_host_port(trimmed).to_string()
+        });
+    let Some((route_idx, _)) = state
+        .route_index
+        .match_route_index_with_host(path, host.as_deref())
+    else {
+        return &[];
+    };
+    state.snapshot.route_response_headers(route_idx)
+}
+
 fn parse_wire_origin_path(head: &[u8]) -> Option<&str> {
     let rest = if head.starts_with(b"GET ") {
         &head[4..]
@@ -670,6 +696,11 @@ where
     // is applied only by the full handler, so an overlay route must not be
     // claimed as sendfile.
     if head_matches_htaccess_route(state, head.as_ref()) {
+        return Some(WirePlan::Hyper(stream, head, rest));
+    }
+    // ADR-062: response headers (e.g. HSTS) are only materialized on the Hyper
+    // path. Force Hyper for any matched route that configures them.
+    if !wire_route_response_headers_for_head(state, head.as_ref()).is_empty() {
         return Some(WirePlan::Hyper(stream, head, rest));
     }
     let view = generation_view_from_state(state);
@@ -1101,6 +1132,7 @@ mod tests {
 
     fn bench_site_config(root: Option<std::path::PathBuf>) -> AppConfig {
         let site = RouteConfig {
+            cache_tags: Vec::new(),
             name: "site".into(),
             r#match: RouteMatch {
                 path: "/site".into(),
@@ -1120,6 +1152,7 @@ mod tests {
             cache: None,
         };
         let api = RouteConfig {
+            cache_tags: Vec::new(),
             name: "api".into(),
             r#match: RouteMatch {
                 path: "/api".into(),
@@ -1905,6 +1938,7 @@ mod ws_tunnel_tests {
 
     pub(super) fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
         let api = RouteConfig {
+            cache_tags: Vec::new(),
             name: "api".into(),
             r#match: RouteMatch {
                 path: "/api".into(),

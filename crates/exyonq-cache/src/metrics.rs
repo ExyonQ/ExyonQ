@@ -156,6 +156,11 @@ pub fn note_fpc_hit() {
     FPC_HIT.fetch_add(1, Ordering::Relaxed);
 }
 
+/// NG-16: a stale entry answered a request because the backend failed.
+pub fn note_fpc_stale() {
+    FPC_STALE_SERVED.fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn note_fpc_miss() {
     FPC_MISS.fetch_add(1, Ordering::Relaxed);
 }
@@ -198,6 +203,8 @@ static FPC_STORE_REJECT_NO_STORE: AtomicU64 = AtomicU64::new(0);
 static FPC_STORE_REJECT_NO_CACHE: AtomicU64 = AtomicU64::new(0);
 static FPC_STORE_REJECT_SET_COOKIE: AtomicU64 = AtomicU64::new(0);
 static FPC_STORE_REJECT_UNSUPPORTED_VARY: AtomicU64 = AtomicU64::new(0);
+/// NG-16: stale-if-error responses served.
+static FPC_STALE_SERVED: AtomicU64 = AtomicU64::new(0);
 static FPC_STORE_REJECT_STATUS: AtomicU64 = AtomicU64::new(0);
 static FPC_STORE_REJECT_STREAMING: AtomicU64 = AtomicU64::new(0);
 static FPC_STORE_REJECT_BODY_TOO_LARGE: AtomicU64 = AtomicU64::new(0);

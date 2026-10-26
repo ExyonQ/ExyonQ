@@ -58,6 +58,9 @@ pub struct CompiledRouteTable {
     pub route_index: RouteIndex,
     /// Parallel to IR `routes` vec order (same as `RouteIndex` source routes).
     pub route_backend_ids: Box<[Option<BackendId>]>,
+    /// ADR-062 `[[route.response_headers]]`, parallel to the route vec:
+    /// `(name, value, always)` triples applied to the response.
+    pub route_response_headers: Box<[Box<[(String, String, bool)]>]>,
 }
 
 /// Resolved upstream cluster metadata (compile-time only — no runtime client).
@@ -152,6 +155,19 @@ pub struct CompiledFullPageCache {
     pub namespace: u16,
     /// Parallel to IR routes: stable non-zero site id derived from route name.
     pub route_site_ids: Box<[u64]>,
+    /// NG-15: request material that shapes the cache key.
+    pub key_query: Box<[String]>,
+    pub key_cookies: Box<[String]>,
+    pub key_headers: Box<[String]>,
+    /// NG-15: request material that forces a bypass.
+    pub bypass_cookies: Box<[String]>,
+    pub bypass_headers: Box<[String]>,
+    /// NG-16: stale retention window for `stale-if-error` (0 = off).
+    pub stale_if_error_secs: u64,
+    /// OL-01: cookies that mark a request as private (never cached).
+    pub private_cookies: Box<[String]>,
+    /// NG-16: invalidation tags per route (parallel to IR routes).
+    pub route_cache_tags: Box<[Box<[String]>]>,
 }
 
 impl Default for CompiledFullPageCache {
@@ -165,6 +181,14 @@ impl Default for CompiledFullPageCache {
             max_ttl_secs: 3600,
             namespace: 4,
             route_site_ids: Box::new([]),
+            key_query: Box::new([]),
+            key_cookies: Box::new([]),
+            key_headers: Box::new([]),
+            bypass_cookies: Box::new([]),
+            bypass_headers: Box::new([]),
+            stale_if_error_secs: 0,
+            private_cookies: Box::new([]),
+            route_cache_tags: Box::new([]),
         }
     }
 }
@@ -200,6 +224,19 @@ pub fn compile_full_page_cache(config: &AppConfig) -> CompiledFullPageCache {
         max_ttl_secs: cfg.max_ttl_seconds,
         namespace: cfg.namespace,
         route_site_ids,
+        key_query: cfg.key.query.iter().cloned().collect(),
+        key_cookies: cfg.key.cookies.iter().cloned().collect(),
+        key_headers: cfg.key.headers.iter().cloned().collect(),
+        bypass_cookies: cfg.bypass.cookies.iter().cloned().collect(),
+        bypass_headers: cfg.bypass.headers.iter().cloned().collect(),
+        stale_if_error_secs: cfg.stale_if_error_secs,
+        private_cookies: cfg.private_cookies.iter().cloned().collect(),
+        route_cache_tags: config
+            .routes
+            .iter()
+            .map(|r| r.cache_tags.clone().into_boxed_slice())
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
     }
 }
 
@@ -220,6 +257,17 @@ impl RuntimeSnapshot {
 
     pub fn backend_table(&self) -> &BackendTable {
         &self.backend_table
+    }
+
+    /// ADR-062: configured response headers for `route_idx` (`name`, `value`,
+    /// `always`). Empty slice when the route configures none.
+    #[inline]
+    pub fn route_response_headers(&self, route_idx: usize) -> &[(String, String, bool)] {
+        self.route_tables
+            .first()
+            .and_then(|t| t.route_response_headers.get(route_idx))
+            .map(|boxed| boxed.as_ref())
+            .unwrap_or(&[])
     }
 
     pub fn route_backend_id(&self, route_idx: usize) -> Option<BackendId> {
@@ -496,9 +544,23 @@ pub fn compile_runtime_plan_from_ir(
         ratelimit: config.modules.ratelimit.enabled,
     };
 
+    let route_response_headers: Box<[Box<[(String, String, bool)]>]> = config
+        .routes
+        .iter()
+        .map(|route| {
+            route
+                .response_headers
+                .iter()
+                .map(|h| (h.name.clone(), h.value.clone(), h.always))
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     let route_tables = vec![CompiledRouteTable {
         route_index,
         route_backend_ids: backend_plan.route_backend_ids,
+        route_response_headers,
     }];
     let listeners = config
         .servers
@@ -788,6 +850,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            cache_tags: Vec::new(),
             name: name.into(),
             r#match: RouteMatch {
                 path: path.into(),

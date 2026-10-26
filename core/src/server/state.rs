@@ -59,10 +59,15 @@ impl ServerState {
 
         let route_index = snapshot.route_tables[0].route_index.clone();
         let fpc_cache = if snapshot.full_page_cache.enabled {
-            Some(Arc::new(exyonq_cache::ResponseCache::with_limits(
-                snapshot.full_page_cache.max_entries,
-                snapshot.full_page_cache.max_total_bytes,
-            )))
+            Some(Arc::new(
+                exyonq_cache::ResponseCache::with_limits(
+                    snapshot.full_page_cache.max_entries,
+                    snapshot.full_page_cache.max_total_bytes,
+                )
+                .with_stale_retention(std::time::Duration::from_secs(
+                    snapshot.full_page_cache.stale_if_error_secs,
+                )),
+            ))
         } else {
             None
         };

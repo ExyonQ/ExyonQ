@@ -182,6 +182,7 @@ mod tests {
             draining: false,
             version: None,
             reload_in_progress: false,
+            tls_cert_not_after_epoch: None,
         }
     }
 

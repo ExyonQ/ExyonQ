@@ -462,6 +462,7 @@ max_ttl_seconds = 300
         path: "/public/index.php".into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
     let key_g2 = build_storage_cache_key(CacheKeyParts {
         site_id,
@@ -476,6 +477,7 @@ max_ttl_seconds = 300
         path: "/public/index.php".into(),
         query: String::new(),
         content_encoding: "identity".into(),
+        vary: String::new(),
     });
 
     let before_reject = fpc_store_rejected_total("generation_mismatch");

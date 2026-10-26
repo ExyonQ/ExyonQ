@@ -29,8 +29,9 @@ pub use metrics::{
     l2_invalidation_receive_total, l2_invalidation_rejected_total, l2_subscriber_overflow_total,
     l2_subscriber_restart_total, note_fpc_bypass, note_fpc_hit, note_fpc_lookup,
     note_fpc_lookup_error, note_fpc_miss, note_fpc_purge_rejected, note_fpc_purge_request,
-    note_fpc_purge_success, note_fpc_store_attempt, note_fpc_store_error, note_fpc_store_eviction,
-    note_fpc_store_rejected, note_fpc_store_success, reset_metrics_for_tests,
+    note_fpc_purge_success, note_fpc_stale, note_fpc_store_attempt, note_fpc_store_error,
+    note_fpc_store_eviction, note_fpc_store_rejected, note_fpc_store_success,
+    reset_metrics_for_tests,
 };
 pub use namespace::{CacheNamespace, HitValidation, HitValidator, NamespaceMetrics, ServeHooks};
 pub use serve::{

@@ -160,6 +160,11 @@ enum CacheCommand {
         #[arg(long)]
         url: Option<String>,
     },
+    /// FPC `site_id` for a route name (the value `EXYONQ_CACHE_SITE_ID` needs).
+    SiteId {
+        /// Route name exactly as declared in `[[route]] name`.
+        route: String,
+    },
     /// Offline: why a URL would hit / miss / bypass FPC under a config.
     Explain {
         /// Candidate ExyonQ config (TOML).
@@ -187,6 +192,8 @@ enum PurgeCommand {
     Site { site_id: u64 },
     /// Purge one runtime generation for a site.
     Generation { site_id: u64, generation: u64 },
+    /// Purge every entry carrying an invalidation tag for a site.
+    Tag { site_id: u64, tag: String },
 }
 
 #[derive(Subcommand)]
@@ -506,6 +513,9 @@ struct ControlResponse {
     /// AP-01: member rows for member_list/member_set.
     #[serde(default)]
     payload: Option<serde_json::Value>,
+    /// Q-09: epoch notAfter of the primary TLS leaf cert, when present.
+    #[serde(default)]
+    tls_cert_not_after_epoch: Option<u64>,
 }
 
 fn main() -> ExitCode {
@@ -1366,6 +1376,10 @@ fn run_cache(command: CacheCommand) -> ExitCode {
             url,
             format,
         } => emit_result(&cache_explain(&config, &url, map_fmt(format))),
+        CacheCommand::SiteId { route } => {
+            println!("{}", exyonq_runtime_plan::stable_fpc_site_id(&route));
+            ExitCode::SUCCESS
+        }
         CacheCommand::Stats { url } => {
             let metrics_url = url
                 .or_else(|| std::env::var("EXYONQ_METRICS_URL").ok())
@@ -1486,6 +1500,7 @@ fn run_purge(command: PurgeCommand, socket: Option<PathBuf>, token: Option<Strin
             site_id,
             generation,
         } => format!("purge generation {site_id} {generation} {token}\n"),
+        PurgeCommand::Tag { site_id, tag } => format!("purge tag {site_id} {tag} {token}\n"),
         PurgeCommand::Url {
             site_id,
             scheme,
@@ -1681,6 +1696,13 @@ fn run_server(command: ServerCommand, socket: Option<PathBuf>) -> ExitCode {
     }
 }
 
+fn chrono_now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 fn run_control(command: &str, socket: Option<PathBuf>, format: ControlOutFormat) -> ExitCode {
     let socket_path = match control_socket(socket) {
         Ok(p) => p,
@@ -1762,6 +1784,10 @@ fn print_response(response: ControlResponse, format: ControlOutFormat) -> ExitCo
         }
         if let Some(version) = response.version {
             print!(" version={version}");
+        }
+        if let Some(not_after) = response.tls_cert_not_after_epoch {
+            let days = (not_after as i64 - chrono_now_epoch() as i64) / 86_400;
+            print!(" tls_cert_not_after={not_after} tls_cert_days_left={days}");
         }
         if let Some(code) = &response.code {
             print!(" code={code}");

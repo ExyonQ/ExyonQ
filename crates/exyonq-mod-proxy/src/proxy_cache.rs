@@ -51,7 +51,14 @@ pub async fn load_get_for_cache(
     request_headers: &[(String, String)],
     metrics: &ProxyHyperMetrics,
 ) -> ProxyCacheLoad {
-    let response = forward_get_streaming(upstream, path_and_query, x_forwarded_for, metrics).await;
+    let response = forward_get_streaming(
+        upstream,
+        path_and_query,
+        x_forwarded_for,
+        metrics,
+        request_headers,
+    )
+    .await;
     prepare_proxy_cache_load(response, max_object_bytes, request_headers).await
 }
 
