@@ -18,7 +18,7 @@ Lab integration tree. Public product release: **v0.8.0** on [exyonq-github](http
 - Supply chain: cargo-auditable embedded SBOM, Rust 1.99.1, `cargo audit` 0 vulnerabilities
 - Docker bases: distroless `cc-debian12:nonroot` (server, ~23 MB) and Wolfi + PHP 8.4-FPM (WordPress) — Docker Scout **0 critical / 0 high / 0 medium** on both images and both architectures
 
-Full notes: [`docs/release/v0.7.0.md`](docs/release/v0.7.0.md) — security audit: `docs/security/audit-v0.7.0.md` (laboratorio).
+Full notes: [v0.8.0 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0) — TLS hardening guide: [`docs/security/tls-hardening.md`](docs/security/tls-hardening.md).
 
 ## Get it
 
@@ -30,7 +30,7 @@ docker pull exyonq/exyonq:0.8.0
 docker pull exyonq/exyonq-wordpress:0.8.0
 ```
 
-Release assets on GitHub: `exyonq-0.7.0-linux-{amd64,arm64}.tar.gz` (versioned layout), `exyonq-linux-{amd64,arm64}.tar.gz` (flat), `SHA256SUMS.txt`, `sbom.cdx.json`, `THIRD_PARTY_NOTICES.md`. Linux binaries are built with `cargo auditable` — verify the embedded SBOM with `cargo audit bin`.
+Release assets on GitHub: `exyonq-v0.8.0-linux-amd64`, `exyonq-v0.8.0-linux-arm64`, and `SHA256SUMS`. Each binary reports `exyonq 0.8.0` and `source_revision=f814bbf7e206581c1d8fea56e022ef9286d2cf26`.
 
 ## Build
 
