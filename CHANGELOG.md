@@ -21,6 +21,46 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
+## [0.8.0] — published on exyonq-github
+
+```text
+RELEASE_AUTHORITY = exyonq-github
+PUBLICATION_STATUS = PUBLISHED
+PUBLIC_RELEASE = v0.8.0
+RELEASE_COMMIT = f814bbf7e206581c1d8fea56e022ef9286d2cf26
+GITHUB_RELEASE = https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0
+GHCR = ghcr.io/exyonq/exyonq:0.8.0 @ sha256:642e1e79a35dbd65d35402381b182275190e537f9df75a888fb54b536bde44e7
+GHCR_WP = ghcr.io/exyonq/exyonq-wordpress:0.8.0 @ sha256:6fa222fca8cc8b9fb1f0059fdecda000a8e478de4ac65de7a5d02b0f2c00d623
+DOCKERHUB = exyonq/exyonq:0.8.0 @ sha256:642e1e79a35dbd65d35402381b182275190e537f9df75a888fb54b536bde44e7
+DOCKERHUB_WP = exyonq/exyonq-wordpress:0.8.0 @ sha256:6fa222fca8cc8b9fb1f0059fdecda000a8e478de4ac65de7a5d02b0f2c00d623
+LINUX_AMD64 = exyonq-v0.8.0-linux-amd64 @ sha256:71f8ce01f46a2d81ed481da1c96ea60cf783de1a2dc801cabae575c808c9e205
+LINUX_ARM64 = exyonq-v0.8.0-linux-arm64 @ sha256:08952427c5b28f84de7886fc81dcb24a737683aad2b83f701e8f873420529439
+LATEST_CHANGED = NO
+TOTAL_COMPAT_PROMISE = FORBIDDEN (Gate A not closed)
+```
+
+### Added
+
+- ACME bootstrap from zero: a server configured with ACME starts with no
+  certificate on disk; HTTP-01 is answered on the cleartext listener and
+  the issued certificate is installed without a restart.
+- Route response headers on the wire (`[[route.response_headers]]`, e.g. HSTS).
+- Multi-listen: every `[[server]].listen` address is bound and served.
+- Full-page cache: direct purge, store/lookup seams, coordinating purge.
+- Gates: unsafe-allowlist, publication-privacy. TLS hardening guide.
+
+### Changed
+
+- TLS listeners fail closed while certificate material is pending; a reload
+  removing `[server.tls]` intentionally reopens cleartext serving.
+
+### Security
+
+- zstd 0.14.3 / zstd-safe 8.2.0 (RUSTSEC-2026-0391..0406).
+- Docker Scout on both images (amd64 + arm64): 0 critical, 0 high, 0 medium.
+
+---
+
 ## [Unreleased]
 
 ### Notes
