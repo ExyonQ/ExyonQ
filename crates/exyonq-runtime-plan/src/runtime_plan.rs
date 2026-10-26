@@ -52,6 +52,9 @@ pub struct CompiledListener {
     pub route_table_id: usize,
 }
 
+/// ADR-062 `[[route.response_headers]]` triples: `(name, value, always)`.
+pub type RouteResponseHeaderSet = Box<[(String, String, bool)]>;
+
 /// Prebuilt route table for a listener.
 #[derive(Clone)]
 pub struct CompiledRouteTable {
@@ -60,7 +63,7 @@ pub struct CompiledRouteTable {
     pub route_backend_ids: Box<[Option<BackendId>]>,
     /// ADR-062 `[[route.response_headers]]`, parallel to the route vec:
     /// `(name, value, always)` triples applied to the response.
-    pub route_response_headers: Box<[Box<[(String, String, bool)]>]>,
+    pub route_response_headers: Box<[RouteResponseHeaderSet]>,
 }
 
 /// Resolved upstream cluster metadata (compile-time only — no runtime client).
@@ -544,7 +547,7 @@ pub fn compile_runtime_plan_from_ir(
         ratelimit: config.modules.ratelimit.enabled,
     };
 
-    let route_response_headers: Box<[Box<[(String, String, bool)]>]> = config
+    let route_response_headers: Box<[RouteResponseHeaderSet]> = config
         .routes
         .iter()
         .map(|route| {

@@ -772,8 +772,18 @@ mod tests {
         let handle = tokio::spawn(async move {
             let _ = run_control_socket(&path_clone, Path::new("/tmp/cfg.toml"), port).await;
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        // Poll instead of a fixed sleep: bind+chmod is async and a loaded
+        // host can exceed any fixed delay (observed flaky under parallel runs).
+        let mut mode = 0;
+        for _ in 0..200 {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                mode = meta.permissions().mode() & 0o777;
+                if mode == CONTROL_SOCKET_MODE {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         assert_eq!(mode, CONTROL_SOCKET_MODE, "mode={mode:#o}");
         handle.abort();
         let _ = handle.await;

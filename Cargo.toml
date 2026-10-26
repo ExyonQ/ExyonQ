@@ -72,7 +72,7 @@ clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 brotli = "8"
 # Cap071: buffered encode_all only — no legacy / dictionary / arrays defaults.
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14.3", default-features = false }
 http = "1"
 http-body = "1"
 http-body-util = "0.1"

@@ -815,6 +815,9 @@ async fn handle_request(
     result
 }
 
+// The Err side is a ready-to-send response on a cold path; boxing it would
+// only add an allocation to every error return.
+#[allow(clippy::result_large_err)]
 async fn handle_request_with_modules(
     state: Arc<ServerState>,
     req: Request<Incoming>,
