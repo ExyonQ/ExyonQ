@@ -889,11 +889,11 @@ mod tests {
     #[test]
     fn stale_lookup_expires_after_the_window() {
         let cache = ResponseCache::with_limits(10, 1024 * 1024)
-            .with_stale_retention(Duration::from_millis(20));
+            .with_stale_retention(Duration::from_millis(200));
         insert_plain(&cache, 1, "/w", b"w", Duration::from_millis(1));
-        std::thread::sleep(Duration::from_millis(10));
-        assert!(cache.lookup_stale(&sample_key_for_site(1, "/w")).is_some());
         std::thread::sleep(Duration::from_millis(30));
+        assert!(cache.lookup_stale(&sample_key_for_site(1, "/w")).is_some());
+        std::thread::sleep(Duration::from_millis(400));
         assert!(
             cache.lookup_stale(&sample_key_for_site(1, "/w")).is_none(),
             "past the retention window the entry is not stale-servable"
