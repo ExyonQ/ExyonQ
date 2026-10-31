@@ -49,7 +49,7 @@ MARKER='Licensed under the Apache License, Version 2.0'
 should_skip_path() {
   local path="$1"
   case "$path" in
-    tests/*|fuzz/*|benchmarks/*|target/*|*/examples/*|*/benches/*) return 0 ;;
+    fuzz/*|benchmarks/*|target/*|*/examples/*|*/benches/*|*/generated/*|*/fixtures/*) return 0 ;;
   esac
   return 1
 }
@@ -57,7 +57,7 @@ should_skip_path() {
 in_scope_crate() {
   local path="$1"
   case "$path" in
-    core/*|modules/*|cli/*|compat/*|config/*|\
+    core/*|modules/*|cli/*|compat/*|config/*|crates/*|scripts/*|tests/*|\
     module-api/*|addon-api/*|addon-sdk/*|wasm/exyonq-wasm-host/*|xtask/*) return 0 ;;
   esac
   return 1
@@ -82,11 +82,11 @@ insert_header() {
   tmp="$(mktemp)"
 
   if head -n1 "$file" | grep -q '^#!'; then
-    { head -n1 "$file"; printf '%s' "$HEADER"; tail -n +2 "$file"; } >"$tmp"
+    { head -n1 "$file"; printf '%s\n' "$HEADER"; tail -n +2 "$file"; } >"$tmp"
   elif head -n1 "$file" | grep -q '^#!\['; then
-    { printf '%s' "$HEADER"; cat "$file"; } >"$tmp"
+    { printf '%s\n' "$HEADER"; cat "$file"; } >"$tmp"
   else
-    printf '%s' "$HEADER" >"$tmp"
+    printf '%s\n' "$HEADER" >"$tmp"
     cat "$file" >>"$tmp"
   fi
 
