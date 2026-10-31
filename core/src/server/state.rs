@@ -168,4 +168,43 @@ impl ServerState {
         let m = &self.config.modules.metrics;
         m.enabled && (path == m.path.as_str() || path == m.health_path.as_str())
     }
+
+    /// Route-bound features the fast paths (wire proxy GET, epoll sendfile,
+    /// blocking static pool, `/site/` static shortcut) cannot honor — the
+    /// request must take the full dispatch path.
+    ///
+    /// AUDIT-D1/D2/D7: wire and static fast paths implement transport only —
+    /// they cannot emit a route 401 (`auth_basic`), per-zone 429
+    /// (`limit_req_zone`), `sub_filter` transforms, mirror subrequests,
+    /// `slice` assembly, `.htaccess` overlays, `[[cache_policy]]` stores, or
+    /// `[[route.response_headers]]`. Cap056 added this gate for `route.cache`
+    /// alone; every route-bound feature shipped since silently no-ops on
+    /// fast paths. Extend this check whenever a feature binds to a route.
+    pub fn route_requires_full_dispatch(&self, route_idx: usize) -> bool {
+        self.snapshot.cache_policy_for_route(route_idx).is_some()
+            || !self.snapshot.route_response_headers(route_idx).is_empty()
+            || self
+                .snapshot
+                .htaccess_site_id_for_route(route_idx)
+                .is_some()
+            || self.config.routes.get(route_idx).is_some_and(|route| {
+                let modules = &self.config.modules;
+                let name = route.name.as_str();
+                modules.auth.routes.contains_key(name)
+                    || modules.ratelimit.routes.contains_key(name)
+                    || modules.sub_filter.routes.contains_key(name)
+                    || modules.mirror.routes.contains_key(name)
+                    || modules.slice.routes.contains_key(name)
+            })
+    }
+
+    /// Generation-wide features no fast path can honor at all: FPC must see
+    /// every eligible GET (lookup/store/stale/`X-Cache`), gunzip transforms
+    /// response bodies, and response-phase WAF rules inspect what fast paths
+    /// emit unchecked.
+    pub fn wire_incompatible_features_active(&self) -> bool {
+        self.snapshot.full_page_cache.enabled
+            || self.gunzip_configured()
+            || self.waf.inspects_responses()
+    }
 }

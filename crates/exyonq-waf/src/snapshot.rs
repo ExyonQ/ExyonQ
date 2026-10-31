@@ -114,6 +114,18 @@ impl CompiledWafSnapshot {
         })
     }
 
+    /// Any enabled rule bound to a response phase (headers or body chunk).
+    pub(crate) fn inspects_responses(&self) -> bool {
+        self.rulesets.iter().any(|rs| {
+            rs.enabled
+                && rs.crs_rules.iter().any(|rule| {
+                    rule.enabled
+                        && (rule.phases.contains(&WafPhase::ResponseHeaders)
+                            || rule.phases.contains(&WafPhase::ResponseBodyChunk))
+                })
+        })
+    }
+
     pub(crate) fn evaluate_phase(
         &self,
         phase: WafPhase,

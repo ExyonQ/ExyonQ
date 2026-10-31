@@ -28,7 +28,7 @@ pub use direct_purge::{test_has, test_insert, DirectL1PurgePort};
 pub use global::{global_response_cache, global_singleflight, reset_global_for_tests, GlobalCache};
 pub use key::{
     build_cache_key, build_storage_cache_key, canonicalize_query, canonicalize_query_safe,
-    is_tracking_query_param, normalize_host, CacheKey, CacheKeyParts,
+    is_tracking_query_param, normalize_host, url_group, CacheKey, CacheKeyParts,
 };
 pub use metrics::{
     append_fpc_prometheus, cache_bytes_current, cache_entries_current, cache_evictions_total,

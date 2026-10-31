@@ -44,6 +44,7 @@ fn serve_proxy_wire_hook(
     head: bytes::Bytes,
     rest: bytes::Bytes,
     real_ip: Option<exyonq_module_api::real_ip::RealIpTrust>,
+    route_gate: Option<Arc<exyonq_module_api::wire_module_hooks::WireRouteGate>>,
 ) -> proxy_wire::ProxyWireServeFuture {
     let xff = hyper::header::HeaderValue::from_str(&x_forwarded_for)
         .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("0.0.0.0"));
@@ -58,6 +59,7 @@ fn serve_proxy_wire_hook(
             rest,
             xff,
             real_ip,
+            route_gate,
             #[cfg(target_os = "linux")]
             None,
         )

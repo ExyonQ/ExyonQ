@@ -57,11 +57,11 @@ const MSG_NOSIGNAL: i32 = 0x4000;
 /// Terminal 503 for a sendfile registration that fails after the fd left the Tokio side
 /// (async `EPOLL_CTL_ADD` failure). Best-effort write + close — never a silent drop.
 const DRAINING_RESPONSE: &[u8] =
-    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\ndraining";
+    b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\ndraining";
 
-const SENDFILE_TERMINAL_503: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
+const SENDFILE_TERMINAL_503: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
 /// HEAD begin-reject: same Content-Length, zero body (HTTP/1.1 HEAD).
-const SENDFILE_TERMINAL_503_HEAD: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\n";
+const SENDFILE_TERMINAL_503_HEAD: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\n";
 
 fn interest_reading() -> u32 {
     static_epoll::interest_reading()

@@ -199,6 +199,7 @@ fn store_load(
         load.static_identity,
         hooks.namespace,
         load.invalidation_tags,
+        None,
         hooks.metrics,
     );
 

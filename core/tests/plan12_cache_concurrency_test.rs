@@ -83,6 +83,7 @@ fn insert_test(cache: &ResponseCache, key: exyonq_cache::CacheKey, ttl: Duration
         None,
         STATIC_CACHE_NAMESPACE,
         Arc::from([]),
+        None,
         NamespaceMetrics::NONE,
     );
 }

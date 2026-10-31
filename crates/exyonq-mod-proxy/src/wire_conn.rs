@@ -990,6 +990,7 @@ where
         carry,
         x_forwarded_for,
         real_ip,
+        None,
         #[cfg(target_os = "linux")]
         peer_fd,
     )
@@ -1008,6 +1009,7 @@ pub async fn serve_with_labels<S>(
     _carry: Bytes,
     x_forwarded_for: HeaderValue,
     real_ip: Option<exyonq_module_api::real_ip::RealIpTrust>,
+    route_gate: Option<Arc<exyonq_module_api::wire_module_hooks::WireRouteGate>>,
     #[cfg(target_os = "linux")] peer_fd: Option<RawFd>,
 ) -> Result<u16>
 where
@@ -1018,7 +1020,7 @@ where
     if rt.cluster_generation() != generation {
         write_fixed_close(
             &mut stream,
-            b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
+            b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
         )
         .await?;
         exyonq_module_api::wire_record_response(503);
@@ -1028,6 +1030,11 @@ where
     let pinned_host = host_header_raw(first_head.as_ref()).map(|h| h.to_vec());
     let mut head = first_head;
     let mut admission_status: u16 = 200;
+    // AUDIT-D1: opaque route token pinned on the first request (when the
+    // composition layer supplies a gate). Keep-alive requests resolving to a
+    // different route — or to one that needs full dispatch — end the
+    // connection, matching the LA-001 Host-switch close.
+    let mut pinned_route_token: Option<Option<u64>> = None;
     // The core wire owner admits the first request before WAF. This loop owns every
     // subsequent keepalive request, so it admits those here before upstream dispatch.
     let mut first_request_was_admitted = true;
@@ -1058,12 +1065,32 @@ where
         let Some(path_and_query) = parse_get_path_and_query(head.as_ref()) else {
             write_fixed_close(
                 &mut stream,
-                b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 11\r\n\r\nBad Request",
+                b"HTTP/1.1 400 Bad Request\r\nServer: exyonq\r\nConnection: close\r\nContent-Length: 11\r\n\r\nBad Request",
             )
             .await?;
             exyonq_module_api::wire_record_response(400);
             return Ok(400);
         };
+
+        // AUDIT-D1: the wire admission covers the first request only — this
+        // loop owns keep-alive requests, so each must resolve to the same
+        // wire-compatible route that was admitted. A route switch ends the
+        // connection (fail closed, same contract as the Host-switch close).
+        if let Some(gate) = route_gate.as_ref() {
+            let path = path_and_query.split('?').next().unwrap_or(path_and_query);
+            let host = this_host
+                .as_deref()
+                .and_then(|h| std::str::from_utf8(h).ok());
+            let token = gate(path, host);
+            match pinned_route_token {
+                None => pinned_route_token = Some(token),
+                Some(pinned) if pinned == token => {}
+                Some(_) => {
+                    let _ = stream.shutdown().await;
+                    return Ok(admission_status);
+                }
+            }
+        }
 
         // NG-11: per-request effective client IP — trusted peers recover the
         // real client from the configured forwarding header; untrusted peers
@@ -1137,7 +1164,7 @@ where
                 None => {
                     write_fixed_close(
                         &mut stream,
-                        b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
+                        b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
                     )
                     .await?;
                     exyonq_module_api::wire_record_response(503);
@@ -1159,7 +1186,7 @@ where
                     None => {
                         write_fixed_close(
                             &mut stream,
-                            b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
+                            b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nConnection: close\r\nContent-Length: 19\r\n\r\nService Unavailable",
                         )
                         .await?;
                         exyonq_module_api::wire_record_response(503);
@@ -1209,7 +1236,7 @@ where
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {
                     write_fixed_close(
                         &mut stream,
-                        b"HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\nContent-Length: 15\r\n\r\nGateway Timeout",
+                        b"HTTP/1.1 504 Gateway Timeout\r\nServer: exyonq\r\nConnection: close\r\nContent-Length: 15\r\n\r\nGateway Timeout",
                     )
                     .await?;
                     exyonq_module_api::wire_record_response(504);
@@ -1367,6 +1394,11 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
+    /// Serializes tests that mutate the process-global [`pin_runtime`]/slot
+    /// bindings — a sibling re-pin mid-serve flips `cluster_generation()` and
+    /// fails the generation gate with an unrelated 503.
+    static TEST_RT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn install_test_runtime() -> Arc<ProxyRuntime> {
         let rt = Arc::new(ProxyRuntime::new());
         pin_runtime(Arc::clone(&rt));
@@ -1406,6 +1438,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_generation_mismatch_writes_503() {
+        let _rt_guard = TEST_RT_LOCK.lock().await;
         let rt = Arc::new(ProxyRuntime::new());
         pin_runtime(Arc::clone(&rt));
         // Bound generation 0; serve with mismatched generation 99.
@@ -1447,6 +1480,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_path_parse_miss_writes_400() {
+        let _rt_guard = TEST_RT_LOCK.lock().await;
         // LA-PROXY-PATH400-COV-001: non-UTF-8 path → fail-closed 400 (not silent Ok).
         let rt = Arc::new(ProxyRuntime::new());
         pin_runtime(Arc::clone(&rt));
@@ -1499,6 +1533,99 @@ mod tests {
         assert!(s.starts_with("HTTP/1.1 400"), "{s}");
     }
 
+    /// AUDIT-D1: a keep-alive request resolving to a different admission
+    /// token than the pinned first request must close the connection — the
+    /// old code proxied every later path verbatim through the pinned cluster.
+    #[tokio::test]
+    async fn keepalive_route_gate_mismatch_closes_connection() {
+        let _rt_guard = TEST_RT_LOCK.lock().await;
+        // Upstream answers the first request with a known-length 200 so the
+        // downstream write ends KeepAlive and the loop reads request #2.
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream");
+        let upstream_addr = upstream.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let (mut s, _) = upstream.accept().await.expect("upstream accept");
+            let mut buf = vec![0u8; 2048];
+            let n = tokio::io::AsyncReadExt::read(&mut s, &mut buf)
+                .await
+                .expect("upstream read");
+            assert!(n > 0);
+            tokio::io::AsyncWriteExt::write_all(
+                &mut s,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+            )
+            .await
+            .expect("upstream write");
+            // Hold the upstream keep-alive socket open; a second upstream
+            // request must never arrive (gate closes first).
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let rt = Arc::new(ProxyRuntime::new());
+        pin_runtime(Arc::clone(&rt));
+        rt.bind_compiled_slots(
+            1,
+            &[ProxyCompiledSlot::legacy_single(
+                0,
+                "backend",
+                format!("http://{upstream_addr}"),
+                Duration::from_millis(500),
+            )],
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+            let mut buf = vec![0u8; 4096];
+            let n = tokio::io::AsyncReadExt::read(&mut stream, &mut buf)
+                .await
+                .expect("read r1");
+            let r1 = String::from_utf8_lossy(&buf[..n]).into_owned();
+            // Request #2 on the same keep-alive connection: different route
+            // token → connection must close with no response.
+            tokio::io::AsyncWriteExt::write_all(
+                &mut stream,
+                b"GET /api/private HTTP/1.1\r\nHost: x\r\n\r\n",
+            )
+            .await
+            .expect("write r2");
+            let n2 = tokio::io::AsyncReadExt::read(&mut stream, &mut buf)
+                .await
+                .expect("read r2");
+            (r1, n2)
+        });
+        let (server, _) = listener.accept().await.expect("accept");
+        #[cfg(target_os = "linux")]
+        let peer_fd = Some(std::os::fd::AsRawFd::as_raw_fd(&server));
+        // Gate mirrors the core admission: only the first route is wire-safe.
+        let gate: Arc<exyonq_module_api::wire_module_hooks::WireRouteGate> =
+            Arc::new(|path: &str, _host: Option<&str>| (path == "/api/a").then_some(1u64));
+        let status = serve_with_labels(
+            0,
+            1,
+            "route".into(),
+            "backend".into(),
+            server,
+            Bytes::from_static(b"GET /api/a HTTP/1.1\r\nHost: x\r\n\r\n"),
+            Bytes::new(),
+            HeaderValue::from_static("127.0.0.1"),
+            None,
+            Some(gate),
+            #[cfg(target_os = "linux")]
+            peer_fd,
+        )
+        .await
+        .expect("serve");
+        assert_eq!(status, 200);
+        let (r1, n2) = client.await.expect("join");
+        assert!(r1.starts_with("HTTP/1.1 200"), "{r1}");
+        assert_eq!(n2, 0, "gate mismatch must close with no response");
+    }
+
     #[test]
     fn might_use_rejects_websocket_upgrade() {
         let head = b"GET /api/ws-echo HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
@@ -1513,6 +1640,7 @@ mod tests {
 
     #[tokio::test]
     async fn upstream_for_cluster_after_bind() {
+        let _rt_guard = TEST_RT_LOCK.lock().await;
         let rt = install_test_runtime();
         let target = rt.upstream_for_cluster(0).expect("cluster 0");
         assert!(target
@@ -1523,6 +1651,7 @@ mod tests {
 
     #[test]
     fn cluster_generation_tracks_bind() {
+        let _rt_guard = TEST_RT_LOCK.blocking_lock();
         let rt = install_test_runtime();
         assert_eq!(rt.cluster_generation(), 1);
         rt.bind_compiled_slots(
