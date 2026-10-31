@@ -966,7 +966,6 @@ async fn write_fixed_close<S: AsyncWrite + Unpin>(
 }
 
 /// Compatibility entry point (tests/other callers): labels default to proxy/proxy.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)] // peer_fd is cfg(linux)-only; arg count differs per OS
 pub async fn serve<S>(
     cluster_id: u32,
