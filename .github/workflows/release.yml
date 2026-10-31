@@ -77,7 +77,7 @@ jobs:
       - name: Generate release compliance artifacts
         shell: bash
         run: bash scripts/legal/generate-release-compliance-artifacts.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-compliance
           path: |
@@ -177,7 +177,7 @@ jobs:
               usr etc build-manifest.json build-manifest.txt
             rm -rf "$STAGE"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -249,7 +249,7 @@ jobs:
           ls -la dist/packages/*.{deb,rpm}
           # Promote into dist/ for artifact upload naming compatibility.
           cp -f dist/packages/*.deb dist/packages/*.rpm dist/
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: exyonq-linux-packages-${{ matrix.arch }}
           path: |
@@ -360,7 +360,7 @@ jobs:
           echo "ROOT_SIGNED_OBJECT=SHA256SUMS.txt"
           echo "RELEASE_MANIFEST_INCLUDED_IN_SHA256SUMS=YES"
           echo "ARTIFACTS_INCLUDED_IN_SHA256SUMS=YES"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: checksums
           path: |
