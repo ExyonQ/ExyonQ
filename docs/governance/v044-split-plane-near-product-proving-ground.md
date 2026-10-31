@@ -37,7 +37,7 @@ Current evidence does not justify further engineering investment toward the +25%
 ## Evidence integrity notes
 
 | Gate | Status |
-|------|--------|
+| --- | --- |
 | P4 competitive (7 reps, latency valid) | **MEASURED** |
 | 30-min endurance | **PASS** |
 | Anti-cheat static audit | **PASS** |

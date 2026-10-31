@@ -32,7 +32,7 @@ This WIP does **not** mutate product, harness semantics, tests, dependencies, or
 ## Authority
 
 | Item | Value |
-|------|-------|
+| --- | --- |
 | Canonical HEAD (unchanged) | `48674836861851217c968720a00e18b03b693b51` |
 | Canonical TREE | `65ec6aade63f60e32f3ee9927ef8e7229015bcca` |
 | Authoritative AMD64 | `20260902T080000Z` |
@@ -47,7 +47,7 @@ Machine terminal: [v044-static-p8rbr-evidence-accounting-documentation-integrati
 ## Resource accounting correction
 
 | Prior claim (573a89fb) | Raw evidence | Corrected |
-|------------------------|--------------|-----------|
+| --- | --- | --- |
 | `FD_SERIES_AMD64=3440,3540,…` | `RESOURCES/series.txt` `FD=12` | `12,12,12,12,12,12,12,12` |
 | (no ARM64 FD series) | ARM64 `FD=12` | `12,12,12,12,12,12,12,12` |
 | `THREAD_SERIES=NOT_CAPTURED` + `THREAD_STAIRCASE=0` | `THREADS=8` constant | series captured; staircase `0` = no growth |

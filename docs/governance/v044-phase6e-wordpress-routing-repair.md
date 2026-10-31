@@ -46,7 +46,7 @@ fcgi-front-controller|pool_id|/index.php
 ## Proof
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | GENERIC_FRONT_CONTROLLER / DIRECTORY_INDEX | PASS (real PHP fixture) |
 | PRETTY_PERMALINK_POST / PAGE | PASS |
 | WORDPRESS_FRONT_CONTROLLER | PASS |

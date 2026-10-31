@@ -18,7 +18,7 @@ Admit a fixed probe set + one rematch target (not a nginx expression list).
 ### IR fields on `RouteConfig`
 
 | Field | Type | Default when `fallback_rewrite` set |
-|-------|------|-------------------------------------|
+| --- | --- | --- |
 | `fallback_rewrite` | `Option<String>` | — (Cap035-valid absolute path; no `?`/`#`) |
 | `try_uri` | `Option<bool>` | `true` |
 | `try_uri_dir` | `Option<bool>` | `false` |
@@ -47,10 +47,10 @@ On a matched route with `root` + `fallback_rewrite` (rematch depth 0):
 ### Migrator (nginx)
 
 | Input | Emit |
-|-------|------|
+| --- | --- |
 | `try_files $uri /index.html;` | Supported → flags + `fallback_rewrite="/index.html"` |
 | `try_files $uri $uri/ /index.php?$args;` (or `$is_args$args`) | Supported → `try_uri_dir=true`, `fallback_rewrite="/index.php"` + note query preserved |
-| `@named`, other vars, intermediate literals | Unsupported / Error (unchanged fail-closed) — SoT `F1-R08`…`F1-R10` in [`F1_RESIDUALS`](../../ROADMAP%20EXYONQ/F1_RESIDUALS.md) |
+| `@named`, other vars, intermediate literals | Unsupported / Error (unchanged fail-closed) — SoT `F1-R08`…`F1-R10` in `F1_RESIDUALS` (local lab path, not published) |
 
 ## Consequences
 

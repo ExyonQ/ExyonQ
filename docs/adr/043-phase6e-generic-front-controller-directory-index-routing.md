@@ -150,7 +150,7 @@ Expected cost on FC/DI FastCGI requests only: small metadata probes (typically 1
 ### Alternatives
 
 | ID | Option | Verdict |
-|----|--------|---------|
+| --- | --- | --- |
 | A | CFD-native compiled DI/FC before `execute_get` | ACCEPT (selected with B semantics) |
 | B | Project htaccess/overlay DI/FC subset into CFD generation | ACCEPT PREFERRED semantics |
 | C | Call core htaccess runtime from CFD per request | REJECT (process isolation) |

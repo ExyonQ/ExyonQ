@@ -14,7 +14,7 @@ release process.
 Vocabulary:
 
 | Field | Meaning |
-|-------|---------|
+| --- | --- |
 | CURRENT vs HISTORICAL | Whether the claim is the live authority for that gate |
 | CANONICAL | May close a phase/gate when CURRENT |
 | NON_CANONICAL | Diagnostic / superseded / invalid harness |
@@ -23,7 +23,7 @@ Vocabulary:
 ## Authoritative current bindings
 
 | Claim / phase | Result | Product revision | Host / arch | Command / gate | Timestamp / run ID | Evidence location | CURRENT/HISTORICAL | Canonical? |
-|---------------|--------|------------------|-------------|----------------|--------------------|-------------------|--------------------|------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | R5 private publication v0.4.3 | PASS / CLOSED | `3a8af75…` (github); post-docs `22b20df…` | GitHub + GHCR | main FF + signed tag + GitHub Release + Cosign OCI | 2026-08-04 | https://github.com/ExyonQ/ExyonQ/releases/tag/v0.4.3 ; GHCR `@sha256:ab02b5ff…` — **release authority = exyonq-github** | CURRENT | YES |
 | Superseded release candidate | SUPERSEDED | `f25137bff3b6fc0d4fc1b7f4c6d736b100fae741` | historical | reparent / rematerialize | 2026-08-04 | `.exyonq-local/release/r5m-promote-v043/` (lab) | HISTORICAL | NO — SUPERSEDED_RELEASE_CANDIDATE |
 | R5 version bump 0.4.2→0.4.3 | PASS | `e8fa4dca9336bb8293b56ca8ad47e24bfd4fd792` | Darwin worktree | Cargo/packaging/CHANGELOG/release allowlists | 2026-08-04 | git commit `e8fa4dc` | HISTORICAL | YES (pre-publication) |
@@ -57,7 +57,7 @@ Vocabulary:
 ## Explicitly non-canonical / historical
 
 | Item | Classification | Notes |
-|------|----------------|-------|
+| --- | --- | --- |
 | Owner-named open tip `6270968…` without post-open lint commits | HISTORICAL_OPEN_TIP | Superseded by freeze relock `e63325d…` (fmt/clippy/harness only; Cargo.toml/lock unchanged) |
 | `PRODUCT_QUALIFIED_REVISION=2f8e869…` as freeze proof | HISTORICAL_PRE_R4 | Must not qualify current freeze tip |
 | Historical WRR proof @ `b70148e` | HISTORICAL_STRATEGY | Not used; tip-bound `r5-wrr-20260803T162708Z` is CURRENT |

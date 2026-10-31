@@ -31,7 +31,7 @@ Core Static correctness and security are dual-arch proven on native Oracle ARM64
 Five CFD Static source files bound at entry; **content SHA-256** match across AMD64 reference digests (Darwin bind) and Oracle ARM64 tree:
 
 | File | Content SHA-256 |
-|------|-----------------|
+| --- | --- |
 | `route_table.rs` | `32aba8c9…` |
 | `composite.rs` | `ba77af85…` |
 | `static_serve.rs` | `b5d29047…` |
@@ -44,7 +44,7 @@ Five CFD Static source files bound at entry; **content SHA-256** match across AM
 ## Native ARM64 execution
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Host | `vnic-quasar` (Oracle Cloud A1) |
 | `uname -m` | `aarch64` |
 | Kernel | `6.17.0-1018-oracle` |
@@ -76,7 +76,7 @@ Run `20260901T171500Z`: `CORE_MATRIX=PASS`. Highlights:
 ## Preserved nonblocking qualifications
 
 | Item | Status |
-|------|--------|
+| --- | --- |
 | Symlink TOCTOU | `BOUNDED_RESIDUAL_PRESERVED` (Phase 8 not authorized) |
 | pread fallback runtime | `NOT_MEASURED_WITH_REASON` |
 | EAGAIN / partial write | `SOURCE_PROVEN_PRESERVED` |
@@ -88,7 +88,7 @@ Run `20260901T171500Z`: `CORE_MATRIX=PASS`. Highlights:
 ## Specialist audits (run `20260901T171500Z`)
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | [Vertex architect](d7d0e3bb-db4b-4e65-80b6-0bf353965018) | **ACCEPT** — ADR-044 preserved; no ARM64 fork; sendfile on StaticSend |
 | [Security engineer](e528a7ff-3b05-4721-8a7d-d0359b077346) | **CONDITIONAL** — zero probe leaks; TOCTOU bounded residual preserved |
 | [Research engineer](0ef56241-db79-4076-b02a-38a3b28ca689) | **PASS** — Linux ARM64 syscalls align with `static_serve.rs` |
@@ -104,7 +104,7 @@ Documented in evidence `LEDGER/invalid_runs.txt` — harness bugs only (digest p
 ## Harness (evidence-only)
 
 | Script | Role |
-|--------|------|
+| --- | --- |
 | `scripts/reality/run-static-dual-arch-qualification-oracle.sh` | Native ARM64 matrix on Oracle |
 | `scripts/remote/v044-static-dual-arch-qualification-oracle.sh` | rsync + remote run + evidence pull |
 

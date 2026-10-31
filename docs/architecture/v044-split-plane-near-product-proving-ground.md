@@ -32,7 +32,7 @@ IL-F showed embedding EP-C geometry inside Cap067/Tokio erased the advantage. Th
 **SELECTED = B_SEPARATE_DATAPLANE_PROCESS** (see experiment `ADR-process-model.md`).
 
 | Option | Verdict |
-|--------|---------|
+| --- | --- |
 | A same-process isolated domain | Reject for proving ground (IL-F contamination risk) |
 | **B separate DP process + atomic gen publish** | **Selected** |
 | C SHM snapshot | Deferred |
@@ -63,7 +63,7 @@ Evidence gaps on Netcup terminal run: correctness matrix capture empty; generati
 7 interleaved repetitions vs ExyonQ / NGINX / OLS / HAProxy. Median primary metrics:
 
 | Product | RPS | CPU µs/req | RSS KiB | P99 µs |
-|---------|-----|------------|---------|--------|
+| --- | --- | --- | --- | --- |
 | **SPPG** | **94,145** | **17.68** | **2,984** | **3,710** |
 | OLS (best RPS) | 86,133 | 22.94 | 3,608 | 4,320 |
 | NGINX | 85,166 | 26.40 | 6,064 | 4,540 |

@@ -36,7 +36,7 @@ Darwin/macOS: authoritative e2e scripts call `e2e_require_linux` and exit `NOT_E
 ## Axes and oracles
 
 | Axis | Cases | Oracle (must fail on timeout) |
-|------|-------|-------------------------------|
+| --- | --- | --- |
 | CORE_STATIC | `scripts/e2e/static-e2e.sh` | GET/HEAD; SHA256 for 1KiB, 64KiB, **1MiB**; traversal + symlink escape reject; progress after reject |
 | CORE_PROXY | `scripts/e2e/proxy-e2e.sh` → `suites/proxy-suite.sh` | healthy upstream; down→502; timeout→502/504; reload identity; **1MiB body SHA256**; HTTP/1.1 KA two-request **or** Cap034 documented single-request/`Connection: close` lifecycle |
 | CORE_FASTCGI | `fastcgi-php-fpm-e2e.sh` + `03b-wordpress-profile.sh` | real PHP-FPM GET/POST/502/503/504; WP-profile front + wp-admin PHP (docroot + case dir must be traversable by `www-data`) |
@@ -75,7 +75,7 @@ Prior package (identity-compatible; Oracle not re-run under Linux-repeat WIP):
 ```
 
 | Platform | Result | Notes |
-|----------|--------|-------|
+| --- | --- | --- |
 | Darwin local | `NOT_EXECUTED` | `e2e_require_linux`; not required for green after Netcup-3× authorization |
 | Netcup amd64 (prior final2) | **3/3 PASS** | `final2-netcup/f2-netcup-{1,2,3}` |
 | Netcup amd64 (this seal) | **3/3 PASS** | authoritative required series |

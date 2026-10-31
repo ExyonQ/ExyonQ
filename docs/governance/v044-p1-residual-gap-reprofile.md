@@ -11,7 +11,7 @@ Do **not** treat this document’s causal ranking (global SessionTable mutex as 
 ## Authority preserved
 
 | Field | Value |
-|-------|--------|
+| --- | --- |
 | PRODUCT_FIX_COMMIT | `f2e90beb28bab1f0efac7c714ad550f12d6794ef` |
 | DOC_COMMIT (prior) | `6260a35c3f9a28ddea3df68b38162d33513b0817` |
 | PRODUCT_TREE_AT_FIX | `a2dec477c1417b0993f37f50dbc619a522a15fb0` |
@@ -27,7 +27,7 @@ The functional fix stands. It must not be reverted for RPS reasons.
 Host variance is large. **This session’s control is the instrumented reference**; do not overwrite sealed competitive claims with these medians alone.
 
 | Server | Median RPS (5×30s) |
-|--------|---------------------|
+| --- | --- |
 | ExyonQ | 69585.48 |
 | NGINX | 140909.00 |
 | OLS | 141585.37 |
@@ -39,7 +39,7 @@ ExyonQ vs NGINX ≈ −50.6% (this session).
 Under absolute-form rewrk:
 
 | Metric | Value |
-|--------|--------|
+| --- | --- |
 | SENDFILE_RUNTIME_EXECUTED | YES |
 | sendfile/req | ≈1.00 |
 | openat2/req | ≈1.00 |
@@ -49,7 +49,7 @@ Under absolute-form rewrk:
 ## Syscalls/request (post-fix)
 
 | Server | syscalls/req | Dominant |
-|--------|--------------|----------|
+| --- | --- | --- |
 | ExyonQ | **11.478** | futex≈5.43, openat2+close≈2, sendfile+sendto+read+write≈4 |
 | NGINX | **4.091** | recvfrom+writev+sendfile+close≈4 |
 | OLS | **2.117** | read+writev≈2 |
@@ -63,7 +63,7 @@ Old ExyonQ ≈8.19 syscalls/req (pre-sendfile path). Multiplier vs rivals remain
 Comparability to pre-fix instrumented numbers is **WEAK** (method + host load). Directional:
 
 | Metric/req | ExyonQ post | NGINX | ExyonQ pre (context) |
-|------------|-------------|-------|----------------------|
+| --- | --- | --- | --- |
 | instructions | 110383 | 87334 | 46508 |
 | cycles | 87261 | 58448 | 38042 |
 | branches | 20241 | 15446 | 8517 |
@@ -100,7 +100,7 @@ Secondary: WAF `regex_automata` pool get_slow/put_value (~1.6–1.7%).
 ## Old hypothesis falsification
 
 | Old cause | Status |
-|-----------|--------|
+| --- | --- |
 | STATIC_TX as primary RPS root | FUNCTIONAL_DEFECT_FIXED_BUT_RPS_ATTRIBUTION_FALSIFIED_OR_INCOMPLETE |
 | Syscall multiplier | PARTIAL |
 | Context-switch multiplier | PARTIAL |
@@ -117,7 +117,7 @@ Secondary: WAF `regex_automata` pool get_slow/put_value (~1.6–1.7%).
 ## Decision gates (no implementation)
 
 | Gate | Verdict |
-|------|---------|
+| --- | --- |
 | FD_REUSE_REQUIRED | **NOT_PROVEN** |
 | WORKER_TOPOLOGY_CHANGE_REQUIRED | **NOT_PROVEN** |
 | Recommended next (auth required) | Cap067 SessionTable lock elimination/sharding; then optional worker=8 diagnostic; FD reuse only if open cost remains material |

@@ -52,7 +52,7 @@ Contamination after residual → protocol/CGI fail → DISCARD → no put.
 ## Evidence
 
 | Layer | Result |
-|-------|--------|
+| --- | --- |
 | Adversarial component (EOF / pending byte / partial header / dirty put) | PASS |
 | Netcup amd64 PHP-FPM 1000 req, SYN oracle | PASS — SYN=1, contamination=0 |
 | BINARY_SHA256 | `5e5ff3c86abe28c4ac8befe30ac75ebe94d56b4b629efc0bf3d639877cf1936d` |
@@ -66,7 +66,7 @@ DIRTY_CONNECTION_REUSE_COUNT (PHP-FPM harness) = NOT_MEASURED_IN_PHP_FPM_SEAL
 ## P3 reconciliation
 
 | ID | Status |
-|----|--------|
+| --- | --- |
 | P6B-P3-01 KEEP_CONN causal | CLOSED (parent seal) |
 | P6B-P3-02 SG-FCGI-06 peercred | OPEN_NONBLOCKING / QUALIFIED — unchanged |
 | P6B-P3-03 FCGI-RACE-01 | CLOSED_WITH_NONBLOCKING_QUALIFICATIONS (this WIP) |

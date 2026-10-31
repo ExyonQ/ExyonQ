@@ -17,7 +17,7 @@ NOTION_RECONCILIATION_REQUIRED = YES
 ## Ledger (cumulative — do not rewrite historical PCR-B / CM-B numbers)
 
 | Phase | Case | Disposition |
-|-------|------|-------------|
+| --- | --- | --- |
 | CFD foundations | CFD-A | closed |
 | CFH2 H1 routing | CFH2-B | YELLOW |
 | PCR-B multi-conn | PCR-B | YELLOW OWNER_REVIEW (RPS/P95/P99) |

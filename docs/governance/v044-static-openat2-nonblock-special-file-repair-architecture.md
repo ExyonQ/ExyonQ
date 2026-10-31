@@ -14,7 +14,7 @@ Linux primary path `openat2_confined` used `O_RDONLY|O_CLOEXEC` without `O_NONBL
 ## Alternatives evaluated
 
 | Alt | Summary | Verdict |
-|-----|---------|---------|
+| --- | --- | --- |
 | **A** | `O_NONBLOCK` on `openat2` + post-open `fstat` via `classify_opened` | **SELECTED** |
 | **B** | `O_PATH` / probe then second open | **REJECT** — pathname reopen TOCTOU unless `(dev,ino)` binding; extra syscall |
 | **C** | Pre-open `fstatat`, thread offload, `OPENAT2_REGULAR` | **REJECT** — TOCTOU, shard model, kernel 7.2+ only |

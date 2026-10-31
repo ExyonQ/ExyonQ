@@ -84,7 +84,7 @@ ACCESS_LOG = off (all comparators)
 ## 4. Comparator matrix
 
 | Comparator | Role | Image / config |
-|------------|------|----------------|
+| --- | --- | --- |
 | ExyonQ | subject | `v044p1-geom8-exyonq` + p1-authoritative overlay |
 | NGINX-stable | rival | `benchmarks/configs/nginx/nginx.conf` (bench harness) |
 | OLS-latest | rival | OpenLiteSpeed bench docker config |
@@ -210,7 +210,7 @@ Post-fix smoke (30s): ExyonQ ~77k, NGINX ~95k, OLS ~101k — credible comparabil
 ## 13. Repetitions (RPS)
 
 | Rep | ExyonQ | NGINX | OLS |
-|-----|--------|-------|-----|
+| --- | --- | --- | --- |
 | 1 | 73711.24 | 100402.05 | 104007.60 |
 | 2 | 74591.91 | 83608.45 | 93208.40 |
 | 3 | 69739.46 | 96446.70 | 99986.40 |
@@ -220,13 +220,13 @@ Post-fix smoke (30s): ExyonQ ~77k, NGINX ~95k, OLS ~101k — credible comparabil
 ## 14. Medians
 
 | | ExyonQ | NGINX | OLS |
-|--|--------|-------|-----|
+| --- | --- | --- | --- |
 | RPS median | **73096.77** | 96446.70 | **97310.38** |
 
 ## 15. P50 / P95 / P99 (ms)
 
 | | ExyonQ | NGINX | OLS |
-|--|--------|-------|-----|
+| --- | --- | --- | --- |
 | P50 | 1.66 | 1.57 | **1.50** |
 | P95 | **2.71** | 3.05 | 2.88 |
 | P99 | **3.53** | 4.33 | 4.17 |
@@ -236,7 +236,7 @@ Post-fix smoke (30s): ExyonQ ~77k, NGINX ~95k, OLS ~101k — credible comparabil
 Meter: docker-stats derived **core-ms/req** (same-session geom8 harness).
 
 | | core-ms/req | user µs/req | system µs/req |
-|--|-------------|-------------|---------------|
+| --- | --- | --- | --- |
 | ExyonQ | 0.2066 | 21.90 | 18.68 |
 | NGINX | 0.1482 | 6.78 | 21.72 |
 | OLS | **0.1319** | 7.72 | 16.33 |
@@ -249,7 +249,7 @@ EXYONQ_CPU_VS_OLS_PERCENT = +56.7%
 ## 17. RSS metrics (MiB, docker stats avg)
 
 | | avg | peak |
-|--|-----|------|
+| --- | --- | --- |
 | ExyonQ | 33.18 | 35.38 |
 | NGINX | **9.95** | 11.18 |
 | OLS | 16.31 | 16.88 |
@@ -257,7 +257,7 @@ EXYONQ_CPU_VS_OLS_PERCENT = +56.7%
 ## 18. CV / stability
 
 | | RPS CV |
-|--|--------|
+| --- | --- |
 | ExyonQ | **0.0257** (winner stability) |
 | NGINX | 0.0701 |
 | OLS | 0.0555 |
@@ -296,7 +296,7 @@ Qualitative: upstream keepalive enabled on all proxies post-fix; direct upstream
 ## 22. Winner per metric
 
 | Metric | Winner |
-|--------|--------|
+| --- | --- |
 | RPS | OLS |
 | CPU/request | OLS |
 | RSS | NGINX |

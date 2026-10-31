@@ -18,7 +18,7 @@ DO_NOT_TREAT_GITHUB_AS_SOLE_TRUST_ROOT = YES
 ```
 
 | Path | Role |
-|------|------|
+| --- | --- |
 | `TRUST-POLICY.md` | Active local trust policy |
 | `fingerprints.txt` | Exact SSH + Cosign fingerprints |
 | `exyonq-release-tag-signers` | SSH `allowedSignersFile` (principal `exyonq-release`) |

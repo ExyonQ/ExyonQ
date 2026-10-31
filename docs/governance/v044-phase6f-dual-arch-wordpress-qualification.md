@@ -24,7 +24,7 @@ This is **not** a performance comparison. Binary SHA differs by architecture as 
 ## Environment (ARM64)
 
 | Component | Version |
-|-----------|---------|
+| --- | --- |
 | Host | oracle-quasar (`vnic-quasar`) aarch64 |
 | Kernel | 6.17.0-1018-oracle |
 | Rust | 1.97.1 / `aarch64-unknown-linux-gnu` |

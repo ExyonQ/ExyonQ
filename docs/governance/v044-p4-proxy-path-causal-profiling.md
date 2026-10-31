@@ -68,7 +68,7 @@ Invalid run `112732Z` excluded from all causal comparison.
 Profiling-session RPS (same contract, not rebaseline): ExyonQ **76215** · NGINX **91892** · OLS **93966**.
 
 | Metric | ExyonQ | NGINX | OLS |
-|--------|-------:|------:|----:|
+| --- | ---: | ---: | ---: |
 | cycles/req | **34,617,095** | 2,037,055 | 1,676,263 |
 | instructions/req | **25,460,815** | 2,109,979 | 1,979,885 |
 | IPC | **0.735** | 1.036 | 1.181 |
@@ -90,7 +90,7 @@ on the same P4 contract, with **~13× more context switches per request**.
 ## 2. perf record — top ExyonQ symbols (exclusive, tokio-rt-worker sample)
 
 | % self | Symbol / class |
-|-------:|----------------|
+| ---: | --- |
 | 4.89% | kernel IPI / reschedule |
 | 3.75% | **malloc** |
 | 1.53% | **bytes::shared_drop** |
@@ -112,7 +112,7 @@ on the sampled worker — consistent with userspace-driven socket churn.
 ## 3. Architectural cost-class aggregation (estimated)
 
 | Class | Evidence | Est. exclusive % | Notes |
-|-------|----------|------------------:|-------|
+| --- | --- | ---: | --- |
 | TOKIO_SCHEDULER / IO wake | perf + ctx switches | **STRONGLY_SUPPORTED** | poll_ready, 13× ctx switches/req |
 | HYPER_CLIENT | perf symbols | **STRONGLY_SUPPORTED** | pool checkout, send_request, mpsc |
 | HYPER_HTTP_PARSE / server conn | perf symbols | **BOUNDED** | hyper_util server auto poll |
@@ -168,7 +168,7 @@ Cannot close `IS_UPSTREAM_POOLING_OR_PROXY_STATE_MACHINE_INEFFICIENT` — remain
 Estimated ~914k requests in window at profiling RPS.
 
 | Syscall | calls/req (worker) |
-|---------|-------------------:|
+| --- | ---: |
 | **total** | ~1.55 |
 | recvfrom | 0.71 |
 | sendto | 0.36 |
@@ -206,7 +206,7 @@ Tokio path, not Cap067 geometry.
 ## 7. Chunked transfer encoding (wire verified)
 
 | Server | Transfer-Encoding | Connection |
-|--------|-------------------|------------|
+| --- | --- | --- |
 | **ExyonQ** | **chunked** | **close** |
 | NGINX | (none — Content-Length: 1024) | keep-alive |
 | OLS | (none — content-length: 1024) | Keep-Alive |
@@ -242,7 +242,7 @@ AVOIDABLE_DUPLICATE_COST = BOUNDED (chunked+close vs CL+keepalive asymmetry)
 ## 9. Memory / PSS (profiling load snapshot)
 
 | | ExyonQ | NGINX | OLS |
-|--|-------:|------:|----:|
+| --- | ---: | ---: | ---: |
 | PSS MiB | **46.95** | 3.55 | 1.84 |
 | Private_Clean MiB | 11.26 | 3.10 | 1.20 |
 | Private_Dirty MiB | **35.13** | 0.15 | 0.26 |

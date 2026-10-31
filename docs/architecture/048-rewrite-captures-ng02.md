@@ -15,14 +15,14 @@ Cap035 supports only a literal absolute-path `rewrite = "/target"` with a single
 `route.rewrite` is an untagged enum:
 
 | Form | TOML | Semantics |
-|------|------|-----------|
+| --- | --- | --- |
 | Literal | `rewrite = "/app/index.html"` | Cap035 unchanged: absolute path, rematch once |
 | Rule | `rewrite = { pattern, replacement, flag?, when? }` | Regex against request path; expand `$1..$9` / `$$` |
 
 `flag` default = `last`.
 
 | Flag | Behavior |
-|------|----------|
+| --- | --- |
 | `last` | Internal URI → rematch routes once (Cap035) |
 | `break` | Internal URI → stay on current route (no rematch) |
 | `redirect` | HTTP 302 to expanded location |
@@ -57,4 +57,4 @@ Only `$1`…`$9` and `$$`. No named captures, no nginx variables (`$uri`, `$host
 
 - Existing Cap035 configs unchanged.  
 - Break enables front-controller patterns without rematch loops.  
-- Query injection via `$1` into path is fail-closed for last/break (no `?` in path). Apache OR/`!`/QSA/PT/END and broad `.htaccess`: SoT [`F1_RESIDUALS`](../../ROADMAP%20EXYONQ/F1_RESIDUALS.md) `F1-R03`…`F1-R07`.
+- Query injection via `$1` into path is fail-closed for last/break (no `?` in path). Apache OR/`!`/QSA/PT/END and broad `.htaccess`: SoT `F1_RESIDUALS` (local lab path, not published) `F1-R03`…`F1-R07`.

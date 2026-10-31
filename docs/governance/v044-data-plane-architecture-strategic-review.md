@@ -119,7 +119,7 @@ DOES_THE_DATA_PLANE_NEED_A_MORE_FUNDAMENTAL_REDESIGN =
 ## 3. Authoritative P1–P4 competitive truth (unchanged)
 
 | Profile | ExyonQ RPS | vs NGINX | CPU/req vs NGINX | RSS ExyonQ | P50/P95/P99 (ExyonQ) | COMPETITIVE_WIN |
-|---------|----------:|---------:|-----------------:|-----------:|----------------------|-----------------|
+| --- | ---: | ---: | ---: | ---: | --- | --- |
 | P1 1 KiB | 154062 | −8.8% | **−19.3%** (win) | 13.86 MiB | 0.79 / 1.29 / 1.71 ms | NOT_PROVEN |
 | P2 64 KiB | 104041 | **+15.3%** | **−16.0%** (win) | 21.64 MiB | 1.20 / 1.87 / 2.41 ms | NOT_PROVEN |
 | P3 1 MiB | 8683 | +1.0% | **−0.4%** (win) | 71.95 MiB | 13.95 / 19.70 / 25.37 ms | **YES** |
@@ -149,7 +149,7 @@ MODEL_C MIXED — some subsystems sound, others need redesign = STRONGLY_SUPPORT
 ## 5. Data-plane inventory (summary)
 
 | Subsystem | Execution | Ownership | Thread/task | Buffer | Hot-path status |
-|-----------|-----------|-----------|-------------|--------|-----------------|
+| --- | --- | --- | --- | --- | --- |
 | Accept | Tokio + epoll pool | stream → task | handoff | kernel socket | ESSENTIAL |
 | Static Cap067 | epoll FSM | session-owned FD | epoll thread | sendfile | **COMPETITIVE (P3)** |
 | Static first req | Tokio → Cap067 divert | seam | 2 models | Bytes head | P1 sensitivity |
@@ -179,7 +179,7 @@ DATA_PLANE_HANDOFF_COUNT_BY_PROFILE (bounded):
 ## 6. Cross-profile path comparison
 
 | Stage | P1/P2 static | P3 static | P4 proxy |
-|-------|--------------|-----------|------------|
+| --- | --- | --- | --- |
 | Accept | Tokio/epoll | same | Tokio/epoll |
 | Parse/route | wire/static | same | wire_dispatch |
 | Security | WAF gate (off bench) | same | WAF gate (off bench) |
@@ -265,7 +265,7 @@ WHY_P4_IS_STRUCTURALLY_EXPENSIVE =
 ## 10. Engineering economics ledger (proxy)
 
 | WIP class | Count (P1–P4) | Notes |
-|-----------|---------------|-------|
+| --- | --- | --- |
 | P1 performance/investigation | 17 | Many closed; RPS gap remains |
 | P2 measurement | 1 | Baseline only |
 | P3 measurement | 1 | COMPETITIVE_WIN=YES |
@@ -303,7 +303,7 @@ Evidence:
 ## 12. Common vs profile-specific improvements
 
 | Improvement | Class | Cross-profile reach |
-|-------------|-------|---------------------|
+| --- | --- | --- |
 | G1 worker geometry (8/8/8) | COMMON | P1/P2/P3 (+P4 defaults) |
 | Root1 TLS static pin | PROFILE (static) | P1–P3 |
 | Root3 read_state | PROFILE (Cap067) | P1–P3 |
@@ -324,7 +324,7 @@ CORRECTNESS_REPAIRS = H1, Host ranking, harness corrections (P4 invalid run)
 ## 13. Architecture principles evaluation
 
 | Principle | Static P1–P3 | P4 proxy | Assessment |
-|-----------|--------------|----------|------------|
+| --- | --- | --- | --- |
 | ONE_CONNECTION_OWNERSHIP_MODEL | BOUNDED (seam on first req) | FAIL (tasks + Hyper pool) | Proxy violates |
 | MINIMAL_EXECUTION_HANDOFFS | GOOD post-Cap067 | FAIL (~133 ctx/req) | Proxy violates |
 | WORKER_LOCAL_STATE | BOUNDED | NOT_MEASURED | Research |
@@ -512,7 +512,7 @@ S3_PROXY_DATA_PLANE_EXPECTED_P4_EFFECT =
 ## 22. P5–P14 repeat-risk (no fabricated numbers)
 
 | Profile class | Dominant mechanism today | Repeat-risk |
-|---------------|-------------------------|-------------|
+| --- | --- | --- |
 | P5–P7 (TLS/HTTP2/H2 proxy) | Hyper + Tokio stack | **HIGH** |
 | P8 SSE/streaming | progressive TE + Tokio | **HIGH** |
 | P9–P10 WebSocket/WASM | separate fast paths | **MEDIUM–HIGH** |
@@ -544,7 +544,7 @@ EXPECTED_MIGRATION_VALUE_DELTA_OPTION_D = UNKNOWN
 ## 24. Decision matrix
 
 | Option | Perf upside | Cross-profile | Eng. complexity | Defect risk | Maintenance | Time to validate | Rollback | Cleanliness | Migration value |
-|--------|-------------|---------------|-----------------|-------------|-------------|------------------|----------|-------------|-----------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A Continue slices | BOUNDED | LOW | VERY HIGH | MEDIUM | HIGH | SHORT per slice | EASY | LOW | LOW |
 | B Common refactor | MEDIUM | MEDIUM | HIGH | MEDIUM | MEDIUM | LONG | MEDIUM | MEDIUM | PARTIAL |
 | C Dedicated proxy DP | HIGH (P4) | MEDIUM | HIGH | HIGH | MEDIUM | LONG | HARD | HIGH | MATERIAL |

@@ -10,7 +10,7 @@ HOST = netcup-bench nodelayab stack
 ## Why P11 is not runnable on current nodelayab
 
 | Blocker | Detail |
-|---------|--------|
+| --- | --- |
 | No TLS listeners on rivals/ExyonQ in nodelay compose | Stack is cleartext `:8080` / OLS `:8088` |
 | Prior matrix skip | `SKIP_NO_TLS_ON_NODELAYAB` in P1–P14 rivals matrix |
 | No shared TLS fixture | Need server certs + SNI + h2 ALPN for ExyonQ + Tier-A rivals |

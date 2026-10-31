@@ -47,7 +47,7 @@ UNKNOWN|EOF|READABLE|ERROR|GEN_MISMATCH|AMBIGUOUS = DISCARD (+ fresh connect if 
 ## ALTERNATIVES
 
 | ID | Design | Verdict |
-|----|--------|---------|
+| --- | --- | --- |
 | A | Checkout probe only (status quo) | **REJECT** — leaves FCGI-RACE-01 open |
 | **B** | Immediate second nonblocking probe + generation re-check immediately before BEGIN | **ACCEPT** — smallest extension of existing `probe()` |
 | C | Hold idle READABLE (mio) until ACTIVE | **REJECT for P6C** — introduces mio registration for FCGI std streams; new pattern + FD/token ownership surface; not required if B closes admitted race |
@@ -70,7 +70,7 @@ Evidence: `FcgiPoolMap::probe` already implements nonblocking one-byte dirty det
 ## OWNERSHIP
 
 | Object | Owner | Notes |
-|--------|-------|-------|
+| --- | --- | --- |
 | `FcgiPoolMap` | Shard thread only (`&mut` in `ShardCtx`) | No cross-thread share |
 | Idle `FcgiStream` | `PoolIdle.idle` Vec until `take` moves out | Exclusive |
 | Candidate stream | `execute_get` local until put/discard | Exclusive |
@@ -252,7 +252,7 @@ AMBIGUOUS_READINESS = DISCARD
 Current FCGI path uses `std::net` with temporary `set_nonblocking(true)` + `read(1)`:
 
 | Result | Meaning | Action |
-|--------|---------|--------|
+| --- | --- | --- |
 | `Err(WouldBlock)` | No pending application data | Clean → ACTIVE |
 | `Ok(0)` | EOF | Dirty → DISCARD |
 | `Ok(n>0)` | Unexpected byte(s) **consumed** | Dirty → DISCARD (byte not replayed; never fed to next response parser as owned response — connection discarded) |

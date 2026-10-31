@@ -65,7 +65,7 @@ NO_KEEPALIVE_RE_ENTRY = intentional (helpers disconnected)
 ### CAP034_CALL_SITES
 
 | Location | Role |
-|----------|------|
+| --- | --- |
 | `crates/exyonq-mod-proxy/src/wire_conn.rs` | **Primary** — `might_use_proxy_wire`, `encode_proxy_response_head`, `write_streaming_proxy_response_wire`, `serve`, `write_chunk` |
 | `crates/exyonq-mod-proxy/src/kernel_hooks.rs` | Registers wire eligibility + `serve` hook |
 | `module-api/src/proxy_wire.rs` | Façade: `might_use_proxy_wire`, `serve_proxy_wire` |
@@ -90,7 +90,7 @@ I8  WebSocket / CL+TE conflict / non-GET → Hyper fallback (not wire)
 ### CAP034_TESTS
 
 | Test / harness | What it proves |
-|----------------|----------------|
+| --- | --- |
 | `wire_conn.rs` unit tests | `encode_proxy_response_head` strips hop headers; forces close+chunked; rejects CL leak |
 | `wire_proxy_response_advertises_connection_close` | Integration of encoder + streaming writer |
 | `might_use_rejects_*` | Wire eligibility guards |
@@ -101,7 +101,7 @@ I8  WebSocket / CL+TE conflict / non-GET → Hyper fallback (not wire)
 ### CAP034_DOCS
 
 | Doc | Reference |
-|-----|-----------|
+| --- | --- |
 | `docs/governance/v044-p4-proxy-path-causal-profiling.md` | ROOT_1B wire asymmetry (PROVEN) |
 | `docs/governance/v044-cross-profile-performance-root-cause-review-p1-p4.md` | P4 path map |
 | `scripts/reality/run-cap-034-dual-linux.sh` | Cap034 closure harness |
@@ -110,7 +110,7 @@ I8  WebSocket / CL+TE conflict / non-GET → Hyper fallback (not wire)
 ### CAP034_HISTORICAL_DEFECTS
 
 | ID | Class | Resolution |
-|----|-------|------------|
+| --- | --- | --- |
 | Hostless route shadowing named Host on wire | PROTOCOL_CORRECTNESS / routing | Fixed — `resolve_proxy_route` requires Host (Cap034) |
 | LA-001 frozen `cluster_id` on keepalive Host switch | FAILURE_CONTAINMENT | **Closed by one-shot close** — E2E accepts `connection_closed_after_wire_admission` |
 | Cap030 buffered proxy body | PERFORMANCE / streaming | Wire must stream; no CL-based full collect |
@@ -188,7 +188,7 @@ CLASSIFICATION =
 Legend: `CL` = Content-Length, `KA` = keep-alive, `CH` = chunked, `—` = N/A or not on wire path.
 
 | # | Case | CL safe? | KA safe? | Must CH? | Must close? | Wire path today |
-|---|------|----------|----------|----------|-------------|-----------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | 1 | 200 known length | YES | YES | NO | NO | CH + close (not required) |
 | 2 | 200 unknown length | NO | YES | YES | NO | CH + close |
 | 3 | Streaming (SSE) | NO | YES | YES | NO | CH + close (KA possible) |
@@ -274,7 +274,7 @@ CAP034_POLICY_REQUIRES_CLOSE = YES today (encoder always emits close)
 ```
 
 | Response type | HTTP allows KA? | Wire today | Safe if wire evolved? |
-|---------------|-----------------|------------|------------------------|
+| --- | --- | --- | --- |
 | Known-length 200 | YES | close | YES with per-request Host rank + byte integrity |
 | Chunked streaming | YES | close | YES with framing completion guarantees |
 | Bodyless 204/304 | YES | close | YES |
@@ -287,7 +287,7 @@ CAP034_POLICY_REQUIRES_CLOSE = YES today (encoder always emits close)
 ## 8. Failure semantics (summary)
 
 | Event | Current wire behavior | Safe KA possible? | Connection poisoned? |
-|-------|----------------------|-------------------|----------------------|
+| --- | --- | --- | --- |
 | Upstream disconnect before headers | 502 via Hyper client | YES (no client bytes sent) | NO |
 | Upstream disconnect after headers | Partial chunked body | NO | YES |
 | Upstream disconnect mid-body | Truncated chunked stream | NO | YES |
@@ -366,7 +366,7 @@ UPGRADE_TUNNEL_PATH = SEPARATE_CONTRACT (Hyper only — unchanged)
 P4P-B evidence used **only** for plausibility — not proof of Cap034 share.
 
 | Effect of client keep-alive | Classification | Rationale |
-|----------------------------|----------------|-----------|
+| --- | --- | --- |
 | accepts/sec reduction | MODERATE | P4 uses 100 connections with reuse; rivals still win with KA |
 | TCP handshakes/sec | MODERATE | One-shot close forces new accepts per request batch |
 | scheduler wakeups | UNKNOWN | 13× ctx switches vs NGINX — multi-causal; KA may help or hurt |
@@ -375,7 +375,7 @@ P4P-B evidence used **only** for plausibility — not proof of Cap034 share.
 | CPU/request | UNKNOWN | ROOT_1A/1F dominate measured gap |
 
 | Effect of Content-Length vs chunked (1 KiB) | Classification |
-|---------------------------------------------|----------------|
+| --- | --- |
 | framing work | SMALL to MODERATE |
 | writes/request | SMALL (chunk overhead ~hex+CRLF per frame) |
 | allocations | SMALL |
@@ -423,7 +423,7 @@ ANTI_PATTERNS_REJECTED =
 ### OPTION_A — KEEP_CAP034_UNCHANGED
 
 | Dimension | Assessment |
-|-----------|------------|
+| --- | --- |
 | PROTOCOL_CORRECTNESS | PASS |
 | SECURITY | PASS (conservative) |
 | FAILURE_BEHAVIOR | PASS (fail-closed) |
@@ -436,7 +436,7 @@ ANTI_PATTERNS_REJECTED =
 ### OPTION_B — KNOWN_LENGTH_CONTENT_LENGTH_PLUS_SAFE_KEEPALIVE
 
 | Dimension | Assessment |
-|-----------|------------|
+| --- | --- |
 | PROTOCOL_CORRECTNESS | PASS for P4-class only |
 | SECURITY | PASS with length validation + no transforms |
 | FAILURE_BEHAVIOR | Requires poison rules |
@@ -449,7 +449,7 @@ ANTI_PATTERNS_REJECTED =
 ### OPTION_C — GENERAL_DOWNSTREAM_FRAMING_POLICY (preferred direction)
 
 | Dimension | Assessment |
-|-----------|------------|
+| --- | --- |
 | PROTOCOL_CORRECTNESS | PASS if rules in §11 enforced |
 | SECURITY | PASS if hop-by-hop + poison rules preserved |
 | FAILURE_BEHAVIOR | IMPROVED vs blind KA |
@@ -472,7 +472,7 @@ REJECT — would remove Host-ranking one-shot discipline without replacement; no
 ## 15. Request-path cost table (P4 wire — selected stages)
 
 | Stage | Required | CPU cost | Recoverable | Evidence |
-|-------|----------|----------|-------------|----------|
+| --- | --- | --- | --- | --- |
 | accept | YES | BOUNDED | SMALL if KA | profiling |
 | client header read | YES | BOUNDED | SMALL if KA | profiling |
 | request parse | YES | INSUFFICIENT | — | — |

@@ -7,7 +7,7 @@ This plugin does **not** store pages, talk to Redis/Lux, or access ExyonQ memory
 ## Requirements
 
 | Item | Value |
-|------|--------|
+| --- | --- |
 | PHP | ≥ 8.0 |
 | WordPress | ≥ 6.0 |
 | Multisite | **Not supported** (deferred — hooks and WP-CLI inactive) |

@@ -37,7 +37,7 @@ Fail-closed:
 ## Performance (Netcup A/B vs Root1)
 
 | | BEFORE Root1 | AFTER Root3 |
-|--|-------------|-------------|
+| --- | --- | --- |
 | Binary (trial) | `14d22eae…` | `46e79a88…` (pre-TOCTOU re-sample) |
 | core-ms/req | 0.01976 | **0.018077 (−8.51%)** |
 | RPS | 156952.95 | 161955.19 (+3.19%) |

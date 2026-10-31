@@ -11,7 +11,7 @@ Medium+ findings that are not fixed before a tag require a tracked exception
 record under `docs/governance/exceptions/` with at least:
 
 | Field | Required |
-|-------|----------|
+| --- | --- |
 | EXCEPTION_ID | YES |
 | source finding/advisory | YES |
 | scope | YES |

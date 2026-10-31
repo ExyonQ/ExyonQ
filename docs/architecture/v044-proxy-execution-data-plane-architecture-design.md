@@ -27,7 +27,7 @@ SOURCE_BINARY_SHA256 = e28c0abe18587f2d911d492be64cbec42372383e011417a6c578be52d
 ## 1. Strategic binding (DP-C)
 
 | Verdict | Value |
-|---------|-------|
+| --- | --- |
 | Architecture model | **MODEL_C_MIXED** |
 | Static Cap067 | **PRESERVE** (P3 COMPETITIVE_WIN=YES) |
 | Proxy execution | **STRUCTURALLY_OVER_LAYERED** |
@@ -106,7 +106,7 @@ flowchart TB
 ### Stage ledger (current — P4 wire GET)
 
 | # | Stage | File / symbol | Task? | Channel? | Buffer transition |
-|---|-------|---------------|-------|----------|-------------------|
+| --- | --- | --- | --- | --- | --- |
 | 01 | TCP accept | `server` accept loop | Y | — | socket fd |
 | 02 | Header read | `io::read_until_headers_async` | Y | — | Bytes head + rest |
 | 03 | Framing safety | `request_headers_safe_for_wire` | Y | — | — |
@@ -170,7 +170,7 @@ flowchart TB
 ### Target stage ledger (≤8)
 
 | # | Stage | Owner | Async boundary | Removable? |
-|---|-------|-------|----------------|------------|
+| --- | --- | --- | --- | --- |
 | 1 | Admit + parse | core dispatch | once per connection | NO |
 | 2 | Plan materialize | `ProxyRequestPlan` (snapshot) | sync read | NO |
 | 3 | Connection shell start | `ProxyConnection` | **one task** | NO |
@@ -201,7 +201,7 @@ TARGET_SHARED_STATE_TOUCH_COUNT = BOUNDED 1–2 per request
 ### Chosen model: **WORKER_LOCAL + CONNECTION_TASK_OWNERSHIP (hybrid E2/E3)**
 
 | Resource | Owner |
-|----------|-------|
+| --- | --- |
 | Client TCP + read/write state | `ProxyConnection` on **admitting Tokio worker** |
 | Upstream TCP (leased) | `UpstreamLease` held by same `ProxyConnection` |
 | Routing / cluster decision | **Frozen** `ProxyRequestPlan` (snapshot at request start) |
@@ -234,7 +234,7 @@ ProxyConnection {
 ## 6. Event model comparison
 
 | Model | Tasks/conn | Tasks/req | Channels | Handoffs | Verdict |
-|-------|------------|-----------|----------|----------|---------|
+| --- | --- | --- | --- | --- | --- |
 | **E1** Current Tokio geometry | 3–6+ | 3–5 | 2–4 | High | **REJECT** (status quo) |
 | **E2** Single long-lived proxy task / conn | 1 (+ Hyper driver) | 1 | 0–1 | Low | **CORE of recommendation** |
 | **E3** Worker-local FSM + async IO | 1 | 1 | 0 | Low | **Combined with E2** |
@@ -309,7 +309,7 @@ CAN_HYPER_INCOMING_FLOW_DIRECTLY_INTO_PROXY_WRITER_WITHOUT_GENERIC_BODY_ERASURE 
 ## 10. Buffer ownership
 
 | Phase | Owner |
-|-------|-------|
+| --- | --- |
 | Upstream read | `Incoming` frame → `Bytes` owned by relay |
 | In transit | `ProxyBodyRelay` hold window (bounded deque or single chunk) |
 | Downstream write | `DownstreamWriter` consumes slices; releases after ACK |
@@ -434,7 +434,7 @@ Streaming interaction:
 ## 15. Module hooks
 
 | Hook | Class | Target dispatch |
-|------|-------|-----------------|
+| --- | --- | --- |
 | proxy_wire eligibility | HOT_REQUIRED | keep in module-api |
 | proxy_dispatch / cache | FALLBACK_ONLY | Hyper path when cache policy bound |
 | compression | OPTIONAL | not on P4 wire bench |
@@ -485,7 +485,7 @@ CAP034_IN_TARGET_ARCHITECTURE = EVOLVE_AS_PART_OF_NEW_LIFECYCLE
 ## 18. Failure / poison model
 
 | Event | Client response? | Retry? | Conn reuse? | Upstream reuse? |
-|-------|------------------|--------|-------------|-----------------|
+| --- | --- | --- | --- | --- |
 | Upstream connect fail | 502/503 | per RetryPolicy | poison client if committed | release lease |
 | Upstream timeout | 504 | maybe pre-commit | poison | release |
 | Upstream close mid-body | 502 | NO | poison | poison upstream |
@@ -601,7 +601,7 @@ HOW_TLS_SOCKET_IO_INTEGRATES = ClientIo enum Plain | Tls(stream)
 ## 26. Memory model
 
 | Scope | Contents |
-|-------|----------|
+| --- | --- |
 | Process | Hyper pools, ProxyRuntime cluster tables |
 | Worker | idle connection registry (optional phase-2) |
 | Client connection | ProxyConnection struct |
@@ -620,7 +620,7 @@ TARGET_BUFFER_MEMORY_PER_ACTIVE_STREAM = BOUNDED ≤ MAX_PROXY_RELAY_BYTES
 ## 27. Shared state inventory
 
 | State | Current | Target |
-|-------|---------|--------|
+| --- | --- | --- |
 | Routing snapshot | Arc read | **Frozen plan** per request |
 | Cluster health | RwLock in ProxyRuntime | read at plan build |
 | Generation | pinned u64 | recheck per request |
@@ -651,7 +651,7 @@ Justification:
 ## 29. Scheduler & allocation budgets (architectural targets — not benchmark claims)
 
 | Budget | Current (P4) | Target class |
-|--------|--------------|--------------|
+| --- | --- | --- |
 | Context switches / req | ~133 | **LOW** (order-of-magnitude reduction goal) |
 | Task boundaries / req | 4–6 | **≤2** |
 | Channel boundaries / req | 2–4 | **≤1** |
@@ -670,7 +670,7 @@ TARGET_STAGE_BUDGET = 8
 ## 30. Single-source-of-truth contract map
 
 | Concern | Canonical owner | Shell interface |
-|---------|-----------------|-----------------|
+| --- | --- | --- |
 | Routing | `wire_dispatch::resolve_proxy_route` | `ProxyRequestPlan.route` |
 | Cluster | `ProxyRuntime` + snapshot | `plan.upstream_target` |
 | WAF | `evaluate_wire_waf` | `plan.waf_outcome` |
@@ -767,7 +767,7 @@ OBSERVABILITY_COMPLETION_RULE = exactly-once terminal record
 ## 35. Lifetime model
 
 | Data | Lifetime |
-|------|----------|
+| --- | --- |
 | Compiled routes | generation / process |
 | ProxyRequestPlan | request |
 | ProxyConnection | connection |
@@ -800,7 +800,7 @@ SECURITY_INVARIANTS =
 ## 37. Architecture alternatives
 
 | Design | Stages | Tasks/req | Channels | Risk | Perf upside | Migration |
-|--------|-------|-----------|----------|------|-------------|-----------|
+| --- | --- | --- | --- | --- | --- | --- |
 | **A** Current cleanup only | 15–19 | 3–5 | 2–4 | Low | BOUNDED 12–22% stacked | Low |
 | **B** Single long-lived task | 8–10 | 1–2 | 0–1 | Med | PLAUSIBLE | Med |
 | **C** Worker-local shell (**pick**) | **8** | **1–2** | **0–1** | Med–High | **PLAUSIBLE 15–25%** | Med–High |
@@ -866,7 +866,7 @@ flowchart LR
 ```
 
 | Phase | Scope |
-|-------|-------|
+| --- | --- |
 | **PXDP-P0** | Contracts: plan, shell traits, error taxonomy |
 | **PXDP-P1** | Shadow: build plan alongside current path; diff logs |
 | **PXDP-P2** | Serve P4-class GET via shell behind flag |
@@ -891,7 +891,7 @@ ROLLBACK_RULE = flag OFF; legacy remains until PXDP-P9 deletion gate
 ## 40. Feature parity matrix (v1 target)
 
 | Feature | Current | Target DP | Required v1 | Fallback |
-|---------|---------|-----------|-------------|----------|
+| --- | --- | --- | --- | --- |
 | H1 GET proxy | YES | YES | **YES** | — |
 | Chunked downstream | YES | YES | **YES** | — |
 | Streaming | YES | YES | **YES** | — |

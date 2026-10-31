@@ -3,7 +3,7 @@
 ExyonQ supports **external Redis** as the WordPress object-cache backend. This is **not** ExyonQ full-page cache and is **not** part of the HTTP dataplane.
 
 | Layer | Owner |
-|-------|--------|
+| --- | --- |
 | Full-page cache (HTML) | ExyonQ L1 + [exyonq-cache](./exyonq-cache/) purge plugin (WC4) |
 | Object cache (PHP/DB objects) | Redis + [redis-cache](https://wordpress.org/plugins/redis-cache/) plugin (WC5) |
 

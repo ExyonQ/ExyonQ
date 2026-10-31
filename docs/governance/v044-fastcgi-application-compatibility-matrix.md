@@ -4,7 +4,7 @@ Evidence-bound matrix for the **current** CFD FastCGI path (ADR-043 front contro
 directory index). Not a performance ranking.
 
 | Application | Version pin | Platforms | Terminal | Notes |
-|-------------|-------------|-----------|----------|-------|
+| --- | --- | --- | --- | --- |
 | WordPress | 7.1 | Linux AMD64 Netcup + Linux ARM64 Oracle | P6F-A | Pretty permalinks, `/wp-admin/`, MariaDB, KEEP_CONN |
 | Laravel | skeleton `laravel/laravel:13.10.1` / framework `v13.29.0` | Linux AMD64 Netcup | P6G-A | `public/` docroot; sessions/CSRF/ORM; owner initial close single-arch |
 

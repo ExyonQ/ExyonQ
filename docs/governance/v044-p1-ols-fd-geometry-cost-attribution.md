@@ -29,7 +29,7 @@ library tests ≠ real Cap067 E2E (see the repair closeout section).
 ## Phase 1 — Live comparability
 
 | Check | Result |
-|--|--|
+| --- | --- |
 | ExyonQ binary SHA-256 | `f243ef2c…5ce49f1d` MATCH sealed Root1+Root3 |
 | OLS container | RUNNING_HEALTHY · `:8088/site/1k.bin` 200/1024 |
 | ExyonQ / OLS cpuset | `0-7` / `0-7` |
@@ -60,7 +60,7 @@ source = cgroup v2 cpu.stat {user,user,system}_usec delta / rewrk requests_total
 ```
 
 | | ExyonQ | OLS |
-|--|--|--|
+| --- | --- | --- |
 | RPS (this window) | 173710 | 128805 |
 | USER µs/req | **8.600** | **4.250** |
 | SYSTEM µs/req | **17.008** | **10.956** |
@@ -81,7 +81,7 @@ Interpretation: the ExyonQ–OLS gap is **majority system**, with a still-materi
 **Method:** Phase B — bpftrace enter/exit `sum(nsecs)` for container TGIDs during a separate 30s load (BOUNDED wall-time-in-syscall; may include brief blocking). Counts / req confirm geometry.
 
 | Syscall | ExyonQ calls/req | ExyonQ µs/req (bpf wall) | OLS calls/req | OLS µs/req (bpf wall) |
-|--|--|--|--|--|
+| --- | --- | --- | --- | --- |
 | openat2 / openat | **1.000** | **3.760** | 0.000067 | 0.005 |
 | statx | **1.000** | **1.687** | ~0 | ~0 |
 | close | **1.388** | **1.222** | 0.000175 | 0.001 |
@@ -100,7 +100,7 @@ OLS_WRITEV_CPU_US_PER_REQ = 6.899
 **Cross-check (perf cycles, children % of all samples × total cgroup µs/req):**
 
 | Kernel entry | Children % | Est. µs/req (on-CPU) |
-|--|--|--|
+| --- | --- | --- |
 | `__x64_sys_openat2` → `do_sys_openat2` → `path_openat` | 13.36% | **3.42** |
 | `__x64_sys_statx` → `vfs_statx` | 5.61% | **1.44** |
 | `__fput` / close path (approx bundle) | ~3% | **~0.77** |
@@ -128,7 +128,7 @@ OTHER_VFS_US_PER_REQ           ≈ 0           # no separate residual attributed
 ### ExyonQ (self %, cycles)
 
 | Symbol | self% | est. µs/req | Category |
-|--|--|--|--|
+| --- | --- | --- | --- |
 | `__raw_callee_save___pv_queued_spin_unlock` | 4.96 | 1.27 | SCHEDULER |
 | `_raw_spin_lock_bh` | 2.82 | 0.72 | SCHEDULER |
 | `__fdget` | 2.12 | 0.54 | FD_LIFECYCLE |
@@ -143,7 +143,7 @@ Children tree confirms **openat2 + statx** as major syscall roots; sendfile chil
 ### OLS (self % / children)
 
 | Symbol | Note | Category |
-|--|--|--|
+| --- | --- | --- |
 | `__x64_sys_writev` | **47.96%** children — body path | WRITEV / TCP |
 | openat / statx | ~0 in bpf + absent as major children | PATH_LOOKUP ≈ 0 |
 | spin unlock / nf_conntrack / skb | top self | TCP / SCHEDULER |
@@ -240,7 +240,7 @@ PATTERN_SELECTED = NONE
 ### ALTERNATIVE_A — generation-scoped FD cache
 
 | Aspect | Evaluation |
-|--|--|
+| --- | --- |
 | Ownership | Shared cache keyed by (generation, root_id, inode/path identity) |
 | Lifetime | Bound to StaticRuntime generation; drop on reload/root rebind |
 | Generation invalidation | Mandatory on publish; no cross-generation FD |
@@ -256,7 +256,7 @@ PATTERN_SELECTED = NONE
 ### ALTERNATIVE_B — worker-local generation-scoped FD cache
 
 | Aspect | Evaluation |
-|--|--|
+| --- | --- |
 | Ownership | Per-worker LocalRuntimePin-adjacent map |
 | Lifetime | Worker + generation |
 | Generation invalidation | Local drop on generation observe |
@@ -272,7 +272,7 @@ PATTERN_SELECTED = NONE
 ### NO_NEW_PATTERN_ALTERNATIVE — keep openat2/statx/close per request
 
 | Aspect | Evaluation |
-|--|--|
+| --- | --- |
 | Ownership | None |
 | Security | Strongest (always RESOLVE_BENEATH) |
 | Expected CPU benefit | 0 vs today |

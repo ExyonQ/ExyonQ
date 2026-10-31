@@ -93,7 +93,7 @@ REFACTORINGS_APPLIED = NONE (no FD-cache redesign; no perf opts)
 ## Classification of `match_sendfile_asset == None`
 
 | Class | Product outcome (Cap067-owned) |
-|-------|--------------------------------|
+| --- | --- |
 | NOT_FOUND / DELETED / open fail | HTTP 404 (GET body; HEAD headers-only) |
 | PATH_TRAVERSAL | HTTP 403 |
 | SYMLINK_CONTAINMENT_REJECTED | HTTP 403 (no secret disclosure) |

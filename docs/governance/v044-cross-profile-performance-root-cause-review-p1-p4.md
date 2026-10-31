@@ -36,7 +36,7 @@ P1, P2, and P4 do **not** share one dominant systemic CPU root. They share a **m
 ## Phase 1 — Evidence inventory matrix
 
 | EVIDENCE_ID | PROFILE | SOURCE | METRIC_DOMAIN | AUTHORITY | COMPARABILITY | FRESHNESS | WHAT_IT_PROVES | WHAT_IT_DOES_NOT_PROVE |
-|-------------|---------|--------|---------------|-----------|---------------|-----------|----------------|------------------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | E-G1-GEOM8 | P1/P2/P3 | `v044-p1-default-worker-geometry-8-20260822T035125Z` | RPS, CPU, RSS, latency | CURRENT | PASS (geom8 3-way) | 2026-08-22 | Coordinated parallelism default; P1 −8.8% RPS vs NGINX post-fix; P2 RPS win; P3 win preserved | P4 applicability; syscall/perf deep dive |
 | E-P1-ATTR | P1 | `v044-p1-competitive-deficit-attr-20260821T211202Z` | PSS, threads, FD | HISTORICAL (pre-G1 numbers) | PASS | 2026-08-21 | Fat binary + anon runtime ≈9.5 MiB PSS gap vs NGINX; FD cache not primary | Current geom8 RPS; P4 |
 | E-AB3 | P1 | `v044-p1-fixed-stage-parallelism-ab-20260822T024222Z` | Parallelism A/B | CURRENT (causal) | PASS | 2026-08-22 | Matched 8/8/8 +10.4% RPS; roots/handle registry below resolution | P4; post-G1 residual |
@@ -63,7 +63,7 @@ UPSTREAM_POOL_METRICS_P4 = NOT_MEASURED
 ## Authoritative profile truth (geom8 product authority)
 
 | Profile | ExyonQ RPS | vs NGINX RPS | CPU/req vs NGINX | RSS ExyonQ | COMPETITIVE_WIN |
-|---------|----------:|-------------:|-----------------:|-----------:|-----------------|
+| --- | ---: | ---: | ---: | ---: | --- |
 | P1 1 KiB | 154062 | −8.8% | **−19.3%** (win) | 13.86 MiB | NOT_PROVEN |
 | P2 64 KiB | 104041 | **+15.3%** | **−16.0%** (win) | 21.64 MiB | NOT_PROVEN |
 | P3 1 MiB | 8683 | +1.0% | **−0.4%** (win) | 71.95 MiB | **YES** |
@@ -89,7 +89,7 @@ TOTAL_REQUEST_COST =
 ### Measured / bounded estimates (geom8 authority)
 
 | Profile | core-ms/req ExyonQ | user µs/req | system µs/req | SYSCALLS/req | ALLOC/req | RSS MiB |
-|---------|-------------------:|------------:|--------------:|-------------:|----------:|--------:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | P1 | 0.130 | NOT_MEASURED | NOT_MEASURED | ~6.2 (historical strace) | NOT_MEASURED | 13.86 |
 | P2 | 0.197 | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED | 21.64 |
 | P3 | 1.146 | 7.58 (historical cgroup) | 150.0 (historical) | NOT_MEASURED | NOT_MEASURED | 71.95 |
@@ -107,7 +107,7 @@ NGINX  F ≈ 13.6 µs + 0.090 µs/KiB
 P4 total ≈207 µs/req — dominated by **upstream + dual HTTP stack + userspace proxy**, not static sendfile F.
 
 | Metric | P1 | P2 | P3 | P4 |
-|--------|----|----|----|-----|
+| --- | --- | --- | --- | --- |
 | CYCLES/req | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED |
 | INSTRUCTIONS/req | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED |
 | FUTEX/req | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED | NOT_MEASURED |
@@ -208,7 +208,7 @@ WHY_IS_EXYONQ_P4_RSS_33.18_MIB =
 Authoritative path: **proxy wire fast path** — Tokio only; Cap067 **not** entered for `GET /api/`.
 
 | Stage | Class | Runtime | Ownership / sync | Notes |
-|-------|-------|---------|------------------|-------|
+| --- | --- | --- | --- | --- |
 | TCP accept | ESSENTIAL | Tokio | stream → task | |
 | Header read | ESSENTIAL | Tokio | Bytes head | |
 | Wire plan → Proxy | ESSENTIAL | Tokio | | |
@@ -354,7 +354,7 @@ RECOMMENDATION = MEASURE_MORE (perf-stat/instructions on geom8 P1) before produc
 ### Rejected / closed roots (do not reopen without new evidence)
 
 | Root | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | PARALLELISM_UNDERUTIL | CLOSED_FIXED (G1) | Residual P1 gap is not this root |
 | ROOTS_RWLOCK | REJECTED_NOT_MATERIAL | AB3 perf sample |
 | HANDLE_REGISTRY | REJECTED_NOT_MATERIAL | AB3 + Root2 falsified |
@@ -367,7 +367,7 @@ RECOMMENDATION = MEASURE_MORE (perf-stat/instructions on geom8 P1) before produc
 ## Architecture options re-evaluation
 
 | Option | Profiles helped | RPS effect | CPU effect | Memory | Tail | Evidence | Recommendation |
-|--------|-----------------|------------|------------|--------|------|----------|----------------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | A KEEP_CURRENT | P3 | preserve win | preserve | unchanged | preserve | PROVEN P3 | insufficient alone |
 | B TARGETED_EVOLUTION | P1/P4 | bounded upside | ↓ fixed/proxy | maybe ↓ | ↓ P1? | STRONGLY_SUPPORTED | **YES (direction)** |
 | C WORKER_LOCAL_OWNERSHIP | P1/P4 | BOUNDED | BOUNDED | neutral | unknown | BOUNDED | subset of B |

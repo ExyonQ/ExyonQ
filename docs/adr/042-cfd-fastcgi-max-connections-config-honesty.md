@@ -49,7 +49,7 @@ LEGACY_MAX_CONNECTIONS_POLICY = CFD_PROJECT_FIELD_RETAINED_VALUE_MUST_BE_1
 ### CFD project format (`fcgi|…|max_conn|…`)
 
 | Value | Behavior |
-|-------|----------|
+| --- | --- |
 | `1` | **Accepted** — sole supported value under current serial CFD FastCGI |
 | `0` | **Rejected** — no silent coerce-to-1 |
 | `>1` | **Rejected** — no silent no-op concurrent / idle-capacity promise |

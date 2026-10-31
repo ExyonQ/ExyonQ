@@ -39,7 +39,7 @@ containing only accepted server blocks.
 Inside each `server`:
 
 | Directive | Rule |
-|-----------|------|
+| --- | --- |
 | `listen` | Required. Single address/port form mappable to ExyonQ `[[server]].listen`. |
 | `server_name` | Optional. Literal names only (no regex `~`, no `*`-wildcards beyond catch-all `_` ignored). |
 | `root` | Required. Document root for static files: at server level and/or inside optional `location /` (at least one). |

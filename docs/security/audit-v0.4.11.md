@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.4.11
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.4.11 |
 | **Commit** | `52dbf9c95a5c4d86bde0f535f6030b0abbc231c4` |
 | **Date** | 2026-10-12 |
@@ -18,7 +18,7 @@ Nightly fuzz, Miri, and an official benchmark were not run for this cut.
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | not run on this commit | Tag workflow runs after publish |
 | Security (`security.yml`) | host `cargo audit` clean | 0 vulnerabilities on this lockfile (Wasmtime 49.0.2) |
 | Nightly fuzz | skipped | Not run for this cut |
@@ -37,7 +37,7 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | Wasmtime 49.0.1 advisories from 0.4.8–0.4.10 | high | Pin is **49.0.2** on this line; host `cargo audit` clean |
 
 ## Waivers

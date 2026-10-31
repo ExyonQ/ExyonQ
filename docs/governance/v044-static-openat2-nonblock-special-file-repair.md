@@ -43,7 +43,7 @@ CLIENT_VISIBLE_FAILURE = FIFO/unix/special → 403 Forbidden
 ## Evidence
 
 | Run | Platform | Result |
-|-----|----------|--------|
+| --- | --- | --- |
 | `20260901T204300Z` | Netcup amd64 | FIFO 403 ~7ms; hello after fifo 200; 4-shard concurrent PASS |
 | `20260901T204500Z-arm64` | Oracle arm64 native | Same PASS pattern |
 
@@ -59,7 +59,7 @@ PRE reproduction: Phase 8 `20260901T181000Z` kernel stacks (not re-built pre-rep
 ## Explicit nonblocking qualifications (P8R-B)
 
 | Item | Status |
-|------|--------|
+| --- | --- |
 | EAGAIN full payload SHA256 | **NOT_REMEASURED_THIS_WIP** |
 | Partial sendfile full SHA256 | **NOT_REMEASURED_THIS_WIP** |
 | TOCTOU 4000 relative race | **NOT_REMEASURED_THIS_WIP** |

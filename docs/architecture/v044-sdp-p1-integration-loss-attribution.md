@@ -39,7 +39,7 @@ Cross-campaign absolute RPS is only **PARTIAL** (ExyonQ floor and OLS drifted; E
 **User/system CPU pattern** and within-campaign A0 vs A1 are **STRONG**.
 
 | DIMENSION | EP-C | SDP-P1 | PERF | CORRECTNESS |
-|-----------|------|--------|------|-------------|
+| --- | --- | --- | --- | --- |
 | binary | bare specialized-proxy | full exyonq | HIGH | HIGH |
 | mio / httparse | 1.x / 1.10.1 | 1.x / 1.10.1 | LOW | LOW |
 | socket2 | 0.5.10 | 0.6.5 | LOW | LOW |
@@ -59,7 +59,7 @@ Cross-campaign absolute RPS is only **PARTIAL** (ExyonQ floor and OLS drifted; E
 ## CPU attribution (campaign medians)
 
 | | EP-C proto | SDP-P1 | Δ |
-|--|----------:|-------:|--:|
+| --- | ---: | ---: | ---: |
 | user µs/req | 1.77 | 18.82 | **+17.05** |
 | system µs/req | 19.84 | 15.38 | −4.46 |
 | total µs/req | 21.66 | 34.19 | **+12.53** |

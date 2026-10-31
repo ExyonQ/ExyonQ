@@ -23,7 +23,7 @@ thread that calls `begin` / `pump` / `clear` for those fds. Sessions do not migr
 workers; Hyper handoff clears before the fd leaves epoll.
 
 | Question | Answer |
-|----------|--------|
+| --- | --- |
 | WHY_DOES_SESSIONTABLE_EXIST | Map opaque session id → `SendingState` + access head (module-owned FSM) |
 | WHAT_INVARIANT | Session state consistent for one fd’s lifecycle on its owning worker |
 | IS_SESSION_OWNERSHIP_ALREADY_SINGLE_REACTOR | YES (per epoll worker) |
@@ -46,7 +46,7 @@ Access notify runs **after** releasing the TLS `RefCell` borrow (no re-entrancy)
 Alternating A₁B₁A₂B₂A₃B₃ — identical host/topology/rewrk.
 
 | Metric | A (Mutex) | B (TLS) |
-|--------|-----------|---------|
+| --- | --- | --- |
 | Median RPS | 67833 | **137977** |
 | RPS Δ | — | **+103.4%** |
 | futex/req | 5.428 | **1.621** (−70.1%) |
@@ -66,7 +66,7 @@ SESSION_MUTEX_COST = REAL_COST_REMOVED
 ## Three-way P1 control (post-fix B)
 
 | Server | Median RPS |
-|--------|------------|
+| --- | --- |
 | ExyonQ | 143182 |
 | NGINX | 164066 |
 | OLS | 140570 |
@@ -76,7 +76,7 @@ ExyonQ vs NGINX ≈ **−12.7%**; vs OLS ≈ **+1.9%**.
 ## Dual-Linux
 
 | Host | Result |
-|------|--------|
+| --- | --- |
 | Netcup amd64 | PASS — unit TLS + real sendfile + A/B + three-way |
 | Oracle arm64 | PASS — `session_table_is_thread_local` on matrix tree |
 
@@ -88,7 +88,7 @@ SESSIONTABLE_NEW_PATH_EXECUTED_ARM64 = YES  # unit ownership path
 ## Decision gates (no further product mutation in this WIP)
 
 | Gate | Verdict |
-|------|---------|
+| --- | --- |
 | FD_REUSE_REQUIRED | NOT_PROVEN (openat2/req≈1 remains) |
 | WORKER_TOPOLOGY_CHANGE_REQUIRED | NOT_PROVEN (still 4 active workers; 4→8 CPU now +11% RPS) |
 | WAF_OPTIMIZATION_REQUIRED | NOT_PROVEN |

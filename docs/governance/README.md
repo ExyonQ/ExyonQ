@@ -6,7 +6,7 @@ TRACKING = force-tracked under /docs/governance/** (see .gitignore exceptions)
 ```
 
 | Path | Purpose |
-|------|---------|
+| --- | --- |
 | [project-integrity.md](project-integrity.md) | Project integrity policy |
 | [CLAIM_EVIDENCE_INTEGRITY_GUARD.md](CLAIM_EVIDENCE_INTEGRITY_GUARD.md) | Claim/evidence integrity guard — development governance; a claim may not exceed its evidence in strength, scope, execution class, platform, client or source state |
 | [git-worktree-policy.md](git-worktree-policy.md) | Git worktree isolation: extra trees do not replace canonical lab, share mutable state, or authorize a second WIP |

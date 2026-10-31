@@ -14,7 +14,7 @@ is a **separate** campaign and has **not** started.
 ## Canonical authorities
 
 | Authority | Path |
-|-----------|------|
+| --- | --- |
 | WAF API contracts | `crates/exyonq-waf-api/**` |
 | WAF engine | `crates/exyonq-waf/**` |
 | Configuration IR | `config/ir/src/waf.rs` (+ merge/fingerprint wiring) |
@@ -28,7 +28,7 @@ paths above. Product source and docs in this repository are the only authorities
 ## Documents
 
 | Doc | Content |
-|-----|---------|
+| --- | --- |
 | [PRODUCT.md](./PRODUCT.md) | Product overview, modes, Cap015 status boundary |
 | [architecture.md](./architecture.md) | Dependency boundary, request order, decision precedence |
 | [configuration.md](./configuration.md) | TOML schema, defaults, validation, reload/fingerprint |

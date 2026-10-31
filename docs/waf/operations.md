@@ -19,7 +19,7 @@ EXYONQ_WAF_MODE=block EXYONQ_WAF_ENFORCE=1 exyonq serve ./config.toml
 ## Body inspection
 
 | Topic | Behavior |
-|-------|----------|
+| --- | --- |
 | Budget | `waf.max_inspection_body_bytes` (default 1 MiB) |
 | No body | Header phase only |
 | Collected body | Inspected after bounded collect; abuse not applied on body phase |
@@ -35,7 +35,7 @@ present an empty body to WAF or upstream (Cap015 fix for former WAF-LOGIC-P3-B).
 These are handled **before** WAF on the request path:
 
 | Path / case | Scope |
-|-------------|--------|
+| --- | --- |
 | `/health` | Exact path (liveness alias) |
 | `/live` | Exact path |
 | `/ready` | Exact path |

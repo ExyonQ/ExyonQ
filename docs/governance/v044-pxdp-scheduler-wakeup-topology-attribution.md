@@ -16,7 +16,7 @@ Performance narrative: [`../performance/v044-pxdp-scheduler-wakeup-topology-attr
 ## Authorization chain
 
 | Prior WIP | Outcome |
-|-----------|---------|
+| --- | --- |
 | RC-B | Multiple material classes; ctx ~128/req |
 | UG-C | **Owner accepted closed** — SendRequest-owner path **rejected** for current P4 profile |
 | **This WIP** | Read-only deeper edge attribution; **no product repair** |
@@ -24,7 +24,7 @@ Performance narrative: [`../performance/v044-pxdp-scheduler-wakeup-topology-attr
 ## Invalid evidence (mandatory)
 
 | Artifact | Classification |
-|----------|----------------|
+| --- | --- |
 | `a1-20260827-022600` ctx/req ~7.9 | **INVALID_SCOPE_MISMATCH** — never cite |
 
 Authoritative UG-C fair A/B: ctx **127.9 → 135.7**, RPS **−5%**.
@@ -32,7 +32,7 @@ Authoritative UG-C fair A/B: ctx **127.9 → 135.7**, RPS **−5%**.
 ## Terminal cases
 
 | Case | When |
-|------|------|
+| --- | --- |
 | SW-A | One dominant wakeup edge proven |
 | SW-B | Small set of dominant edges proven |
 | **SW-C** | **Cross-core / migration / involuntary preemption dominant** ← **this run** |

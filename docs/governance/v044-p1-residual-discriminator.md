@@ -22,7 +22,7 @@ RECOMMENDED_NEXT_ACTION = HARNESS_OR_CONFIG_NORMALIZE_P1_RAW_EXPLICIT_WAF_OFF
 ## Phase 1 control (this session)
 
 | Server | Median RPS | CV% |
-|--------|------------|-----|
+| --- | --- | --- |
 | ExyonQ | 138634.92 | 7.20 |
 | NGINX | 143466.14 | 10.33 |
 | OLS | 123086.28 | 9.35 |
@@ -39,7 +39,7 @@ Prior post-SessionTable residual control (130421.60 / −20.57% vs NGINX) remain
 ### Config / code truth
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | `P1_RAW_WAF_CONFIG` | `bench.toml` has **no** `[waf]` |
 | `WAF_SECTION_PRESENT` | NO |
 | `WAF_ENABLED_EFFECTIVE` | YES (`default_waf_enabled() = true`) |
@@ -52,7 +52,7 @@ Prior post-SessionTable residual control (130421.60 / −20.57% vs NGINX) remain
 ### Causal A/B (workers=4, host cpuset 0–7, alternating)
 
 | Arm | Config | Median RPS |
-|-----|--------|------------|
+| --- | --- | --- |
 | A | canonical (absent `[waf]` → Monitor) | **125494.16** |
 | B | `[waf] enabled=false mode="disabled"` (diagnostic IR) | **164982.42** |
 
@@ -69,7 +69,7 @@ Perf: A shows `lock_contended` → `Stdout::write_all` (~1.99%) consistent with 
 Host CPUs fixed (`cpuset 0-7`). WAF-off diag to avoid WAF confound. `WORKER_TOPOLOGY_CHANGE_AUTHORIZED = NO`.
 
 | Metric | workers=4 | workers=8 |
-|--------|-----------|-----------|
+| --- | --- | --- |
 | Alternating median RPS | 160161.26 | 143849.74 (−10.18%) |
 | Busy tokio workers (sample) | 4 | 4 |
 | Scale shape (single reps) | 4 → 129681 | 8 → 165815 |

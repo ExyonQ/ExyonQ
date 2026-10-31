@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.4.4
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.4.4 |
 | **Commit** | `1ce0a7007171d4af6d1f9f4510137298783575ee` |
 | **Date** | 2026-10-01 |
@@ -20,7 +20,7 @@ This document is not a security-compiler sign-off and does not authorize publica
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | not executed | Not run for this repair |
 | Security (`security.yml` local equiv.) | partial | `cargo audit` exit 0 on 2026-10-01 (advisory db fetched that day): no vulnerabilities; one allowed warning, yanked `yoke-derive` 0.8.3. `cargo deny check advisories bans sources`: advisories ok, bans ok, sources ok. Security nextest and the private-material scan were not run |
 | Nightly fuzz | not executed | |
@@ -41,7 +41,7 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | LOCK-044 | Release gate | Tagged `Cargo.lock` kept workspace packages at 0.4.3 and still contained `exyonq-bench`, which is not a workspace member. `cargo update --offline --workspace` on toolchain 1.98.1 rewrote only those package versions and removed `exyonq-bench`. No third-party version changed |
 | RUSTSEC-2026-0222 | Low | v0.4.3 waiver was Wasmtime 45.0.2 and expired for review at v0.4.4. Pin is now 49.0.1, inside the published patched range `>=47.0.3`. Not re-waived. `cargo audit` did not report it |
 
@@ -50,7 +50,7 @@ None.
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | | | | | |
 
 No waiver is active for v0.4.4. The v0.4.3 RUSTSEC-2026-0222 waiver is historical and is not renewed.

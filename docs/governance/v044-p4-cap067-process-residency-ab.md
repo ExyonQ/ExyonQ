@@ -19,7 +19,7 @@ Parent: [`v044-runtime-topology-parallelism-budget-audit.md`](v044-runtime-topol
 ## Verdict
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Cap067 isolatable without product mutation | **YES** (`EXYONQ_EPOLL_STATIC=0`) |
 | Material P4 residency cost | **NO** (CP-C) |
 | Cap067 as P4 root cause | **CLOSED_NOT_MATERIAL** |

@@ -108,7 +108,7 @@ Before perf/test/bench/demo/measurement work, declare the fields in the Cursor r
 ## Process gates
 
 | Phase | Requirement |
-|-------|-------------|
+| --- | --- |
 | Pre-test / pre-demo / pre-bench | `project-integrity-gate` selftest; tree PASS for product claims |
 | Pre-competitive run | Also `benchmark-integrity-gate` PASS |
 | Pre-publication | `data-provenance-gate` PASS on the result package |

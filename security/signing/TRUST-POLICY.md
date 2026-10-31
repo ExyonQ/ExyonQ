@@ -44,7 +44,7 @@ COSIGN_PUBLIC_KEY_SHA256 =
 ## Surfaces
 
 | Surface | Mechanism | Authenticated object |
-|---------|-----------|----------------------|
+| --- | --- | --- |
 | Git tag | SSH signing (annotated tags only) | Tag object → commit |
 | Release bundle | Cosign key-managed `sign-blob` | **`SHA256SUMS.txt`** (root signed object) |
 | OCI | Cosign key-managed | Image **digest only** (`@sha256:…`) — mutable tags forbidden |
@@ -54,7 +54,7 @@ COSIGN_PUBLIC_KEY_SHA256 =
 ## Active keys
 
 | Key ID | Role | Public material |
-|--------|------|-----------------|
+| --- | --- | --- |
 | `EXYONQ_RELEASE_TAG_SSH_V1` | Annotated release tags (`git tag -s -a`) | `exyonq-release-tag-ssh-v1.pub`, `exyonq-release-tag-signers` (principal `exyonq-release`) |
 | `EXYONQ_RELEASE_COSIGN_V1` | Artifact blob **and** OCI digest (MODEL_1) | `exyonq-cosign.pub` |
 

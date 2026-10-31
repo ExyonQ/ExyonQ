@@ -34,7 +34,7 @@ ARCHITECTURE_WITHOUT_UNNECESSARILY_REWRITING_ALREADY_VALID_PRODUCT_LOGIC =
 ## 2. Strategic authority
 
 | Item | Status |
-|------|--------|
+| --- | --- |
 | Extreme +25/−10 | **CLOSED** (SPPG-C kill switch) |
 | Competitive Frontier target | ≈ SPPG vs OLS: RPS +9.3%, CPU +22.9% better, MEM +17.3%, P95 +16.5%, P99 +14.1% |
 | SPPG | **ARCHITECTURE_TARGET_REFERENCE** — not shipping baseline |
@@ -67,7 +67,7 @@ LARGE_CPU_SERVER_RISK = HIGH (MAX_WORKERS=16; independent pools)
 **Alphabet warning:** SPPG ADR used **A**=same-process / **B**=separate-process. This Phase-0 table uses different letters. **Freeze by named enum only** — never “option A/B” alone.
 
 | CFR ID | Named model | Verdict for shipping |
-|--------|-------------|----------------------|
+| --- | --- | --- |
 | CFR-PM-SEPARATE | `TRUE_SPLIT_PLANE_SEPARATE_PROCESS` | **Preferred isolation for competitive H1 proxy DP** (only geometry with measured soft-frontier deltas) |
 | CFR-PM-SAME-STRICT | `SAME_PROCESS_STRICT_EXECUTION_DOMAINS` | **Closed as SDP-style path** (IL-F); reopen only with new isolation proof |
 | CFR-PM-CURRENT-TARGETED | `CURRENT_PROCESS_TARGETED_EXECUTION_REPLACE` | **No frontier evidence**; IL-F contamination risk if specialized engine co-resides; **not** proven impossible for soft frontier; **rejected as sole path pending owner** |
@@ -97,7 +97,7 @@ Tech-lead draft preferred **CFR-PM-CURRENT-TARGETED** after extreme STOP; owner 
 ## 5. Classification summary
 
 | Class | Count (approx) | Examples |
-|-------|----------------|----------|
+| --- | --- | --- |
 | PRESERVE | ~12 | Cap067 static FSM, FastCGI, error/commit, hop-by-hop contract, BackendTable slots |
 | PRESERVE_WITH_ADAPTER | ~10 | Module API, Hyper role-scoped, observability emit, Cap067 budget |
 | MOVE_TO_CONTROL_PLANE | ~4 | config parse, plan compile, control socket, export sinks |
@@ -113,7 +113,7 @@ Exhaustive table: evidence `preserve-matrix.md`.
 ## 6. Subsystem classifications (headline)
 
 | Area | Classification |
-|------|----------------|
+| --- | --- |
 | Routing | COMPILE_TO_DATAPLANE |
 | WAF | COMPILE_TO_DATAPLANE (no weaken) |
 | Generation/reload | COMPILE_TO_DATAPLANE + control publish |
@@ -135,7 +135,7 @@ Exhaustive table: evidence `preserve-matrix.md`.
 ## 7. Dataplane boundary
 
 | Responsibility | Separation class |
-|----------------|------------------|
+| --- | --- |
 | Routing / WAF / header / timeout / gen id | EXECUTE_FROM_IMMUTABLE_COMPILED_STATE |
 | Upstream select / local rate / KA pools | REQUIRES_LOCAL_MUTABLE_SHARD_STATE |
 | Config parse / reload orchestration / exporters / admin | REQUIRES_CONTROL_PLANE |
@@ -209,7 +209,7 @@ NEXT_WIP_AUTHORIZED = NO
 ### CASE glossary
 
 | CASE | Meaning |
-|------|---------|
+| --- | --- |
 | CFR-A | Core reconciled; Phase 1 ready (no unresolved Phase-1 blocker) |
 | CFR-B | Core reconciled; Phase 1 conditional (owner decision/proof blockers) |
 | CFR-C | Architecture contradiction — broader redesign than authorized |

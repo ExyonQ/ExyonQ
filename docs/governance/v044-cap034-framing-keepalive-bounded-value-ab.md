@@ -13,7 +13,7 @@ Isolated product experiment (A1 arm only) to bound how much of the P4 proxy defi
 ## Authority
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | SOURCE_HEAD | `ade997a362e60d1dc6eafc984da454930600845a` |
 | SOURCE_TREE | `4ae6ffc7528d0881be23fcac246c345dcb9a1606` |
 | SOURCE_BINARY_SHA256 (canonical A0 product) | `e28c0abe18587f2d911d492be64cbec42372383e011417a6c578be52da5ba459` |
@@ -28,7 +28,7 @@ Isolated product experiment (A1 arm only) to bound how much of the P4 proxy defi
 ## Arms
 
 | Arm | `EXYONQ_PROXY_WIRE_DOWNSTREAM_FRAMING` | Wire (P4 1 KiB) |
-|-----|----------------------------------------|-----------------|
+| --- | --- | --- |
 | A0 | `cap034_chunked_close` (default) | `Transfer-Encoding: chunked`, `Connection: close` |
 | A1 | `safe_known_length_keepalive` | `Content-Length: 1024`, `Connection: keep-alive`, no `Transfer-Encoding` |
 
@@ -48,7 +48,7 @@ MATCHED_ALTERNATING = A0,A1 × 5 rounds
 ## Correctness / security (A1)
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | Cap034 routing E2E (`cap-034-routing-host-proxy-e2e.py`, A1 env) | PASS 29/29 |
 | LA-001 host switch on same TCP (`wire_keepalive_host_switch_no_frozen_cluster`) | PASS (`response_on_reuse`) |
 | Wire probe A0 | chunked + close |
@@ -59,7 +59,7 @@ MATCHED_ALTERNATING = A0,A1 × 5 rounds
 ## Performance (matched A/B)
 
 | Metric | A0 | A1 | A1 vs A0 |
-|--------|----|----|----------|
+| --- | --- | --- | --- |
 | RPS median | 74647.73 | 78583.61 | **+5.27%** |
 | RPS CV | 0.0563 | 0.0439 | improved |
 | P50 (ms) | — | — | not extracted in summary script |

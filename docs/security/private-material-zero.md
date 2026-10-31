@@ -29,7 +29,7 @@ Related helpers: `scripts/release/scan-private-keys.sh`, `scripts/test-tls/exyon
 ## Enforcement
 
 | Surface | Mechanism |
-|---------|-----------|
+| --- | --- |
 | Local pre-commit | `.githooks/pre-commit` → `--git-index` |
 | Local pre-push | `.githooks/pre-push` → tree scan + `verify-no-private-paths` |
 | CI | `security.yml` private-material job |

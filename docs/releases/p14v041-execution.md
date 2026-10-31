@@ -130,7 +130,7 @@ Dependency highlights:
 ## Close commit chain (publication)
 
 | Commit | Subject |
-|--------|---------|
+| --- | --- |
 | `f335360` | (pre-amend tip referenced by owner EXPECTED_HEAD) |
 | `94f29a9` | chore(fmt): rustfmt config_watcher |
 | `43805eb` | fix(release): allow product version 0.4.1 in manifest policy |

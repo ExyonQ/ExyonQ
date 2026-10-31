@@ -22,7 +22,7 @@ A follow-on extension (same protocol) qualifies **P4 Proxy** (`/api/` → real `
 ## Scope
 
 | In scope | Out of scope |
-|----------|----------------|
+| --- | --- |
 | P1 Static `/site/1k.bin` Docker-internal | FastCGI three-way (blocked — no canonical harness) |
 | P4 Proxy `/api/` → real HTTP upstream | Official competitive campaign |
 | ExyonQ + NGINX + OpenLiteSpeed | Cross-arch aggregation / marketing |
@@ -66,7 +66,7 @@ BACKGROUND_LOAD_SNAPSHOT
 ### Mandatory measure-window sources
 
 | Metric | Authority | Forbidden as ranking authority |
-|--------|-----------|--------------------------------|
+| --- | --- | --- |
 | RPS / latency / bytes | `rewrk --json` measure window | — |
 | CPU | cgroup `cpu.stat` `usage_usec` delta → CPU-seconds and CPU-seconds/request | `docker stats` CPU% |
 | RSS | sum of `/proc/<pid>/status` `VmRSS` over `cgroup.procs` | `docker stats` MemUsage |
@@ -111,7 +111,7 @@ Absolute RPS must **not** be compared across Netcup↔Oracle (different core cou
 ### Evidence paths (P1)
 
 | Host | Remote | Local fetch |
-|------|--------|-------------|
+| --- | --- | --- |
 | Netcup | `/tmp/exyonq-p1-methodqual-netcup-20260905T074622Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/netcup/` |
 | Oracle | `/tmp/exyonq-p1-methodqual-oracle-20260905T075946Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/oracle/` |
 
@@ -120,7 +120,7 @@ Lab context HEAD at P1 qualification time: `5e5895f58e056e6b73a82c732245f3241b4c
 ### Netcup amd64 (n=5)
 
 | Contender | RPS median | CV | Bootstrap median CI95 | cpsr median | RSS sum MiB median |
-|-----------|------------|----|-----------------------|-------------|--------------------|
+| --- | --- | --- | --- | --- | --- |
 | ExyonQ | 154288 | 0.067 | [149243, 174627] | 2.17e-5 | 24.97 |
 | NGINX | 156417 | 0.032 | [149839, 162621] | 2.96e-5 | 32.26 |
 | OLS | 143367 | 0.027 | [139912, 149618] | 2.07e-5 | 71.08 |
@@ -136,7 +136,7 @@ THROTTLING = nr_throttled=0 observed
 ### Oracle arm64 (n=5)
 
 | Contender | RPS median | CV | Bootstrap median CI95 | cpsr median | RSS sum MiB median |
-|-----------|------------|----|-----------------------|-------------|--------------------|
+| --- | --- | --- | --- | --- | --- |
 | ExyonQ | 82542 | 0.005 | [81990, 82969] | 3.21e-5 | 18.36 |
 | NGINX | 73257 | 0.018 | [71861, 75067] | 3.55e-5 | 18.15 |
 | OLS | 86198 | 0.032 | [80515, 87157] | 2.89e-5 | 42.16 |
@@ -176,7 +176,7 @@ UPSTREAM_OR_PHP_FPM_HEALTH = PASS (200/1024 probes on all three reverse proxies 
 ### Evidence paths (P4)
 
 | Host | Remote | Local fetch |
-|------|--------|-------------|
+| --- | --- | --- |
 | Netcup | `/tmp/exyonq-p4-methodqual-netcup-20260905T085821Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/proxy-netcup/` |
 | Oracle | `/tmp/exyonq-p4-methodqual-oracle-20260905T085832Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/proxy-oracle/` |
 
@@ -185,7 +185,7 @@ Lab entry HEAD for this Proxy extension: `791d71cef6bd4fd23dceca4532117dbebef2b1
 ### Netcup amd64 (n=5)
 
 | Contender | RPS median | CV | Bootstrap median CI95 | cpsr median | RSS sum MiB median |
-|-----------|------------|----|-----------------------|-------------|--------------------|
+| --- | --- | --- | --- | --- | --- |
 | ExyonQ | 89253 | 0.040 | [85630, 94603] | 4.55e-5 | 35.84 |
 | NGINX | 104730 | 0.036 | [97675, 107581] | 3.65e-5 | 33.57 |
 | OLS | 109125 | 0.021 | [104945, 111185] | 3.17e-5 | 74.59 |
@@ -202,7 +202,7 @@ CPU/RSS = PID/cgroup authority; docker stats AUXILIARY_ONLY
 ### Oracle arm64 (n=5)
 
 | Contender | RPS median | CV | Bootstrap median CI95 | cpsr median | RSS sum MiB median |
-|-----------|------------|----|-----------------------|-------------|--------------------|
+| --- | --- | --- | --- | --- | --- |
 | ExyonQ | 18634 | 0.017 | [18253, 19021] | 1.20e-4 | 33.50 |
 | NGINX | 27545 | 0.009 | [27099, 27719] | 6.30e-5 | 18.85 |
 | OLS | 27580 | 0.021 | [26590, 27846] | 6.24e-5 | 43.58 |

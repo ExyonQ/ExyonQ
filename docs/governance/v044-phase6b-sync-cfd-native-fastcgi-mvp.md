@@ -54,7 +54,7 @@ Option **D** accepted; **B/C** rejected.
 ## Component classification
 
 | Component | Class |
-|-----------|--------|
+| --- | --- |
 | Record codec / PARAMS / STDIN / STDOUT+STDERR / END_REQUEST | PORT_TO_RUNTIME_NEUTRAL (`exyonq-fastcgi-wire`) |
 | CommitStage / NotStarted retry | REUSE (ported) |
 | Caps / CGI parse | REUSE (ported) |
@@ -65,7 +65,7 @@ Option **D** accepted; **B/C** rejected.
 ## Security contracts
 
 | ID | Topic | P6B result |
-|----|-------|------------|
+| --- | --- | --- |
 | SG-FCGI-04 | CL ↔ body ↔ STDIN | CLOSED (fail-closed mismatch) |
 | SG-FCGI-05 | Trailing bytes after END_REQUEST | CLOSED (DISCARD; no checkin) |
 | SG-FCGI-06 | Unix socket trust | QUALIFIED `SINGLE_TENANT_ADMIN_FS` (absolute path only) |

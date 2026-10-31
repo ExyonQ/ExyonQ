@@ -12,7 +12,7 @@ NETCUP_AMD64 = PASS
 ## Historical truth (preserved)
 
 | Epoch | Upstream put | Evidence |
-|-------|--------------|----------|
+| --- | --- | --- |
 | Phase-2 | Live (hit-rate overstated) | UPRR / CFD-L06 HISTORICAL |
 | Phase-4 | Fail-closed discard-only | SOURCE_PROOF (trailing-byte race) |
 | Pre-this-WIP | `put` dead; success always DISCARD | UPRR-C / UPRR-R6 |

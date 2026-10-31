@@ -89,7 +89,7 @@ FD_CACHE_EXPECTED_MAX_FDS = low for P1 (typically 1 hot file × workers)
 ## Implementation
 
 | File | Change |
-|--|--|
+| --- | --- |
 | `sendfile_fd_cache.rs` | TLS cache + metrics |
 | `sendfile.rs` | `identity_under_root` (`fstatat`) |
 | `epoll_session.rs` | match uses try_hit / insert; clear on pin |
@@ -98,7 +98,7 @@ FD_CACHE_EXPECTED_MAX_FDS = low for P1 (typically 1 hot file × workers)
 ## Netcup causal results (cgroup Phase A, no observers)
 
 | | Before (attribution) | After FD reuse |
-|--|--|--|
+| --- | --- | --- |
 | ExyonQ total µs/req | 25.608 | **16.179** |
 | ExyonQ user µs/req | 8.600 | **4.416** |
 | ExyonQ system µs/req | 17.008 | **11.762** |
@@ -114,7 +114,7 @@ FD_REUSE_PERCENT_OF_PREDICTED_CEILING ≈ 156% of 6.05 µs upper
 ## Syscall geometry after (bpftrace counts / req)
 
 | Syscall | Before | After |
-|--|--|--|
+| --- | --- | --- |
 | openat2 | ≈1.0 | **≈0** (absent) |
 | statx | ≈1.0 | **≈0** (absent) |
 | newfstatat | — | **≈1.0** (pathname revalidation) |
@@ -161,7 +161,7 @@ LA-CAP067-FD-001 = FIXED
 Do not interchange these labels:
 
 | Label | Meaning | Status |
-|--|--|--|
+| --- | --- | --- |
 | AMD64 real production (Netcup) | live P1 / Cap067 sendfile + FD reuse on amd64 | sealed R1 (this repair WIP) |
 | ARM64 library tests | `sendfile_fd_cache::*` on aarch64 | PASS (4 tests) — **not** REAL_PRODUCTION |
 | ARM64 Cap067 real E2E | real `exyonq` process + real FS + real sockets | hit path PASS; miss path FAIL (see closeout) |

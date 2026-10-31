@@ -25,7 +25,7 @@ inflate skb_split / page-batch work. Cap each large-body step count.
 ## Mutation (product KEEP)
 
 | Item | Value |
-|------|--------|
+| --- | --- |
 | Gate | `remaining >= LARGE_BODY_MIN_BYTES` (= `TCP_CORK_MIN_BODY` = 65537) |
 | Default clamp | `LARGE_BODY_SENDFILE_COUNT_MAX` = **128 KiB** (KEEP arm C) |
 | P1 / P2 | Uncapped (MSG_MORE unchanged) |
@@ -38,7 +38,7 @@ inflate skb_split / page-batch work. Cap each large-body step count.
 Arms:
 
 | Arm | Policy |
-|-----|--------|
+| --- | --- |
 | A | `EXYONQ_SENDFILE_CHUNK=1048576` (uncapped for P3) |
 | B | unset → product **256 KiB** candidate |
 | C | `EXYONQ_SENDFILE_CHUNK=131072` (**128 KiB**) |
@@ -46,7 +46,7 @@ Arms:
 ### ExyonQ medians
 
 | Arm | P1 RPS | P1 p99 | P2 RPS | P2 p99 | P3 RPS | P3 p99 | P3 core-ms |
-|-----|--------|--------|--------|--------|--------|--------|------------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | A uncapped | 141349 | 1.35 | 91987 | 2.69 | 6038 | 33.43 | 0.4087 |
 | B 256 KiB | 145271 | 1.42 | 94903 | 2.70 | 6189 | 31.85 | 0.4062 |
 | C 128 KiB | 142944 | 1.47 | 91971 | 2.74 | **6400** | 34.93 | **0.3963** |
@@ -54,7 +54,7 @@ Arms:
 ### Δ vs A (ExyonQ)
 
 | Arm | P1 dRPS / dP99 | P2 dRPS / dP99 | P3 dRPS / dP99 / dCMS |
-|-----|----------------|----------------|------------------------|
+| --- | --- | --- | --- |
 | B | +2.8% / +5.2% | +3.2% / +0.4% | +2.5% / −4.7% / −0.6% |
 | C | +1.1% / +8.9% | −0.0% / +1.9% | **+6.0%** / +4.5% / **−3.0%** |
 
@@ -70,7 +70,7 @@ C_PROTECTORS = PASS   # P1 p99 +8.9% within 10%
 ### Competitive residual (not closed)
 
 | Arm | P3 vs NGINX | P3 vs OLS |
-|-----|-------------|-----------|
+| --- | --- | --- |
 | A | −22.9% | −27.7% |
 | B | −22.8% | −24.4% |
 | C | −21.0% | −24.5% |

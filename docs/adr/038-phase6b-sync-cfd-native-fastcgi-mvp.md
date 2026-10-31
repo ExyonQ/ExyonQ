@@ -19,7 +19,7 @@ Phase 6A proved FastCGI exists on the product Tokio/Hyper path and is absent fro
 ## Options
 
 | ID | Option | Verdict |
-|----|--------|---------|
+| --- | --- | --- |
 | A | Permanent product FastCGI + CFD reject | Rejected as **final** Phase-6 architecture (allowed only as interim fail-closed during rollout) |
 | B | Per-request CFD→product handoff | **REJECT** — violates per-request handoff / cross-process RPC invariants |
 | C | Embed Tokio/Hyper FastCGI into CFD | **REJECT** — violates Tokio=0 / Hyper=0 |

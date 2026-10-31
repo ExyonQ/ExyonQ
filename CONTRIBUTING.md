@@ -1,10 +1,10 @@
 # Contributing to ExyonQ
 
-Early-stage project. Contributions welcome once public alpha opens (Fase 5).
+Contributions welcome once the public alpha process opens.
 
 ## Development setup
 
-1. Install Rust 1.93+ (`rust-toolchain.toml` pins the channel).
+1. Install Rust 1.99.1+ (`rust-toolchain.toml` pins the channel).
 2. Clone the repo and build:
 
 ```bash
@@ -28,7 +28,7 @@ Disparar Bugbot antes de merge: comentario `bugbot run` (o `@cursor review`) en 
 
 ## Scope discipline
 
-- Core changes must respect [ADR-001](docs/adr/001-core-invariants.md).
+- Core changes must respect the project ADRs in `docs/adr/`.
 - Module API changes require ADR amendment and semver bump.
 - Compat importers only implement rules listed in [compatibility-scope-v1.md](docs/compat/compatibility-scope-v1.md).
 - No P2P, cluster, or panel work in v1 issues unless explicitly un-frozen.
@@ -44,7 +44,7 @@ bash scripts/verify-no-private-paths.sh
 # optional: bash scripts/setup-githooks.sh   # runs the check on every git push
 ```
 
-Public docs live under `docs/`, `ARCHITECTURE.md`, and ADRs. Repository scope: [`docs/project-scope.md`](docs/project-scope.md).
+Public docs live under `docs/`, `ARCHITECTURE.md`, and ADRs. Repository scope: `ARCHITECTURE.md`.
 
 ## Commit style
 

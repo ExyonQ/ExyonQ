@@ -13,7 +13,7 @@ PRODUCT_BINARY_SHA256 = efb15c7a7ce459c403fc837f3cf125f9505c5ccfdff93c8191369362
 ## Medians (fresh same campaign)
 
 | Product | RPS | CPU µs/req | RSS KiB |
-|---------|----:|-----------:|--------:|
+| --- | ---: | ---: | ---: |
 | A0 ExyonQ (SDP off) | 79081 | 35.38 | 28304 |
 | A1 ExyonQ SDP-P1 | 81405 | 34.19 | 27924 |
 | NGINX | 96194 | 26.71 | 6064 |
