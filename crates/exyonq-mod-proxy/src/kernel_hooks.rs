@@ -33,9 +33,12 @@ pub fn install_kernel_hooks(runtime: Arc<ProxyRuntime>) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn serve_proxy_wire_hook(
     cluster_id: u32,
     generation: u64,
+    route: String,
+    upstream: String,
     x_forwarded_for: String,
     stream: proxy_wire::BoxedWireStream,
     head: bytes::Bytes,
@@ -45,9 +48,11 @@ fn serve_proxy_wire_hook(
     let xff = hyper::header::HeaderValue::from_str(&x_forwarded_for)
         .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("0.0.0.0"));
     Box::pin(async move {
-        wire_conn::serve(
+        wire_conn::serve_with_labels(
             cluster_id,
             generation,
+            route,
+            upstream,
             crate::wire_stream::into_async_io(stream),
             head,
             rest,

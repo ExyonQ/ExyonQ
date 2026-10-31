@@ -28,7 +28,7 @@ use crate::Backend;
 use bytes::Bytes;
 use exyonq_cache::{
     build_storage_cache_key, global_response_cache, global_singleflight, normalize_host,
-    CacheKeyParts,
+    CacheKeyParts, CacheNamespace, NamespaceMetrics,
 };
 use exyonq_mod_proxy::{
     bad_gateway, forward_websocket_by_cluster, is_websocket_upgrade, load_get_for_cache_by_cluster,
@@ -39,15 +39,20 @@ use exyonq_module_api::kernel_observation::{note_fastcgi_http_501, note_proxy_ht
 use exyonq_module_api::static_dispatch::StaticMethod;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{HeaderName, HeaderValue};
+use hyper::header::{
+    HeaderName, HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
+    CONTENT_TYPE, ETAG, LAST_MODIFIED,
+};
 use hyper::{Method, Request, Response, StatusCode};
 use std::convert::Infallible;
 use std::sync::Arc;
 use tracing::Instrument;
 
 type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
+type FinalBoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, exyonq_module_api::BoxError>;
 /// Alias so H3 entry points do not expand GATE-DEP-007 handler-body budget (baseline 31; live ~30).
 type HandlerResponse = Response<BoxBody>;
+type H3Response = Response<FinalBoxBody>;
 
 /// Private budget-exceeded signal for H3 remapping (macro avoids an extra handler-body token).
 macro_rules! budget_exceeded_marker_response {
@@ -149,11 +154,67 @@ impl Http3RequestBody for Vec<u8> {
 /// HTTP/3 entry point (P1.3b-C1: GET/HEAD/POST; BOUNDED_BUFFERED body already collected).
 pub async fn serve_http3_request<B: Http3RequestBody>(
     ctx: ConnectionContext,
-    req: Request<B>,
-) -> HandlerResponse {
+    mut req: Request<B>,
+) -> H3Response {
+    let path = req.uri().path().to_string();
+    let host = request_host_from_parts(req.uri(), req.headers());
+    let accept_encoding = req
+        .headers()
+        .get(hyper::header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let method = req.method().clone();
+    let query = req.uri().query().map(str::to_string);
+    if !req
+        .extensions()
+        .get::<crate::mirror::MirrorMarker>()
+        .is_some()
+    {
+        // Internal marker — clients must not suppress or trigger mirroring.
+        req.headers_mut().remove(crate::mirror::MIRROR_GUARD);
+    }
+    let mirror_headers = header_pairs_from_map(req.headers());
+    let waf_request_headers = mirror_headers.clone();
+    let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
+    crate::mirror::maybe_mirror_headers(
+        &ctx,
+        &path,
+        host.as_deref(),
+        &method,
+        &mirror_headers,
+        query.as_deref(),
+    );
+    let state = Arc::clone(&ctx.state);
     let (parts, body) = req.into_parts();
     let req = Request::from_parts(parts, body.into_http3_bytes());
-    serve_http3_request_bytes(ctx, req).await
+    let response = serve_http3_request_bytes(ctx, req).await;
+    let mut response: Response<FinalBoxBody> = response.map(|body| {
+        body.map_err(|err| -> exyonq_module_api::BoxError { Box::new(err) })
+            .boxed()
+    });
+    apply_route_response_headers(&state, &path, host.as_deref(), &mut response);
+    maybe_gunzip_response(
+        &state,
+        &path,
+        host.as_deref(),
+        accept_encoding.as_deref(),
+        &method,
+        &mut response,
+    );
+    maybe_sub_filter_response(&state, &path, host.as_deref(), &mut response);
+    crate::waf_body::maybe_wrap_response(
+        Arc::clone(&state.waf),
+        method.as_str(),
+        host.as_deref(),
+        &path,
+        query.as_deref(),
+        &waf_request_headers,
+        client_ip,
+        None,
+        state.config.waf.max_inspection_body_bytes as usize,
+        &mut response,
+    );
+    response
 }
 
 async fn serve_http3_request_bytes(
@@ -176,6 +237,11 @@ async fn serve_http3_request_bytes(
     let method = req.method().clone();
     let request_path = req.uri().path().to_string();
     let request_host = request_host_from_parts(req.uri(), req.headers());
+    let accept_encoding = req
+        .headers()
+        .get(hyper::header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
     let state = Arc::clone(&ctx.state);
     let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
     let client_ip = xff.to_str().unwrap_or("unknown").to_string();
@@ -221,6 +287,7 @@ async fn serve_http3_request_bytes(
         let needs_compression_pipeline = ctx.state.compression_configured();
         if ctx.state.hyper_required_for_modules()
             || needs_compression_pipeline
+            || ctx.state.gunzip_configured()
             || ctx.state.path_requires_module_pipeline(req.uri().path())
         {
             return serve_http3_with_modules(ctx, req).await;
@@ -268,6 +335,7 @@ async fn serve_http3_request_bytes(
             &request_headers,
             budget,
             post_body,
+            &ctx.ops,
         )
         .await;
         if ctx.state.wire_cheap_modules_active() {
@@ -296,6 +364,7 @@ async fn serve_http3_request_bytes(
         request_host.as_deref(),
         &mut response,
     );
+    let _ = (accept_encoding, method);
     response
 }
 
@@ -350,23 +419,91 @@ async fn serve_http3_with_modules(
                     .expect("valid 413");
             }
         }
-        dispatch_core(
+        let host = request_host_from_parts(&uri, &parts.headers);
+        let mut response = dispatch_core(
             &ctx.state,
             &ctx.proxy_client,
             &method,
             &uri,
-            request_host_from_parts(&uri, &parts.headers),
+            host.clone(),
             Some(&xff),
             &headers,
             budget,
             post_body,
+            &ctx.ops,
         )
-        .await
+        .await;
+        attach_route_labels(&ctx.state, uri.path(), host.as_deref(), &mut response);
+        response
     })
     .await
 }
 
+/// Final H1/H2 boundary: convert the internal body error to `BoxError` so the
+/// `gunzip` filter can abort the stream on an invalid gzip (Hyper closes it).
 pub async fn serve_connection(
+    ctx: ConnectionContext,
+    mut req: Request<Incoming>,
+) -> Result<Response<FinalBoxBody>, Infallible> {
+    let path = req.uri().path().to_string();
+    let host = request_host(&req);
+    let accept_encoding = req
+        .headers()
+        .get(hyper::header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let method = req.method().clone();
+    let query = req.uri().query().map(str::to_string);
+    if !req
+        .extensions()
+        .get::<crate::mirror::MirrorMarker>()
+        .is_some()
+    {
+        req.headers_mut().remove(crate::mirror::MIRROR_GUARD);
+    }
+    let mirror_headers = header_pairs_from_map(req.headers());
+    let waf_request_headers = mirror_headers.clone();
+    let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
+    crate::mirror::maybe_mirror_headers(
+        &ctx,
+        &path,
+        host.as_deref(),
+        &method,
+        &mirror_headers,
+        query.as_deref(),
+    );
+    let state = Arc::clone(&ctx.state);
+    let response = serve_connection_inner(ctx, req).await?;
+    let mut response: Response<FinalBoxBody> = response.map(|body| {
+        body.map_err(|err| -> exyonq_module_api::BoxError { Box::new(err) })
+            .boxed()
+    });
+    apply_route_response_headers(&state, &path, host.as_deref(), &mut response);
+    maybe_gunzip_response(
+        &state,
+        &path,
+        host.as_deref(),
+        accept_encoding.as_deref(),
+        &method,
+        &mut response,
+    );
+    maybe_sub_filter_response(&state, &path, host.as_deref(), &mut response);
+    crate::waf_body::maybe_wrap_response(
+        Arc::clone(&state.waf),
+        method.as_str(),
+        host.as_deref(),
+        &path,
+        query.as_deref(),
+        &waf_request_headers,
+        client_ip,
+        None,
+        state.config.waf.max_inspection_body_bytes as usize,
+        &mut response,
+    );
+    Ok(response)
+}
+
+async fn serve_connection_inner(
     ctx: ConnectionContext,
     req: Request<Incoming>,
 ) -> Result<Response<BoxBody>, Infallible> {
@@ -474,6 +611,8 @@ pub async fn serve_connection(
         if !ctx.state.wire_cheap_modules_active()
             && !ctx.state.hyper_required_for_modules()
             && !ctx.state.compression_configured()
+            && !ctx.state.gunzip_configured()
+            && !ctx.state.mirror_configured()
             && matches!(*req.method(), Method::GET | Method::HEAD)
         {
             let path = req.uri().path();
@@ -541,6 +680,7 @@ pub async fn serve_connection(
         let needs_compression_pipeline = ctx.state.compression_configured();
         let needs_module_pipeline = ctx.state.hyper_required_for_modules()
             || needs_compression_pipeline
+            || ctx.state.gunzip_configured()
             || ctx.state.path_requires_module_pipeline(req.uri().path());
         let response = if !needs_module_pipeline {
             if ctx.state.wire_cheap_modules_active() {
@@ -567,17 +707,31 @@ pub async fn serve_connection(
             let response = fast_bench_request(&ctx, req).await;
             if ctx.state.wire_cheap_modules_active() {
                 let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-                exyonq_module_api::wire_record_exchange(
-                    method.as_str(),
-                    &request_path,
-                    response.status().as_u16(),
-                    elapsed_ms,
-                );
+                if let Some(labels) = response
+                    .extensions()
+                    .get::<exyonq_module_api::RouteLabels>()
+                {
+                    exyonq_module_api::wire_record_exchange_labeled(
+                        method.as_str(),
+                        &request_path,
+                        response.status().as_u16(),
+                        elapsed_ms,
+                        &labels.route,
+                        &labels.upstream,
+                    );
+                } else {
+                    exyonq_module_api::wire_record_exchange(
+                        method.as_str(),
+                        &request_path,
+                        response.status().as_u16(),
+                        elapsed_ms,
+                    );
+                }
             }
             response
         } else {
             let req = inject_client_ip(req, &client_ip);
-            match handle_request(ctx.state, req, Some(&xff)).await {
+            match handle_request(ctx.state, req, Some(&xff), Arc::clone(&ctx.ops)).await {
                 Ok(response) => response,
                 Err(response) => response,
             }
@@ -691,7 +845,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
         if path == "/ready" {
             return probe_ready_response(req.method(), &ctx.ops);
         }
-        if path.as_bytes().starts_with(b"/site/") {
+        if path.as_bytes().starts_with(b"/site/") && !ctx.state.mirror_configured() {
             if let Some(root_slot) = site_static_root_slot(&ctx.state) {
                 let headers = header_pairs_from_map(req.headers());
                 let header_view = crate::waf::PairsHeaderView(&headers);
@@ -710,7 +864,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
                     return reject;
                 }
                 // Cap019: forward Range only (full header pair copy remains avoided).
-                return static_dispatch_via_service(
+                let mut response = static_dispatch_via_service(
                     req.method(),
                     root_slot,
                     path,
@@ -718,11 +872,18 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
                     None,
                 )
                 .await;
+                attach_route_labels(&ctx.state, path, host.as_deref(), &mut response);
+                return response;
             }
         }
     }
 
-    handle_core_request(&ctx.state, &ctx.proxy_client, req, Some(&xff)).await
+    let path = req.uri().path().to_string();
+    let host = request_host(&req);
+    let mut response =
+        handle_core_request(&ctx.state, &ctx.proxy_client, req, Some(&xff), &ctx.ops).await;
+    attach_route_labels(&ctx.state, &path, host.as_deref(), &mut response);
+    response
 }
 
 #[allow(clippy::result_large_err)] // Err is a ready-to-send response, not an error
@@ -730,6 +891,7 @@ async fn handle_request_inner(
     state: Arc<ServerState>,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
+    ops: Arc<crate::lifecycle::LifecycleState>,
 ) -> Result<Response<BoxBody>, Response<BoxBody>> {
     let path = req.uri().path();
 
@@ -757,8 +919,9 @@ async fn handle_request_inner(
     if state.hyper_required_for_modules()
         || state.path_requires_module_pipeline(path)
         || state.compression_configured()
+        || state.gunzip_configured()
     {
-        return handle_request_with_modules(state, req, x_forwarded_for).await;
+        return handle_request_with_modules(state, req, x_forwarded_for, ops).await;
     }
 
     if state.wire_cheap_modules_active() {
@@ -775,7 +938,7 @@ async fn handle_request_inner(
         let response_path = req.uri().path().to_string();
         let response_host = request_host(&req);
         let mut response =
-            handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await;
+            handle_core_request(&state, &state.proxy_client, req, x_forwarded_for, &ops).await;
         apply_route_response_headers(
             &state,
             &response_path,
@@ -788,7 +951,8 @@ async fn handle_request_inner(
 
     let response_path = req.uri().path().to_string();
     let response_host = request_host(&req);
-    let mut response = handle_core_request(&state, &state.proxy_client, req, x_forwarded_for).await;
+    let mut response =
+        handle_core_request(&state, &state.proxy_client, req, x_forwarded_for, &ops).await;
     apply_route_response_headers(
         &state,
         &response_path,
@@ -803,15 +967,23 @@ async fn handle_request(
     state: Arc<ServerState>,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
+    ops: Arc<crate::lifecycle::LifecycleState>,
 ) -> Result<Response<BoxBody>, Response<BoxBody>> {
     let path = req.uri().path().to_string();
     let host = request_host(&req);
-    let mut result = handle_request_inner(state.clone(), req, x_forwarded_for).await;
+    let accept_encoding = req
+        .headers()
+        .get(hyper::header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let method = req.method().clone();
+    let mut result = handle_request_inner(state.clone(), req, x_forwarded_for, ops).await;
     let response = match &mut result {
         Ok(response) => response,
         Err(response) => response,
     };
     apply_route_response_headers(&state, &path, host.as_deref(), response);
+    let _ = (accept_encoding, method);
     result
 }
 
@@ -822,6 +994,7 @@ async fn handle_request_with_modules(
     state: Arc<ServerState>,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
+    ops: Arc<crate::lifecycle::LifecycleState>,
 ) -> Result<Response<BoxBody>, Response<BoxBody>> {
     let state_for_dispatch = Arc::clone(&state);
     let proxy_client = state.proxy_client.clone();
@@ -830,7 +1003,16 @@ async fn handle_request_with_modules(
     pipeline_handle_incoming(&state.snapshot.module_state, req, move |req| {
         let state = Arc::clone(&state_for_dispatch);
         let xff = xff.clone();
-        async move { handle_core_request(&state, &proxy_client, req, xff.as_ref()).await }
+        let ops = Arc::clone(&ops);
+        async move {
+            // Q-15: labels must exist before `on_response` runs in the pipeline.
+            let path = req.uri().path().to_string();
+            let host = request_host(&req);
+            let mut response =
+                handle_core_request(&state, &proxy_client, req, xff.as_ref(), &ops).await;
+            attach_route_labels(&state, &path, host.as_deref(), &mut response);
+            response
+        }
     })
     .await
 }
@@ -838,13 +1020,13 @@ async fn handle_request_with_modules(
 /// ADR-062: apply `[[route.response_headers]]` to a finished response.
 /// `always = false` (default) limits the header to 2xx/3xx, matching
 /// nginx `add_header` without the `always` parameter.
-fn apply_route_response_headers(
+fn apply_route_response_headers<B>(
     state: &ServerState,
     path: &str,
     host: Option<&str>,
-    response: &mut Response<BoxBody>,
+    response: &mut Response<B>,
 ) {
-    let Some((route_idx, _)) = state.route_index.match_route_index_with_host(path, host) else {
+    let Some((route_idx, route)) = state.route_index.match_route_index_with_host(path, host) else {
         tracing::trace!(%path, ?host, "apply_route_response_headers: no route match");
         return;
     };
@@ -864,20 +1046,134 @@ fn apply_route_response_headers(
         };
         response.headers_mut().insert(name, value);
     }
+    insert_route_labels(route, response);
+}
+
+/// Q-15: matched route + backend label for module `on_response` metrics.
+fn insert_route_labels<B>(route: &exyonq_config_ir::RouteConfig, response: &mut Response<B>) {
+    let upstream = if let Some(name) = &route.upstream {
+        format!("proxy:{name}")
+    } else if let Some(pool) = &route.fastcgi {
+        format!("fcgi:{pool}")
+    } else if route.root.is_some() {
+        "static".to_string()
+    } else if route.redirect.is_some() {
+        "redirect".to_string()
+    } else {
+        "-".to_string()
+    };
+    response
+        .extensions_mut()
+        .insert(exyonq_module_api::RouteLabels {
+            route: route.name.clone(),
+            upstream,
+        });
+}
+
+/// NG-18: apply `gunzip` with the matched route override or the global default.
+fn maybe_gunzip_response(
+    state: &ServerState,
+    path: &str,
+    host: Option<&str>,
+    accept_encoding: Option<&str>,
+    method: &Method,
+    response: &mut Response<FinalBoxBody>,
+) {
+    let (enabled, buffer_bytes) = match state.route_index.match_route_index_with_host(path, host) {
+        Some((_, route)) => (
+            route.gunzip.unwrap_or(state.config.modules.gunzip.enabled),
+            state.config.modules.gunzip.buffer_bytes,
+        ),
+        None => (
+            state.config.modules.gunzip.enabled,
+            state.config.modules.gunzip.buffer_bytes,
+        ),
+    };
+    crate::gunzip::maybe_gunzip(enabled, buffer_bytes, accept_encoding, method, response);
+}
+
+fn basic_auth_challenge(realm: &str) -> Response<BoxBody> {
+    let mut response = text_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    if let Ok(value) = HeaderValue::from_str(&format!("Basic realm=\"{realm}\"")) {
+        response
+            .headers_mut()
+            .insert(hyper::header::WWW_AUTHENTICATE, value);
+    }
+    response
+}
+
+/// NG-18 Phase C: apply `sub_filter` with the matched route policy.
+fn maybe_sub_filter_response(
+    state: &ServerState,
+    path: &str,
+    host: Option<&str>,
+    response: &mut Response<FinalBoxBody>,
+) {
+    let Some((_, route)) = state.route_index.match_route_index_with_host(path, host) else {
+        return;
+    };
+    crate::sub_filter::maybe_sub_filter(&state.config.modules.sub_filter, &route.name, response);
+}
+
+/// Match the route again for paths that bypass [`apply_route_response_headers`]
+/// (HTTP/3 dispatch closure).
+fn attach_route_labels<B>(
+    state: &ServerState,
+    path: &str,
+    host: Option<&str>,
+    response: &mut Response<B>,
+) {
+    if let Some((_, route)) = state.route_index.match_route_index_with_host(path, host) {
+        insert_route_labels(route, response);
+    }
 }
 
 async fn handle_core_request(
-    state: &ServerState,
+    state: &Arc<ServerState>,
     proxy_client: &ProxyClient,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
+    ops: &Arc<crate::lifecycle::LifecycleState>,
+) -> Response<BoxBody> {
+    let method = req.method().clone();
+    let host = request_host(&req);
+    let path = req.uri().path().to_string();
+    let query = req.uri().query().unwrap_or("").to_string();
+    let request_pairs = header_pairs_from_map(req.headers());
+    let request_view = ResponseHeadersView(
+        request_pairs
+            .iter()
+            .map(|(name, value)| (name.to_ascii_lowercase(), value.as_bytes().to_vec()))
+            .collect(),
+    );
+    let client_ip = client_ip_from_xff(x_forwarded_for);
+    let response = handle_core_request_inner(state, proxy_client, req, x_forwarded_for, ops).await;
+    waf_response_gate(
+        state,
+        &method,
+        host.as_deref(),
+        &path,
+        &query,
+        &request_view,
+        client_ip,
+        response,
+    )
+    .await
+}
+
+async fn handle_core_request_inner(
+    state: &Arc<ServerState>,
+    proxy_client: &ProxyClient,
+    req: Request<Incoming>,
+    x_forwarded_for: Option<&HeaderValue>,
+    ops: &Arc<crate::lifecycle::LifecycleState>,
 ) -> Response<BoxBody> {
     if is_websocket_upgrade(req.headers()) {
-        return handle_core_request_with_body(state, proxy_client, req, x_forwarded_for).await;
+        return handle_core_request_with_body(state, proxy_client, req, x_forwarded_for, ops).await;
     }
 
     if *req.method() != Method::GET && *req.method() != Method::HEAD {
-        return handle_core_request_with_body(state, proxy_client, req, x_forwarded_for).await;
+        return handle_core_request_with_body(state, proxy_client, req, x_forwarded_for, ops).await;
     }
 
     let request_headers = header_pairs_from_map(req.headers());
@@ -891,15 +1187,17 @@ async fn handle_core_request(
         &request_headers,
         None,
         None,
+        ops,
     )
     .await
 }
 
 async fn handle_core_request_with_body(
-    state: &ServerState,
+    state: &Arc<ServerState>,
     proxy_client: &ProxyClient,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
+    ops: &Arc<crate::lifecycle::LifecycleState>,
 ) -> Response<BoxBody> {
     let path = req.uri().path().to_string();
     let host = request_host(&req);
@@ -982,8 +1280,10 @@ async fn handle_core_request_with_body(
     //
     // SEC-PROXY-001: never unbounded-collect the body first — that waits for a full
     // declared Content-Length and hangs / DoS-amplifies before any limit check. Use the
-    // same early-CL + incremental bound as proxy_route_target. Proxy oversize → 502
-    // (BadGateway, no upstream); FastCGI/other → 413.
+    // same early-CL + incremental bound as proxy_route_target. Oversize → 413 on every
+    // route kind: the bound rejects the *client's* request body (nginx
+    // client_max_body_size semantics), it is not an upstream failure; the HTTP/3
+    // path already answers 413 for the same PROXY_MAX_REQUEST_BODY_BYTES bound.
     use crate::server::proxy_request_body::{
         collect_proxy_request_body_bounded, parse_proxy_request_content_length,
         ProxyRequestBodyReadError,
@@ -1004,9 +1304,6 @@ async fn handle_core_request_with_body(
     let body =
         match collect_proxy_request_body_bounded(declared_len, req.into_body(), body_limit).await {
             Ok(body) => body,
-            Err(ProxyRequestBodyReadError::TooLarge) if is_proxy_route => {
-                return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
-            }
             Err(ProxyRequestBodyReadError::TooLarge) => {
                 return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
             }
@@ -1040,6 +1337,7 @@ async fn handle_core_request_with_body(
         &headers,
         None,
         Some(bytes::Bytes::from(body)),
+        ops,
     )
     .await
 }
@@ -1049,8 +1347,8 @@ async fn handle_core_request_with_body(
 // Behavioral refactor avoided during release qualification (OD-1).
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_core(
-    state: &ServerState,
-    _proxy_client: &ProxyClient,
+    state: &Arc<ServerState>,
+    proxy_client: &ProxyClient,
     method: &Method,
     uri: &hyper::Uri,
     host: Option<String>,
@@ -1058,6 +1356,7 @@ async fn dispatch_core(
     request_headers: &[(String, String)],
     materialization_budget_bytes: Option<u64>,
     request_body: Option<Bytes>,
+    ops: &Arc<crate::lifecycle::LifecycleState>,
 ) -> Response<BoxBody> {
     let path = uri.path();
     let client_ip = client_ip_from_xff(x_forwarded_for);
@@ -1133,6 +1432,22 @@ async fn dispatch_core(
     else {
         return text_response(StatusCode::NOT_FOUND, "not found");
     };
+    // 0.5: nginx auth_basic per-route challenge.
+    if let Some(realm) =
+        crate::auth_basic::check(&state.config.modules.auth, &route.name, request_headers)
+    {
+        return basic_auth_challenge(&realm);
+    }
+    // 0.5: nginx limit_req_zone per-route token bucket.
+    if let Some(retry) = crate::zone_ratelimit::check(
+        &state.config.modules.ratelimit,
+        &route.name,
+        request_headers,
+        host.as_deref(),
+        &client_ip.to_string(),
+    ) {
+        return rate_limit_reject_response(retry);
+    }
 
     // H1/H3: inspect the client-visible URI before htaccess/structural rewrite so
     // path-based signature rules cannot be dodged by InternalRewrite normalization.
@@ -1162,6 +1477,28 @@ async fn dispatch_core(
             return reject;
         }
     }
+
+    // NG-18 Phase D: nginx creates mirror subrequests at PRECONTENT (after the
+    // access-phase rejections above) and, with `mirror_request_body on`, only
+    // once the client body has been read. The body is already materialized here.
+    let mirror_ctx = ConnectionContext {
+        state: Arc::clone(state),
+        proxy_client: proxy_client.clone(),
+        x_forwarded_for: x_forwarded_for
+            .cloned()
+            .unwrap_or_else(|| HeaderValue::from_static("")),
+        ops: Arc::clone(ops),
+    };
+    let mirror_body = request_body.clone().unwrap_or_default();
+    crate::mirror::maybe_mirror_body(
+        &mirror_ctx,
+        path,
+        host.as_deref(),
+        method,
+        request_headers,
+        uri.query(),
+        &mirror_body,
+    );
 
     let mut route_idx = route_idx;
     let mut path = path.to_string();
@@ -1265,6 +1602,7 @@ async fn dispatch_core(
         if let Some(ctx) = fpc_miss {
             return fpc_bypassed!(
                 static_dispatch_fpc_fill(
+                    state,
                     method,
                     root_slot,
                     path,
@@ -1716,6 +2054,7 @@ async fn fastcgi_dispatch_maybe_cached(
         "http"
     };
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: 0,
         namespace: 0,
         backend_id: 0,
@@ -1959,6 +2298,74 @@ fn static_method_not_allowed() -> Response<BoxBody> {
     response
 }
 
+/// ADR-061 / NG-17: apply `[[route]].cache_headers` to a static 200.
+/// An existing `Cache-Control` (origin or `[[route.response_headers]]`) wins.
+fn apply_route_cache_headers(
+    state: &ServerState,
+    route_idx: usize,
+    response: &mut Response<BoxBody>,
+) {
+    if response.status() != StatusCode::OK {
+        return;
+    }
+    if response.headers().contains_key(CACHE_CONTROL) {
+        return;
+    }
+    let Some(route) = state.snapshot.config.routes.get(route_idx) else {
+        return;
+    };
+    let Some(cache_headers) = &route.cache_headers else {
+        return;
+    };
+    let Some(content_type) = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return;
+    };
+    if let Some(value) = cache_headers.cache_control_for(content_type) {
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            response.headers_mut().insert(CACHE_CONTROL, value);
+        }
+    }
+}
+
+/// Pair-form of [`apply_route_cache_headers`] for the FPC fill path, so the
+/// stored entry carries the same `Cache-Control` as the live MISS response.
+fn apply_route_cache_headers_pairs(
+    state: &ServerState,
+    route_idx: usize,
+    status: u16,
+    headers: &mut Vec<(String, String)>,
+) {
+    if status != 200 {
+        return;
+    }
+    if headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
+    {
+        return;
+    }
+    let Some(route) = state.snapshot.config.routes.get(route_idx) else {
+        return;
+    };
+    let Some(cache_headers) = &route.cache_headers else {
+        return;
+    };
+    let Some(content_type) = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str())
+    else {
+        return;
+    };
+    if let Some(value) = cache_headers.cache_control_for(content_type) {
+        headers.push(("cache-control".into(), value));
+    }
+}
+
 async fn static_dispatch_via_service(
     method: &Method,
     root_slot: u32,
@@ -2037,6 +2444,7 @@ async fn static_load_for_cache_via_service(
 
 /// WC2C: static MISS path — execute origin once, assess, bounded insert, return origin unchanged.
 async fn static_dispatch_fpc_fill(
+    state: &ServerState,
     method: &Method,
     root_slot: u32,
     request_path: &str,
@@ -2054,11 +2462,12 @@ async fn static_dispatch_fpc_fill(
             materialization_budget_bytes,
         )
         .await;
+        apply_route_cache_headers(state, ctx.route_idx, &mut resp);
         crate::fpc_lookup::apply_x_cache(resp.headers_mut(), "miss");
         return resp;
     }
 
-    let load = static_load_for_cache_via_service(
+    let mut load = static_load_for_cache_via_service(
         method,
         root_slot,
         request_path,
@@ -2076,6 +2485,8 @@ async fn static_dispatch_fpc_fill(
         crate::fpc_lookup::apply_x_cache_bypass(resp.headers_mut(), "budget");
         return resp;
     }
+
+    apply_route_cache_headers_pairs(state, ctx.route_idx, load.status, &mut load.headers);
 
     // Live reload may publish N+1 while static origin was in flight (symmetric FastCGI WC2D).
     let generation_ok = crate::reload::active_runtime_generation() == ctx.runtime_generation;
@@ -2151,7 +2562,7 @@ async fn static_dispatch_maybe_cached(
     materialization_budget_bytes: Option<u64>,
 ) -> Response<BoxBody> {
     let Some(policy) = state.snapshot.cache_policy_for_route(route_idx) else {
-        return static_dispatch_via_service(
+        let mut response = static_dispatch_via_service(
             method,
             root_slot,
             request_path,
@@ -2159,10 +2570,12 @@ async fn static_dispatch_maybe_cached(
             materialization_budget_bytes,
         )
         .await;
+        apply_route_cache_headers(state, route_idx, &mut response);
+        return response;
     };
 
     if !exyonq_module_api::request_eligible_for_cache(method.as_str(), request_headers) {
-        return static_dispatch_via_service(
+        let mut response = static_dispatch_via_service(
             method,
             root_slot,
             request_path,
@@ -2170,6 +2583,8 @@ async fn static_dispatch_maybe_cached(
             materialization_budget_bytes,
         )
         .await;
+        apply_route_cache_headers(state, route_idx, &mut response);
+        return response;
     }
 
     let scheme = if state.config.primary_server().tls.is_some() {
@@ -2178,6 +2593,7 @@ async fn static_dispatch_maybe_cached(
         "http"
     };
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: 0,
         namespace: 0,
         backend_id: 0,
@@ -2196,7 +2612,7 @@ async fn static_dispatch_maybe_cached(
     let req_headers = request_headers.to_vec();
     let method_owned = method.clone();
     let path_owned = request_path.to_string();
-    let response = serve_static_with_cache(
+    let mut response = serve_static_with_cache(
         global_response_cache(),
         global_singleflight(),
         key,
@@ -2235,6 +2651,7 @@ async fn static_dispatch_maybe_cached(
             return budget_exceeded_marker_response!();
         }
     }
+    apply_route_cache_headers(state, route_idx, &mut response);
     response
 }
 
@@ -2285,6 +2702,7 @@ async fn proxy_dispatch_maybe_cached(
         "http"
     };
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: 0,
         namespace: 0,
         backend_id: 0,
@@ -2304,6 +2722,38 @@ async fn proxy_dispatch_maybe_cached(
     let xff = x_forwarded_for.cloned();
     let req_headers = request_headers.to_vec();
     let max_bytes = policy.max_object_bytes;
+    // NG-18 Phase E: slice route with segment cache.
+    if !request_headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("range"))
+    {
+        let route_name = state
+            .snapshot
+            .config
+            .routes
+            .get(route_idx)
+            .map(|r| r.name.as_str())
+            .unwrap_or("");
+        if let Some(slice_cfg) = state.config.modules.slice.routes.get(route_name) {
+            if let Some(resp) = proxy_dispatch_slice(
+                state,
+                route_idx,
+                cluster_id,
+                method,
+                uri,
+                host,
+                &path_and_query,
+                request_headers,
+                x_forwarded_for,
+                policy.ttl.as_secs(),
+                slice_cfg.size,
+            )
+            .await
+            {
+                return resp;
+            }
+        }
+    }
     // NG-07: cookie_affinity route token travels beside the cache load —
     // appended to the client response only, never into cached headers.
     let route_cookie = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
@@ -2341,7 +2791,390 @@ async fn proxy_dispatch_maybe_cached(
             }
         }
     }
+    maybe_apply_proxy_range(&mut resp, request_headers, method, max_bytes).await;
     resp
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RangeOutcome {
+    Single(u64, u64),
+    Unsatisfiable,
+    Ignore,
+}
+
+fn header_value_ignore_case<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// NG-18 Phase E: serve a single Range from a cached/materialized full 200.
+/// Multi-range and malformed ranges fall back to the full representation.
+fn parse_single_range(value: &str, len: u64) -> RangeOutcome {
+    let Some(spec) = value.trim().strip_prefix("bytes=") else {
+        return RangeOutcome::Ignore;
+    };
+    if spec.contains(',') || len == 0 {
+        return RangeOutcome::Ignore;
+    }
+    let Some((start, end)) = spec.split_once('-') else {
+        return RangeOutcome::Ignore;
+    };
+    let (start, end) = (start.trim(), end.trim());
+    if start.is_empty() {
+        let Ok(suffix) = end.parse::<u64>() else {
+            return RangeOutcome::Ignore;
+        };
+        if suffix == 0 {
+            return RangeOutcome::Ignore;
+        }
+        let start = len.saturating_sub(suffix);
+        return RangeOutcome::Single(start, len - 1);
+    }
+    let Ok(start) = start.parse::<u64>() else {
+        return RangeOutcome::Ignore;
+    };
+    if start >= len {
+        return RangeOutcome::Unsatisfiable;
+    }
+    let end = if end.is_empty() {
+        len - 1
+    } else {
+        let Ok(end) = end.parse::<u64>() else {
+            return RangeOutcome::Ignore;
+        };
+        if end < start {
+            return RangeOutcome::Ignore;
+        }
+        end.min(len - 1)
+    };
+    RangeOutcome::Single(start, end)
+}
+
+async fn maybe_apply_proxy_range(
+    response: &mut Response<BoxBody>,
+    request_headers: &[(String, String)],
+    method: &Method,
+    max_object_bytes: usize,
+) {
+    let Some(range) = header_value_ignore_case(request_headers, "range") else {
+        return;
+    };
+    if response.status() != StatusCode::OK {
+        return;
+    }
+    if let Some(if_range) = header_value_ignore_case(request_headers, "if-range") {
+        let etag = response.headers().get(ETAG).and_then(|v| v.to_str().ok());
+        let last_modified = response
+            .headers()
+            .get(LAST_MODIFIED)
+            .and_then(|v| v.to_str().ok());
+        let matches = if if_range.starts_with('"') || if_range.starts_with("W/") {
+            etag == Some(if_range)
+        } else {
+            last_modified == Some(if_range)
+        };
+        if !matches {
+            return;
+        }
+    }
+    let Some(len) = response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+    else {
+        return;
+    };
+    if len > max_object_bytes as u64 {
+        return;
+    }
+    match parse_single_range(range, len) {
+        RangeOutcome::Ignore => (),
+        RangeOutcome::Unsatisfiable => {
+            let headers = response.headers_mut();
+            headers.remove(CONTENT_LENGTH);
+            headers.insert(
+                CONTENT_RANGE,
+                HeaderValue::from_str(&format!("bytes */{len}")).expect("valid range"),
+            );
+            *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+            *response.body_mut() = empty_body();
+        }
+        RangeOutcome::Single(start, end) => {
+            let headers = response.headers_mut();
+            headers.remove(CONTENT_LENGTH);
+            headers.remove(hyper::header::TRANSFER_ENCODING);
+            headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            headers.insert(
+                CONTENT_RANGE,
+                HeaderValue::from_str(&format!("bytes {start}-{end}/{len}")).expect("valid range"),
+            );
+            let body_len = end - start + 1;
+            headers.insert(
+                CONTENT_LENGTH,
+                HeaderValue::from_str(&body_len.to_string()).expect("valid length"),
+            );
+            *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+            if *method == Method::HEAD {
+                *response.body_mut() = empty_body();
+                return;
+            }
+            let body = std::mem::replace(response.body_mut(), empty_body());
+            let Ok(collected) = body.collect().await else {
+                return;
+            };
+            let bytes = collected.to_bytes();
+            if bytes.len() as u64 != len {
+                return;
+            }
+            let slice = bytes.slice(start as usize..=end as usize);
+            *response.body_mut() = Full::new(slice).map_err(|never| match never {}).boxed();
+        }
+    }
+}
+
+fn empty_body() -> BoxBody {
+    Full::new(Bytes::new())
+        .map_err(|never| match never {})
+        .boxed()
+}
+
+const SLICE_MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+
+fn parse_content_range_total(headers: &[(String, String)]) -> Option<u64> {
+    let value = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-range"))
+        .map(|(_, value)| value.as_str())?;
+    value.rsplit_once('/')?.1.trim().parse().ok()
+}
+
+fn slice_segment_key(
+    state: &ServerState,
+    route_idx: usize,
+    cluster_id: u32,
+    uri: &hyper::Uri,
+    host: Option<&str>,
+    range: String,
+) -> exyonq_cache::CacheKey {
+    let scheme = if state.config.primary_server().tls.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    build_storage_cache_key(CacheKeyParts {
+        site_id: 0,
+        namespace: 0,
+        backend_id: cluster_id,
+        runtime_generation: state.generation,
+        policy_generation: 0,
+        route_idx,
+        method: "GET".into(),
+        scheme: scheme.into(),
+        host: normalize_host(host),
+        path: uri.path().to_string(),
+        query: uri.query().unwrap_or("").to_string(),
+        content_encoding: "identity".into(),
+        vary: String::new(),
+        range,
+    })
+}
+
+async fn fetch_slice_segment(
+    cluster_id: u32,
+    path_and_query: &str,
+    x_forwarded_for: Option<&HeaderValue>,
+    request_headers: &[(String, String)],
+    size: usize,
+    start: u64,
+    end: u64,
+) -> Option<(Bytes, Vec<(String, String)>)> {
+    let mut headers = request_headers.to_vec();
+    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("range"));
+    headers.push(("range".into(), format!("bytes={start}-{end}")));
+    match load_get_for_cache_by_cluster(cluster_id, path_and_query, x_forwarded_for, size, &headers)
+        .await
+        .0
+    {
+        ProxyCacheLoad::Materialized {
+            body,
+            status,
+            headers,
+            ..
+        } if status.as_u16() == 206 => Some((body, headers)),
+        ProxyCacheLoad::Passthrough { response, .. } if response.status().as_u16() == 206 => {
+            let headers = response
+                .headers()
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.to_string(),
+                        value.to_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected = (end - start + 1) as usize;
+            let body = http_body_util::Limited::new(response.into_body(), expected)
+                .collect()
+                .await
+                .ok()?
+                .to_bytes();
+            Some((body, headers))
+        }
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn proxy_dispatch_slice(
+    state: &ServerState,
+    route_idx: usize,
+    cluster_id: u32,
+    method: &Method,
+    uri: &hyper::Uri,
+    host: Option<&str>,
+    path_and_query: &str,
+    request_headers: &[(String, String)],
+    x_forwarded_for: Option<&HeaderValue>,
+    ttl_secs: u64,
+    size: usize,
+) -> Option<Response<BoxBody>> {
+    if *method != Method::GET && *method != Method::HEAD {
+        return None;
+    }
+    let size_u64 = size as u64;
+    let cache = global_response_cache();
+    let key0 = slice_segment_key(
+        state,
+        route_idx,
+        cluster_id,
+        uri,
+        host,
+        format!("0-{}", size_u64 - 1),
+    );
+    let (first_body, first_headers, first_cached) = if let Some(entry) = cache.lookup(&key0) {
+        (entry.body.clone(), entry.headers.clone(), true)
+    } else {
+        let (body, headers) = fetch_slice_segment(
+            cluster_id,
+            path_and_query,
+            x_forwarded_for,
+            request_headers,
+            size,
+            0,
+            size_u64 - 1,
+        )
+        .await?;
+        (body, headers, false)
+    };
+    let total = parse_content_range_total(&first_headers)?;
+    if total <= size_u64 || total > SLICE_MAX_TOTAL_BYTES {
+        return None;
+    }
+    if first_body.len() as u64 != size_u64.min(total) {
+        return None;
+    }
+
+    let ttl = std::time::Duration::from_secs(ttl_secs.max(1));
+    let mut assembled = bytes::BytesMut::with_capacity(total as usize);
+    let mut all_hit = true;
+    let segments = total.div_ceil(size_u64);
+    for idx in 0..segments {
+        let start = idx * size_u64;
+        let end = (start + size_u64 - 1).min(total - 1);
+        let key = slice_segment_key(
+            state,
+            route_idx,
+            cluster_id,
+            uri,
+            host,
+            format!("{start}-{end}"),
+        );
+        if idx == 0 && first_cached {
+            assembled.extend_from_slice(&first_body);
+            continue;
+        }
+        if let Some(entry) = cache.lookup(&key) {
+            if entry.body.len() as u64 == end - start + 1 {
+                assembled.extend_from_slice(&entry.body);
+                continue;
+            }
+        }
+        all_hit = false;
+        let (body, headers) = if idx == 0 {
+            (first_body.clone(), first_headers.clone())
+        } else {
+            fetch_slice_segment(
+                cluster_id,
+                path_and_query,
+                x_forwarded_for,
+                request_headers,
+                size,
+                start,
+                end,
+            )
+            .await?
+        };
+        if body.len() as u64 != end - start + 1 {
+            return None;
+        }
+        if !exyonq_module_api::cache::slice_segment_store_blocked(&headers) {
+            cache.insert_entry(
+                key,
+                0,
+                route_idx,
+                state.generation,
+                ttl,
+                206,
+                exyonq_module_api::cache::filter_storable_headers(&headers),
+                body.clone(),
+                None,
+                CacheNamespace::new(0),
+                Arc::from([]),
+                NamespaceMetrics::NONE,
+            );
+        }
+        assembled.extend_from_slice(&body);
+    }
+
+    let mut resp = Response::builder()
+        .status(StatusCode::OK)
+        .body(if *method == Method::HEAD {
+            empty_body()
+        } else {
+            Full::new(assembled.freeze())
+                .map_err(|never| match never {})
+                .boxed()
+        })
+        .ok()?;
+    for (name, value) in &first_headers {
+        let lower = name.to_ascii_lowercase();
+        if lower == "content-range"
+            || lower == "content-length"
+            || lower == "transfer-encoding"
+            || lower == "connection"
+            || lower == "set-cookie"
+            || exyonq_module_api::hop_by_hop::is_fixed_hop_by_hop_header(&lower)
+        {
+            continue;
+        }
+        if let (Ok(n), Ok(v)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            resp.headers_mut().append(n, v);
+        }
+    }
+    resp.headers_mut().insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&total.to_string()).ok()?,
+    );
+    resp.headers_mut()
+        .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    crate::fpc_lookup::apply_x_cache(resp.headers_mut(), if all_hit { "hit" } else { "miss" });
+    Some(resp)
 }
 
 /// WC2E/NG-15: proxy dispatch with FPC fill — the miss context carries the
@@ -2610,8 +3443,9 @@ async fn proxy_route_target(
         {
             Ok(bytes) => Some(bytes),
             Err(ProxyRequestBodyReadError::TooLarge) => {
-                // Preserve current rejection semantics (502). Do not dispatch upstream.
-                return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
+                // Client-facing body limit (nginx client_max_body_size semantics):
+                // 413, never upstream dispatch.
+                return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
             }
             // Cap015 / WAF-LOGIC-P3-B: body-frame transport failure must not become an
             // empty body for WAF inspection or upstream dispatch (fail closed).
@@ -2765,9 +3599,129 @@ fn waf_reject_response(reject: crate::waf::WafReject) -> Response<BoxBody> {
         crate::waf::WafRejectBody::Static(b) => bytes::Bytes::from_static(b),
         crate::waf::WafRejectBody::Owned(v) => bytes::Bytes::from(v),
     };
-    builder
+    let mut response = builder
         .body(Full::from(bytes).map_err(|never| match never {}).boxed())
-        .expect("valid waf reject response")
+        .expect("valid waf reject response");
+    response
+        .extensions_mut()
+        .insert(crate::waf_body::WafBodyChecked);
+    response
+}
+
+struct ResponseHeadersView(Vec<(String, Vec<u8>)>);
+
+impl exyonq_waf_api::HeaderView for ResponseHeadersView {
+    fn get(&self, name: &str) -> Option<&[u8]> {
+        self.0
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_slice())
+    }
+
+    fn for_each(&self, f: &mut dyn FnMut(&[u8], &[u8])) {
+        for (name, value) in &self.0 {
+            f(name.as_bytes(), value);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn waf_response_gate(
+    state: &ServerState,
+    method: &Method,
+    host: Option<&str>,
+    path: &str,
+    query: &str,
+    headers: &dyn exyonq_waf_api::HeaderView,
+    client_ip: std::net::IpAddr,
+    response: Response<BoxBody>,
+) -> Response<BoxBody> {
+    let max = state.config.waf.max_inspection_body_bytes as usize;
+    let small = response
+        .headers()
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|len| max > 0 && len <= max as u64);
+    if state.waf.inspects_response_body() && small {
+        let status = response.status().as_u16();
+        let (parts, body) = response.into_parts();
+        let entries = parts
+            .headers
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_ascii_lowercase(),
+                    value.as_bytes().to_vec(),
+                )
+            })
+            .collect();
+        let response_view = ResponseHeadersView(entries);
+        let limited = http_body_util::Limited::new(body, max.max(1));
+        let collected = match limited.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(_) => {
+                return text_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "response body exceeds WAF inspection limit",
+                )
+            }
+        };
+        match crate::waf::inspect_response_body(
+            state.waf.as_ref(),
+            method.as_str(),
+            host,
+            path,
+            Some(query),
+            headers,
+            client_ip,
+            None,
+            status,
+            &response_view,
+            &collected,
+            state.generation,
+            state.waf_enforce,
+        ) {
+            crate::waf::WafHookResult::Continue => {}
+            crate::waf::WafHookResult::Reject(reject) => return waf_reject_response(reject),
+        }
+        let mut rebuilt = Response::from_parts(
+            parts,
+            Full::new(collected).map_err(|never| match never {}).boxed(),
+        );
+        rebuilt
+            .extensions_mut()
+            .insert(crate::waf_body::WafBodyChecked);
+        return rebuilt;
+    }
+    let entries = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_ascii_lowercase(),
+                value.as_bytes().to_vec(),
+            )
+        })
+        .collect();
+    let response_view = ResponseHeadersView(entries);
+    match crate::waf::inspect_response_headers(
+        state.waf.as_ref(),
+        method.as_str(),
+        host,
+        path,
+        Some(query),
+        headers,
+        client_ip,
+        None,
+        response.status().as_u16(),
+        &response_view,
+        state.generation,
+        state.waf_enforce,
+    ) {
+        crate::waf::WafHookResult::Continue => response,
+        crate::waf::WafHookResult::Reject(reject) => waf_reject_response(reject),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2795,7 +3749,13 @@ fn waf_header_gate(
         state.waf_enforce,
         state.waf_abuse.as_deref(),
     ) {
-        crate::waf::WafHookResult::Continue => None,
+        crate::waf::WafHookResult::Continue => {
+            if *method == Method::GET || *method == Method::HEAD {
+                waf_body_gate(state, method, host, path, query, headers, client_ip, b"")
+            } else {
+                None
+            }
+        }
         crate::waf::WafHookResult::Reject(reject) => Some(waf_reject_response(reject)),
     }
 }
@@ -2882,6 +3842,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: name.into(),
             r#match: RouteMatch {
@@ -2908,6 +3869,10 @@ mod tests {
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
         }
+    }
+
+    fn test_ops() -> Arc<crate::lifecycle::LifecycleState> {
+        crate::lifecycle::LifecycleState::new()
     }
 
     async fn state_for(
@@ -2976,6 +3941,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -3024,6 +3990,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -3076,6 +4043,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -3142,10 +4110,21 @@ mod tests {
         assert_eq!(proxy_cluster, Some(0));
     }
 
+    /// Retarget the fixture upstream to a port guaranteed to refuse, so the
+    /// proxy outcome (502, not a colliding service's 404) is host-independent.
+    /// The rewrite happens before parsing because `endpoint_set` is the
+    /// authoritative field — patching `target` alone leaves the parsed
+    /// endpoint pointing at the original address.
+    fn fixture_config_unreachable_upstream() -> AppConfig {
+        include_str!("../../../tests/fixtures/minimal.toml")
+            .replace("127.0.0.1:9000", "127.0.0.1:1")
+            .parse()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn dispatch_proxy_via_backend_table_get() {
-        let raw = include_str!("../../../tests/fixtures/minimal.toml");
-        let config: AppConfig = raw.parse().unwrap();
+        let config = fixture_config_unreachable_upstream();
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(state.snapshot.proxy_cluster_for_route(0).is_some());
         let response = dispatch_core(
@@ -3158,6 +4137,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
@@ -3165,8 +4145,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_proxy_via_backend_table_head() {
-        let raw = include_str!("../../../tests/fixtures/minimal.toml");
-        let config: AppConfig = raw.parse().unwrap();
+        let config = fixture_config_unreachable_upstream();
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
             &state,
@@ -3178,6 +4157,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
@@ -3185,8 +4165,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_proxy_via_backend_table() {
-        let raw = include_str!("../../../tests/fixtures/minimal.toml");
-        let config: AppConfig = raw.parse().unwrap();
+        let config = fixture_config_unreachable_upstream();
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let (route_idx, _route) = state
             .route_index
@@ -3198,7 +4177,7 @@ mod tests {
             .proxy_compiled_slot(0)
             .expect("compiled slot");
         assert_eq!(slot.upstream_name, "backend");
-        assert_eq!(slot.target, "http://127.0.0.1:9000");
+        assert_eq!(slot.target, "http://127.0.0.1:1");
     }
 
     #[tokio::test]
@@ -3258,6 +4237,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -3347,6 +4327,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -3399,6 +4380,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         let (route_idx, _) = state
@@ -3452,6 +4434,7 @@ mod tests {
             &[],
             None,
             None,
+            &test_ops(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
@@ -3571,5 +4554,45 @@ mod tests {
                 .unwrap_err(),
             StatusCode::PAYLOAD_TOO_LARGE
         );
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::{parse_single_range, RangeOutcome};
+
+    #[test]
+    fn single_range_forms() {
+        assert_eq!(
+            parse_single_range("bytes=0-99", 1000),
+            RangeOutcome::Single(0, 99)
+        );
+        assert_eq!(
+            parse_single_range("bytes=100-", 1000),
+            RangeOutcome::Single(100, 999)
+        );
+        assert_eq!(
+            parse_single_range("bytes=-100", 1000),
+            RangeOutcome::Single(900, 999)
+        );
+        assert_eq!(
+            parse_single_range("bytes=0-9999", 1000),
+            RangeOutcome::Single(0, 999)
+        );
+    }
+
+    #[test]
+    fn unsatisfiable_and_ignored_forms() {
+        assert_eq!(
+            parse_single_range("bytes=1000-", 1000),
+            RangeOutcome::Unsatisfiable
+        );
+        assert_eq!(
+            parse_single_range("bytes=0-1,3-4", 1000),
+            RangeOutcome::Ignore
+        );
+        assert_eq!(parse_single_range("items=0-1", 1000), RangeOutcome::Ignore);
+        assert_eq!(parse_single_range("bytes=abc", 1000), RangeOutcome::Ignore);
+        assert_eq!(parse_single_range("bytes=5-4", 1000), RangeOutcome::Ignore);
     }
 }

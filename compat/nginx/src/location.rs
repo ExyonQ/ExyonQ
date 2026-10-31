@@ -273,6 +273,15 @@ pub fn analyze_location_directives(
                 ),
                 None,
             ),
+            // NG-18: body transforms are explicit non-goals; fail closed with an
+            // alternative instead of silently dropping the directive.
+            "gunzip" => report.push(
+                &d.loc,
+                "gunzip",
+                CompatStatus::Unsupported,
+                "gunzip is not implemented (NG-18); send identity upstream (proxy_set_header Accept-Encoding \"\") or let clients decompress",
+                Some("upstream identity / client decompression".into()),
+            ),
             _ => {}
         }
     }

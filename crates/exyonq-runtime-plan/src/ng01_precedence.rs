@@ -39,6 +39,7 @@ fn r(name: &str, m: RouteMatch) -> RouteConfig {
         cache_headers: None,
         response_headers: Vec::new(),
         location_rewrite: Vec::new(),
+        gunzip: None,
     }
 }
 

@@ -176,6 +176,7 @@ impl CoreCachePurgePort {
                     }
                 };
                 let key = build_storage_cache_key(CacheKeyParts {
+                    range: String::new(),
                     site_id,
                     namespace: state.snapshot.full_page_cache.namespace,
                     backend_id: backend_id.index(),

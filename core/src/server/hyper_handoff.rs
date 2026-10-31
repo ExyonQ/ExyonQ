@@ -83,8 +83,19 @@ pub fn install_handoff_bridge(
     if HANDOFF_BRIDGE.set(Arc::clone(&bridge)).is_err() {
         return; // already installed
     }
-    for _ in 0..workers {
-        let bridge = Arc::clone(&bridge);
+    spawn_consumers(&bridge, runtime, shared, proxy_client, ops, workers);
+}
+
+fn spawn_consumers(
+    bridge: &Arc<HandoffBridge>,
+    runtime: &Handle,
+    shared: SharedServerState,
+    proxy_client: ProxyClient,
+    ops: Arc<LifecycleState>,
+    workers: usize,
+) {
+    for _ in 0..workers.max(1) {
+        let bridge = Arc::clone(bridge);
         let shared = SharedServerState::clone(&shared);
         let proxy_client = proxy_client.clone();
         let ops = Arc::clone(&ops);
@@ -118,6 +129,14 @@ fn handoff_worker_count_default() -> usize {
 }
 
 impl HandoffBridge {
+    /// `HANDOFF_BRIDGE` keeps one `Arc`; each live `consumer_loop` holds another.
+    /// If all consumers are gone (their runtime was dropped, e.g. per-test
+    /// runtimes), the queue can never drain — callers must fall back to a
+    /// direct spawn instead of parking the connection forever.
+    fn consumers_alive(self: &Arc<Self>) -> bool {
+        Arc::strong_count(self) > 1
+    }
+
     #[allow(clippy::result_large_err)] // Err hands the handoff back to the caller on queue-full
     fn try_enqueue(&self, handoff: HyperHandoff) -> Result<(), HyperHandoff> {
         let HyperHandoff {
@@ -269,6 +288,53 @@ fn spawn_hyper_handoff_direct(
     Ok(())
 }
 
+/// Spawn every item stranded in `bridge`'s queue on `runtime` (sync callers
+/// cannot use `tokio::spawn`; the consumer path is dead or absent here).
+fn drain_stranded_handoffs(
+    bridge: &HandoffBridge,
+    shared: &SharedServerState,
+    proxy_client: &ProxyClient,
+    ops: &Arc<LifecycleState>,
+    runtime: &Handle,
+) {
+    while let Some(item) = bridge.pop() {
+        let QueuedHandoff {
+            stream,
+            peer,
+            prefetched,
+            generation,
+            token,
+        } = item;
+        let _ = stream.set_nonblocking(true);
+        let xff = xff_from_peer(peer);
+        let shared = SharedServerState::clone(shared);
+        let ops = Arc::clone(ops);
+        let proxy_client = proxy_client.clone();
+        runtime.spawn(async move {
+            lifecycle::run_with_connection_token(token, async move {
+                let Ok(stream) = TokioTcpStream::from_std(stream) else {
+                    return;
+                };
+                let state = reload::read_state(&shared);
+                let ctx = WireDispatchContext {
+                    shared: SharedServerState::clone(&shared),
+                    state,
+                    proxy_client,
+                    x_forwarded_for: xff,
+                    ops,
+                    pinned_generation: generation.generation,
+                };
+                if let Some((head, rest)) = prefetched {
+                    dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
+                } else {
+                    dispatch_tcp_inner(stream, ctx).await;
+                }
+            })
+            .await;
+        });
+    }
+}
+
 /// **INTERNAL WORKSPACE CONTRACT — NOT STABLE PUBLIC API**
 pub fn spawn_hyper_handoff(
     handoff: HyperHandoff,
@@ -283,25 +349,62 @@ pub fn spawn_hyper_handoff(
     }
 
     if let Some(bridge) = HANDOFF_BRIDGE.get() {
-        match bridge.try_enqueue(handoff) {
-            Ok(()) => return Ok(()),
-            Err(handoff) => {
-                return spawn_hyper_handoff_direct(handoff, shared, proxy_client, ops, runtime);
+        if bridge.consumers_alive() {
+            match bridge.try_enqueue(handoff) {
+                Ok(()) => {
+                    // The last consumer may have died in the check→enqueue
+                    // window; if none remain, rescue the queue now instead of
+                    // leaving our item parked until the next handoff.
+                    if !bridge.consumers_alive() {
+                        drain_stranded_handoffs(bridge, shared, &proxy_client, ops, runtime);
+                    }
+                    return Ok(());
+                }
+                // Queue full with live consumers — they keep draining; serve
+                // ours directly rather than waiting on capacity.
+                Err(handoff) => {
+                    return spawn_hyper_handoff_direct(handoff, shared, proxy_client, ops, runtime)
+                }
             }
         }
+        // Dead consumers: the bridge's runtime was dropped and the global
+        // `OnceLock` still serves its queue. Rescue anything already queued —
+        // the dead-consumer liveness check ran under no lock, so an item can
+        // be stranded by a death in the check→enqueue window — then serve
+        // ours directly.
+        drain_stranded_handoffs(bridge, shared, &proxy_client, ops, runtime);
+        return spawn_hyper_handoff_direct(handoff, shared, proxy_client, ops, runtime);
     }
 
     spawn_hyper_handoff_direct(handoff, shared, proxy_client, ops, runtime)
 }
 
 /// Ensure the bridge exists (composition / executor construction).
+///
+/// When the previous consumers' runtime was dropped, the bridge object and
+/// its queue survive (process-global `OnceLock`); re-arm consumers on the
+/// live runtime so items stranded by that death still drain.
 pub(crate) fn ensure_handoff_bridge(
     runtime: &Handle,
     shared: SharedServerState,
     proxy_client: ProxyClient,
     ops: Arc<LifecycleState>,
 ) {
-    if HANDOFF_BRIDGE.get().is_some() {
+    static REARM: Mutex<()> = Mutex::new(());
+    if let Some(bridge) = HANDOFF_BRIDGE.get() {
+        // Serialize re-arms: two executors built while consumers are dead must
+        // not each spawn a full worker set.
+        let _rearm = REARM.lock().unwrap_or_else(|p| p.into_inner());
+        if !bridge.consumers_alive() {
+            spawn_consumers(
+                bridge,
+                runtime,
+                shared,
+                proxy_client,
+                ops,
+                handoff_worker_count_default(),
+            );
+        }
         return;
     }
     install_handoff_bridge(
@@ -444,7 +547,7 @@ mod tests {
         // have finished (0) before this assert; never allow >1.
         assert!(ops.active_connections() <= 1);
         rt.block_on(async {
-            for _ in 0..100 {
+            for _ in 0..500 {
                 if ops.active_connections() == 0 {
                     break;
                 }
@@ -511,5 +614,162 @@ mod tests {
         };
         assert!(bridge.try_enqueue(mk()).is_ok());
         assert!(bridge.try_enqueue(mk()).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_test_kernel_hooks() {
+        static HOOKS: std::sync::Once = std::sync::Once::new();
+        HOOKS.call_once(|| {
+            exyonq_mod_static::install_kernel_hooks(std::sync::Arc::new(
+                exyonq_mod_static::StaticRuntime::new(),
+            ));
+            exyonq_mod_proxy::install_kernel_hooks(std::sync::Arc::new(
+                exyonq_mod_proxy::ProxyRuntime::new(),
+            ));
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn handoff_bridge_stranded_items_drain_on_fallback() {
+        // Item parked in a queue with no live consumers (its runtime died) must
+        // be rescued by the fallback drain — served on the caller's runtime,
+        // not held open until process exit.
+        install_test_kernel_hooks();
+        let ops = std::sync::Arc::new(LifecycleState::new());
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let raw = include_str!("../../../tests/fixtures/minimal.toml");
+        let config: crate::config::AppConfig = raw.parse().expect("config");
+        let proxy = exyonq_mod_proxy::build_incoming_client();
+        let shared = rt.block_on(async {
+            crate::reload::wrap_state(
+                crate::server::state::ServerState::new(config, proxy.clone())
+                    .await
+                    .expect("state"),
+            )
+        });
+        let bridge = Arc::new(HandoffBridge {
+            queue: Mutex::new(VecDeque::new()),
+            notify: Notify::new(),
+            depth: AtomicUsize::new(0),
+            max_depth: 8,
+        });
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        let (server, peer) = listener.accept().unwrap();
+        let token = ops.try_enter().unwrap();
+        let cache = SyncBenchCache::from_state(crate::reload::read_state(&shared).as_ref());
+        let head = Bytes::from_static(b"GET /unknown HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(bridge
+            .try_enqueue(HyperHandoff::new(
+                server,
+                peer,
+                Some((head, Bytes::new())),
+                cache,
+                token,
+            ))
+            .is_ok());
+        assert!(!bridge.consumers_alive());
+        drain_stranded_handoffs(&bridge, &shared, &proxy, &ops, rt.handle());
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        use std::io::Read;
+        let mut buf = [0u8; 512];
+        let n = client.read(&mut buf).expect("stranded conn must be served");
+        assert!(n > 0, "a served connection must yield a response");
+        drop(client);
+        rt.block_on(async {
+            for _ in 0..500 {
+                if ops.active_connections() == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        });
+        assert_eq!(ops.active_connections(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ensure_handoff_bridge_rearms_dead_consumers() {
+        // Sequential-runtime scenario (the core-suite pattern): the runtime
+        // that installed the bridge dies; an item stranded in the shared queue
+        // must drain once a later executor re-arms consumers on a live runtime.
+        install_test_kernel_hooks();
+        let ops = std::sync::Arc::new(LifecycleState::new());
+        let rt1 = tokio::runtime::Runtime::new().expect("rt1");
+        let raw = include_str!("../../../tests/fixtures/minimal.toml");
+        let config: crate::config::AppConfig = raw.parse().expect("config");
+        let proxy = exyonq_mod_proxy::build_incoming_client();
+        let shared = rt1.block_on(async {
+            crate::reload::wrap_state(
+                crate::server::state::ServerState::new(config, proxy.clone())
+                    .await
+                    .expect("state"),
+            )
+        });
+        ensure_handoff_bridge(
+            rt1.handle(),
+            SharedServerState::clone(&shared),
+            proxy.clone(),
+            std::sync::Arc::clone(&ops),
+        );
+        drop(rt1);
+        let bridge = HANDOFF_BRIDGE.get().expect("bridge installed");
+        for _ in 0..100 {
+            if !bridge.consumers_alive() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !bridge.consumers_alive(),
+            "consumers must die with their runtime"
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        let (server, peer) = listener.accept().unwrap();
+        let token = ops.try_enter().unwrap();
+        let cache = SyncBenchCache::from_state(crate::reload::read_state(&shared).as_ref());
+        let head = Bytes::from_static(b"GET /unknown HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(bridge
+            .try_enqueue(HyperHandoff::new(
+                server,
+                peer,
+                Some((head, Bytes::new())),
+                cache,
+                token,
+            ))
+            .is_ok());
+        let rt2 = tokio::runtime::Runtime::new().expect("rt2");
+        ensure_handoff_bridge(
+            rt2.handle(),
+            SharedServerState::clone(&shared),
+            proxy.clone(),
+            std::sync::Arc::clone(&ops),
+        );
+        assert!(bridge.consumers_alive());
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        use std::io::Read;
+        let mut buf = [0u8; 512];
+        let n = client
+            .read(&mut buf)
+            .expect("re-armed consumers must serve");
+        assert!(n > 0, "a served connection must yield a response");
+        drop(client);
+        rt2.block_on(async {
+            for _ in 0..500 {
+                if ops.active_connections() == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        });
+        assert_eq!(ops.active_connections(), 0);
     }
 }

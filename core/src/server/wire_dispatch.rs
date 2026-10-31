@@ -378,7 +378,7 @@ pub(crate) fn evaluate_wire_waf(
             Some(trust) => trust.resolve_from_pairs(peer_ip, &header_pairs),
             None => peer_ip,
         };
-    crate::waf::inspect_request_headers(
+    let decision = crate::waf::inspect_request_headers(
         state.waf.as_ref(),
         parse_wire_method(head),
         host,
@@ -391,7 +391,29 @@ pub(crate) fn evaluate_wire_waf(
         false,
         state.waf_enforce,
         state.waf_abuse.as_deref(),
-    )
+    );
+    if matches!(decision, crate::waf::WafHookResult::Continue) {
+        // CRS phase 2 must run for bodyless methods too (the Hyper path does the
+        // same with an empty body); otherwise every ARGS/REQUEST_URI rule at
+        // phase 2 is skipped on the wire proxy fast path.
+        let method = parse_wire_method(head);
+        if method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD") {
+            return crate::waf::inspect_request_body(
+                state.waf.as_ref(),
+                method,
+                host,
+                path,
+                query,
+                &header_view,
+                client_ip,
+                None,
+                b"",
+                generation,
+                state.waf_enforce,
+            );
+        }
+    }
+    decision
 }
 
 fn wire_host_from_pairs(headers: &[(String, String)]) -> Option<&str> {
@@ -584,12 +606,38 @@ where
     // NG-11: the hook receives the socket peer — keep-alive requests resolve
     // their own chain per request inside wire_conn against this peer.
     let xff = x_forwarded_for.to_str().unwrap_or("127.0.0.1").to_string();
+    // Q-15: the wire proxy keeps one cluster for the connection, so the
+    // matched route/upstream labels are constant for every keep-alive request.
+    let route_name = state
+        .snapshot
+        .config
+        .routes
+        .get(route_idx)
+        .map(|r| r.name.clone())
+        .unwrap_or_else(|| "-".to_string());
+    let upstream_name = state
+        .snapshot
+        .config
+        .routes
+        .get(route_idx)
+        .and_then(|r| r.upstream.clone())
+        .unwrap_or_else(|| "-".to_string());
     let boxed = exyonq_mod_proxy::box_wire_stream(stream);
     // Bench/edge hot path: access logging is usually off — do not Bytes::clone the
     // request head solely for a no-op emit (refcount churn on every P4 wire GET).
     let head_for_access = observability::access_event_required().then(|| head.clone());
-    match proxy_wire::serve_proxy_wire(cluster_id, generation, xff, boxed, head, rest, real_ip)
-        .await
+    match proxy_wire::serve_proxy_wire(
+        cluster_id,
+        generation,
+        route_name,
+        upstream_name,
+        xff,
+        boxed,
+        head,
+        rest,
+        real_ip,
+    )
+    .await
     {
         Ok(status) => {
             if let Some(ref h) = head_for_access {
@@ -684,8 +732,12 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     // Fail closed: never route/static/proxy on ambiguous HTTP/1 framing.
-    if !io::request_headers_safe_for_wire(head.as_ref()) {
+    if io::request_framing_ambiguous(head.as_ref()) {
         return Some(WirePlan::Reject(stream));
+    }
+    // Chunked bodies are decoded by Hyper, not by the wire fast path.
+    if io::request_framing_needs_hyper(head.as_ref()) {
+        return Some(WirePlan::Hyper(stream, head, rest));
     }
     // Cap067 early AE gate: compression configured ∧ AE prefers coding → Hyper
     // (no mid-connection Cap067→Hyper handoff later on this socket).
@@ -935,7 +987,10 @@ pub(crate) async fn dispatch_tcp(mut stream: TcpStream, ctx: WireDispatchContext
 }
 
 pub(crate) async fn dispatch_tcp_inner(stream: TcpStream, ctx: WireDispatchContext) {
-    if ctx.state.hyper_required_for_modules() || ctx.ops.is_draining() {
+    if ctx.state.hyper_required_for_modules()
+        || ctx.state.gunzip_configured()
+        || ctx.ops.is_draining()
+    {
         super::serve_hyper(
             stream,
             crate::reload::SharedServerState::clone(&ctx.shared),
@@ -1131,7 +1186,15 @@ mod tests {
 
     fn bench_site_config(root: Option<std::path::PathBuf>) -> AppConfig {
         let site = RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+            cache_headers: None,
+            response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
             name: "site".into(),
             r#match: RouteMatch {
                 path: "/site".into(),
@@ -1149,6 +1212,10 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+        };
+        let api = RouteConfig {
+            gunzip: None,
+            cache_tags: Vec::new(),
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
@@ -1156,9 +1223,6 @@ mod tests {
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
-        };
-        let api = RouteConfig {
-            cache_tags: Vec::new(),
             name: "api".into(),
             r#match: RouteMatch {
                 path: "/api".into(),
@@ -1176,13 +1240,6 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
-            fallback_rewrite: None,
-            try_uri: None,
-            try_uri_dir: None,
-            proxy_set_headers: Vec::new(),
-            cache_headers: None,
-            response_headers: Vec::new(),
-            location_rewrite: Vec::new(),
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1573,7 +1630,9 @@ mod tests {
         let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .unwrap();
-        let req = b"GET /site/x HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n";
+        // TE+CL is a request-smuggling vector and must still be rejected with
+        // 400; bare `Transfer-Encoding: chunked` is now correctly accepted.
+        let req = b"GET /site/x HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n";
         tokio::io::AsyncWriteExt::write_all(&mut client, req)
             .await
             .unwrap();
@@ -1631,7 +1690,9 @@ mod tests {
             }
         });
 
-        let req = b"GET /site/x HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n";
+        // TE+CL is a request-smuggling vector and must still be rejected with
+        // 400; bare `Transfer-Encoding: chunked` is now correctly accepted.
+        let req = b"GET /site/x HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n";
         let mut observed = before;
         for _ in 0..80 {
             let std_stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -1944,6 +2005,7 @@ mod ws_tunnel_tests {
 
     pub(super) fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
         let api = RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: "api".into(),
             r#match: RouteMatch {

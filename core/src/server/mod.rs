@@ -694,7 +694,8 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     #[cfg(not(target_os = "linux"))]
     let use_io_uring = false;
     #[cfg(target_os = "linux")]
-    let epoll_keepalive = epoll_start::epoll_static_env_enabled(tls_on_listen);
+    let epoll_keepalive =
+        !config.waf.enabled && epoll_start::epoll_static_env_enabled(tls_on_listen);
     #[cfg(target_os = "linux")]
     let use_epoll_listener = epoll_keepalive && epoll_start::epoll_listen_env_enabled();
     #[cfg(target_os = "linux")]

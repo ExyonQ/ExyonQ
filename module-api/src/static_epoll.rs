@@ -179,6 +179,9 @@ pub fn record_product_response(status: u16) {
 }
 
 /// Delivered inline response: counter, route label, and latency.
+///
+/// The epoll static fast path is bound to the `site` static slot (see
+/// `ServerState::site_static_slot`), so route/upstream are stable.
 #[cfg(target_os = "linux")]
 pub fn record_product_exchange(head: &[u8], status: u16, elapsed_ms: f64) {
     let method = if head.starts_with(b"HEAD ") {
@@ -187,7 +190,7 @@ pub fn record_product_exchange(head: &[u8], status: u16, elapsed_ms: f64) {
         "GET"
     };
     let path = request_target(head);
-    crate::wire_record_exchange(method, path, status, elapsed_ms);
+    crate::wire_record_exchange_labeled(method, path, status, elapsed_ms, "site", "static");
 }
 
 #[cfg(target_os = "linux")]

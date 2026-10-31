@@ -516,6 +516,38 @@ fn check_bot(req: &WafRequest<'_>, bad: &[PatternRule], good: &[&str]) -> Option
 
 // --- Pattern tables (ExyonQ-owned IDs; compact v1 set) ---
 
+static SQL_VALUE_RES: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock::new(|| {
+    SQL_PATTERNS
+        .iter()
+        .filter_map(|(_, pattern)| Regex::new(pattern).ok())
+        .collect()
+});
+
+static XSS_VALUE_RES: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock::new(|| {
+    XSS_PATTERNS
+        .iter()
+        .filter_map(|(_, pattern)| Regex::new(pattern).ok())
+        .collect()
+});
+
+/// Inline SQL comments, used to de-obfuscate before pattern matching.
+static SQL_COMMENT_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?s)/\*.*?\*/").expect("valid SQL comment regex")
+});
+
+pub(crate) fn detect_sql(value: &str) -> bool {
+    if SQL_VALUE_RES.iter().any(|re| re.is_match(value)) {
+        return true;
+    }
+    // Inline comments are a common obfuscation (`1'/**/OR/**/1=1`).
+    let normalized = SQL_COMMENT_RE.replace_all(value, " ");
+    normalized != value && SQL_VALUE_RES.iter().any(|re| re.is_match(&normalized))
+}
+
+pub(crate) fn detect_xss(value: &str) -> bool {
+    XSS_VALUE_RES.iter().any(|re| re.is_match(value))
+}
+
 const SQL_PATTERNS: &[(&str, &str)] = &[
     ("EXY-SQL-1001", r"(?i)\bunion\b[\s/\*]+.*\bselect\b"),
     ("EXY-SQL-1002", r"(?i)\b(or|and)\b\s+\d+\s*=\s*\d+"),
@@ -523,6 +555,13 @@ const SQL_PATTERNS: &[(&str, &str)] = &[
         "EXY-SQL-1003",
         r"(?i)\b(sleep|benchmark|waitfor\s+delay)\s*\(",
     ),
+    // Quoted tautology: `' OR '1'='1`.
+    (
+        "EXY-SQL-1004",
+        r#"(?i)\b(or|and)\b\s+['"][^'"]{1,32}['"]?\s*=\s*['"]?[^'"\s]{1,32}"#,
+    ),
+    // Quote closed by a SQL comment: `admin'--`.
+    ("EXY-SQL-1005", r#"(?i)['"]\s*(?:--|#)\s*$"#),
 ];
 
 const XSS_PATTERNS: &[(&str, &str)] = &[

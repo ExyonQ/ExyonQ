@@ -19,8 +19,26 @@ Complete before tagging `vX.Y.Z` (~30 minutes).
 
 ## 4. Functional
 
-- [ ] `bash benchmarks/scenarios/functional/run-all.sh` — F1–F13 pass for ExyonQ.
-- [ ] Path traversal (F4), upstream down (F7), TLS validate (F9), reload (F11) verified.
+The old F1–F13 functional harness (`benchmarks/scenarios/functional/`) does not
+exist in this tree — the directory only carries `lib.sh` — so the checklist
+names the real commands that now provide that coverage.
+
+- [ ] Full workspace suite green: `cargo nextest run --workspace` (includes
+      `exyonq-integration-tests`).
+- [ ] Path traversal: `cargo nextest run -p exyonq-core path_traversal_returns_403`
+      and `cargo nextest run -p exyonq-mod-htaccess traversal_path_rejected_at_compile`.
+- [ ] Upstream down / failover: `cargo nextest run -p exyonq-mod-proxy`
+      (NG-07 wire affinity, NG-08 passive health, failover).
+- [ ] TLS config validate + crypto policy:
+      `cargo nextest run -p exyonq-config-ir -E 'test(/tls|ng12|ng13|ng24|ap02|ocsp|sni/)'`
+      (14 tests) plus the `openssl s_client` battery below.
+- [ ] Reload: `cargo nextest run -p exyonq-integration-tests security_reload_invalid_config_keeps_snapshot`
+      and `cargo nextest run -p exyonq-reload-runtime`.
+- [ ] Host E2E TLS battery on both Linux hosts (Netcup amd64, Oracle arm64):
+      negotiated TLS 1.3 cipher matches `ciphers`, TLS 1.2 rejected when not
+      configured, SNI multi-cert selects the right certificate, unknown SNI
+      rejected with `strict_sni`, OCSP staple present, session resumed.
+- [ ] WordPress image gate (rule 134) for the release tag on both architectures.
 
 ## 5. Integrity + private material
 
@@ -28,6 +46,8 @@ Complete before tagging `vX.Y.Z` (~30 minutes).
 - [ ] `bash scripts/gates/benchmark-integrity-gate.sh --selftest` and `--tree .` PASS.
 - [ ] `bash scripts/gates/data-provenance-gate.sh --selftest` PASS (and `--check` on any result package used for claims).
 - [ ] `bash scripts/security/scan-private-material.sh --git-tree --repo .` PASS.
+- [ ] `bash scripts/gates/unsafe-allowlist-gate.sh --tree .` PASS (ADR-045 ratchet).
+- [ ] `bash scripts/gates/publication-privacy-gate.sh` PASS on release material (rule 135).
 - [ ] Tracked waivers under `docs/governance/exceptions/` complete with expiry (`waiver-expiry-gate.sh --check`).
 
 ## 6. Audit artifact

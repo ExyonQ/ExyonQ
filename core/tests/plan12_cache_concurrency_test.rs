@@ -44,6 +44,7 @@ fn test_policy() -> CompiledCachePolicy {
 
 fn test_key(path: &str) -> exyonq_cache::CacheKey {
     build_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: 0,
         namespace: 0,
         backend_id: 0,

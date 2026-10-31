@@ -175,6 +175,18 @@ pub struct WafRulesetConfig {
     pub builtins: Option<WafBuiltinToggles>,
     #[serde(default, rename = "rule")]
     pub rules: Vec<WafCustomRuleConfig>,
+    /// CRS/ModSecurity `SecRule` file for this ruleset.
+    #[serde(default)]
+    pub rules_file: Option<String>,
+    /// CRS inbound anomaly threshold.
+    #[serde(default)]
+    pub inbound_threshold: Option<u32>,
+    /// CRS detection-only (log, never block).
+    #[serde(default)]
+    pub detection_only: bool,
+    /// CRS rule IDs disabled by config (allowlist).
+    #[serde(default)]
+    pub disabled_rule_ids: Vec<u32>,
 }
 
 fn default_true() -> bool {

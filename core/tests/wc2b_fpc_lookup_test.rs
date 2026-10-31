@@ -132,6 +132,7 @@ async fn eligible_hit_serves_without_backend_and_head_has_no_body() {
     assert_ne!(site_id, 0);
     let backend_id = state.snapshot.route_backend_id(0).expect("backend").index();
     let parts = CacheKeyParts {
+        range: String::new(),
         site_id,
         namespace: 4,
         backend_id,
@@ -178,6 +179,7 @@ async fn cookie_bypass_does_not_hit_anonymous_entry() {
     insert_hit(
         cache,
         CacheKeyParts {
+            range: String::new(),
             site_id,
             namespace: 4,
             backend_id,
@@ -230,6 +232,7 @@ async fn distinct_site_ids_isolate_keys() {
     assert_ne!(b, 0);
     assert_ne!(a, b);
     let ka = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: a,
         namespace: 4,
         backend_id: 1,
@@ -245,6 +248,7 @@ async fn distinct_site_ids_isolate_keys() {
         vary: String::new(),
     });
     let kb = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: b,
         namespace: 4,
         backend_id: 1,

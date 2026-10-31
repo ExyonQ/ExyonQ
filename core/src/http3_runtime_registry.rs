@@ -24,6 +24,9 @@ use crate::reload::{read_state, SharedServerState};
 use crate::server::handler::{self, ConnectionContext};
 use async_trait::async_trait;
 use bytes::Bytes;
+
+#[allow(dead_code)]
+type BoxBody = http_body_util::combinators::BoxBody<Bytes, hyper::Error>;
 use exyonq_mod_proxy::ProxyClient;
 use exyonq_module_api::http3_runtime::{
     Http3ConnectionLifecycle, Http3DispatchError, Http3DispatchService, Http3DrainRejected,
@@ -36,8 +39,6 @@ use hyper::body::Body;
 use hyper::header::HeaderValue;
 use std::sync::Arc;
 use tracing::warn;
-
-type BoxBody = http_body_util::combinators::BoxBody<Bytes, hyper::Error>;
 
 /// Temporary H3 response materialization ceiling.
 ///
@@ -59,7 +60,7 @@ pub(crate) fn h3_materialization_budget_bytes() -> u64 {
 /// Private materialization error (not a public API).
 #[derive(Debug)]
 enum H3ResponseMaterializationError {
-    Body(hyper::Error),
+    Body(exyonq_module_api::BoxError),
     TooLarge,
 }
 
@@ -83,13 +84,14 @@ async fn collect_h3_response_body_bounded<B>(
     max_bytes: usize,
 ) -> Result<Bytes, H3ResponseMaterializationError>
 where
-    B: Body<Data = Bytes, Error = hyper::Error> + Unpin,
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Into<exyonq_module_api::BoxError> + 'static,
 {
     let mut buf = Vec::new();
     loop {
         match body.frame().await {
             None => return Ok(Bytes::from(buf)),
-            Some(Err(err)) => return Err(H3ResponseMaterializationError::Body(err)),
+            Some(Err(err)) => return Err(H3ResponseMaterializationError::Body(err.into())),
             Some(Ok(frame)) => {
                 let Ok(chunk) = frame.into_data() else {
                     // Trailers / non-data: preserve current ignore semantics.
@@ -193,16 +195,22 @@ impl Http3DispatchService for CoreHttp3Dispatcher {
     }
 }
 
-async fn materialize_response(
-    response: Response<BoxBody>,
-) -> anyhow::Result<Http3MaterializedResponse> {
+async fn materialize_response<B>(response: Response<B>) -> anyhow::Result<Http3MaterializedResponse>
+where
+    B: http_body::Body<Data = bytes::Bytes> + Unpin,
+    B::Error: Into<exyonq_module_api::BoxError> + 'static,
+{
     materialize_response_with_limit(response, H3_MAX_MATERIALIZED_RESPONSE_BODY_BYTES).await
 }
 
-async fn materialize_response_with_limit(
-    response: Response<BoxBody>,
+async fn materialize_response_with_limit<B>(
+    response: Response<B>,
     max_bytes: usize,
-) -> anyhow::Result<Http3MaterializedResponse> {
+) -> anyhow::Result<Http3MaterializedResponse>
+where
+    B: http_body::Body<Data = bytes::Bytes> + Unpin,
+    B::Error: Into<exyonq_module_api::BoxError> + 'static,
+{
     // Static (or other owners) signalled budget exceeded before building a Full body.
     // Map to the canonical H3 oversized outcome (500 / stream-local / KEEP).
     if response
@@ -263,7 +271,7 @@ async fn materialize_response_with_limit(
             // Stream-local HTTP 500 — Ok so the H3 accept loop keeps the connection.
             Ok(h3_oversized_materialized_response())
         }
-        Err(H3ResponseMaterializationError::Body(err)) => Err(err.into()),
+        Err(H3ResponseMaterializationError::Body(err)) => Err(anyhow::Error::msg(err.to_string())),
     }
 }
 
@@ -398,7 +406,7 @@ mod tests {
             .header(MATERIALIZATION_BUDGET_EXCEEDED_HEADER, "1")
             .body(
                 Full::from(Bytes::from_static(b"should-not-appear"))
-                    .map_err(|never| match never {})
+                    .map_err(|never| -> exyonq_module_api::BoxError { match never {} })
                     .boxed(),
             )
             .unwrap();

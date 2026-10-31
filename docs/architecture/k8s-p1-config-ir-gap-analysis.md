@@ -30,7 +30,7 @@ ACTIVE_GO_RECOMMENDATIONS_REMAINING = 0
 
 P2A close: EndpointSet IR gaps addressed for foundation (no silent truncation; full set in plan; execution gated). Remaining productive multi-endpoint / WRR execution and fuzz coverage tracked as P2A-OPEN-001 / K8S-P2B.
 
-Evidence collected only from `<worktree>`.
+Evidence collected only from `<worktree>
 
 Note: user inspection path `crates/exyonq-config-ir/` does **not** exist; package `exyonq-config-ir` is at `config/ir/`.
 
@@ -64,7 +64,7 @@ Note: user inspection path `crates/exyonq-config-ir/` does **not** exist; packag
 | F22 | `config/schema/src/lib.rs` | `ir_json_schema` | partial schema | drift vs IR features | compatibility | Med | High | schema sync |
 | F23 | `config/ir/src/error.rs` | `ConfigError` | rich config errors | ops/proxy/tls inconsistent | Contract 16 | Med | High | unify codes |
 | F24 | `config/merge/src/product_profile.rs` | comments | no H2/H3 upstream claim; limited retry | pins product limits | Contracts 3/8 | Med | High | keep explicit |
-| F25 | `scripts/smoke/p13a-tls-sni.sh` | `SUPPORT_LIMIT=SINGLE_CERT_SNI` | documents single cert SNI | multi-SNI absent | Contract 9 | High | High | P2 |
+| F25 | smoke probe removed (superseded by `crates/exyonq-mod-tls` NG-24 tests) | `SUPPORT_LIMIT=SINGLE_CERT_SNI` | documents single cert SNI | multi-SNI absent | Contract 9 | High | High | P2 |
 | F26 | `core/tests/proxy_request_body_limit_test.rs` | comment | no HTTP retry implementation | Contract 8 design-only | retries | Med | High | P2+ |
 | F27 | PATH | `crates/exyonq-config-ir` | missing directory | package is `config/ir` | docs clarity | Low | Low | name mapping only |
 

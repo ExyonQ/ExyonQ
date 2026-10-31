@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+regex.workspace = true
 anyhow.workspace = true
 exyonq-compat-common = { path = "../common" }
 exyonq-config-ir = { path = "../../config/ir" }

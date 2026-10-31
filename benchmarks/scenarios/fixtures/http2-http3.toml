@@ -1,0 +1,15 @@
+# Config-validation fixture for TLS ALPN h2 plus a dedicated HTTP/3 listener.
+# Runtime protocol tests generate ephemeral PEMs and perform real handshakes.
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:18443"
+http3_listen = "127.0.0.1:18444"
+routes = ["site"]
+tls = { cert = "/run/exyonq-test/cert.pem", key = "/run/exyonq-test/key.pem" }
+
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "/srv/exyonq-test"
+index = "index.html"

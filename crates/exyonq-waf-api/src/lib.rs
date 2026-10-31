@@ -320,6 +320,13 @@ pub struct WafRequest<'a> {
 }
 
 /// Sync WAF engine. Implementations live in `exyonq-waf`; core depends only on this trait.
+/// Response data for CRS phases 3–5.
+pub struct WafResponse<'a> {
+    pub status: u16,
+    pub headers: &'a dyn HeaderView,
+    pub body: Option<&'a [u8]>,
+}
+
 pub trait WafEngine: Send + Sync {
     fn inspect(&self, phase: WafPhase, req: &WafRequest<'_>) -> WafDecision;
 
@@ -330,6 +337,21 @@ pub trait WafEngine: Send + Sync {
         end_of_stream: bool,
         state: &mut BodyInspectionState,
     ) -> WafDecision;
+
+    fn inspect_response(
+        &self,
+        phase: WafPhase,
+        req: &WafRequest<'_>,
+        _resp: &WafResponse<'_>,
+    ) -> WafDecision {
+        let _ = (phase, req);
+        WafDecision::allow()
+    }
+
+    /// Whether the engine has CRS rules that inspect the response body.
+    fn inspects_response_body(&self) -> bool {
+        false
+    }
 }
 
 /// No-op engine: always [`WafAction::Allow`]. Useful before a concrete engine is wired.

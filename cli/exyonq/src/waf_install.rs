@@ -70,8 +70,10 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
     } else {
         let input = waf_compile_input_from_config(config)
             .map_err(|e| anyhow::anyhow!("waf IR convert: {e}"))?;
+        let crs = waf_crs_rulesets_from_ir(&config.waf)
+            .map_err(|e| anyhow::anyhow!("waf CRS load: {e}"))?;
         Arc::new(
-            FixedWafEngine::compile(input)
+            FixedWafEngine::compile_with_crs(input, &crs)
                 .map_err(|e| anyhow::anyhow!("waf compile failed (fail closed): {e}"))?,
         )
     };
@@ -100,6 +102,32 @@ fn install_cap013_hooks() {
     exyonq_core::install_waf_discard_hook(Arc::new(|| {
         exyonq_core::discard_staged_waf_binding();
     }));
+}
+
+/// Load CRS `SecRule` files declared by `[[waf.ruleset]] rules_file`.
+pub fn waf_crs_rulesets_from_ir(
+    waf: &WafConfig,
+) -> Result<Vec<exyonq_waf::CrsRulesetInput>, String> {
+    let mut out = Vec::new();
+    for ruleset in &waf.rulesets {
+        let Some(path) = &ruleset.rules_file else {
+            continue;
+        };
+        let contents =
+            std::fs::read_to_string(path).map_err(|e| format!("crs rules file `{path}`: {e}"))?;
+        let base = std::path::Path::new(path).parent();
+        let mut crs = exyonq_waf::parse_rule_file_with_base(
+            &ruleset.id,
+            &contents,
+            ruleset.inbound_threshold.unwrap_or(5),
+            base,
+        );
+        crs.detection_only |= ruleset.detection_only;
+        crs.disabled_ids
+            .extend(ruleset.disabled_rule_ids.iter().copied());
+        out.push(crs);
+    }
+    Ok(out)
 }
 
 /// Convert product IR to engine compile input (CLI composition root).

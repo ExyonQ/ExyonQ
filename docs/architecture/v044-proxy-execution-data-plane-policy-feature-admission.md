@@ -87,7 +87,7 @@ P3_BACKPRESSURE = preserved (MAX_IN_FLIGHT body frames bounded)
 ## Evidence
 
 Darwin: `cargo test -p exyonq-core --lib pxdp_p5 -- --test-threads=1`  
-Netcup: `scripts/evidence/pxdp-p5-netcup-product-e2e.py`  
+Netcup: evidence driver retired with the v0.4.4 campaign (script no longer in tree)  
 Ledger SSOT: `docs/governance/v044-proxy-execution-data-plane-feature-admission-ledger.md`
 
 ## Terminal performance validation (PXDP reality check)

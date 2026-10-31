@@ -31,7 +31,7 @@ Before: three unstaged tracked paths (competitive dashboard HTML/JSON + generato
 - Preserved under evidence `CANDIDATE_DIRT/preserved/`.
 - Restored **explicit paths only** to candidate `HEAD` (`git restore --source=HEAD -- <paths>`).
 - After: `git status --porcelain` empty → `CANDIDATE_WORKTREE_CLEAN=YES`.
-- Secret path `scripts/remote/v044-split-plane-near-product-proving-ground.sh`: excluded; not read, copied, or committed.
+- Secret path `the v0.4.4 split-plane driver (retired, not in tree)`: excluded; not read, copied, or committed.
 
 ## Logic P3 accounting (by ID)
 
