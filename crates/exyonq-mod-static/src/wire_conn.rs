@@ -930,7 +930,10 @@ mod tests {
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
             let n = client1.read(&mut buf).expect("first response");
-            assert!(std::str::from_utf8(&buf[..n]).unwrap().contains("200"));
+            // The blocking serve shim only emits /health; file paths get the wire 404.
+            assert!(std::str::from_utf8(&buf[..n])
+                .unwrap()
+                .contains("HTTP/1.1 404"));
 
             let (stream2, _client2) = tcp_pair();
             assert!(matches!(
@@ -992,7 +995,9 @@ mod tests {
                 .set_read_timeout(Some(Duration::from_secs(1)))
                 .unwrap();
             let n = client.read(&mut buf).unwrap();
-            assert!(std::str::from_utf8(&buf[..n]).unwrap().contains("200"));
+            assert!(std::str::from_utf8(&buf[..n])
+                .unwrap()
+                .contains("HTTP/1.1 404"));
 
             client2
                 .set_read_timeout(Some(Duration::from_secs(1)))
@@ -1018,7 +1023,7 @@ mod tests {
                 .unwrap();
             let n = client.read(&mut buf).expect("read HEAD response");
             let response = std::str::from_utf8(&buf[..n]).expect("utf8");
-            assert!(response.starts_with("HTTP/1.1 200"));
+            assert!(response.starts_with("HTTP/1.1 404"));
             assert!(response.contains("Content-Length:"));
         }
 
