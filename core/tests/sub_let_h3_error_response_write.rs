@@ -291,24 +291,24 @@ async fn s2n_error_response_write_failure_is_observed() {
         .await
         .expect("h3 client");
 
-    // No Content-Length: stream body past cap so TooLarge trips mid-recv, then cancel
-    // the response direction so the server's error-response write fails for real.
+    // No Content-Length: stream body past cap so TooLarge trips mid-recv. The peer
+    // STOP_SENDING must precede the cap-tripping bytes — the server cannot attempt
+    // the 413 write until it has collected >cap data, and by then the stop on the
+    // response direction is already processed, so write_h3_response fails for real.
     let req = Request::builder()
         .method("POST")
         .uri("https://localhost/api/oversize-abort")
         .body(())
         .unwrap();
     let mut stream = send.send_request(req).await.expect("send");
+    stream.stop_sending(Code::H3_REQUEST_CANCELLED);
     let oversized = Bytes::from(vec![b'x'; body_cap + 2048]);
     stream
         .send_data(oversized)
         .await
         .expect("send oversized body chunk");
-    // End request body so the server finishes TooLarge handling and attempts 413 write.
-    let _ = stream.finish().await;
-    // Peer STOP_SENDING on the response direction is a real H3 condition that makes
-    // the server's error-response write fail (not a mock transport).
-    stream.stop_sending(Code::H3_REQUEST_CANCELLED);
+    // Reset the client->server half so the server's drain exits promptly and it
+    // reaches the already-stopped response write.
     stream.stop_stream(Code::H3_REQUEST_CANCELLED);
 
     let mut observed = before;
