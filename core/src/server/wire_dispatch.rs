@@ -1222,8 +1222,8 @@ mod tests {
         let service: Arc<dyn exyonq_module_api::static_dispatch::StaticDispatchService> =
             runtime.clone();
         let static_guard = execute_backend::StaticDispatchTestGuard::install(service);
-        exyonq_mod_static::install_kernel_hooks(runtime);
         ensure_wire_hooks();
+        exyonq_mod_static::install_kernel_hooks(runtime);
         let proxy_client = build_incoming_client();
         let state = ServerState::new_with_generation(1, config, proxy_client)
             .await
