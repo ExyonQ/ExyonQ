@@ -10,7 +10,7 @@ SUSPENDED_DATE = 2026-08-26
 
 PRODUCT_MUTATION = NO (canonical tree)
 EXPERIMENT_BRANCH = experiment/p4-proxy-wire-body-pipeline-slim (worktree only; not authority)
-EXPERIMENT_WORKTREE = /Volumes/Lexar/Cursor/exyonq-laboratorio/.exyonq-local/worktrees/p4-body-pipeline-slim
+EXPERIMENT_WORKTREE = <repo>/.exyonq-local/worktrees/p4-body-pipeline-slim
 EXPERIMENT_COMMIT = a7dac179 (local experiment only; not merged)
 CANONICAL_PRODUCT_CHANGED = NO
 NON_PRODUCTION_EXPERIMENT = YES

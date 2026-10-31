@@ -43,7 +43,7 @@ P14V041_FREEZE_AMENDMENT =
   → 94f29a9 → 43805eb; remote main FF only
 
 P14V041_BRANCH = release/p14v041
-P14V041_WORKTREE = /Volumes/Lexar/Cursor/exyonq-laboratorio-wt-p14v041
+P14V041_WORKTREE = <worktree>
 P14V041_TAG = v0.4.1
 P14V041_AMBIENT_LAB_DIRT_IMPORTED = NO
 P14V041_PREHISTCLEAN_HISTORY_IMPORTED = NO
@@ -52,7 +52,7 @@ P14V041_PREHISTCLEAN_HISTORY_IMPORTED = NO
 Ambient lab (untouched during close):
 
 ```text
-AMBIENT_PATH = /Volumes/Lexar/Cursor/exyonq-laboratorio
+AMBIENT_PATH = <repo>
 AMBIENT_BRANCH = perf/p8o-finite-sse-batch
 ```
 

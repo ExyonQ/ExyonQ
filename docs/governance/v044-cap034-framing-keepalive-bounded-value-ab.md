@@ -18,7 +18,7 @@ Isolated product experiment (A1 arm only) to bound how much of the P4 proxy defi
 | SOURCE_TREE | `4ae6ffc7528d0881be23fcac246c345dcb9a1606` |
 | SOURCE_BINARY_SHA256 (canonical A0 product) | `e28c0abe18587f2d911d492be64cbec42372383e011417a6c578be52da5ba459` |
 | EXPERIMENT_BRANCH | `experiment/cap034-framing-keepalive-ab` |
-| EXPERIMENT_WORKTREE | `/Volumes/Lexar/Cursor/exyonq-laboratorio/.exyonq-local/worktrees/cap034-ab` |
+| EXPERIMENT_WORKTREE | `<repo>/.exyonq-local/worktrees/cap034-ab` |
 | EXPERIMENT_COMMIT | not committed (working tree only) |
 | EXPERIMENT_BINARY_SHA256 (linux/amd64 image build) | `f7248b1806012168615bbfcf32caed24e22df0f9e19c078cac1130d5e4d9f642` |
 | CANONICAL_PRODUCT_CHANGED | NO |
