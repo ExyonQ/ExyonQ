@@ -42,6 +42,7 @@ fn redirect_config() -> AppConfig {
             error_pages: Default::default(),
         }],
         routes: vec![RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: "root".into(),
             r#match: RouteMatch {

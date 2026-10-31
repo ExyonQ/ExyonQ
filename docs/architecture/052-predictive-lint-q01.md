@@ -30,6 +30,7 @@ Predictive analysis is **offline**, **pure on IR** (no DNS, no probes, no `core/
 | `EXY-LINT-0004` | Same-host regex with shorter `pattern_len` than another regex (loses when both match) |
 | `EXY-LINT-0005` | `[[map]]` never referenced from any `proxy_set_headers` value |
 | `EXY-LINT-0006` | Hostless catch-all `/` while host-specific routes exist (host rank wins) |
+| `EXY-LINT-0007` | FPC serve window (`max_ttl_seconds + stale_if_error_secs`) exceeds the anonymous-nonce tick (43200s) |
 
 Every warning carries `cause` + `suggestion`. Documentation pointers use `docs/config/diagnostic-codes.md#exy-lint-000N`.
 

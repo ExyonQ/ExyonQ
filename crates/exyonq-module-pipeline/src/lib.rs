@@ -74,6 +74,7 @@ impl CrossCuttingPipeline {
             admit_active: RateLimitModule::wire_admit_active,
             record_response: MetricsModule::wire_record_response,
             record_exchange: MetricsModule::wire_record_exchange,
+            record_exchange_labeled: MetricsModule::wire_record_exchange_labeled,
         });
         // LA-CAP054-008 / KD4.4: rate-limit short-circuit must run before metrics scrape
         // short-circuit so public /metrics cannot bypass Cap055 when both are enabled.
@@ -169,11 +170,19 @@ impl CrossCuttingPipeline {
 
     async fn transform_response(
         &self,
-        module_req: &HttpRequest,
+        module_req: &mut HttpRequest,
         response: Response<BoxBody>,
     ) -> anyhow::Result<Response<BoxBody>> {
         if self.registry.modules().is_empty() {
             return Ok(response);
+        }
+        // Q-15: core attaches the matched route/upstream to the response;
+        // copy it into the request extensions the modules observe.
+        if let Some(labels) = response
+            .extensions()
+            .get::<exyonq_module_api::RouteLabels>()
+        {
+            module_req.extensions_mut().insert(labels.clone());
         }
         // Cap032: never collect text/event-stream — streaming must reach the client.
         // Cap054: modules observe real status + real headers with StreamingUnavailable body.
@@ -224,11 +233,11 @@ impl CrossCuttingPipeline {
         self.on_module_request(&mut module_req).await?;
 
         if let Some(response) = self.on_route_shortcircuit_for_module(&module_req).await? {
-            return self.transform_response(&module_req, response).await;
+            return self.transform_response(&mut module_req, response).await;
         }
 
         let response = dispatch_core(req).await;
-        self.transform_response(&module_req, response).await
+        self.transform_response(&mut module_req, response).await
     }
 
     /// HTTP/3 path: module request already built with client IP.
@@ -244,18 +253,20 @@ impl CrossCuttingPipeline {
         self.on_module_request(&mut module_req).await?;
 
         if let Some(response) = self.on_route_shortcircuit_for_module(&module_req).await? {
-            return self.transform_response(&module_req, response).await;
+            return self.transform_response(&mut module_req, response).await;
         }
 
         let response = dispatch_core().await;
-        self.transform_response(&module_req, response).await
+        self.transform_response(&mut module_req, response).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig};
+    use exyonq_config_ir::{
+        AuthConfig, CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig,
+    };
 
     #[test]
     fn la_cap054_008_ratelimit_registers_before_metrics() {
@@ -272,8 +283,15 @@ mod tests {
                 enabled: true,
                 requests_per_second: 10,
                 burst: 10,
+                zones: Default::default(),
+                routes: Default::default(),
             },
             real_ip: RealIpConfig::default(),
+            gunzip: Default::default(),
+            sub_filter: Default::default(),
+            mirror: Default::default(),
+            slice: Default::default(),
+            auth: AuthConfig::default(),
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         let names: Vec<_> = pipeline
@@ -305,8 +323,15 @@ mod tests {
                 enabled: true,
                 requests_per_second: 1_000_000,
                 burst: 1_000_000,
+                zones: Default::default(),
+                routes: Default::default(),
             },
             real_ip: RealIpConfig::default(),
+            gunzip: Default::default(),
+            sub_filter: Default::default(),
+            mirror: Default::default(),
+            slice: Default::default(),
+            auth: AuthConfig::default(),
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         assert_eq!(pipeline.module_count(), 2);
@@ -394,13 +419,13 @@ mod tests {
             )
             .unwrap();
 
-        let req = Request::builder()
+        let mut req = Request::builder()
             .uri("http://127.0.0.1/sse/paced")
             .body(Body::from(Bytes::new()))
             .unwrap();
 
         let out = pipeline
-            .transform_response(&req, response)
+            .transform_response(&mut req, response)
             .await
             .expect("transform");
 
@@ -443,10 +468,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn q15_route_labels_flow_from_response_to_on_response() {
+        use async_trait::async_trait;
+        use bytes::Bytes;
+        use exyonq_module_api::{
+            Body, BoxError, HttpRequest, Module, ModuleInfo, ResponseObservation, RouteLabels,
+        };
+        use http::{Request, StatusCode};
+        use http_body_util::BodyExt;
+        use std::sync::{Arc, Mutex};
+
+        struct Probe {
+            seen: Mutex<Option<RouteLabels>>,
+        }
+        #[async_trait]
+        impl Module for Probe {
+            fn info(&self) -> ModuleInfo {
+                ModuleInfo {
+                    name: "route-label-probe",
+                    version: "0.0.0",
+                    api_version: "1.0",
+                }
+            }
+            async fn on_response(
+                &self,
+                req: &HttpRequest,
+                _obs: &mut ResponseObservation,
+            ) -> Result<(), BoxError> {
+                *self.seen.lock().expect("lock") = req.extensions().get::<RouteLabels>().cloned();
+                Ok(())
+            }
+        }
+
+        let probe = Arc::new(Probe {
+            seen: Mutex::new(None),
+        });
+        let mut registry = ModuleRegistry::new();
+        registry.register(probe.clone());
+        let pipeline = CrossCuttingPipeline {
+            registry,
+            wire_ratelimit_enabled: false,
+            wire_ratelimit_requests_per_second: 1,
+            wire_ratelimit_burst: 1,
+            wire_metrics_enabled: false,
+        };
+
+        let mut response = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(
+                http_body_util::Full::from(Bytes::new())
+                    .map_err(|never| match never {})
+                    .boxed(),
+            )
+            .unwrap();
+        response.extensions_mut().insert(RouteLabels {
+            route: "wordpress".into(),
+            upstream: "fcgi:php".into(),
+        });
+
+        let mut req = Request::builder()
+            .uri("http://127.0.0.1/")
+            .body(Body::from(Bytes::new()))
+            .unwrap();
+        let _ = pipeline
+            .transform_response(&mut req, response)
+            .await
+            .expect("transform");
+        assert_eq!(
+            probe.seen.lock().expect("lock").clone(),
+            Some(RouteLabels {
+                route: "wordpress".into(),
+                upstream: "fcgi:php".into(),
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn sse_hostile_clear_body_cannot_force_406_with_live_stream() {
         use async_trait::async_trait;
         use bytes::Bytes;
-        use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig};
+        use exyonq_config_ir::{
+            AuthConfig, CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig,
+        };
         use exyonq_module_api::{
             Body, BoxError, HttpRequest, Module, ModuleInfo, ResponseObservation,
         };
@@ -492,6 +595,11 @@ mod tests {
                 ..RateLimitConfig::default()
             },
             real_ip: RealIpConfig::default(),
+            gunzip: Default::default(),
+            sub_filter: Default::default(),
+            mirror: Default::default(),
+            slice: Default::default(),
+            auth: AuthConfig::default(),
         };
         let mut pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         pipeline.registry.register(Arc::new(Hostile));
@@ -506,13 +614,13 @@ mod tests {
                     .boxed(),
             )
             .unwrap();
-        let req = Request::builder()
+        let mut req = Request::builder()
             .uri("http://127.0.0.1/sse/hostile")
             .header(ACCEPT_ENCODING, "identity;q=0")
             .body(Body::from(Bytes::new()))
             .unwrap();
         let out = pipeline
-            .transform_response(&req, response)
+            .transform_response(&mut req, response)
             .await
             .expect("transform");
         assert_eq!(
@@ -531,7 +639,9 @@ mod tests {
     async fn metrics_on_sse_records_status_without_claiming_empty_body() {
         use async_trait::async_trait;
         use bytes::Bytes;
-        use exyonq_config_ir::{CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig};
+        use exyonq_config_ir::{
+            AuthConfig, CompressionConfig, MetricsConfig, RateLimitConfig, RealIpConfig,
+        };
         use exyonq_module_api::{
             Body, BoxError, HttpRequest, Module, ModuleInfo, ResponseBodyState, ResponseObservation,
         };
@@ -578,6 +688,11 @@ mod tests {
                 ..RateLimitConfig::default()
             },
             real_ip: RealIpConfig::default(),
+            gunzip: Default::default(),
+            sub_filter: Default::default(),
+            mirror: Default::default(),
+            slice: Default::default(),
+            auth: AuthConfig::default(),
         };
         let mut pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         pipeline.registry.register(probe.clone());
@@ -592,12 +707,12 @@ mod tests {
                     .boxed(),
             )
             .unwrap();
-        let req = Request::builder()
+        let mut req = Request::builder()
             .uri("http://127.0.0.1/sse/metrics")
             .body(Body::from(Bytes::new()))
             .unwrap();
         let out = pipeline
-            .transform_response(&req, response)
+            .transform_response(&mut req, response)
             .await
             .expect("transform");
         assert_eq!(out.status(), StatusCode::OK);
@@ -668,12 +783,12 @@ mod tests {
                     .boxed(),
             )
             .unwrap();
-        let req = Request::builder()
+        let mut req = Request::builder()
             .uri("http://127.0.0.1/empty")
             .body(Body::from(Bytes::new()))
             .unwrap();
         let _ = pipeline
-            .transform_response(&req, response)
+            .transform_response(&mut req, response)
             .await
             .expect("transform");
         assert_eq!(

@@ -21,6 +21,7 @@ p8tp-vectored = []
 p8tp-platform-cork = []
 
 [dependencies]
+regex.workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 async-trait.workspace = true

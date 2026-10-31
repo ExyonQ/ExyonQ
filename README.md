@@ -4,9 +4,9 @@ ExyonQ is a modular HTTP server and reverse proxy written in Rust: static files,
 
 This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark campaigns and raw evidence packs are intentionally not included; methodology notes and summary dashboards live under `docs/benchmarks/`.
 
-Lab integration tree. Public product release: **v0.8.0** on [exyonq-github](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0) (`ghcr.io/exyonq/exyonq:0.8.0`, `ghcr.io/exyonq/exyonq-wordpress:0.8.0`, `exyonq/exyonq:0.8.0` on Docker Hub — no `:latest`). This lab worktree may diverge; do not treat lab HEAD as the published tag.
+Lab integration tree. Public product release: **v0.7.0** on [exyonq-github](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.7.0) (`ghcr.io/exyonq/exyonq:0.7.0`, `ghcr.io/exyonq/exyonq-wordpress:0.7.0`, `exyonq/exyonq:0.7.0` on Docker Hub — no `:latest`). This lab worktree may diverge; do not treat lab HEAD as the published tag.
 
-## What's in 0.8.0
+## What's in 0.7.0
 
 - PROXY protocol v1/v2 inbound; `set_real_ip_from` X-Forwarded-For trust model
 - Sticky sessions (cookie/source/header) + `leastconn`, consistent-hash, P2C upstream selection
@@ -18,19 +18,19 @@ Lab integration tree. Public product release: **v0.8.0** on [exyonq-github](http
 - Supply chain: cargo-auditable embedded SBOM, Rust 1.99.1, `cargo audit` 0 vulnerabilities
 - Docker bases: distroless `cc-debian12:nonroot` (server, ~23 MB) and Wolfi + PHP 8.4-FPM (WordPress) — Docker Scout **0 critical / 0 high / 0 medium** on both images and both architectures
 
-Full notes: [v0.8.0 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0) — TLS hardening guide: [`docs/security/tls-hardening.md`](docs/security/tls-hardening.md).
+Full notes: [`docs/release/v0.7.0.md`](docs/release/v0.7.0.md) — security audit: `docs/security/audit-v0.7.0.md` (laboratorio).
 
 ## Get it
 
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.8.0
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.8.0
+docker pull ghcr.io/exyonq/exyonq:0.7.0
+docker pull ghcr.io/exyonq/exyonq-wordpress:0.7.0
 # Docker Hub mirror:
-docker pull exyonq/exyonq:0.8.0
-docker pull exyonq/exyonq-wordpress:0.8.0
+docker pull exyonq/exyonq:0.7.0
+docker pull exyonq/exyonq-wordpress:0.7.0
 ```
 
-Release assets on GitHub: `exyonq-v0.8.0-linux-amd64`, `exyonq-v0.8.0-linux-arm64`, and `SHA256SUMS`. Each binary reports `exyonq 0.8.0` and `source_revision=5f3b64830467b353de42d5a16df1000b6860d6d6`.
+Release assets on GitHub: `exyonq-0.7.0-linux-{amd64,arm64}.tar.gz` (versioned layout), `exyonq-linux-{amd64,arm64}.tar.gz` (flat), `SHA256SUMS.txt`, `sbom.cdx.json`, `THIRD_PARTY_NOTICES.md`. Linux binaries are built with `cargo auditable` — verify the embedded SBOM with `cargo audit bin`.
 
 ## Build
 

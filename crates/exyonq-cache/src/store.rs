@@ -692,6 +692,7 @@ mod tests {
 
     fn sample_key_for_site(site_id: u64, path: &str) -> CacheKey {
         build_cache_key(CacheKeyParts {
+            range: String::new(),
             site_id,
             namespace: 1,
             backend_id: 0,

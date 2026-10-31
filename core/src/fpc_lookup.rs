@@ -128,6 +128,7 @@ pub fn fpc_gate(
         "http"
     };
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id,
         namespace: fpc.namespace,
         backend_id: backend_id.index(),

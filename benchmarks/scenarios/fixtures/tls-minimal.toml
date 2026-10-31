@@ -1,0 +1,13 @@
+# Config-validation fixture only. Runtime TLS tests generate ephemeral PEMs.
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:18443"
+routes = ["site"]
+tls = { cert = "/run/exyonq-test/cert.pem", key = "/run/exyonq-test/key.pem" }
+
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "/srv/exyonq-test"
+index = "index.html"

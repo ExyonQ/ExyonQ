@@ -203,20 +203,19 @@ fn header_field_name_count(head: &[u8], name_lower: &[u8]) -> usize {
 /// Reject ambiguous length/framing on a complete HTTP/1 header block (wire bytes).
 /// Call only after `find_header_end` — incomplete buffers are not validated here.
 ///
-/// Wire path is fail-closed: Transfer-Encoding alone is rejected (no chunked drain on wire),
-/// duplicate Content-Length is rejected, and TE+CL is rejected. Matching is case-insensitive
-/// on field names and does not treat `X-Content-Length` as Content-Length.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(crate) fn request_headers_safe_for_wire(head: &[u8]) -> bool {
+/// Duplicate Content-Length and TE+CL are ambiguous (request smuggling) and are
+/// rejected. `Transfer-Encoding` alone is not ambiguous: it must be handed to
+/// Hyper, whose HTTP/1 decoder handles chunked framing.
+pub(crate) fn request_framing_ambiguous(head: &[u8]) -> bool {
     let cl = header_field_name_count(head, b"content-length");
     let te = header_field_name_count(head, b"transfer-encoding");
-    if cl > 1 {
-        return false;
-    }
-    if te >= 1 {
-        return false;
-    }
-    true
+    cl > 1 || (te >= 1 && cl >= 1)
+}
+
+/// Transfer-Encoding needs Hyper's body decoder; the wire fast path never
+/// drains chunked bodies.
+pub(crate) fn request_framing_needs_hyper(head: &[u8]) -> bool {
+    header_field_name_count(head, b"transfer-encoding") >= 1
 }
 
 /// Header-read timeout from `EXYONQ_READ_TIMEOUT_MS` (process-lifetime cache).
@@ -439,7 +438,8 @@ mod tests {
         assert!(header.len() > 512);
         assert!(header.len() < MAX_HEADER_CAP);
         assert!(find_header_end(&header).is_some());
-        assert!(request_headers_safe_for_wire(&header));
+        assert!(!request_framing_ambiguous(&header));
+        assert!(!request_framing_needs_hyper(&header));
     }
 
     #[test]
@@ -452,46 +452,49 @@ mod tests {
     #[test]
     fn wire_safe_rejects_duplicate_content_length() {
         let head = b"GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nContent-Length: 1\r\n\r\n";
-        assert!(!request_headers_safe_for_wire(head));
+        assert!(request_framing_ambiguous(head));
     }
 
     #[test]
     fn wire_safe_rejects_duplicate_content_length_lowercase() {
         let head = b"GET / HTTP/1.1\r\nHost: x\r\ncontent-length: 0\r\ncontent-length: 1\r\n\r\n";
-        assert!(!request_headers_safe_for_wire(head));
+        assert!(request_framing_ambiguous(head));
     }
 
     #[test]
     fn wire_safe_rejects_transfer_encoding_with_content_length() {
         let head = b"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n";
-        assert!(!request_headers_safe_for_wire(head));
+        assert!(request_framing_ambiguous(head));
     }
 
     #[test]
     fn wire_safe_rejects_transfer_encoding_mixed_case_with_content_length() {
         let head = b"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\ncontent-length: 0\r\n\r\n";
-        assert!(!request_headers_safe_for_wire(head));
+        assert!(request_framing_ambiguous(head));
         let head2 = b"POST / HTTP/1.1\r\nHost: x\r\ntransfer-encoding: chunked\r\nContent-Length: 0\r\n\r\n";
-        assert!(!request_headers_safe_for_wire(head2));
+        assert!(request_framing_ambiguous(head2));
     }
 
     #[test]
-    fn wire_safe_rejects_transfer_encoding_alone() {
+    fn wire_transfer_encoding_alone_is_not_ambiguous_and_needs_hyper() {
         let head = b"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n";
-        assert!(!request_headers_safe_for_wire(head));
+        assert!(!request_framing_ambiguous(head));
+        assert!(request_framing_needs_hyper(head));
     }
 
     #[test]
     fn wire_safe_x_content_length_does_not_count_as_content_length() {
         let head =
             b"GET / HTTP/1.1\r\nHost: x\r\nX-Content-Length: 99\r\nContent-Length: 0\r\n\r\n";
-        assert!(request_headers_safe_for_wire(head));
+        assert!(!request_framing_ambiguous(head));
+        assert!(!request_framing_needs_hyper(head));
     }
 
     #[test]
     fn wire_safe_accepts_typical_get() {
         let head = b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
-        assert!(request_headers_safe_for_wire(head));
+        assert!(!request_framing_ambiguous(head));
+        assert!(!request_framing_needs_hyper(head));
     }
 
     #[test]

@@ -73,6 +73,66 @@ pub struct ParsedServer {
     pub directives: Vec<Directive>,
     pub locations: Vec<ParsedLocation>,
     pub loc: SourceLoc,
+    /// NG-18 / ADR-064: server-scope `gunzip on|off`.
+    pub gunzip: Option<bool>,
+    /// NG-18: server-scope `gunzip_buffers` total bytes.
+    pub gunzip_buffers: Option<usize>,
+    /// NG-18 Phase C: server-scope `sub_filter` policy.
+    pub sub_filter: Option<ParsedSubFilter>,
+    /// NG-18 Phase D: server-scope `mirror` policy.
+    pub mirror: Option<ParsedMirror>,
+    /// NG-18 Phase E: server-scope `slice` size.
+    pub slice: Option<ParsedSlice>,
+    /// 0.5: server-scope `auth_basic` policy.
+    pub auth: Option<ParsedAuth>,
+    /// 0.5: server-scope `limit_req` default.
+    pub limit_req: Option<ParsedLimitReq>,
+}
+
+/// NG-18 Phase C: nginx `sub_filter*` directives at one scope.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParsedSubFilter {
+    pub rules: Vec<exyonq_config_ir::SubFilterRule>,
+    pub once: Option<bool>,
+    pub types: Option<Vec<String>>,
+    pub last_modified: Option<bool>,
+}
+
+/// NG-18 Phase D: nginx `mirror` directives at one scope.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParsedMirror {
+    pub destinations: Vec<String>,
+    pub request_body: Option<bool>,
+    /// `mirror off`: explicitly disables inherited destinations at this scope.
+    pub off: bool,
+}
+
+/// NG-18 Phase E: nginx `slice <size>` at one scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedSlice {
+    pub size: usize,
+}
+
+/// 0.5: nginx `auth_basic` / `auth_basic_user_file` at one scope.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParsedAuth {
+    pub realm: Option<String>,
+    pub user_file: Option<String>,
+    pub off: bool,
+}
+
+/// 0.5: nginx `limit_req_zone`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedLimitZone {
+    pub key: String,
+    pub requests_per_second: u32,
+}
+
+/// 0.5: nginx `limit_req`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedLimitReq {
+    pub zone: String,
+    pub burst: u32,
 }
 
 /// NG-07: nginx upstream load-balancing method (`least_conn`, `ip_hash`,
@@ -111,6 +171,22 @@ pub struct AnalyzedConfig {
     pub real_ip_trusted: Vec<String>,
     /// NG-11: last `real_ip_header` seen wins (nginx innermost-wins ≈ last).
     pub real_ip_header: Option<String>,
+    /// NG-18 / ADR-064: http-scope `gunzip on|off`.
+    pub gunzip_http: Option<bool>,
+    /// NG-18: http-scope `gunzip_buffers` total bytes.
+    pub gunzip_buffers_http: Option<usize>,
+    /// NG-18 Phase C: http-scope `sub_filter` policy.
+    pub sub_filter_http: Option<ParsedSubFilter>,
+    /// NG-18 Phase D: http-scope `mirror` policy.
+    pub mirror_http: Option<ParsedMirror>,
+    /// NG-18 Phase E: http-scope `slice` size.
+    pub slice_http: Option<ParsedSlice>,
+    /// 0.5: http-scope `auth_basic` policy.
+    pub auth_http: Option<ParsedAuth>,
+    /// 0.5: http-scope `limit_req_zone` definitions.
+    pub limit_zones_http: std::collections::BTreeMap<String, ParsedLimitZone>,
+    /// 0.5: http-scope `limit_req` default.
+    pub limit_req_http: Option<ParsedLimitReq>,
 }
 
 /// Nginx `map` block reduced to IR-friendly fields (Exact only).

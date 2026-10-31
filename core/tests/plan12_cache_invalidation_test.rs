@@ -147,6 +147,7 @@ fn test_policy() -> CompiledCachePolicy {
 
 fn test_key(path: &str, query: &str, route: usize, gen: u64) -> exyonq_cache::CacheKey {
     build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: 0,
         namespace: 0,
         backend_id: 0,

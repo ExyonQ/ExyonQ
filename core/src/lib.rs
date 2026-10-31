@@ -16,6 +16,7 @@
 //! ExyonQ core HTTP runtime.
 
 mod acme_http01_adapter;
+mod auth_basic;
 pub mod cache_purge_port;
 mod certificate_publication_port;
 pub mod config;
@@ -26,6 +27,7 @@ pub mod execute_backend;
 pub mod fcgi_cache_registry;
 pub mod fpc_lookup;
 pub mod fpc_store;
+mod gunzip;
 pub mod htaccess_probes;
 pub mod htaccess_runtime_registry;
 pub mod http3_runtime_registry;
@@ -34,17 +36,23 @@ pub mod kernel;
 pub mod kernel_control_port;
 pub mod lab_coord_hooks;
 pub mod lifecycle;
+mod mirror;
 pub mod observability;
 pub mod pipeline_registry;
 pub mod platform;
 pub mod reload;
 pub mod server;
 pub mod structural_route_rules;
+mod sub_filter;
 pub mod waf;
+mod waf_body;
+mod waf_metrics;
+mod zone_ratelimit;
 
 /// TLS runtime (KD4.5 — implementation in `exyonq-mod-tls`).
 pub use exyonq_mod_tls as tls;
 
+pub use mirror::append_mirror_prometheus;
 pub use waf::{
     clear_waf_abuse_gate, commit_staged_waf_binding, commit_waf_reload,
     compute_wire_inspection_active, current_waf_engine, discard_staged_waf_binding,
@@ -54,6 +62,7 @@ pub use waf::{
     stage_waf_runtime_binding, waf_binding_for_new_state, waf_enforce_enabled, WafRuntimeBinding,
     WAF_CHALLENGE_VERIFY_PATH,
 };
+pub use waf_metrics::append_waf_prometheus;
 
 /// Exposed for fuzz targets and tests.
 pub fn find_header_end(buf: &[u8]) -> Option<usize> {

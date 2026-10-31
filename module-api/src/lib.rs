@@ -171,13 +171,24 @@ pub use route_rules::{
 pub use tls_runtime::{TlsAlpnProfile, TlsListenerBinding};
 pub use wire_module_hooks::{
     install_wire_module_hooks, rate_limit_reject_wire, wire_admit, wire_admit_active,
-    wire_record_exchange, wire_record_response, WireAdmit, WireModuleHooks,
+    wire_record_exchange, wire_record_exchange_labeled, wire_record_response, WireAdmit,
+    WireModuleHooks,
 };
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 pub type Body = Full<Bytes>;
 pub type HttpRequest = Request<Body>;
 pub type HttpResponse = Response<Body>;
+
+/// Q-15: matched route + backend label, copied from the core response into
+/// `on_response` request extensions for per-route/upstream metrics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteLabels {
+    /// IR route name (`[[route]].name`), not the request path.
+    pub route: String,
+    /// `proxy:<upstream>` | `fcgi:<pool>` | `static` | `redirect` | `-`.
+    pub upstream: String,
+}
 
 /// Internal header injected by core so modules can read the client IP.
 pub const CLIENT_IP_HEADER: &str = "x-exyonq-client-ip";

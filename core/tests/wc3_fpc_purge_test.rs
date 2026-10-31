@@ -90,6 +90,7 @@ fn insert(
     body: &'static [u8],
 ) {
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id,
         namespace: 4,
         backend_id,
@@ -167,6 +168,7 @@ async fn purge_site_scoped_and_url() {
     assert_eq!(cache.snapshot().entries, 1);
 
     let key_b = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: site_b,
         namespace: 4,
         backend_id: be_b,
@@ -224,6 +226,7 @@ async fn purge_generation_and_tag_deferred() {
 
     // Tagged entry: purged by its tag.
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id: site_a,
         namespace: 4,
         backend_id: be,

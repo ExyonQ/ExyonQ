@@ -11,7 +11,7 @@ P14V042_RELEASE_AUTHORIZED = NO
 
 P14V042_BASE_HEAD = 25dcb4e9b323bbb2163c5f28f600175bfe725295
 P14V042_BRANCH = audit/p14v042-scope
-P14V042_WORKTREE = <repo>-wt-p14v042-scope
+P14V042_WORKTREE = <worktree>
 P14V042_TREE_CLEAN = YES
 
 P14V042_PROPOSED_KIND =
@@ -34,7 +34,7 @@ Canonical closed release: `v0.4.1` → `43805eb` (tag); ledger tip `25dcb4e` (do
 Historical worktree (do not use for future product work; retain until owner confirms dispose):
 
 ```text
-P14V041_WORKTREE = <repo>-wt-p14v041
+P14V041_WORKTREE = <worktree>
 P14V041_TRACKED_TREE_CLEAN = YES
 P14V041_PROPOSAL_PRESERVED_SHA256 =
   d0da05b6e288443a537290f0617a8972efa077b190897fb3d1ecc6adfa4317cf
@@ -419,4 +419,4 @@ Accept / amend this audit, then either:
 2. Request audit revisions; or  
 3. Defer opening.
 
-Also confirm when `exyonq-wt-p14v041` may be removed (after acknowledging exclusive `.exyonq-local/p14v041-close` evidence retention/archive).
+Also confirm when `exyonq-laboratorio-wt-p14v041` may be removed (after acknowledging exclusive `.exyonq-local/p14v041-close` evidence retention/archive).

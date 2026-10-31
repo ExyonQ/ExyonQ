@@ -569,9 +569,8 @@ pub fn request_eligible_for_cache(method: &str, request_headers: &[(String, Stri
     if header_present_ignore_case(request_headers, "cookie") {
         return false;
     }
-    if header_present_ignore_case(request_headers, "range") {
-        return false;
-    }
+    // NG-18 Phase E: Range may be served from a cached full 200 (206), so it
+    // must reach the cache lookup. The store gate still rejects 206 bodies.
     // Cap020: conditional validators must evaluate at origin (not cache HIT as full 200).
     if header_present_ignore_case(request_headers, "if-none-match")
         || header_present_ignore_case(request_headers, "if-modified-since")
@@ -887,6 +886,39 @@ fn fpc_response_headers_block_store(
         }
     }
     None
+}
+
+/// NG-18 slice: 206-tolerant store gate — the response-side checks of
+/// `fpc_response_headers_block_store` minus status/`content-range` (a 206
+/// carries both by definition) and minus the vary allowlist (slices are
+/// range-keyed; any `Vary` blocks).
+pub fn slice_segment_store_blocked(headers: &[(String, String)]) -> bool {
+    if header_present_ignore_case(headers, "set-cookie") {
+        return true;
+    }
+    if header_value_ignore_case(headers, "content-type").is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+    }) {
+        return true;
+    }
+    for (name, _) in headers {
+        let lower = name.to_ascii_lowercase();
+        if HOP_BY_HOP_RESPONSE.iter().any(|hop| lower == *hop) {
+            return true;
+        }
+    }
+    if let Some(value) = header_values_joined_ignore_case(headers, "cache-control") {
+        let lower = value.to_ascii_lowercase();
+        for token in ["private", "no-store", "no-cache"] {
+            if cache_control_token_present(&lower, token) {
+                return true;
+            }
+        }
+    }
+    header_values_joined_ignore_case(headers, "vary").is_some()
 }
 
 fn cache_control_token_present(lower_cc: &str, token: &str) -> bool {

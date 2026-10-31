@@ -856,7 +856,10 @@ pub fn pump_sendfile_session(fd: RawFd, session: u64) -> StaticEpollPumpResult {
                 "GET"
             };
             let path = crate::wire_eligibility::request_path_from_head(&head).unwrap_or("/");
-            exyonq_module_api::wire_record_exchange(method, path, status, elapsed_ms);
+            // Q-15: this session is bound to the `site` static slot.
+            exyonq_module_api::wire_record_exchange_labeled(
+                method, path, status, elapsed_ms, "site", "static",
+            );
             crate::wire_conn::notify_wire_access_for_hooks(&head, status, outcome, started);
         }
         Terminal::Aborted {

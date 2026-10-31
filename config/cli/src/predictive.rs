@@ -27,6 +27,12 @@ const DOC_NO_HC: &str = "docs/config/diagnostic-codes.md#exy-lint-0003";
 const DOC_WEAK_RE: &str = "docs/config/diagnostic-codes.md#exy-lint-0004";
 const DOC_UNUSED_MAP: &str = "docs/config/diagnostic-codes.md#exy-lint-0005";
 const DOC_HOSTLESS: &str = "docs/config/diagnostic-codes.md#exy-lint-0006";
+const DOC_FPC_NONCE: &str = "docs/config/diagnostic-codes.md#exy-lint-0007";
+
+/// WordPress nonces are tick-bound: a 12h tick and a 12–24h life. A cached
+/// anonymous page keeps its nonce valid only while the serve window stays
+/// below one tick (OL-02 alternative; no ESI).
+const FPC_NONCE_MAX_WINDOW_SECS: u64 = 43_200;
 
 /// Emit advisory warnings for footguns that still parse as valid IR.
 pub fn analyze_predictive(cfg: &AppConfig) -> Vec<Diagnostic> {
@@ -37,7 +43,35 @@ pub fn analyze_predictive(cfg: &AppConfig) -> Vec<Diagnostic> {
     duplicate_proxy_headers(cfg, &mut out);
     upstreams_without_health(cfg, &mut out);
     unused_maps(cfg, &mut out);
+    fpc_nonce_window(cfg, &mut out);
     out
+}
+
+fn fpc_nonce_window(cfg: &AppConfig, out: &mut Vec<Diagnostic>) {
+    let fpc = &cfg.full_page_cache;
+    if !fpc.enabled {
+        return;
+    }
+    let window = fpc.max_ttl_seconds.saturating_add(fpc.stale_if_error_secs);
+    if window <= FPC_NONCE_MAX_WINDOW_SECS {
+        return;
+    }
+    out.push(
+        Diagnostic::warning(
+            DiagnosticCode::LintFpcNonceWindow,
+            format!(
+                "full_page_cache serve window is {window}s (max_ttl_seconds + stale_if_error_secs)"
+            ),
+        )
+        .with_field("full_page_cache.max_ttl_seconds")
+        .with_cause(
+            "anonymous WordPress nonces live 12–24h; a longer window can serve a cached nonce after it expires (OL-02: no ESI)",
+        )
+        .with_suggestion(
+            "keep max_ttl_seconds + stale_if_error_secs ≤ 43200 (recommended ≤ 21600)",
+        )
+        .with_documentation(DOC_FPC_NONCE),
+    );
 }
 
 fn host_key(m: &RouteMatch) -> String {
@@ -420,5 +454,46 @@ values = {}
             assert!(w.cause.is_some(), "missing cause on {}", w.code);
             assert!(w.suggestion.is_some(), "missing suggestion on {}", w.code);
         }
+    }
+
+    #[test]
+    fn fpc_nonce_window_warns_only_above_one_tick() {
+        fn cfg(ttl: u64, stale: u64, enabled: bool) -> AppConfig {
+            parse(&format!(
+                r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:18080"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = {{ path = "/" }}
+root = "/var/www"
+
+[full_page_cache]
+enabled = {enabled}
+max_ttl_seconds = {ttl}
+stale_if_error_secs = {stale}
+"#
+            ))
+        }
+        let code = DiagnosticCode::LintFpcNonceWindow;
+
+        assert!(analyze_predictive(&cfg(43_200, 0, true))
+            .iter()
+            .all(|d| d.code != code));
+        assert!(analyze_predictive(&cfg(43_200, 1, true))
+            .iter()
+            .any(|d| d.code == code));
+        let warn = analyze_predictive(&cfg(999_999, 0, true))
+            .into_iter()
+            .find(|d| d.code == code)
+            .expect("warning above one tick");
+        assert!(warn.cause.is_some() && warn.suggestion.is_some());
+        assert!(analyze_predictive(&cfg(999_999, 0, false))
+            .iter()
+            .all(|d| d.code != code));
     }
 }

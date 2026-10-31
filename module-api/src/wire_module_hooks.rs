@@ -41,6 +41,9 @@ pub struct WireModuleHooks {
     /// Counter, route label, and latency for a wire/Cap067 response that never
     /// enters the module `on_response` hook.
     pub record_exchange: fn(method: &str, path: &str, status: u16, elapsed_ms: f64),
+    /// Q-15: same as [`Self::record_exchange`] plus matched route/upstream.
+    pub record_exchange_labeled:
+        fn(method: &str, path: &str, status: u16, elapsed_ms: f64, route: &str, upstream: &str),
 }
 
 static HOOKS: OnceLock<WireModuleHooks> = OnceLock::new();
@@ -85,6 +88,20 @@ pub fn wire_record_response(status: u16) {
 pub fn wire_record_exchange(method: &str, path: &str, status: u16, elapsed_ms: f64) {
     if let Some(h) = hooks() {
         (h.record_exchange)(method, path, status, elapsed_ms);
+    }
+}
+
+/// Q-15: wire response with the matched route + backend label.
+pub fn wire_record_exchange_labeled(
+    method: &str,
+    path: &str,
+    status: u16,
+    elapsed_ms: f64,
+    route: &str,
+    upstream: &str,
+) {
+    if let Some(h) = hooks() {
+        (h.record_exchange_labeled)(method, path, status, elapsed_ms, route, upstream);
     }
 }
 

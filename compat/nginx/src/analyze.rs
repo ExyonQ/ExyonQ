@@ -28,6 +28,19 @@ pub fn analyze(config: &Config, report: &mut CompatibilityReport) -> AnalyzedCon
     for directive in &config.directives {
         walk_top(directive, &mut out, report);
     }
+    // NG-18 Phase C: http-scope sub_filter defaults.
+    for directive in &config.directives {
+        if directive.name == "http" {
+            if let Some(block) = &directive.block {
+                out.sub_filter_http = parse_sub_filter(&block.directives, report);
+                out.mirror_http = parse_mirror(&block.directives, report);
+                out.slice_http = parse_slice(&block.directives, report);
+                out.auth_http = parse_auth(&block.directives, report);
+                out.limit_zones_http = parse_limit_req_zone(&block.directives, report);
+                out.limit_req_http = parse_limit_req(&block.directives, report);
+            }
+        }
+    }
     for server in &out.servers {
         analyze_precedence(server, report);
         let named = named_location_set(server);
@@ -72,6 +85,41 @@ fn walk_http(directive: &Directive, out: &mut AnalyzedConfig, report: &mut Compa
         "set_real_ip_from" | "real_ip_header" | "real_ip_recursive" => {
             analyze_real_ip_directive(directive, out, report, false);
         }
+        "gunzip" => match parse_on_off(directive) {
+            Ok(v) => {
+                out.gunzip_http = Some(v);
+                report.push(
+                    &directive.loc,
+                    "gunzip",
+                    CompatStatus::Supported,
+                    format!(
+                        "http gunzip {} → modules.gunzip.enabled (Phase B)",
+                        if v { "on" } else { "off" }
+                    ),
+                    Some(format!("[modules.gunzip] enabled = {v}")),
+                );
+            }
+            Err(msg) => report.push(&directive.loc, "gunzip", CompatStatus::Error, msg, None),
+        },
+        "gunzip_buffers" => match parse_gunzip_buffers(directive) {
+            Ok(v) => {
+                out.gunzip_buffers_http = Some(v);
+                report.push(
+                    &directive.loc,
+                    "gunzip_buffers",
+                    CompatStatus::Supported,
+                    format!("http gunzip_buffers → modules.gunzip.buffer_bytes = {v}"),
+                    Some(format!("[modules.gunzip] buffer_bytes = {v}")),
+                );
+            }
+            Err(msg) => report.push(
+                &directive.loc,
+                "gunzip_buffers",
+                CompatStatus::Error,
+                msg,
+                None,
+            ),
+        },
         "if" => {
             report.push(
                 &directive.loc,
@@ -579,6 +627,13 @@ fn parse_server(directive: &Directive, out: &mut AnalyzedConfig, report: &mut Co
         directives: Vec::new(),
         locations: Vec::new(),
         loc: directive.loc.clone(),
+        gunzip: None,
+        gunzip_buffers: None,
+        sub_filter: None,
+        mirror: None,
+        slice: None,
+        auth: None,
+        limit_req: None,
     };
     let mut loc_order = 0usize;
     if let Some(block) = &directive.block {
@@ -590,6 +645,46 @@ fn parse_server(directive: &Directive, out: &mut AnalyzedConfig, report: &mut Co
                 }
             } else {
                 server.directives.push(child.clone());
+                match child.name.as_str() {
+                    "gunzip" => match parse_on_off(child) {
+                        Ok(v) => server.gunzip = Some(v),
+                        Err(msg) => {
+                            report.push(&child.loc, "gunzip", CompatStatus::Error, msg, None)
+                        }
+                    },
+                    "gunzip_buffers" => match parse_gunzip_buffers(child) {
+                        Ok(v) => server.gunzip_buffers = Some(v),
+                        Err(msg) => report.push(
+                            &child.loc,
+                            "gunzip_buffers",
+                            CompatStatus::Error,
+                            msg,
+                            None,
+                        ),
+                    },
+                    _ => {}
+                }
+                if matches!(
+                    child.name.as_str(),
+                    "sub_filter"
+                        | "sub_filter_once"
+                        | "sub_filter_types"
+                        | "sub_filter_last_modified"
+                ) {
+                    server.sub_filter = parse_sub_filter(&server.directives, report);
+                }
+                if matches!(child.name.as_str(), "mirror" | "mirror_request_body") {
+                    server.mirror = parse_mirror(&server.directives, report);
+                }
+                if child.name == "slice" {
+                    server.slice = parse_slice(&server.directives, report);
+                }
+                if matches!(child.name.as_str(), "auth_basic" | "auth_basic_user_file") {
+                    server.auth = parse_auth(&server.directives, report);
+                }
+                if child.name == "limit_req" {
+                    server.limit_req = parse_limit_req(&server.directives, report);
+                }
                 classify_server_directive(child, out, report);
             }
         }
@@ -625,6 +720,25 @@ fn classify_server_directive(
             );
         }
         "server_name" => classify_server_name_directive(directive, report),
+        // NG-17: mapped (and reported) by map_ir; inheritance handled there.
+        "add_header" | "expires" => {}
+        // NG-18 / ADR-064: parsed by parse_server; status reported there.
+        "gunzip" | "gunzip_buffers" => {}
+        // NG-18: remaining body transforms are still open (ADR-064).
+        "sub_filter" | "sub_filter_once" | "sub_filter_types" | "sub_filter_last_modified" => {}
+        "mirror" | "mirror_request_body" => {}
+        "slice" => {}
+        "auth_basic" | "auth_basic_user_file" => {}
+        "limit_req" | "limit_req_zone" => {}
+        "sub_filter_unsupported_placeholder" => {
+            report.push(
+                &directive.loc,
+                &directive.name,
+                CompatStatus::Unsupported,
+                "body-transform directive is not implemented (NG-18 / ADR-064)",
+                None,
+            );
+        }
         "set_real_ip_from" | "real_ip_header" | "real_ip_recursive" => {
             analyze_real_ip_directive(directive, out, report, true);
         }
@@ -680,6 +794,475 @@ fn classify_server_name_directive(directive: &Directive, report: &mut Compatibil
             );
         }
     }
+}
+
+/// NG-18: `on|off` with exactly one argument.
+pub(crate) fn parse_on_off(directive: &Directive) -> Result<bool, String> {
+    match directive.args.as_slice() {
+        [value] if value.eq_ignore_ascii_case("on") => Ok(true),
+        [value] if value.eq_ignore_ascii_case("off") => Ok(false),
+        _ => Err(format!(
+            "`{}` expects exactly `on` or `off`",
+            directive.name
+        )),
+    }
+}
+
+/// NG-18: `gunzip_buffers <count> <size>` → total bytes.
+pub(crate) fn parse_gunzip_buffers(directive: &Directive) -> Result<usize, String> {
+    let [count, size] = directive.args.as_slice() else {
+        return Err("`gunzip_buffers` expects `<count> <size>`".into());
+    };
+    let count: usize = count
+        .parse()
+        .map_err(|_| format!("`gunzip_buffers` count `{count}` is not a number"))?;
+    let size = parse_nginx_size(size)
+        .ok_or_else(|| format!("`gunzip_buffers` size `{size}` is not a valid size"))?;
+    count
+        .checked_mul(size)
+        .filter(|total| (1024..=1_048_576).contains(total))
+        .ok_or_else(|| "`gunzip_buffers` total must be 1024..=1048576 bytes".into())
+}
+
+pub(crate) fn parse_nginx_size(value: &str) -> Option<usize> {
+    let lower = value.to_ascii_lowercase();
+    let (digits, mult) = match lower.chars().next_back()? {
+        'k' => (&lower[..lower.len() - 1], 1024usize),
+        'm' => (&lower[..lower.len() - 1], 1024 * 1024),
+        'g' => (&lower[..lower.len() - 1], 1024 * 1024 * 1024),
+        c if c.is_ascii_digit() => (lower.as_str(), 1),
+        _ => return None,
+    };
+    digits.parse::<usize>().ok()?.checked_mul(mult)
+}
+
+/// NG-18 Phase C: parse `sub_filter*` directives in one scope.
+pub(crate) fn parse_sub_filter(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> Option<crate::ast::ParsedSubFilter> {
+    let mut parsed = crate::ast::ParsedSubFilter::default();
+    let mut seen = false;
+    for d in directives {
+        match d.name.as_str() {
+            "sub_filter" => {
+                seen = true;
+                if d.args.len() != 2 {
+                    report.push(
+                        &d.loc,
+                        "sub_filter",
+                        CompatStatus::Error,
+                        "sub_filter expects <pattern> <replacement>",
+                        None,
+                    );
+                    continue;
+                }
+                let pattern = strip_quotes(&d.args[0]);
+                let replacement = strip_quotes(&d.args[1]);
+                if pattern.is_empty() {
+                    report.push(
+                        &d.loc,
+                        "sub_filter",
+                        CompatStatus::Error,
+                        "sub_filter pattern must not be empty",
+                        None,
+                    );
+                    continue;
+                }
+                if replacement.contains('$') {
+                    // nginx interpolates $variables in the replacement; ExyonQ
+                    // emits it literally, so a variable-bearing replacement is
+                    // not equivalent.
+                    report.push(
+                        &d.loc,
+                        "sub_filter",
+                        CompatStatus::Unsupported,
+                        format!(
+                            "sub_filter `{pattern}` → `{replacement}` (nginx interpolates $variables; literal-only here)"
+                        ),
+                        None,
+                    );
+                    continue;
+                }
+                parsed.rules.push(exyonq_config_ir::SubFilterRule {
+                    pattern: pattern.to_string(),
+                    replacement: replacement.to_string(),
+                });
+                report.push(
+                    &d.loc,
+                    "sub_filter",
+                    CompatStatus::Supported,
+                    format!("sub_filter `{pattern}` → `{replacement}`"),
+                    Some("[[route.sub_filter]] / modules.sub_filter".into()),
+                );
+            }
+            "sub_filter_once" => {
+                seen = true;
+                match parse_on_off(d) {
+                    Ok(v) => {
+                        parsed.once = Some(v);
+                        report.push(
+                            &d.loc,
+                            "sub_filter_once",
+                            CompatStatus::Supported,
+                            format!("sub_filter_once {}", if v { "on" } else { "off" }),
+                            Some("modules.sub_filter.routes.<route>.once".into()),
+                        );
+                    }
+                    Err(msg) => {
+                        report.push(&d.loc, "sub_filter_once", CompatStatus::Error, msg, None)
+                    }
+                }
+            }
+            "sub_filter_types" => {
+                seen = true;
+                if d.args.is_empty() {
+                    report.push(
+                        &d.loc,
+                        "sub_filter_types",
+                        CompatStatus::Error,
+                        "sub_filter_types expects at least one MIME type",
+                        None,
+                    );
+                } else {
+                    parsed.types = Some(d.args.clone());
+                    report.push(
+                        &d.loc,
+                        "sub_filter_types",
+                        CompatStatus::Supported,
+                        format!("sub_filter_types {}", d.args.join(" ")),
+                        Some("modules.sub_filter.routes.<route>.types".into()),
+                    );
+                }
+            }
+            "sub_filter_last_modified" => {
+                seen = true;
+                match parse_on_off(d) {
+                    Ok(v) => parsed.last_modified = Some(v),
+                    Err(msg) => report.push(
+                        &d.loc,
+                        "sub_filter_last_modified",
+                        CompatStatus::Error,
+                        msg,
+                        None,
+                    ),
+                }
+            }
+            _ => {}
+        }
+    }
+    seen.then_some(parsed)
+}
+
+/// NG-18 Phase D: parse `mirror` / `mirror_request_body` in one scope.
+pub(crate) fn parse_mirror(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> Option<crate::ast::ParsedMirror> {
+    let mut parsed = crate::ast::ParsedMirror::default();
+    let mut seen = false;
+    for d in directives {
+        match d.name.as_str() {
+            "mirror" => {
+                seen = true;
+                if d.args.len() == 1 && d.args[0] == "off" {
+                    parsed.off = true;
+                    parsed.destinations.clear();
+                    report.push(
+                        &d.loc,
+                        "mirror",
+                        CompatStatus::Supported,
+                        "mirror off → disables inherited mirrors".to_string(),
+                        Some("modules.mirror.routes.<route>".into()),
+                    );
+                    continue;
+                }
+                if d.args.len() != 1 || !d.args[0].starts_with('/') {
+                    report.push(
+                        &d.loc,
+                        "mirror",
+                        CompatStatus::Error,
+                        "mirror expects one internal path (starting with `/`) or `off`",
+                        None,
+                    );
+                    continue;
+                }
+                parsed.off = false;
+                parsed.destinations.push(d.args[0].clone());
+                report.push(
+                    &d.loc,
+                    "mirror",
+                    CompatStatus::Supported,
+                    format!("mirror `{}` → modules.mirror", d.args[0]),
+                    Some("modules.mirror.routes.<route>".into()),
+                );
+            }
+            "mirror_request_body" => {
+                seen = true;
+                match parse_on_off(d) {
+                    Ok(v) => {
+                        parsed.request_body = Some(v);
+                        report.push(
+                            &d.loc,
+                            "mirror_request_body",
+                            CompatStatus::Supported,
+                            format!(
+                                "mirror_request_body {} → modules.mirror",
+                                if v { "on" } else { "off" }
+                            ),
+                            Some("modules.mirror.routes.<route>.request_body".into()),
+                        );
+                    }
+                    Err(msg) => report.push(
+                        &d.loc,
+                        "mirror_request_body",
+                        CompatStatus::Error,
+                        msg,
+                        None,
+                    ),
+                }
+            }
+            _ => {}
+        }
+    }
+    seen.then_some(parsed)
+}
+
+/// NG-18 Phase E: `slice <size>`.
+pub(crate) fn parse_slice(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> Option<crate::ast::ParsedSlice> {
+    for d in directives {
+        if d.name != "slice" {
+            continue;
+        }
+        if d.args.len() != 1 {
+            report.push(
+                &d.loc,
+                "slice",
+                CompatStatus::Error,
+                "slice expects one size argument",
+                None,
+            );
+            continue;
+        }
+        let Some(size) = parse_nginx_size(&d.args[0]) else {
+            report.push(
+                &d.loc,
+                "slice",
+                CompatStatus::Error,
+                format!("slice `{}` is not a valid size", d.args[0]),
+                None,
+            );
+            continue;
+        };
+        if !(1024..=1_073_741_824).contains(&size) {
+            report.push(
+                &d.loc,
+                "slice",
+                CompatStatus::Error,
+                format!("slice size {size} is outside 1024..=1073741824"),
+                None,
+            );
+            continue;
+        }
+        report.push(
+            &d.loc,
+            "slice",
+            CompatStatus::Supported,
+            format!("slice {size} → modules.slice.routes"),
+            Some("modules.slice.routes.<route>".into()),
+        );
+        return Some(crate::ast::ParsedSlice { size });
+    }
+    None
+}
+
+/// 0.5: `auth_basic` + `auth_basic_user_file`.
+pub(crate) fn parse_auth(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> Option<crate::ast::ParsedAuth> {
+    let mut parsed = crate::ast::ParsedAuth::default();
+    let mut seen = false;
+    for d in directives {
+        match d.name.as_str() {
+            "auth_basic" => {
+                seen = true;
+                if d.args.len() != 1 {
+                    report.push(
+                        &d.loc,
+                        "auth_basic",
+                        CompatStatus::Error,
+                        "auth_basic expects one argument",
+                        None,
+                    );
+                    continue;
+                }
+                if d.args[0].eq_ignore_ascii_case("off") {
+                    parsed.off = true;
+                    parsed.realm = None;
+                } else {
+                    parsed.realm = Some(strip_quotes(&d.args[0]).to_string());
+                }
+                report.push(
+                    &d.loc,
+                    "auth_basic",
+                    CompatStatus::Supported,
+                    "auth_basic → modules.auth",
+                    Some("modules.auth.routes.<route>".into()),
+                );
+            }
+            "auth_basic_user_file" => {
+                seen = true;
+                if d.args.len() != 1 {
+                    report.push(
+                        &d.loc,
+                        "auth_basic_user_file",
+                        CompatStatus::Error,
+                        "auth_basic_user_file expects one path",
+                        None,
+                    );
+                    continue;
+                }
+                parsed.user_file = Some(d.args[0].clone());
+                report.push(
+                    &d.loc,
+                    "auth_basic_user_file",
+                    CompatStatus::Supported,
+                    "auth_basic_user_file → modules.auth",
+                    Some("modules.auth.routes.<route>".into()),
+                );
+            }
+            _ => {}
+        }
+    }
+    seen.then_some(parsed)
+}
+
+/// 0.5: `limit_req_zone $key zone=name:size rate=Nr/s`.
+pub(crate) fn parse_limit_req_zone(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> std::collections::BTreeMap<String, crate::ast::ParsedLimitZone> {
+    let mut out = std::collections::BTreeMap::new();
+    for d in directives {
+        if d.name != "limit_req_zone" {
+            continue;
+        }
+        let mut key = None;
+        let mut zone = None;
+        let mut rps = None;
+        for arg in &d.args {
+            if let Some(rest) = arg.strip_prefix("zone=") {
+                zone = rest.split(':').next().map(str::to_string);
+            } else if let Some(rest) = arg.strip_prefix("rate=") {
+                if let Some(rate) = rest.strip_suffix("r/s") {
+                    rps = rate.parse::<u32>().ok();
+                } else if let Some(rate) = rest.strip_suffix("r/m") {
+                    rps = rate.parse::<u32>().ok().map(|v| (v / 60).max(1));
+                }
+            } else if arg.starts_with('$') {
+                key = Some(match arg.as_str() {
+                    "$binary_remote_addr" | "$remote_addr" => "ip".to_string(),
+                    "$host" => "host".to_string(),
+                    _ if arg.starts_with("$http_") => {
+                        format!("header:{}", arg["$http_".len()..].replace('_', "-"))
+                    }
+                    _ => String::new(),
+                });
+            }
+        }
+        let (Some(key), Some(zone), Some(rps)) = (key, zone, rps) else {
+            report.push(
+                &d.loc,
+                "limit_req_zone",
+                CompatStatus::Error,
+                "limit_req_zone expects $key zone=name:size rate=Nr/s",
+                None,
+            );
+            continue;
+        };
+        if key.is_empty() {
+            report.push(
+                &d.loc,
+                "limit_req_zone",
+                CompatStatus::Partial,
+                "limit_req_zone key is not supported (ip/host/$http_*)",
+                None,
+            );
+            continue;
+        }
+        report.push(
+            &d.loc,
+            "limit_req_zone",
+            CompatStatus::Supported,
+            format!("limit_req_zone `{zone}` → modules.ratelimit.zones"),
+            Some("modules.ratelimit.zones".into()),
+        );
+        out.insert(
+            zone,
+            crate::ast::ParsedLimitZone {
+                key,
+                requests_per_second: rps,
+            },
+        );
+    }
+    out
+}
+
+/// 0.5: `limit_req zone=name burst=N nodelay`.
+pub(crate) fn parse_limit_req(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> Option<crate::ast::ParsedLimitReq> {
+    for d in directives {
+        if d.name != "limit_req" {
+            continue;
+        }
+        let mut zone = None;
+        let mut burst = 1;
+        for arg in &d.args {
+            if let Some(rest) = arg.strip_prefix("zone=") {
+                zone = Some(rest.to_string());
+            } else if let Some(rest) = arg.strip_prefix("burst=") {
+                burst = rest.parse::<u32>().unwrap_or(1);
+            }
+        }
+        let Some(zone) = zone else {
+            report.push(
+                &d.loc,
+                "limit_req",
+                CompatStatus::Error,
+                "limit_req expects zone=name",
+                None,
+            );
+            continue;
+        };
+        report.push(
+            &d.loc,
+            "limit_req",
+            CompatStatus::Supported,
+            format!("limit_req `{zone}` → modules.ratelimit.routes"),
+            Some("modules.ratelimit.routes".into()),
+        );
+        return Some(crate::ast::ParsedLimitReq { zone, burst });
+    }
+    None
+}
+
+fn strip_quotes(value: &str) -> &str {
+    let v = value.trim();
+    if v.len() >= 2 {
+        let bytes = v.as_bytes();
+        if (bytes[0] == b'\'' && bytes[v.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[v.len() - 1] == b'"')
+        {
+            return &v[1..v.len() - 1];
+        }
+    }
+    v
 }
 
 fn report_unknown(directive: &Directive, ctx: &str, report: &mut CompatibilityReport) {

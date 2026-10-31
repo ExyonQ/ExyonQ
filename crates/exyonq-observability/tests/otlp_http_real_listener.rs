@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use exyonq_config_ir::{LoggingConfig, OtelLoggingConfig, OtlpProtocol};
 use std::io::{Read, Write};
 use std::net::TcpListener;

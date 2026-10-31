@@ -69,7 +69,7 @@ Public Tier 1 artifacts must ship:
 | `LICENSE` | ExyonQ Apache-2.0 license text |
 | `NOTICE` | Project attribution |
 | `THIRD_PARTY_NOTICES.md` | Human-readable third-party licenses (cargo-about) |
-| `sbom.cdx.json` | CycloneDX SBOM for supply-chain audit (cargo-cyclonedx; covers the published binaries' dependency tree, not the whole workspace) |
+| `sbom.cdx.json` | CycloneDX SBOM for supply-chain audit (cargo-cyclonedx) |
 
 ```bash
 cargo install cargo-about --locked --features cli

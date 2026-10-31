@@ -779,7 +779,11 @@ impl ProxyRuntime {
         // F3-R20: rewrite before classify — Streaming stores this same
         // header set, so the outcome and the stored response stay identical.
         if let Some(rules) = self.location_rewrite_rules(request.cluster_id) {
-            rewrite_location_header_map(response.headers_mut(), &rules);
+            rewrite_location_header_map(
+                response.headers_mut(),
+                &rules,
+                &redirect_vars(&request.headers),
+            );
         }
         Ok(classify_hyper_response(response, &request.path_and_query, request.method).await)
     }
@@ -869,7 +873,11 @@ impl ProxyRuntime {
                 let (mut parts, body) = resp.into_parts();
                 strip_hop_by_hop_headers(&mut parts.headers);
                 if let Some(rules) = self.location_rewrite_rules(request.cluster_id) {
-                    rewrite_location_header_map(&mut parts.headers, &rules);
+                    rewrite_location_header_map(
+                        &mut parts.headers,
+                        &rules,
+                        &redirect_vars(&request.headers),
+                    );
                 }
                 let response: hyper::Response<
                     http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>,
@@ -966,7 +974,30 @@ fn url_authority_end(s: &str) -> Option<usize> {
 
 /// Prefix-replace `value` when it matches `from` (scheme+authority compared
 /// case-insensitively per RFC 3986 §3.1/§3.2; the remainder case-sensitively).
+static REGEX_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Option<regex::Regex>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn regex_rewrite(value: &str, pattern: &str, to: &str) -> Option<String> {
+    let mut cache = REGEX_CACHE.lock().ok()?;
+    let re = cache
+        .entry(pattern.to_string())
+        .or_insert_with(|| regex::Regex::new(pattern).ok())
+        .as_ref()?;
+    let caps = re.captures(value)?;
+    let mut out = to.to_string();
+    for i in 1..=9 {
+        if let Some(m) = caps.get(i) {
+            out = out.replace(&format!("${i}"), m.as_str());
+        }
+    }
+    Some(out)
+}
+
 fn rewrite_prefix_match(value: &str, from: &str, to: &str) -> Option<String> {
+    if let Some(pattern) = from.strip_prefix('~') {
+        return regex_rewrite(value, pattern, to);
+    }
     let f_auth = url_authority_end(from)?;
     let v_auth = url_authority_end(value)?;
     if !value[..v_auth].eq_ignore_ascii_case(&from[..f_auth]) {
@@ -978,7 +1009,52 @@ fn rewrite_prefix_match(value: &str, from: &str, to: &str) -> Option<String> {
         .then(|| format!("{to}{}", &v_rest[f_rest.len()..]))
 }
 
-fn rewrite_location_header_map(headers: &mut hyper::HeaderMap, rules: &[(String, String)]) {
+struct RedirectVars {
+    scheme: String,
+    host: String,
+    port: String,
+}
+
+fn redirect_vars(headers: &[(String, String)]) -> RedirectVars {
+    let host_header = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("host"))
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("");
+    let scheme = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-forwarded-proto"))
+        .map(|(_, value)| value.split(',').next().unwrap_or(value).trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("http")
+        .to_string();
+    let (host, port) = match host_header.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => {
+            (host.to_string(), port.to_string())
+        }
+        _ => (
+            host_header.to_string(),
+            if scheme == "https" {
+                "443".into()
+            } else {
+                "80".into()
+            },
+        ),
+    };
+    RedirectVars { scheme, host, port }
+}
+
+fn expand_redirect_to(to: &str, vars: &RedirectVars) -> String {
+    to.replace("$scheme", &vars.scheme)
+        .replace("$host", &vars.host)
+        .replace("$server_port", &vars.port)
+}
+
+fn rewrite_location_header_map(
+    headers: &mut hyper::HeaderMap,
+    rules: &[(String, String)],
+    vars: &RedirectVars,
+) {
     for key in [
         hyper::header::LOCATION,
         hyper::header::CONTENT_LOCATION,
@@ -990,7 +1066,7 @@ fn rewrite_location_header_map(headers: &mut hyper::HeaderMap, rules: &[(String,
             match v.to_str().ok().and_then(|s| {
                 rules
                     .iter()
-                    .find_map(|(f, t)| rewrite_prefix_match(s, f, t))
+                    .find_map(|(f, t)| rewrite_prefix_match(s, f, &expand_redirect_to(t, vars)))
             }) {
                 Some(s) => {
                     any = true;
@@ -1390,7 +1466,11 @@ impl ProxyRuntime {
         )
         .await;
         if let Some(rules) = self.location_rewrite_rules(cluster_id) {
-            rewrite_location_header_map(resp.headers_mut(), &rules);
+            rewrite_location_header_map(
+                resp.headers_mut(),
+                &rules,
+                &redirect_vars(request_headers),
+            );
         }
         if let Some(lease) = sel.lease {
             resp = resp.map(|b| GuardedBody::new(b, lease).boxed());
@@ -1526,7 +1606,11 @@ impl ProxyRuntime {
         {
             Ok(mut resp) => {
                 if let Some(rules) = &location_rewrites {
-                    rewrite_location_header_map(resp.headers_mut(), rules);
+                    rewrite_location_header_map(
+                        resp.headers_mut(),
+                        rules,
+                        &redirect_vars(ctx.headers),
+                    );
                 }
                 resp
             }
@@ -1592,7 +1676,11 @@ impl ProxyRuntime {
                                 }
                             }
                             if let Some(rules) = &location_rewrites {
-                                rewrite_location_header_map(resp.headers_mut(), rules);
+                                rewrite_location_header_map(
+                                    resp.headers_mut(),
+                                    rules,
+                                    &redirect_vars(ctx.headers),
+                                );
                             }
                             return resp;
                         }
@@ -1746,10 +1834,23 @@ mod location_rewrite_tests {
         );
         h.insert("x-other", HeaderValue::from_static("keep"));
         let rules = vec![("http://be/".to_string(), "/public/".to_string())];
-        rewrite_location_header_map(&mut h, &rules);
+        let vars = super::RedirectVars {
+            scheme: "http".into(),
+            host: "be".into(),
+            port: "80".into(),
+        };
+        rewrite_location_header_map(&mut h, &rules, &vars);
         assert_eq!(h["location"], "/public/x");
         assert_eq!(h["content-location"], "/public/y");
         assert_eq!(h["x-other"], "keep");
+    }
+
+    #[test]
+    fn regex_rewrite_captures() {
+        assert_eq!(
+            rewrite_prefix_match("http://be/x", "~^http://be/(.*)$", "/public/$1"),
+            Some("/public/x".to_string())
+        );
     }
 
     #[test]
@@ -1760,7 +1861,12 @@ mod location_rewrite_tests {
             HeaderValue::from_static("http://other/x"),
         );
         let rules = vec![("http://be/".to_string(), "/public/".to_string())];
-        rewrite_location_header_map(&mut h, &rules);
+        let vars = super::RedirectVars {
+            scheme: "http".into(),
+            host: "be".into(),
+            port: "80".into(),
+        };
+        rewrite_location_header_map(&mut h, &rules, &vars);
         assert_eq!(h["location"], "http://other/x");
     }
 }

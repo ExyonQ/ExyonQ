@@ -11,7 +11,9 @@ anyhow.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 http.workspace = true
+http-body.workspace = true
 http-body-util.workspace = true
+flate2.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 tokio.workspace = true
@@ -33,6 +35,9 @@ exyonq-waf-api = { workspace = true }
 arc-swap.workspace = true
 ipnetwork.workspace = true
 serde_json.workspace = true
+sha1 = "0.10"
+bcrypt = "0.18"
+base64 = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
@@ -41,6 +46,7 @@ exyonq-linux-ffi = { path = "../crates/exyonq-linux-ffi" }
 [dev-dependencies]
 tempfile = "3"
 sha1 = "0.10"
+bcrypt = "0.18"
 base64 = "0.22"
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 exyonq-mod-static = { workspace = true, features = ["test-utils"] }

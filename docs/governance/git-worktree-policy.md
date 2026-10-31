@@ -93,7 +93,7 @@ Approved extra-worktree placements:
 
 ```text
 <canonical>/.exyonq-local/worktrees/<name>
-<worktree>   # only when the owner names that path
+<worktree><name>   # only when the owner names that path
 ```
 
 `/private/tmp` and `/tmp` are **not** approved placements for new worktrees.
@@ -166,10 +166,10 @@ Examples:
 ```text
 <repo>/.exyonq-local/
 <repo>/.exyonq-local/worktrees/<name>/.exyonq-local/
-<worktree>/.exyonq-local/
+<worktree><name>/.exyonq-local/
 ```
 
-No runtime or evidence state may silently resolve back to the canonical `exyonq/.exyonq-local` directory unless the access is explicitly read-only and named in the current task.
+No runtime or evidence state may silently resolve back to the canonical `exyonq-laboratorio/.exyonq-local` directory unless the access is explicitly read-only and named in the current task.
 
 Nested worktrees under `.exyonq-local/worktrees/<name>` MUST still use their own nested `.exyonq-local/` for writable state. They must not write evidence, logs, PIDs, sockets, or caches into the parent canonical `.exyonq-local/` except when copying a finished artifact as an explicit, labeled handoff.
 
@@ -325,7 +325,7 @@ PUBLICATION = NO
 SYNC_TO_GITHUB = NO
 ```
 
-A worktree never implies permission to sync to `exyonq-github`. Local worktree paths (`<workspace>/exyonq-*`, `exyonq-wt-*`, `<tmp>/exyonq-*`) must not be published.
+A worktree never implies permission to sync to `exyonq-github`. Local worktree paths (`<worktree>`, `exyonq-laboratorio-wt-*`, `/private/tmp/exyonq-*`) must not be published.
 
 ---
 

@@ -52,7 +52,11 @@ pub use logging::{
     FileLoggingConfig, FileRotationConfig, JournaldLoggingConfig, LogFormat, LoggingConfig,
     OtelLoggingConfig, OtlpProtocol, SyslogLoggingConfig,
 };
-pub use modules::{CompressionConfig, MetricsConfig, ModulesConfig, RateLimitConfig, RealIpConfig};
+pub use modules::{
+    AuthConfig, AuthRouteConfig, CompressionConfig, GunzipConfig, MetricsConfig, MirrorConfig,
+    MirrorRouteConfig, ModulesConfig, RateLimitConfig, RateLimitZoneConfig, RealIpConfig,
+    SliceConfig, SliceRouteConfig, SubFilterConfig, SubFilterRouteConfig, SubFilterRule,
+};
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
 pub use static_preload::{
     StaticEncodingCacheConfig, StaticPreloadConfig, StaticSectionConfig,
@@ -340,6 +344,10 @@ pub struct RouteConfig {
     /// (`ProxyPassReverse` / `proxy_redirect`).
     #[serde(default)]
     pub location_rewrite: Vec<LocationRewriteConfig>,
+    /// NG-18 / ADR-064: route-level `gunzip on|off`; `None` inherits
+    /// `[modules.gunzip] enabled`.
+    #[serde(default)]
+    pub gunzip: Option<bool>,
 }
 
 /// F3-R20: one response-location rewrite rule (`ProxyPassReverse` /
@@ -1291,6 +1299,11 @@ impl AppConfig {
         validate_metrics_config(&raw.modules.metrics, &raw.server)?;
         validate_ratelimit_config(&raw.modules.ratelimit)?;
         raw.modules.real_ip.validate()?;
+        raw.modules.gunzip.validate()?;
+        raw.modules.sub_filter.validate()?;
+        raw.modules.mirror.validate()?;
+        raw.modules.slice.validate()?;
+        raw.modules.auth.validate()?;
         if let Err(message) = validate_logging(&raw.logging) {
             return Err(ConfigError::Parse(message));
         }
@@ -1445,6 +1458,27 @@ fn validate_metrics_config(
         }
     }
     Ok(())
+}
+
+/// 0.7: `proxy_redirect` `to` may use `$scheme`, `$host`, `$server_port`.
+fn location_rewrite_to_vars_ok(value: &str, allow_captures: bool) -> bool {
+    let mut rest = value;
+    while let Some(idx) = rest.find('$') {
+        rest = &rest[idx + 1..];
+        let len = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .count();
+        let var = &rest[..len];
+        rest = &rest[len..];
+        let ok = matches!(var, "scheme" | "host" | "server_port")
+            || (allow_captures
+                && matches!(var, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 fn validate_route_cache_headers(route: &RouteConfig) -> Result<(), ConfigError> {
@@ -2235,23 +2269,40 @@ fn validate_location_rewrites(route: &RouteConfig) -> Result<(), ConfigError> {
     }
     for r in &route.location_rewrite {
         for (what, v) in [("from", r.from.as_str()), ("to", r.to.as_str())] {
-            if v.is_empty() || v.bytes().any(|b| b <= 0x20 || b == 0x7f) || v.contains('$') {
+            if v.is_empty() || v.bytes().any(|b| b <= 0x20 || b == 0x7f) {
                 return Err(ConfigError::Parse(format!(
                     "route `{}`: invalid location_rewrite {what} `{v}`",
                     route.name
                 )));
             }
         }
-        if !(r.from.starts_with("http://") || r.from.starts_with("https://")) {
+        if r.from.contains('$') && !r.from.starts_with('~') {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: location_rewrite from cannot contain variables (`{}`)",
+                route.name, r.from
+            )));
+        }
+        if !location_rewrite_to_vars_ok(&r.to, r.from.starts_with('~')) {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: location_rewrite to has unsupported variable (`{}`); allowed: $scheme/$host/$server_port",
+                route.name, r.to
+            )));
+        }
+        if !(r.from.starts_with("http://")
+            || r.from.starts_with("https://")
+            || r.from.starts_with('~'))
+        {
             return Err(ConfigError::Parse(format!(
                 "route `{}`: location_rewrite from must be an absolute http(s) URL (`{}`)",
                 route.name, r.from
             )));
         }
-        if !r.to.starts_with('/') && !(r.to.starts_with("http://") || r.to.starts_with("https://"))
+        if !r.to.starts_with('/')
+            && !(r.to.starts_with("http://") || r.to.starts_with("https://"))
+            && !r.to.starts_with("$scheme://")
         {
             return Err(ConfigError::Parse(format!(
-                "route `{}`: location_rewrite to must be a `/` path or absolute http(s) URL (`{}`)",
+                "route `{}`: location_rewrite to must be a `/` path, absolute http(s) URL, or `$scheme://` URL (`{}`)",
                 route.name, r.to
             )));
         }

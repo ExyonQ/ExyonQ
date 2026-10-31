@@ -93,7 +93,7 @@ selftest() {
     echo "SELFTEST_PASS clean_tree_must_pass"
   fi
 
-  for case in 'LAB_PATH:<workspace>/lab/x.md' \
+  for case in 'LAB_PATH:/Volumes/Lexar/Cursor/lab/x.md' \
               'INTERNAL_HOST:deployed on netcup-bench today' \
               'CAMPAIGN_CODE:see rule 134 for the gate' \
               'PREP_PLACEHOLDER:PUBLICATION = PENDING'; do

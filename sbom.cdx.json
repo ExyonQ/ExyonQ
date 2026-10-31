@@ -2,9 +2,9 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "version": 1,
-  "serialNumber": "urn:uuid:e2662fb3-87b3-4053-8537-5a6b96350a73",
+  "serialNumber": "urn:uuid:da686299-933b-4c55-afb3-b6cf072bce67",
   "metadata": {
-    "timestamp": "2026-10-31T05:05:28.814217000Z",
+    "timestamp": "2026-10-31T04:27:17.384301000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -14,9 +14,9 @@
     ],
     "component": {
       "type": "application",
-      "bom-ref": "path+file://./cli/exyonq#0.8.0",
+      "bom-ref": "path+file://./cli/exyonq#0.9.0",
       "name": "exyonq",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ server CLI",
       "scope": "required",
       "licenses": [
@@ -24,14 +24,14 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq@0.8.0?download_url=file://.",
+      "purl": "pkg:cargo/exyonq@0.9.0?download_url=file://.",
       "components": [
         {
           "type": "application",
-          "bom-ref": "path+file://./cli/exyonq#0.8.0 bin-target-0",
+          "bom-ref": "path+file://./cli/exyonq#0.9.0 bin-target-0",
           "name": "exyonq",
-          "version": "0.8.0",
-          "purl": "pkg:cargo/exyonq@0.8.0?download_url=file://.#src/main.rs"
+          "version": "0.9.0",
+          "purl": "pkg:cargo/exyonq@0.9.0?download_url=file://.#src/main.rs"
         }
       ]
     },
@@ -59,9 +59,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./addon-sdk#exyonq-addon-sdk@0.8.0",
+      "bom-ref": "path+file://./addon-sdk#exyonq-addon-sdk@0.9.0",
       "name": "exyonq-addon-sdk",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ addon SDK \u2014 helpers and builders for addon-api 1.x",
       "scope": "required",
       "licenses": [
@@ -69,13 +69,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-addon-sdk@0.8.0?download_url=file://../../addon-sdk"
+      "purl": "pkg:cargo/exyonq-addon-sdk@0.9.0?download_url=file://../../addon-sdk"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./config/cli#exyonq-config-cli@0.8.0",
+      "bom-ref": "path+file://./config/cli#exyonq-config-cli@0.9.0",
       "name": "exyonq-config-cli",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Shared offline config CLI logic (lint/test/explain/format) for exyonqctl and exyonq",
       "scope": "required",
       "licenses": [
@@ -83,13 +83,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-config-cli@0.8.0?download_url=file://../../config/cli"
+      "purl": "pkg:cargo/exyonq-config-cli@0.9.0?download_url=file://../../config/cli"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./config/ir#exyonq-config-ir@0.8.0",
+      "bom-ref": "path+file://./config/ir#exyonq-config-ir@0.9.0",
       "name": "exyonq-config-ir",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ configuration IR: parse, validate, canonicalize",
       "scope": "required",
       "licenses": [
@@ -97,13 +97,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-config-ir@0.8.0?download_url=file://../../config/ir"
+      "purl": "pkg:cargo/exyonq-config-ir@0.9.0?download_url=file://../../config/ir"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./config/merge#exyonq-config-merge@0.8.0",
+      "bom-ref": "path+file://./config/merge#exyonq-config-merge@0.9.0",
       "name": "exyonq-config-merge",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ IR merge: includes, discovery overlays, profiles",
       "scope": "required",
       "licenses": [
@@ -111,13 +111,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-config-merge@0.8.0?download_url=file://../../config/merge"
+      "purl": "pkg:cargo/exyonq-config-merge@0.9.0?download_url=file://../../config/merge"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./config/schema#exyonq-config-schema@0.8.0",
+      "bom-ref": "path+file://./config/schema#exyonq-config-schema@0.9.0",
       "name": "exyonq-config-schema",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ config JSON Schema and migrators",
       "scope": "required",
       "licenses": [
@@ -125,13 +125,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-config-schema@0.8.0?download_url=file://../../config/schema"
+      "purl": "pkg:cargo/exyonq-config-schema@0.9.0?download_url=file://../../config/schema"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./config/surface#exyonq-config-surface@0.8.0",
+      "bom-ref": "path+file://./config/surface#exyonq-config-surface@0.9.0",
       "name": "exyonq-config-surface",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ Serverfile surface language parser and lowering",
       "scope": "required",
       "licenses": [
@@ -139,13 +139,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-config-surface@0.8.0?download_url=file://../../config/surface"
+      "purl": "pkg:cargo/exyonq-config-surface@0.9.0?download_url=file://../../config/surface"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./core#exyonq-core@0.8.0",
+      "bom-ref": "path+file://./core#exyonq-core@0.9.0",
       "name": "exyonq-core",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ core HTTP runtime: config, routing, static files, reverse proxy",
       "scope": "required",
       "licenses": [
@@ -153,13 +153,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-core@0.8.0?download_url=file://../../core"
+      "purl": "pkg:cargo/exyonq-core@0.9.0?download_url=file://../../core"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-cache#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-cache#0.9.0",
       "name": "exyonq-cache",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "KD4.1 \u2014 neutral response cache store, singleflight, and serve orchestration",
       "scope": "required",
       "licenses": [
@@ -167,13 +167,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-cache@0.8.0?download_url=file://../../crates/exyonq-cache"
+      "purl": "pkg:cargo/exyonq-cache@0.9.0?download_url=file://../../crates/exyonq-cache"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-cache-redis#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-cache-redis#0.9.0",
       "name": "exyonq-cache-redis",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "WC7B2 \u2014 Redis Streams adapter for FPC L2 coordination (invalidation + generation)",
       "scope": "required",
       "licenses": [
@@ -181,13 +181,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-cache-redis@0.8.0?download_url=file://../../crates/exyonq-cache-redis"
+      "purl": "pkg:cargo/exyonq-cache-redis@0.9.0?download_url=file://../../crates/exyonq-cache-redis"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-cfd-control#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-cfd-control#0.9.0",
       "name": "exyonq-cfd-control",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Competitive Frontier dataplane control helpers (launch/lifecycle/budget)",
       "scope": "required",
       "licenses": [
@@ -195,13 +195,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-cfd-control@0.8.0?download_url=file://../../crates/exyonq-cfd-control"
+      "purl": "pkg:cargo/exyonq-cfd-control@0.9.0?download_url=file://../../crates/exyonq-cfd-control"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-cfd-gen#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-cfd-gen#0.9.0",
       "name": "exyonq-cfd-gen",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Competitive Frontier dataplane generation format (Phase 1 foundations)",
       "scope": "required",
       "licenses": [
@@ -209,13 +209,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-cfd-gen@0.8.0?download_url=file://../../crates/exyonq-cfd-gen"
+      "purl": "pkg:cargo/exyonq-cfd-gen@0.9.0?download_url=file://../../crates/exyonq-cfd-gen"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-control-api#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-control-api#0.9.0",
       "name": "exyonq-control-api",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ HTTP Control API leaf crate",
       "scope": "required",
       "licenses": [
@@ -223,13 +223,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-control-api@0.8.0?download_url=file://../../crates/exyonq-control-api"
+      "purl": "pkg:cargo/exyonq-control-api@0.9.0?download_url=file://../../crates/exyonq-control-api"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-discovery-runtime#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-discovery-runtime#0.9.0",
       "name": "exyonq-discovery-runtime",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ discovery runtime \u2014 file/env JSON upstream overlay (KD4.10)",
       "scope": "required",
       "licenses": [
@@ -237,13 +237,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-discovery-runtime@0.8.0?download_url=file://../../crates/exyonq-discovery-runtime"
+      "purl": "pkg:cargo/exyonq-discovery-runtime@0.9.0?download_url=file://../../crates/exyonq-discovery-runtime"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-http3-provider-api#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-http3-provider-api#0.9.0",
       "name": "exyonq-http3-provider-api",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Provider-neutral HTTP/3 transport settings (P13P) \u2014 no Quinn/quiche types",
       "scope": "required",
       "licenses": [
@@ -251,13 +251,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-http3-provider-api@0.8.0?download_url=file://../../crates/exyonq-http3-provider-api"
+      "purl": "pkg:cargo/exyonq-http3-provider-api@0.9.0?download_url=file://../../crates/exyonq-http3-provider-api"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-http3-provider-s2n#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-http3-provider-s2n#0.9.0",
       "name": "exyonq-http3-provider-s2n",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "HTTP/3 / QUIC provider \u2014 AWS s2n-quic (P13D intended default)",
       "scope": "required",
       "licenses": [
@@ -265,13 +265,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-http3-provider-s2n@0.8.0?download_url=file://../../crates/exyonq-http3-provider-s2n"
+      "purl": "pkg:cargo/exyonq-http3-provider-s2n@0.9.0?download_url=file://../../crates/exyonq-http3-provider-s2n"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-linux-ffi#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-linux-ffi#0.9.0",
       "name": "exyonq-linux-ffi",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ADR-045 Linux FFI capsule \u2014 Safe wrappers over epoll-adjacent syscalls (Tokio-free by default)",
       "scope": "required",
       "licenses": [
@@ -279,13 +279,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-linux-ffi@0.8.0?download_url=file://../../crates/exyonq-linux-ffi"
+      "purl": "pkg:cargo/exyonq-linux-ffi@0.9.0?download_url=file://../../crates/exyonq-linux-ffi"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-mod-fastcgi#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-mod-fastcgi#0.9.0",
       "name": "exyonq-mod-fastcgi",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Plan 08 FastCGI module \u2014 PR3-A in-memory record parser (no wire I/O)",
       "scope": "required",
       "licenses": [
@@ -293,13 +293,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-mod-fastcgi@0.8.0?download_url=file://../../crates/exyonq-mod-fastcgi"
+      "purl": "pkg:cargo/exyonq-mod-fastcgi@0.9.0?download_url=file://../../crates/exyonq-mod-fastcgi"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-mod-htaccess#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-mod-htaccess#0.9.0",
       "name": "exyonq-mod-htaccess",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Plan 05B .htaccess offline parser, compiler, and watcher",
       "scope": "required",
       "licenses": [
@@ -307,13 +307,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-mod-htaccess@0.8.0?download_url=file://../../crates/exyonq-mod-htaccess"
+      "purl": "pkg:cargo/exyonq-mod-htaccess@0.9.0?download_url=file://../../crates/exyonq-mod-htaccess"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-mod-http3#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-mod-http3#0.9.0",
       "name": "exyonq-mod-http3",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "HTTP/3 / QUIC runtime facade \u2014 Quinn legacy interim; s2n/quiche providers (P13D)",
       "scope": "required",
       "licenses": [
@@ -321,13 +321,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-mod-http3@0.8.0?download_url=file://../../crates/exyonq-mod-http3"
+      "purl": "pkg:cargo/exyonq-mod-http3@0.9.0?download_url=file://../../crates/exyonq-mod-http3"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-mod-proxy#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-mod-proxy#0.9.0",
       "name": "exyonq-mod-proxy",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "KD3 reverse-proxy module \u2014 Hyper runtime, header policy, URI helpers",
       "scope": "required",
       "licenses": [
@@ -335,13 +335,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-mod-proxy@0.8.0?download_url=file://../../crates/exyonq-mod-proxy"
+      "purl": "pkg:cargo/exyonq-mod-proxy@0.9.0?download_url=file://../../crates/exyonq-mod-proxy"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-mod-static#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-mod-static#0.9.0",
       "name": "exyonq-mod-static",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "KD2 static file module \u2014 path resolution, preload, wire/sendfile assets",
       "scope": "required",
       "licenses": [
@@ -349,13 +349,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-mod-static@0.8.0?download_url=file://../../crates/exyonq-mod-static"
+      "purl": "pkg:cargo/exyonq-mod-static@0.9.0?download_url=file://../../crates/exyonq-mod-static"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-mod-tls#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-mod-tls#0.9.0",
       "name": "exyonq-mod-tls",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "TLS termination runtime \u2014 certificates, rustls config, handshake (KD4.5)",
       "scope": "required",
       "licenses": [
@@ -363,13 +363,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-mod-tls@0.8.0?download_url=file://../../crates/exyonq-mod-tls"
+      "purl": "pkg:cargo/exyonq-mod-tls@0.9.0?download_url=file://../../crates/exyonq-mod-tls"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-module-pipeline#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-module-pipeline#0.9.0",
       "name": "exyonq-module-pipeline",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Cross-cutting module pipeline orchestration (compression, ratelimit, addons)",
       "scope": "required",
       "licenses": [
@@ -377,13 +377,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-module-pipeline@0.8.0?download_url=file://../../crates/exyonq-module-pipeline"
+      "purl": "pkg:cargo/exyonq-module-pipeline@0.9.0?download_url=file://../../crates/exyonq-module-pipeline"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-observability#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-observability#0.9.0",
       "name": "exyonq-observability",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Cap061 \u2014 production observability leaf (sinks, subscriber, redaction, OTel)",
       "scope": "required",
       "licenses": [
@@ -391,13 +391,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-observability@0.8.0?download_url=file://../../crates/exyonq-observability"
+      "purl": "pkg:cargo/exyonq-observability@0.9.0?download_url=file://../../crates/exyonq-observability"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-ops-runtime#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-ops-runtime#0.9.0",
       "name": "exyonq-ops-runtime",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ control plane and operations runtime (unix socket, admin commands)",
       "scope": "required",
       "licenses": [
@@ -405,7 +405,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-ops-runtime@0.8.0?download_url=file://../../crates/exyonq-ops-runtime"
+      "purl": "pkg:cargo/exyonq-ops-runtime@0.9.0?download_url=file://../../crates/exyonq-ops-runtime"
     },
     {
       "type": "library",
@@ -423,9 +423,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-proxy-sdp#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-proxy-sdp#0.9.0",
       "name": "exyonq-proxy-sdp",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "SDP-P1 specialized H1 proxy dataplane \u2014 mio TPC shards (internal)",
       "scope": "required",
       "licenses": [
@@ -433,13 +433,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-proxy-sdp@0.8.0?download_url=file://../../crates/exyonq-proxy-sdp"
+      "purl": "pkg:cargo/exyonq-proxy-sdp@0.9.0?download_url=file://../../crates/exyonq-proxy-sdp"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-reload-runtime#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-reload-runtime#0.9.0",
       "name": "exyonq-reload-runtime",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ reload watcher and OS signal runtime (KD4.14)",
       "scope": "required",
       "licenses": [
@@ -447,13 +447,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-reload-runtime@0.8.0?download_url=file://../../crates/exyonq-reload-runtime"
+      "purl": "pkg:cargo/exyonq-reload-runtime@0.9.0?download_url=file://../../crates/exyonq-reload-runtime"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-runtime-plan#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-runtime-plan#0.9.0",
       "name": "exyonq-runtime-plan",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ runtime plan: compile config IR into immutable lookup structures",
       "scope": "required",
       "licenses": [
@@ -461,13 +461,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-runtime-plan@0.8.0?download_url=file://../../crates/exyonq-runtime-plan"
+      "purl": "pkg:cargo/exyonq-runtime-plan@0.9.0?download_url=file://../../crates/exyonq-runtime-plan"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-waf#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-waf#0.9.0",
       "name": "exyonq-waf",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Native ExyonQ WAF engine \u2014 compile, snapshot, inspect (no Pingora)",
       "scope": "required",
       "licenses": [
@@ -475,13 +475,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-waf@0.8.0?download_url=file://../../crates/exyonq-waf"
+      "purl": "pkg:cargo/exyonq-waf@0.9.0?download_url=file://../../crates/exyonq-waf"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./crates/exyonq-waf-api#0.8.0",
+      "bom-ref": "path+file://./crates/exyonq-waf-api#0.9.0",
       "name": "exyonq-waf-api",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Public contracts for the ExyonQ native WAF (no HTTP stack / Pingora)",
       "scope": "required",
       "licenses": [
@@ -489,13 +489,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-waf-api@0.8.0?download_url=file://../../crates/exyonq-waf-api"
+      "purl": "pkg:cargo/exyonq-waf-api@0.9.0?download_url=file://../../crates/exyonq-waf-api"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./module-api#exyonq-module-api@0.8.0",
+      "bom-ref": "path+file://./module-api#exyonq-module-api@0.9.0",
       "name": "exyonq-module-api",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ExyonQ module API v0 \u2014 static hooks for official modules",
       "scope": "required",
       "licenses": [
@@ -503,13 +503,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-module-api@0.8.0?download_url=file://../../module-api"
+      "purl": "pkg:cargo/exyonq-module-api@0.9.0?download_url=file://../../module-api"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./modules/acme#exyonq-acme@0.8.0",
+      "bom-ref": "path+file://./modules/acme#exyonq-acme@0.9.0",
       "name": "exyonq-acme",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "ACME v2 certificate automation (HTTP-01) for ExyonQ",
       "scope": "required",
       "licenses": [
@@ -517,13 +517,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-acme@0.8.0?download_url=file://../../modules/acme"
+      "purl": "pkg:cargo/exyonq-acme@0.9.0?download_url=file://../../modules/acme"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./modules/compression#exyonq-compression@0.8.0",
+      "bom-ref": "path+file://./modules/compression#exyonq-compression@0.9.0",
       "name": "exyonq-compression",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Gzip, Deflate (zlib), Brotli, and Zstandard response compression module",
       "scope": "required",
       "licenses": [
@@ -531,13 +531,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-compression@0.8.0?download_url=file://../../modules/compression"
+      "purl": "pkg:cargo/exyonq-compression@0.9.0?download_url=file://../../modules/compression"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./modules/metrics#exyonq-metrics@0.8.0",
+      "bom-ref": "path+file://./modules/metrics#exyonq-metrics@0.9.0",
       "name": "exyonq-metrics",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Prometheus metrics module (Fase 2)",
       "scope": "required",
       "licenses": [
@@ -545,13 +545,13 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-metrics@0.8.0?download_url=file://../../modules/metrics"
+      "purl": "pkg:cargo/exyonq-metrics@0.9.0?download_url=file://../../modules/metrics"
     },
     {
       "type": "library",
-      "bom-ref": "path+file://./modules/ratelimit#exyonq-ratelimit@0.8.0",
+      "bom-ref": "path+file://./modules/ratelimit#exyonq-ratelimit@0.9.0",
       "name": "exyonq-ratelimit",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Token-bucket rate limit module (Fase 2)",
       "scope": "required",
       "licenses": [
@@ -559,7 +559,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/exyonq-ratelimit@0.8.0?download_url=file://../../modules/ratelimit"
+      "purl": "pkg:cargo/exyonq-ratelimit@0.9.0?download_url=file://../../modules/ratelimit"
     },
     {
       "type": "library",
@@ -1214,6 +1214,107 @@
     },
     {
       "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bcrypt@0.18.0",
+      "author": "Vincent Prouillet <hello@prouilletvincent.com>",
+      "name": "bcrypt",
+      "version": "0.18.0",
+      "description": "Easily hash and verify passwords using bcrypt",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9a0f5948f30df5f43ac29d310b7476793be97c50787e6ef4a63d960a0d0be827"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "purl": "pkg:cargo/bcrypt@0.18.0",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/Keats/rust-bcrypt"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/Keats/rust-bcrypt"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bit-set@0.8.0",
+      "author": "Alexis Beingessner <a.beingessner@gmail.com>",
+      "name": "bit-set",
+      "version": "0.8.0",
+      "description": "A set of bits",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "purl": "pkg:cargo/bit-set@0.8.0",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/bit-set/"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/contain-rs/bit-set"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/contain-rs/bit-set"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bit-vec@0.8.0",
+      "author": "Alexis Beingessner <a.beingessner@gmail.com>",
+      "name": "bit-vec",
+      "version": "0.8.0",
+      "description": "A vector of bits",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "purl": "pkg:cargo/bit-vec@0.8.0",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/bit-vec/"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/contain-rs/bit-vec"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/contain-rs/bit-vec"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bit-vec@0.9.1",
       "author": "Alexis Beingessner <a.beingessner@gmail.com>",
       "name": "bit-vec",
@@ -1341,6 +1442,37 @@
         {
           "type": "vcs",
           "url": "https://github.com/RustCrypto/utils"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#blowfish@0.9.1",
+      "author": "RustCrypto Developers",
+      "name": "blowfish",
+      "version": "0.9.1",
+      "description": "Blowfish block cipher",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e412e2cd0f2b2d93e02543ceae7917b3c70331573df19ee046bcbc35e45e87d7"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/blowfish@0.9.1",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/blowfish"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/block-ciphers"
         }
       ]
     },
@@ -1531,6 +1663,37 @@
         {
           "type": "vcs",
           "url": "https://github.com/RustCrypto/stream-ciphers"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cipher@0.4.4",
+      "author": "RustCrypto Developers",
+      "name": "cipher",
+      "version": "0.4.4",
+      "description": "Traits for describing block ciphers and stream ciphers",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/cipher@0.4.4",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/cipher"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
         }
       ]
     },
@@ -2330,6 +2493,37 @@
         {
           "type": "vcs",
           "url": "https://github.com/lambda-fairy/rust-errno"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#fancy-regex@0.17.0",
+      "author": "Raph Levien <raph@google.com>, Robin Stocker <robin@nibor.org>, Keith Hall <keith.hall@available.systems>",
+      "name": "fancy-regex",
+      "version": "0.17.0",
+      "description": "An implementation of regexes, supporting a relatively rich set of features, including backreferences and look-around.",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "purl": "pkg:cargo/fancy-regex@0.17.0",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/fancy-regex"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/fancy-regex/fancy-regex"
         }
       ]
     },
@@ -3731,6 +3925,37 @@
     },
     {
       "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#inout@0.1.4",
+      "author": "RustCrypto Developers",
+      "name": "inout",
+      "version": "0.1.4",
+      "description": "Custom reference types for code generic over in-place and buffer-to-buffer modes of operation.",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/inout@0.1.4",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/inout"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#instant-acme@0.8.5",
       "name": "instant-acme",
       "version": "0.8.5",
@@ -3880,16 +4105,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#itertools@0.13.0",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#itertools@0.14.0",
       "author": "bluss",
       "name": "itertools",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "description": "Extra iterator adaptors, iterator methods, free functions, and macros.",
       "scope": "required",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+          "content": "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
         }
       ],
       "licenses": [
@@ -3897,7 +4122,7 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/itertools@0.13.0",
+      "purl": "pkg:cargo/itertools@0.14.0",
       "externalReferences": [
         {
           "type": "documentation",
@@ -9151,60 +9376,60 @@
       ]
     },
     {
-      "ref": "path+file://./addon-sdk#exyonq-addon-sdk@0.8.0",
+      "ref": "path+file://./addon-sdk#exyonq-addon-sdk@0.9.0",
       "dependsOn": [
         "path+file://./addon-api#exyonq-addon-api@1.0.0",
         "registry+https://github.com/rust-lang/crates.io-index#semver@1.0.28"
       ]
     },
     {
-      "ref": "path+file://./cli/exyonq#0.8.0",
+      "ref": "path+file://./cli/exyonq#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#clap@4.6.7",
-        "path+file://./modules/acme#exyonq-acme@0.8.0",
-        "path+file://./crates/exyonq-cache-redis#0.8.0",
-        "path+file://./crates/exyonq-cfd-control#0.8.0",
-        "path+file://./config/cli#exyonq-config-cli@0.8.0",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./config/merge#exyonq-config-merge@0.8.0",
-        "path+file://./config/schema#exyonq-config-schema@0.8.0",
-        "path+file://./config/surface#exyonq-config-surface@0.8.0",
-        "path+file://./core#exyonq-core@0.8.0",
-        "path+file://./crates/exyonq-discovery-runtime#0.8.0",
-        "path+file://./modules/metrics#exyonq-metrics@0.8.0",
-        "path+file://./crates/exyonq-mod-fastcgi#0.8.0",
-        "path+file://./crates/exyonq-mod-htaccess#0.8.0",
-        "path+file://./crates/exyonq-mod-http3#0.8.0",
-        "path+file://./crates/exyonq-mod-proxy#0.8.0",
-        "path+file://./crates/exyonq-mod-static#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
-        "path+file://./crates/exyonq-observability#0.8.0",
-        "path+file://./crates/exyonq-ops-runtime#0.8.0",
+        "path+file://./modules/acme#exyonq-acme@0.9.0",
+        "path+file://./crates/exyonq-cache-redis#0.9.0",
+        "path+file://./crates/exyonq-cfd-control#0.9.0",
+        "path+file://./config/cli#exyonq-config-cli@0.9.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./config/merge#exyonq-config-merge@0.9.0",
+        "path+file://./config/schema#exyonq-config-schema@0.9.0",
+        "path+file://./config/surface#exyonq-config-surface@0.9.0",
+        "path+file://./core#exyonq-core@0.9.0",
+        "path+file://./crates/exyonq-discovery-runtime#0.9.0",
+        "path+file://./modules/metrics#exyonq-metrics@0.9.0",
+        "path+file://./crates/exyonq-mod-fastcgi#0.9.0",
+        "path+file://./crates/exyonq-mod-htaccess#0.9.0",
+        "path+file://./crates/exyonq-mod-http3#0.9.0",
+        "path+file://./crates/exyonq-mod-proxy#0.9.0",
+        "path+file://./crates/exyonq-mod-static#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
+        "path+file://./crates/exyonq-observability#0.9.0",
+        "path+file://./crates/exyonq-ops-runtime#0.9.0",
         "path+file://./crates/exyonq-platform-linux#0.0.0",
-        "path+file://./modules/ratelimit#exyonq-ratelimit@0.8.0",
-        "path+file://./crates/exyonq-reload-runtime#0.8.0",
-        "path+file://./crates/exyonq-waf#0.8.0",
-        "path+file://./crates/exyonq-waf-api#0.8.0",
+        "path+file://./modules/ratelimit#exyonq-ratelimit@0.9.0",
+        "path+file://./crates/exyonq-reload-runtime#0.9.0",
+        "path+file://./crates/exyonq-waf#0.9.0",
+        "path+file://./crates/exyonq-waf-api#0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1",
         "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44"
       ]
     },
     {
-      "ref": "path+file://./config/cli#exyonq-config-cli@0.8.0",
+      "ref": "path+file://./config/cli#exyonq-config-cli@0.9.0",
       "dependsOn": [
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./config/merge#exyonq-config-merge@0.8.0",
-        "path+file://./config/surface#exyonq-config-surface@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
-        "path+file://./crates/exyonq-runtime-plan#0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./config/merge#exyonq-config-merge@0.9.0",
+        "path+file://./config/surface#exyonq-config-surface@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
+        "path+file://./crates/exyonq-runtime-plan#0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.154",
         "registry+https://github.com/rust-lang/crates.io-index#toml@0.8.23"
       ]
     },
     {
-      "ref": "path+file://./config/ir#exyonq-config-ir@0.8.0",
+      "ref": "path+file://./config/ir#exyonq-config-ir@0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.12.0",
         "registry+https://github.com/rust-lang/crates.io-index#ipnetwork@0.20.0",
@@ -9216,71 +9441,76 @@
       ]
     },
     {
-      "ref": "path+file://./config/merge#exyonq-config-merge@0.8.0",
+      "ref": "path+file://./config/merge#exyonq-config-merge@0.9.0",
       "dependsOn": [
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.154",
         "registry+https://github.com/rust-lang/crates.io-index#toml@0.8.23"
       ]
     },
     {
-      "ref": "path+file://./config/schema#exyonq-config-schema@0.8.0",
+      "ref": "path+file://./config/schema#exyonq-config-schema@0.9.0",
       "dependsOn": [
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.154"
       ]
     },
     {
-      "ref": "path+file://./config/surface#exyonq-config-surface@0.8.0",
+      "ref": "path+file://./config/surface#exyonq-config-surface@0.9.0",
       "dependsOn": [
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./config/merge#exyonq-config-merge@0.8.0",
-        "path+file://./config/schema#exyonq-config-schema@0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./config/merge#exyonq-config-merge@0.9.0",
+        "path+file://./config/schema#exyonq-config-schema@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.21"
       ]
     },
     {
-      "ref": "path+file://./core#exyonq-core@0.8.0",
+      "ref": "path+file://./core#exyonq-core@0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#arc-swap@1.9.3",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
+        "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
+        "registry+https://github.com/rust-lang/crates.io-index#bcrypt@0.18.0",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./crates/exyonq-cache#0.8.0",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./crates/exyonq-control-api#0.8.0",
-        "path+file://./crates/exyonq-mod-http3#0.8.0",
-        "path+file://./crates/exyonq-mod-proxy#0.8.0",
-        "path+file://./crates/exyonq-mod-static#0.8.0",
-        "path+file://./crates/exyonq-mod-tls#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
-        "path+file://./crates/exyonq-module-pipeline#0.8.0",
-        "path+file://./crates/exyonq-proxy-sdp#0.8.0",
-        "path+file://./crates/exyonq-runtime-plan#0.8.0",
-        "path+file://./crates/exyonq-waf-api#0.8.0",
+        "path+file://./crates/exyonq-cache#0.9.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./crates/exyonq-control-api#0.9.0",
+        "path+file://./crates/exyonq-mod-http3#0.9.0",
+        "path+file://./crates/exyonq-mod-proxy#0.9.0",
+        "path+file://./crates/exyonq-mod-static#0.9.0",
+        "path+file://./crates/exyonq-mod-tls#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
+        "path+file://./crates/exyonq-module-pipeline#0.9.0",
+        "path+file://./crates/exyonq-proxy-sdp#0.9.0",
+        "path+file://./crates/exyonq-runtime-plan#0.9.0",
+        "path+file://./crates/exyonq-waf-api#0.9.0",
+        "registry+https://github.com/rust-lang/crates.io-index#flate2@1.1.10",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
+        "registry+https://github.com/rust-lang/crates.io-index#http-body@1.1.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.12.0",
         "registry+https://github.com/rust-lang/crates.io-index#hyper-util@0.1.21",
         "registry+https://github.com/rust-lang/crates.io-index#ipnetwork@0.20.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.154",
+        "registry+https://github.com/rust-lang/crates.io-index#sha1@0.10.7",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1",
         "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-cache#0.8.0",
+      "ref": "path+file://./crates/exyonq-cache#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-cache-redis#0.8.0",
+      "ref": "path+file://./crates/exyonq-cache-redis#0.9.0",
       "dependsOn": [
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#hmac@0.13.0",
         "registry+https://github.com/rust-lang/crates.io-index#redis@1.7.1",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
@@ -9289,28 +9519,28 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-cfd-control#0.8.0",
+      "ref": "path+file://./crates/exyonq-cfd-control#0.9.0",
       "dependsOn": [
-        "path+file://./crates/exyonq-cfd-gen#0.8.0",
-        "path+file://./crates/exyonq-waf#0.8.0",
-        "path+file://./crates/exyonq-waf-api#0.8.0",
+        "path+file://./crates/exyonq-cfd-gen#0.9.0",
+        "path+file://./crates/exyonq-waf#0.9.0",
+        "path+file://./crates/exyonq-waf-api#0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.21"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-cfd-gen#0.8.0",
+      "ref": "path+file://./crates/exyonq-cfd-gen#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.21"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-control-api#0.8.0",
+      "ref": "path+file://./crates/exyonq-control-api#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./config/merge#exyonq-config-merge@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./config/merge#exyonq-config-merge@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.12.0",
@@ -9324,24 +9554,24 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-discovery-runtime#0.8.0",
+      "ref": "path+file://./crates/exyonq-discovery-runtime#0.9.0",
       "dependsOn": [
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
-        "path+file://./crates/exyonq-runtime-plan#0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
+        "path+file://./crates/exyonq-runtime-plan#0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-http3-provider-api#0.8.0"
+      "ref": "path+file://./crates/exyonq-http3-provider-api#0.9.0"
     },
     {
-      "ref": "path+file://./crates/exyonq-http3-provider-s2n#0.8.0",
+      "ref": "path+file://./crates/exyonq-http3-provider-s2n#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./crates/exyonq-http3-provider-api#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./crates/exyonq-http3-provider-api#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#h3@0.0.8",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#s2n-quic@1.91.0",
@@ -9351,19 +9581,19 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-linux-ffi#0.8.0",
+      "ref": "path+file://./crates/exyonq-linux-ffi#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.191",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-mod-fastcgi#0.8.0",
+      "ref": "path+file://./crates/exyonq-mod-fastcgi#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./crates/exyonq-cache#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./crates/exyonq-cache#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.12.0",
@@ -9374,11 +9604,11 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-mod-htaccess#0.8.0",
+      "ref": "path+file://./crates/exyonq-mod-htaccess#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#arc-swap@1.9.3",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#notify@8.2.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.21",
@@ -9387,34 +9617,35 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-mod-http3#0.8.0",
+      "ref": "path+file://./crates/exyonq-mod-http3#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./crates/exyonq-http3-provider-api#0.8.0",
-        "path+file://./crates/exyonq-http3-provider-s2n#0.8.0",
-        "path+file://./crates/exyonq-mod-tls#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./crates/exyonq-http3-provider-api#0.9.0",
+        "path+file://./crates/exyonq-http3-provider-s2n#0.9.0",
+        "path+file://./crates/exyonq-mod-tls#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1",
         "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-mod-proxy#0.8.0",
+      "ref": "path+file://./crates/exyonq-mod-proxy#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./crates/exyonq-cache#0.8.0",
-        "path+file://./crates/exyonq-linux-ffi#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./crates/exyonq-cache#0.9.0",
+        "path+file://./crates/exyonq-linux-ffi#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body@1.1.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.12.0",
         "registry+https://github.com/rust-lang/crates.io-index#hyper-util@0.1.21",
+        "registry+https://github.com/rust-lang/crates.io-index#regex@1.13.1",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#sha1@0.10.7",
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.21",
@@ -9423,13 +9654,13 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-mod-static#0.8.0",
+      "ref": "path+file://./crates/exyonq-mod-static#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#brotli@8.0.4",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./crates/exyonq-cache#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./crates/exyonq-cache#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#flate2@1.1.10",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
@@ -9442,25 +9673,25 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-mod-tls#0.8.0",
+      "ref": "path+file://./crates/exyonq-mod-tls#0.9.0",
       "dependsOn": [
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#rustls@0.23.46",
         "registry+https://github.com/rust-lang/crates.io-index#tokio-rustls@0.26.6",
         "registry+https://github.com/rust-lang/crates.io-index#x509-parser@0.18.1"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-module-pipeline#0.8.0",
+      "ref": "path+file://./crates/exyonq-module-pipeline#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./modules/compression#exyonq-compression@0.8.0",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./modules/metrics#exyonq-metrics@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
-        "path+file://./modules/ratelimit#exyonq-ratelimit@0.8.0",
+        "path+file://./modules/compression#exyonq-compression@0.9.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./modules/metrics#exyonq-metrics@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
+        "path+file://./modules/ratelimit#exyonq-ratelimit@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.12.0",
@@ -9468,10 +9699,10 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-observability#0.8.0",
+      "ref": "path+file://./crates/exyonq-observability#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.3.4",
         "registry+https://github.com/rust-lang/crates.io-index#opentelemetry@0.33.1",
         "registry+https://github.com/rust-lang/crates.io-index#opentelemetry-otlp@0.33.1",
@@ -9485,12 +9716,12 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-ops-runtime#0.8.0",
+      "ref": "path+file://./crates/exyonq-ops-runtime#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
-        "path+file://./crates/exyonq-cache#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./crates/exyonq-cache#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.154",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1",
@@ -9501,17 +9732,17 @@
       "ref": "path+file://./crates/exyonq-platform-linux#0.0.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./core#exyonq-core@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./core#exyonq-core@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-proxy-sdp#0.8.0",
+      "ref": "path+file://./crates/exyonq-proxy-sdp#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#arc-swap@1.9.3",
-        "path+file://./crates/exyonq-runtime-plan#0.8.0",
-        "path+file://./crates/exyonq-waf-api#0.8.0",
+        "path+file://./crates/exyonq-runtime-plan#0.9.0",
+        "path+file://./crates/exyonq-waf-api#0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#httparse@1.10.1",
         "registry+https://github.com/rust-lang/crates.io-index#mio@1.2.4",
         "registry+https://github.com/rust-lang/crates.io-index#socket2@0.6.5",
@@ -9520,10 +9751,10 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-reload-runtime#0.8.0",
+      "ref": "path+file://./crates/exyonq-reload-runtime#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#notify@8.2.0",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1",
         "registry+https://github.com/rust-lang/crates.io-index#tokio-util@0.7.20",
@@ -9531,13 +9762,13 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-runtime-plan#0.8.0",
+      "ref": "path+file://./crates/exyonq-runtime-plan#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./config/merge#exyonq-config-merge@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
-        "path+file://./crates/exyonq-module-pipeline#0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./config/merge#exyonq-config-merge@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
+        "path+file://./crates/exyonq-module-pipeline#0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#matchit@0.9.2",
         "registry+https://github.com/rust-lang/crates.io-index#regex@1.13.1",
@@ -9545,28 +9776,31 @@
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-waf#0.8.0",
+      "ref": "path+file://./crates/exyonq-waf#0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#arc-swap@1.9.3",
-        "path+file://./crates/exyonq-waf-api#0.8.0",
+        "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
+        "path+file://./crates/exyonq-waf-api#0.9.0",
+        "registry+https://github.com/rust-lang/crates.io-index#fancy-regex@0.17.0",
         "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.3.4",
         "registry+https://github.com/rust-lang/crates.io-index#hmac@0.13.0",
         "registry+https://github.com/rust-lang/crates.io-index#ipnetwork@0.20.0",
         "registry+https://github.com/rust-lang/crates.io-index#regex@1.13.1",
         "registry+https://github.com/rust-lang/crates.io-index#sha2@0.11.1",
-        "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.21"
+        "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.21",
+        "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44"
       ]
     },
     {
-      "ref": "path+file://./crates/exyonq-waf-api#0.8.0"
+      "ref": "path+file://./crates/exyonq-waf-api#0.9.0"
     },
     {
-      "ref": "path+file://./module-api#exyonq-module-api@0.8.0",
+      "ref": "path+file://./module-api#exyonq-module-api@0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
         "path+file://./addon-api#exyonq-addon-api@1.0.0",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#ipnetwork@0.20.0",
@@ -9577,12 +9811,12 @@
       ]
     },
     {
-      "ref": "path+file://./modules/acme#exyonq-acme@0.8.0",
+      "ref": "path+file://./modules/acme#exyonq-acme@0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
-        "path+file://./config/ir#exyonq-config-ir@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./config/ir#exyonq-config-ir@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#instant-acme@0.8.5",
         "registry+https://github.com/rust-lang/crates.io-index#rustls-pki-types@1.15.1",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.154",
@@ -9592,13 +9826,13 @@
       ]
     },
     {
-      "ref": "path+file://./modules/compression#exyonq-compression@0.8.0",
+      "ref": "path+file://./modules/compression#exyonq-compression@0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#brotli@8.0.4",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./addon-sdk#exyonq-addon-sdk@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./addon-sdk#exyonq-addon-sdk@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#flate2@1.1.10",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
@@ -9606,25 +9840,25 @@
       ]
     },
     {
-      "ref": "path+file://./modules/metrics#exyonq-metrics@0.8.0",
+      "ref": "path+file://./modules/metrics#exyonq-metrics@0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./addon-sdk#exyonq-addon-sdk@0.8.0",
-        "path+file://./crates/exyonq-mod-fastcgi#0.8.0",
-        "path+file://./crates/exyonq-mod-htaccess#0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./addon-sdk#exyonq-addon-sdk@0.9.0",
+        "path+file://./crates/exyonq-mod-fastcgi#0.9.0",
+        "path+file://./crates/exyonq-mod-htaccess#0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5"
       ]
     },
     {
-      "ref": "path+file://./modules/ratelimit#exyonq-ratelimit@0.8.0",
+      "ref": "path+file://./modules/ratelimit#exyonq-ratelimit@0.9.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
-        "path+file://./addon-sdk#exyonq-addon-sdk@0.8.0",
-        "path+file://./module-api#exyonq-module-api@0.8.0",
+        "path+file://./addon-sdk#exyonq-addon-sdk@0.9.0",
+        "path+file://./module-api#exyonq-module-api@0.9.0",
         "registry+https://github.com/rust-lang/crates.io-index#http@1.5.0"
       ]
     },
@@ -9743,6 +9977,25 @@
       "ref": "registry+https://github.com/rust-lang/crates.io-index#base64@0.23.1"
     },
     {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#bcrypt@0.18.0",
+      "dependsOn": [
+        "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
+        "registry+https://github.com/rust-lang/crates.io-index#blowfish@0.9.1",
+        "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.3.4",
+        "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
+        "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.9.1"
+      ]
+    },
+    {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#bit-set@0.8.0",
+      "dependsOn": [
+        "registry+https://github.com/rust-lang/crates.io-index#bit-vec@0.8.0"
+      ]
+    },
+    {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#bit-vec@0.8.0"
+    },
+    {
       "ref": "registry+https://github.com/rust-lang/crates.io-index#bit-vec@0.9.1",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229"
@@ -9761,6 +10014,13 @@
       "ref": "registry+https://github.com/rust-lang/crates.io-index#block-buffer@0.12.1",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#hybrid-array@0.4.15"
+      ]
+    },
+    {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#blowfish@0.9.1",
+      "dependsOn": [
+        "registry+https://github.com/rust-lang/crates.io-index#byteorder@1.5.0",
+        "registry+https://github.com/rust-lang/crates.io-index#cipher@0.4.4"
       ]
     },
     {
@@ -9792,6 +10052,13 @@
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.5",
         "registry+https://github.com/rust-lang/crates.io-index#rand_core@0.10.1"
+      ]
+    },
+    {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#cipher@0.4.4",
+      "dependsOn": [
+        "registry+https://github.com/rust-lang/crates.io-index#crypto-common@0.1.7",
+        "registry+https://github.com/rust-lang/crates.io-index#inout@0.1.4"
       ]
     },
     {
@@ -9948,6 +10215,14 @@
       "ref": "registry+https://github.com/rust-lang/crates.io-index#errno@0.3.14",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.191"
+      ]
+    },
+    {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#fancy-regex@0.17.0",
+      "dependsOn": [
+        "registry+https://github.com/rust-lang/crates.io-index#bit-set@0.8.0",
+        "registry+https://github.com/rust-lang/crates.io-index#regex-automata@0.4.18",
+        "registry+https://github.com/rust-lang/crates.io-index#regex-syntax@0.8.11"
       ]
     },
     {
@@ -10302,6 +10577,12 @@
       ]
     },
     {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#inout@0.1.4",
+      "dependsOn": [
+        "registry+https://github.com/rust-lang/crates.io-index#generic-array@0.14.7"
+      ]
+    },
+    {
       "ref": "registry+https://github.com/rust-lang/crates.io-index#instant-acme@0.8.5",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
@@ -10342,7 +10623,7 @@
       "ref": "registry+https://github.com/rust-lang/crates.io-index#is_terminal_polyfill@1.70.2"
     },
     {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#itertools@0.13.0",
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#itertools@0.14.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#either@1.19.0"
       ]
@@ -10596,7 +10877,7 @@
       "ref": "registry+https://github.com/rust-lang/crates.io-index#prost-derive@0.14.4",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
-        "registry+https://github.com/rust-lang/crates.io-index#itertools@0.13.0",
+        "registry+https://github.com/rust-lang/crates.io-index#itertools@0.14.0",
         "registry+https://github.com/rust-lang/crates.io-index#proc-macro2@1.0.107",
         "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.47",
         "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.119"

@@ -47,9 +47,16 @@ struct FpcCtx {
 }
 
 async fn fpc_static_ctx(max_object_bytes: usize) -> FpcCtx {
+    fpc_static_ctx_with(max_object_bytes, None).await
+}
+
+async fn fpc_static_ctx_with(max_object_bytes: usize, cache_max_age: Option<u64>) -> FpcCtx {
     reset_metrics_for_tests();
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::write(tmp.path().join("ok.txt"), b"fpc-body-v1").expect("write");
+    let cache_headers = cache_max_age
+        .map(|n| format!("[route.cache_headers.by_mime.\"text/plain\"]\nmax_age = {n}\n"))
+        .unwrap_or_default();
     let raw = format!(
         r#"
 config_version = 1
@@ -63,6 +70,7 @@ name = "site"
 match = {{ path = "/" }}
 root = "{}"
 
+{cache_headers}
 [full_page_cache]
 enabled = true
 namespace = 4
@@ -329,4 +337,38 @@ async fn parallel_miss_inserts_remain_bounded() {
     let snap = ctx.state.fpc_cache.as_ref().expect("cache").snapshot();
     assert!(snap.entries <= 32);
     assert!(snap.bytes <= 1_048_576);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn ng17_static_cache_headers_applied_on_miss_and_hit() {
+    let _gate = WC2C_FPC_SUITE_GATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let harness = fpc_static_ctx_with(1024 * 1024, Some(3600)).await;
+    let ctx = harness.ctx;
+    let uri = "http://example.test/ok.txt";
+
+    for expected in ["miss", "hit"] {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .header("host", "example.test")
+            .body(())
+            .expect("req");
+        let r = serve_http3_request(ctx.as_ref().clone(), req).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(
+            r.headers().get("x-cache").and_then(|v| v.to_str().ok()),
+            Some(expected)
+        );
+        assert_eq!(
+            r.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=3600"),
+            "ADR-061 cache_headers must reach the wire on {expected}"
+        );
+        let _ = r.into_body().collect().await.unwrap();
+    }
 }

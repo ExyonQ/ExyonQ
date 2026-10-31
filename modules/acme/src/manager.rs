@@ -317,7 +317,12 @@ pub async fn ensure_certificates(
             }
         }
     }
-    challenge_result?;
+    if let Err(err) = challenge_result {
+        for token in &http01_tokens {
+            challenges.remove(token);
+        }
+        return Err(err);
+    }
 
     let ready = order.poll_ready(&RetryPolicy::default()).await;
     for token in &http01_tokens {
