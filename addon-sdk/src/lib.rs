@@ -41,7 +41,7 @@ pub fn static_descriptor(
     }
 }
 
-/// Official modules stay compatible with the current 0.8.x core line.
+/// Official modules stay compatible with the current 0.9.x core line.
 pub fn official_core_compat() -> &'static str {
-    ">=0.1.0, <0.9.0"
+    ">=0.1.0, <0.10.0"
 }
