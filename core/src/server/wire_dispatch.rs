@@ -43,7 +43,7 @@ use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
 const BAD_REQUEST_RESPONSE: &[u8] =
-    b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    b"HTTP/1.1 400 Bad Request\r\nServer: exyonq\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
 
 /// Process-local count of failed WirePlan::Reject 400 response writes.
 static WIRE_REJECT_RESPONSE_WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -230,43 +230,56 @@ fn strip_host_port(host: &str) -> &str {
     }
 }
 
-fn head_matches_htaccess_route(state: &ServerState, head: &[u8]) -> bool {
+/// AUDIT-D1/D2/D7: single wire admission gate — full dispatch when
+/// generation-wide features the wire paths cannot honor are active (FPC,
+/// gunzip, response-phase WAF), or when the matched route binds features
+/// only Hyper implements (`auth_basic`, zone limits, `sub_filter`, mirror,
+/// slice, htaccess, cache policies, route `response_headers`). The wire
+/// paths are transport-only shortcuts: they cannot emit a route 401/429,
+/// transform a body, or apply response metadata. Supersedes the narrow
+/// htaccess/response-headers probes — the audit proved them incomplete
+/// (`auth_basic` bypassed entirely — D1 Critical; FPC/sub_filter/mirror/
+/// zone-limit/response-WAF silently dropped — D2).
+pub(crate) fn wire_head_requires_full_dispatch(state: &ServerState, head: &[u8]) -> bool {
+    if state.wire_incompatible_features_active() {
+        return true;
+    }
     let Some(path) = parse_wire_origin_path(head) else {
         return false;
     };
-    let Some((route_idx, _)) = state.route_index.match_route_index_with_host(path, None) else {
-        return false;
-    };
+    let header_pairs = parse_wire_header_pairs(head);
+    let host = wire_host_from_pairs(&header_pairs).map(strip_host_port);
     state
-        .snapshot
-        .htaccess_site_id_for_route(route_idx)
-        .is_some()
+        .route_index
+        .match_route_index_with_host(path, host)
+        .is_some_and(|(idx, _)| state.route_requires_full_dispatch(idx))
 }
 
-/// ADR-062: a matched route with `[[route.response_headers]]` must go through the
-/// Hyper path so the configured headers are applied (Cap067 wire does not yet
-/// materialize arbitrary response headers).
-fn wire_route_response_headers_for_head<'a>(
-    state: &'a ServerState,
-    head: &[u8],
-) -> &'a [(String, String, bool)] {
-    let Some(path) = parse_wire_origin_path(head) else {
-        return &[];
-    };
-    let host = parse_wire_header_pairs(head)
-        .into_iter()
-        .find(|(k, _)| k == "host")
-        .map(|(_, v)| {
-            let trimmed = v.trim();
-            strip_host_port(trimmed).to_string()
-        });
-    let Some((route_idx, _)) = state
-        .route_index
-        .match_route_index_with_host(path, host.as_deref())
-    else {
-        return &[];
-    };
-    state.snapshot.route_response_headers(route_idx)
+/// AUDIT-D2 (static keep-alive): a full-dispatch route whose paths a static
+/// slot could claim makes wire-static unsafe generation-wide. The epoll /
+/// blocking / tokio static loops re-resolve the *slot* per request but never
+/// the route — a keep-alive switch to `dirty_prefix/...` would serve the
+/// file with no auth/limit/headers. Non-prefix dirty matches (suffix/regex/
+/// header filter) can't be proven disjoint from the root → conservative
+/// overlap. Fail closed: plan Hyper for every static decision that could
+/// carry such a sibling.
+fn static_wire_route_overlap(state: &ServerState) -> bool {
+    state.config.routes.iter().enumerate().any(|(idx, route)| {
+        if !state.route_requires_full_dispatch(idx) {
+            return false;
+        }
+        let m = &route.r#match;
+        state.snapshot.static_slots.iter().any(|slot| {
+            let sp = slot.route_prefix.trim_end_matches('/');
+            if sp.is_empty() || m.suffix.is_some() || m.regex.is_some() || m.header.is_some() {
+                // Static "/" root claims every path; non-prefix or
+                // header-filtered matches can't be proven disjoint.
+                return true;
+            }
+            let dp = m.path.trim_end_matches('/');
+            dp == sp || dp.starts_with(&format!("{sp}/"))
+        })
+    })
 }
 
 fn parse_wire_origin_path(head: &[u8]) -> Option<&str> {
@@ -426,7 +439,7 @@ fn wire_host_from_pairs(headers: &[(String, String)]) -> Option<&str> {
 pub(crate) fn format_waf_reject_http(reject: &crate::waf::WafReject) -> Vec<u8> {
     let body = reject.body.as_slice();
     let mut resp = format!(
-        "HTTP/1.1 {} \r\ncontent-type: {}\r\ncache-control: no-store\r\npragma: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n",
+        "HTTP/1.1 {} \r\nserver: exyonq\r\ncontent-type: {}\r\ncache-control: no-store\r\npragma: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n",
         reject.status.as_u16(),
         reject.content_type,
         body.len()
@@ -517,7 +530,7 @@ enum ProxyWireOutcome<S> {
 
 /// Wire proxy fast path; returns `Fallback` when Hyper must complete the request.
 async fn serve_proxy_wire<S>(
-    state: &ServerState,
+    state: &Arc<ServerState>,
     generation: u64,
     mut stream: S,
     head: Bytes,
@@ -541,10 +554,14 @@ where
         return ProxyWireOutcome::Fallback(stream, head, rest);
     };
 
-    // Cap056: explicit `route.cache` / [[cache_policy]] is owned by Hyper
-    // `proxy_dispatch_maybe_cached`. The GET `/api/*` wire fast path must not
-    // silently bypass store/hit when a policy is bound (PRODUCTION_REACHABLE defect).
-    if state.snapshot.cache_policy_for_route(route_idx).is_some() {
+    // AUDIT-D1/D2: generalized wire admission. Cap056 gated only on
+    // `route.cache` — every route-bound feature shipped since silently
+    // bypassed on the wire path: auth_basic (the wire path cannot emit a
+    // route 401 at all — proven bypass), zone limits, sub_filter, mirror,
+    // slice, htaccess and route response_headers. FPC/gunzip/response-WAF
+    // are generation-wide and equally unreachable here. The wire path is a
+    // transport shortcut — routes that need semantics take full dispatch.
+    if state.route_requires_full_dispatch(route_idx) || state.wire_incompatible_features_active() {
         return ProxyWireOutcome::Fallback(stream, head, rest);
     }
 
@@ -623,6 +640,20 @@ where
         .and_then(|r| r.upstream.clone())
         .unwrap_or_else(|| "-".to_string());
     let boxed = exyonq_mod_proxy::box_wire_stream(stream);
+    // AUDIT-D1: keep-alive gate. wire_conn pins cluster+host for the whole
+    // connection and previously forwarded every subsequent GET path verbatim —
+    // a keep-alive switch to an auth-protected (or any full-dispatch) route
+    // would still be proxied wire-fast. The gate resolves each keep-alive
+    // path against the *same* generation pinned here; a token mismatch ends
+    // the admission inside wire_conn (fail closed → reconnect via dispatch).
+    let route_gate: Arc<exyonq_module_api::wire_module_hooks::WireRouteGate> = {
+        let state = Arc::clone(state);
+        Arc::new(move |path: &str, host: Option<&str>| {
+            let (idx, _) = state.route_index.match_route_index_with_host(path, host)?;
+            (!state.route_requires_full_dispatch(idx) && !state.wire_incompatible_features_active())
+                .then_some(idx as u64)
+        })
+    };
     // Bench/edge hot path: access logging is usually off — do not Bytes::clone the
     // request head solely for a no-op emit (refcount churn on every P4 wire GET).
     let head_for_access = observability::access_event_required().then(|| head.clone());
@@ -636,6 +667,7 @@ where
         head,
         rest,
         real_ip,
+        Some(route_gate),
     )
     .await
     {
@@ -744,15 +776,12 @@ where
     if state.modules_require_hyper_for_request_head(head.as_ref()) {
         return Some(WirePlan::Hyper(stream, head, rest));
     }
-    // A static miss on the epoll path is a terminal 404. `.htaccess` Redirect
-    // is applied only by the full handler, so an overlay route must not be
-    // claimed as sendfile.
-    if head_matches_htaccess_route(state, head.as_ref()) {
-        return Some(WirePlan::Hyper(stream, head, rest));
-    }
-    // ADR-062: response headers (e.g. HSTS) are only materialized on the Hyper
-    // path. Force Hyper for any matched route that configures them.
-    if !wire_route_response_headers_for_head(state, head.as_ref()).is_empty() {
+    // AUDIT-D1/D2/D7: unified route-aware admission. A static miss on the
+    // epoll path is a terminal 404 and the wire paths cannot honor
+    // route-bound features (auth, zone limits, sub_filter, mirror, slice,
+    // htaccess, cache policies, response_headers) or generation-wide ones
+    // (FPC, gunzip, response WAF) — those requests must reach full dispatch.
+    if wire_head_requires_full_dispatch(state, head.as_ref()) {
         return Some(WirePlan::Hyper(stream, head, rest));
     }
     let view = generation_view_from_state(state);
@@ -765,6 +794,14 @@ where
         && !head.starts_with(b"HEAD /health ")
         && !exyonq_mod_static::static_slot_owns_request(head.as_ref())
     {
+        WirePlanDecision::Hyper
+    } else {
+        decision
+    };
+    // AUDIT-D2: static keep-alive loops never re-resolve the route — a
+    // sibling route requiring full dispatch under a static prefix would be
+    // served raw on a subsequent request. Fail closed generation-wide.
+    let decision = if decision == WirePlanDecision::Static && static_wire_route_overlap(state) {
         WirePlanDecision::Hyper
     } else {
         decision

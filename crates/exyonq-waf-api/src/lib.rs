@@ -352,6 +352,13 @@ pub trait WafEngine: Send + Sync {
     fn inspects_response_body(&self) -> bool {
         false
     }
+
+    /// Whether the engine has CRS rules that inspect responses at all
+    /// (headers or body). AUDIT-D2: paths that never produce an inspectable
+    /// response (byte-level wire relays) must decline ownership when set.
+    fn inspects_responses(&self) -> bool {
+        false
+    }
 }
 
 /// No-op engine: always [`WafAction::Allow`]. Useful before a concrete engine is wired.

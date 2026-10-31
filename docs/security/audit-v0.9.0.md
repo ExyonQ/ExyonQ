@@ -81,3 +81,93 @@ No new `unsafe` blocks introduced by the v0.9.0 feature set (NG-15..18, OL-01/02
 - **Reviewer:** release pipeline (gates above, reproducible evidence in repo scripts + `.exyonq-local/`)
 - **Date:** 2026-10-31
 - **Notes:** Formal `exyonq-security-compiler` verdict, `contract-adversarial-auditor` pass and official sequential benchmark remain pending before tag — reported honestly as NOT RUN / pending, never as pass. `OPEN_PROVEN_PRODUCT_DEFECTS = 0` at this writing.
+
+---
+
+## Round 2 — 2026-10-31 (post NG-18 C/D/E, HTTP-01, Q-10)
+
+**Scope added since Round 1:** NG-18 C/D/E (`sub_filter`, `mirror`, `slice`), ACME HTTP-01 cross-process share (ADR-066), Q-10 WAF metrics, `zone_ratelimit`, `auth_basic`, `waf_body`, workspace clippy drift fixes, wasmtime 49.0.4→49.0.5.
+
+### Automated gates (re-run on final tree)
+
+| Gate | Result |
+|---|---|
+| `cargo audit` | PASS — 3 new RUSTSEC advisories (wasmtime, dated 2026-10-29, dev-dep only) cleared via patch pin `=49.0.5` |
+| `cargo deny check` | PASS (advisories/bans/licenses/sources) |
+| `scan-private-material.sh --git-tree` | PASS (0 findings) |
+| `cargo fmt --check` | PASS |
+| `cargo clippy` (all touched crates, `-D warnings`) | PASS — incl. toolchain-drift fixes in `map_ir.rs`, `handler.rs` |
+| Tests | acme 10/10 · compat-nginx 26/26 · ng18 gunzip 3/3 + sub_filter 2/2 · core lib touched-area 17/17 · waf_metrics 1/1 |
+
+### Independent audits
+
+**exyonq-security-compiler:** CONDITIONAL ACCEPT → blockers **all fixed and verified**.
+
+| ID | Sev | Finding | Disposition |
+|---|---|---|---|
+| F1 | H | slice cached 206s bypassing store gates → `Set-Cookie` replay, private/no-store poisoning | **FIXED** — `slice_segment_store_blocked` + `filter_storable_headers` + denylist (`module-api/cache.rs`, `handler.rs`) |
+| F2 | H | `zone_ratelimit` unbounded map on attacker keys | **FIXED** — 10k/zone cap, full-bucket sweep, LRU evict, 128-char key cap |
+| F3 | M | gunzip unbounded header-state input | **FIXED** — `Err` when header-state input >64 KiB |
+| F4 | M | sub_filter `buf` grew ~whole-body on large frames | **FIXED** — drain `buf` before polling inner |
+| F5 | M | `waf_body` buffer never drained past max_bytes | **FIXED** — buffer capped at `max_bytes` |
+| F6 | M | client `x-exyonq-mirror` header suppressed mirroring | **FIXED** — `MirrorMarker` extension + guard-header stripped at both external entries |
+| F9 | L | `\n` unescaped in waf rule_id label | **FIXED** |
+| — | — | Passthrough 206 `collect()` unbounded | **FIXED** — `http_body_util::Limited` at segment size |
+| — | — | ratelimit fail-open on poisoned mutex | **FIXED** — poison-tolerant lock |
+| — | — | ACME silent disk errors / token leak on order failure | **FIXED** — `warn!` on get/remove + error-path cleanup |
+| — | — | mirror lifecycle metrics absent (ADR-064:56) | **FIXED** — `exyonq_mirror_subrequests_total{outcome}` on `/metrics` |
+| — | — | sub_filter `$var` imported as Supported (nginx interpolates) | **FIXED** — importer → `Unsupported` when replacement contains `$` |
+| — | — | streaming `WafBody` uninstrumented (Q-10 undercount) | **FIXED** — `note_inspection`+`note_decision` wired |
+
+**contract-adversarial-auditor:** initial verdict REJECT (2 blockers) → both were F1/F3 above, **fixed**. Verified-clean areas: NG-15 key/vary/bypass, NG-16 stale-if-error, NG-17 headers, OL-01/02, Q-15, ADR-066 lifecycle.
+
+### Deferred (documented, non-blocking)
+
+- **F7** FPC bypass matching doesn't %-decode paths (`/%77p-admin` evades `wp-admin` bypass) — defeats operator never-cache list; cookie gate still protects confidentiality. → 0.9.x hardening.
+- **F8** challenge-store residuals inside ADR-066 trust domain: no `O_NOFOLLOW`, no crash-orphan sweep, no dir-perm check at startup.
+- **F10** slice HEAD assembles all segments (bounded 64 MiB, wasteful); segment entries unpurgeable (site/ns/tag zeroed).
+- sub_filter `once` is global across rules (nginx may be per-pair — differential pending); mirror headers-hook fires pre-access-phase (parity nit); Apache `A####` migrator doesn't clamp max_age; Plan-12 MISS serves filtered headers to live client (pre-existing parity nit).
+
+## Verdict (Round 2)
+
+**CONDITIONAL ACCEPT → tag-ready pending:** all security/contract blockers closed and re-verified; remaining release steps are mechanical (sync → commit → tag → Docker publish E2E amd64+arm64 per rule 134).
+
+---
+
+## Round 3 — 2026-10-31 (post-merge contract-adversarial-auditor FAIL → remediation)
+
+**Trigger:** independent `contract-adversarial-auditor` pass over the v0.9.0 land (post PR #64 merge) returned **FAIL** — 8 proven production-reachable defects, self-confirming test loop confirmed (wire-path fixtures never configured auth/FPC; gunzip corpus had no truncations; `limit_reached` never asserted).
+
+### Defects and remediation (all fixed in lab, regressions added)
+
+| ID | Sev | Defect | Remediation |
+|---|---|---|---|
+| D1 | Critical | `auth_basic` unreachable on wire proxy path — no code could emit 401 | `ServerState::route_requires_full_dispatch` + `wire_head_requires_full_dispatch` admit gate; wire falls back to Hyper dispatch |
+| D2 | High | Wire path silently no-op'd FPC/`sub_filter`/`mirror`/`zone_ratelimit`/response-WAF | Same unified gate: per-route modules + `wire_incompatible_features_active` (FPC/gunzip/resp-WAF) + keep-alive `WireRouteGate` pinned-token recheck per request (mismatch → fail-closed close) |
+| D3 | High | gunzip livelock: `inner_done` + residual input + no progress → `continue` spin | No-progress guard → `truncated gzip stream` error (multi-thread timeout tests) |
+| D4 | High | `waf_body` re-inspected full retained prefix per chunk (quadratic ~GiB on 100MB); `limit_reached` dead | Incremental scan of new bytes + max-pattern-length boundary overlap; `limit_reached` reachable at `>= max_bytes` |
+| D5 | Medium | `purge.url` invalidated one exact key only — Vary/query variants survived | `CacheKeyParts::url_group` + `url_groups` secondary index + `invalidate_url_group`; `key.query` allowlist canonicalized at purge |
+| D6 | Medium | `mirror` fired at connection-entry, before auth/WAF/ratelimit → sink sees rejected traffic | `maybe_mirror_headers`/`maybe_mirror_body` moved into `dispatch_core` post-access gates |
+| D7 | Medium | `GET/HEAD /site/*` Hyper fast-branch returned before route-match → auth/`response_headers` unreachable | Route match + `route_requires_full_dispatch` gate before all three `/site/` shortcuts |
+| D8 | Medium | FPC path-bypass evadable via `%XX` (`/wp-%61dmin/`) | `percent_decode_segment` once per segment in `fpc_canonicalize_path`; malformed/unsafe encodings fail closed (supersedes deferred F7) |
+
+Also closed deferred nits: mirror headers-hook now post-access (was F-round deferred note). `Server: exyonq` (versionless) added to every ExyonQ-generated response surface (Hyper funnel `finish_hyper`, static/proxy wire templates, sdp shard, fcgi exec, drain probes, metrics export); upstream `Server` passes through untouched — nginx parity.
+
+### Regression coverage added
+
+- `route_bound_features_force_full_dispatch` (table: auth/ratelimit/sub_filter/mirror/slice/response_headers → full dispatch)
+- `wire_head_for_protected_route_requires_full_dispatch` (generation-wide FPC gate)
+- `site_fast_path_honors_route_auth` (D7: `/site/` + auth → 401, not static 200)
+- `keepalive_route_gate_mismatch_closes_connection` (D1/D2: second keep-alive request to incompatible route → close, no upstream hit)
+- `mirror_headers_mode_fires_only_after_access_gates` (D6: unauthenticated → 401, zero mirror)
+- `purge_url_covers_vary_variants_and_key_query` (D5: variants + allowed-query purged together)
+- gunzip truncated/malformed timeout tests ×3 (D3); `waf_body::scans_incrementally_and_stops_at_limit` (D4); `fpc_path_encoding_bypass` %-decode asserts (D8)
+- Test-infra fix: `TEST_RT_LOCK` serializes global-runtime-mutating wire_conn tests (latent race exposed by the new regression)
+
+### Verification on remediated tree
+
+`cargo fmt` clean · `cargo clippy --workspace --all-targets -Dwarnings` clean · workspace test suite green (all crates incl. new regressions).
+
+### Verdict (Round 3)
+
+**Remediated, pending independent re-audit.** `OPEN_PROVEN_PRODUCT_DEFECTS` was 8 at audit time; each has a shipped fix + regression. Re-audit verdict and official sequential benchmark remain pending before tag — reported honestly, never as pass.

@@ -176,14 +176,6 @@ pub async fn serve_http3_request<B: Http3RequestBody>(
     let mirror_headers = header_pairs_from_map(req.headers());
     let waf_request_headers = mirror_headers.clone();
     let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
-    crate::mirror::maybe_mirror_headers(
-        &ctx,
-        &path,
-        host.as_deref(),
-        &method,
-        &mirror_headers,
-        query.as_deref(),
-    );
     let state = Arc::clone(&ctx.state);
     let (parts, body) = req.into_parts();
     let req = Request::from_parts(parts, body.into_http3_bytes());
@@ -464,14 +456,6 @@ pub async fn serve_connection(
     let mirror_headers = header_pairs_from_map(req.headers());
     let waf_request_headers = mirror_headers.clone();
     let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
-    crate::mirror::maybe_mirror_headers(
-        &ctx,
-        &path,
-        host.as_deref(),
-        &method,
-        &mirror_headers,
-        query.as_deref(),
-    );
     let state = Arc::clone(&ctx.state);
     let response = serve_connection_inner(ctx, req).await?;
     let mut response: Response<FinalBoxBody> = response.map(|body| {
@@ -617,28 +601,62 @@ async fn serve_connection_inner(
         {
             let path = req.uri().path();
             if path.as_bytes().starts_with(b"/site/") {
-                if let Some(root_slot) = site_static_root_slot(&ctx.state) {
-                    let headers = header_pairs_from_map(req.headers());
-                    let header_view = crate::waf::PairsHeaderView(&headers);
-                    let client_ip_addr = client_ip_from_xff(Some(&xff));
-                    let host = request_host(&req);
-                    if let Some(reject) = waf_header_gate(
-                        &ctx.state,
-                        req.method(),
-                        host.as_deref(),
-                        path,
-                        req.uri().query(),
-                        &header_view,
-                        client_ip_addr,
-                        false,
-                    ) {
-                        let outcome = waf_outcome_from_status(reject.status());
-                        crate::observability::emit_audit(crate::observability::AuditEvent {
-                            action: "waf.decision",
-                            result: "success",
-                            detail: Some(outcome),
-                            request_id: identity.as_ref().map(|id| id.internal_request_id.as_str()),
-                        });
+                // AUDIT-D7: match the route before the static shortcut — a
+                // `/site/` route carrying auth/limit/htaccess/cache (or FPC /
+                // response WAF active generation-wide) must take full dispatch.
+                let host = request_host(&req);
+                let route_forces_dispatch = ctx
+                    .state
+                    .route_index
+                    .match_route_index_with_host(path, host.as_deref())
+                    .is_some_and(|(idx, _)| ctx.state.route_requires_full_dispatch(idx));
+                let static_ok =
+                    !route_forces_dispatch && !ctx.state.wire_incompatible_features_active();
+                if static_ok {
+                    if let Some(root_slot) = site_static_root_slot(&ctx.state) {
+                        let headers = header_pairs_from_map(req.headers());
+                        let header_view = crate::waf::PairsHeaderView(&headers);
+                        let client_ip_addr = client_ip_from_xff(Some(&xff));
+                        if let Some(reject) = waf_header_gate(
+                            &ctx.state,
+                            req.method(),
+                            host.as_deref(),
+                            path,
+                            req.uri().query(),
+                            &header_view,
+                            client_ip_addr,
+                            false,
+                        ) {
+                            let outcome = waf_outcome_from_status(reject.status());
+                            crate::observability::emit_audit(crate::observability::AuditEvent {
+                                action: "waf.decision",
+                                result: "success",
+                                detail: Some(outcome),
+                                request_id: identity
+                                    .as_ref()
+                                    .map(|id| id.internal_request_id.as_str()),
+                            });
+                            return finish_hyper(
+                                identity.as_ref(),
+                                access_needed,
+                                method.as_str(),
+                                &request_path,
+                                protocol,
+                                started,
+                                Some(client_ip.as_str()),
+                                reject,
+                                Some(outcome),
+                            );
+                        }
+                        // Cap019: forward Range only (full HeaderMap→Vec remains avoided).
+                        let response = static_dispatch_via_service(
+                            req.method(),
+                            root_slot,
+                            path,
+                            static_dispatch_range_headers(req.headers()),
+                            None,
+                        )
+                        .await;
                         return finish_hyper(
                             identity.as_ref(),
                             access_needed,
@@ -647,30 +665,10 @@ async fn serve_connection_inner(
                             protocol,
                             started,
                             Some(client_ip.as_str()),
-                            reject,
-                            Some(outcome),
+                            response,
+                            Some("static"),
                         );
                     }
-                    // Cap019: forward Range only (full HeaderMap→Vec remains avoided).
-                    let response = static_dispatch_via_service(
-                        req.method(),
-                        root_slot,
-                        path,
-                        static_dispatch_range_headers(req.headers()),
-                        None,
-                    )
-                    .await;
-                    return finish_hyper(
-                        identity.as_ref(),
-                        access_needed,
-                        method.as_str(),
-                        &request_path,
-                        protocol,
-                        started,
-                        Some(client_ip.as_str()),
-                        response,
-                        Some("static"),
-                    );
                 }
             }
         }
@@ -795,8 +793,19 @@ fn finish_hyper(
             });
         }
     }
-    if let Some(identity) = identity {
+    let response = if let Some(identity) = identity {
         attach_request_id(response, &identity.internal_request_id)
+    } else {
+        response
+    };
+    // `Server: exyonq` (versionless) on responses we emit; a proxied upstream's
+    // own Server header passes through untouched — same rule as nginx.
+    if !response.headers().contains_key(http::header::SERVER) {
+        let mut response = response;
+        response
+            .headers_mut()
+            .insert(http::header::SERVER, HeaderValue::from_static("exyonq"));
+        response
     } else {
         response
     }
@@ -846,34 +855,45 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
             return probe_ready_response(req.method(), &ctx.ops);
         }
         if path.as_bytes().starts_with(b"/site/") && !ctx.state.mirror_configured() {
-            if let Some(root_slot) = site_static_root_slot(&ctx.state) {
-                let headers = header_pairs_from_map(req.headers());
-                let header_view = crate::waf::PairsHeaderView(&headers);
-                let client_ip = client_ip_from_xff(Some(&xff));
-                let host = request_host(&req);
-                if let Some(reject) = waf_header_gate(
-                    &ctx.state,
-                    req.method(),
-                    host.as_deref(),
-                    path,
-                    req.uri().query(),
-                    &header_view,
-                    client_ip,
-                    false,
-                ) {
-                    return reject;
+            // AUDIT-D7: match the route before the static shortcut — same gate
+            // as serve_connection_inner (auth/limit/htaccess/cache/FPC).
+            let host = request_host(&req);
+            let route_forces_dispatch = ctx
+                .state
+                .route_index
+                .match_route_index_with_host(path, host.as_deref())
+                .is_some_and(|(idx, _)| ctx.state.route_requires_full_dispatch(idx));
+            let static_ok =
+                !route_forces_dispatch && !ctx.state.wire_incompatible_features_active();
+            if static_ok {
+                if let Some(root_slot) = site_static_root_slot(&ctx.state) {
+                    let headers = header_pairs_from_map(req.headers());
+                    let header_view = crate::waf::PairsHeaderView(&headers);
+                    let client_ip = client_ip_from_xff(Some(&xff));
+                    if let Some(reject) = waf_header_gate(
+                        &ctx.state,
+                        req.method(),
+                        host.as_deref(),
+                        path,
+                        req.uri().query(),
+                        &header_view,
+                        client_ip,
+                        false,
+                    ) {
+                        return reject;
+                    }
+                    // Cap019: forward Range only (full header pair copy remains avoided).
+                    let mut response = static_dispatch_via_service(
+                        req.method(),
+                        root_slot,
+                        path,
+                        static_dispatch_range_headers_from_pairs(&headers),
+                        None,
+                    )
+                    .await;
+                    attach_route_labels(&ctx.state, path, host.as_deref(), &mut response);
+                    return response;
                 }
-                // Cap019: forward Range only (full header pair copy remains avoided).
-                let mut response = static_dispatch_via_service(
-                    req.method(),
-                    root_slot,
-                    path,
-                    static_dispatch_range_headers_from_pairs(&headers),
-                    None,
-                )
-                .await;
-                attach_route_labels(&ctx.state, path, host.as_deref(), &mut response);
-                return response;
             }
         }
     }
@@ -1402,27 +1422,37 @@ async fn dispatch_core(
 
     if (*method == Method::GET || *method == Method::HEAD) && path.as_bytes().starts_with(b"/site/")
     {
-        if let Some(reject) = waf_header_gate(
-            state,
-            method,
-            host.as_deref(),
-            path,
-            uri.query(),
-            &header_view,
-            client_ip,
-            false,
-        ) {
-            return reject;
-        }
-        if let Some(root_slot) = site_static_root_slot(state) {
-            return static_dispatch_via_service(
+        // AUDIT-D7: match the route before the static shortcut — a `/site/`
+        // route with auth_basic/zone-limit/htaccess/cache (or FPC / response
+        // WAF active generation-wide) must reach the checks below, not be
+        // served straight from disk.
+        let route_forces_dispatch = state
+            .route_index
+            .match_route_index_with_host(path, host.as_deref())
+            .is_some_and(|(idx, _)| state.route_requires_full_dispatch(idx));
+        if !route_forces_dispatch && !state.wire_incompatible_features_active() {
+            if let Some(reject) = waf_header_gate(
+                state,
                 method,
-                root_slot,
+                host.as_deref(),
                 path,
-                static_dispatch_range_headers_from_pairs(request_headers),
-                materialization_budget_bytes,
-            )
-            .await;
+                uri.query(),
+                &header_view,
+                client_ip,
+                false,
+            ) {
+                return reject;
+            }
+            if let Some(root_slot) = site_static_root_slot(state) {
+                return static_dispatch_via_service(
+                    method,
+                    root_slot,
+                    path,
+                    static_dispatch_range_headers_from_pairs(request_headers),
+                    materialization_budget_bytes,
+                )
+                .await;
+            }
         }
     }
 
@@ -1481,6 +1511,9 @@ async fn dispatch_core(
     // NG-18 Phase D: nginx creates mirror subrequests at PRECONTENT (after the
     // access-phase rejections above) and, with `mirror_request_body on`, only
     // once the client body has been read. The body is already materialized here.
+    // AUDIT-D6: headers-mode (`mirror_request_body off`) fires here too — it
+    // previously fired at connection entry, mirroring requests that the
+    // auth/WAF/zone gates above were about to reject (amplified denied load).
     let mirror_ctx = ConnectionContext {
         state: Arc::clone(state),
         proxy_client: proxy_client.clone(),
@@ -1489,6 +1522,14 @@ async fn dispatch_core(
             .unwrap_or_else(|| HeaderValue::from_static("")),
         ops: Arc::clone(ops),
     };
+    crate::mirror::maybe_mirror_headers(
+        &mirror_ctx,
+        path,
+        host.as_deref(),
+        method,
+        request_headers,
+        uri.query(),
+    );
     let mirror_body = request_body.clone().unwrap_or_default();
     crate::mirror::maybe_mirror_body(
         &mirror_ctx,
@@ -3133,6 +3174,7 @@ async fn proxy_dispatch_slice(
                 None,
                 CacheNamespace::new(0),
                 Arc::from([]),
+                None,
                 NamespaceMetrics::NONE,
             );
         }
@@ -4397,6 +4439,331 @@ mod tests {
         assert_eq!(via_canonical.route_name, "site");
         assert_eq!(via_fast.status(), via_backend_table.status());
         assert_eq!(via_fast.status(), StatusCode::OK);
+    }
+
+    /// AUDIT-D6: headers-mode mirror fires post-access. A request the auth
+    /// gate rejects must never reach the mirror (no amplified denied load);
+    /// an admitted request still fans out to every destination.
+    #[tokio::test]
+    async fn mirror_headers_mode_fires_only_after_access_gates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), b"mirrored").unwrap();
+        let htpasswd = dir.path().join("users.htpasswd");
+        std::fs::write(&htpasswd, "u:{PLAIN}pw\n").unwrap();
+
+        let mut site = route("site", "/site");
+        site.root = Some(dir.path().to_path_buf());
+        site.index = Some("index.html".into());
+        let mut modules = exyonq_config_ir::ModulesConfig::default();
+        modules.auth.routes.insert(
+            "site".into(),
+            exyonq_config_ir::AuthRouteConfig {
+                realm: "restricted".into(),
+                user_file: htpasswd.display().to_string(),
+            },
+        );
+        modules.mirror.routes.insert(
+            "site".into(),
+            exyonq_config_ir::MirrorRouteConfig {
+                destinations: vec!["/mirror-sink".into()],
+                request_body: false,
+            },
+        );
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["site".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![site],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules,
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+
+        // Denied: no Authorization header — 401 and zero mirror traffic.
+        let before = crate::mirror::mirror_started_for_tests();
+        let denied = dispatch_core(
+            &state,
+            &state.proxy_client,
+            &Method::GET,
+            &Uri::from_static("/site/index.html"),
+            None,
+            None,
+            &[],
+            None,
+            None,
+            &test_ops(),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            crate::mirror::mirror_started_for_tests(),
+            before,
+            "denied request must not spawn mirror subrequests"
+        );
+
+        // Admitted: valid credentials — response serves and the headers-mode
+        // mirror fires exactly once (destination unreachable → counted started
+        // regardless of its outcome).
+        use base64::Engine as _;
+        let auth = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("u:pw")
+        );
+        let allowed = dispatch_core(
+            &state,
+            &state.proxy_client,
+            &Method::GET,
+            &Uri::from_static("/site/index.html"),
+            None,
+            None,
+            &[("authorization".to_string(), auth)],
+            None,
+            None,
+            &test_ops(),
+        )
+        .await;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mirror::mirror_started_for_tests(),
+            before + 1,
+            "admitted request must fire the headers-mode mirror"
+        );
+    }
+
+    /// AUDIT-D7: the `/site/*` static shortcut must honor route-bound access
+    /// control — the old code served the file before the route match ran, so
+    /// `auth_basic` was unreachable there.
+    #[tokio::test]
+    async fn site_fast_path_honors_route_auth() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), b"secret").unwrap();
+        let htpasswd = dir.path().join("users.htpasswd");
+        std::fs::write(&htpasswd, "u:{PLAIN}pw\n").unwrap();
+
+        let mut site = route("site", "/site");
+        site.root = Some(dir.path().to_path_buf());
+        site.index = Some("index.html".into());
+        let mut modules = exyonq_config_ir::ModulesConfig::default();
+        modules.auth.routes.insert(
+            "site".into(),
+            exyonq_config_ir::AuthRouteConfig {
+                realm: "restricted".into(),
+                user_file: htpasswd.display().to_string(),
+            },
+        );
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["site".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![site],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules,
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        let denied = dispatch_core(
+            &state,
+            &state.proxy_client,
+            &Method::GET,
+            &Uri::from_static("/site/index.html"),
+            None,
+            None,
+            &[],
+            None,
+            None,
+            &test_ops(),
+        )
+        .await;
+        assert_eq!(
+            denied.status(),
+            StatusCode::UNAUTHORIZED,
+            "auth-protected /site/ route must challenge, not serve the file"
+        );
+    }
+
+    /// AUDIT-D1/D2: every route-bound feature class must trip the shared
+    /// full-dispatch predicate — the wire/static fast paths consult this one
+    /// gate, so a missing binding is a silent semantic bypass.
+    #[tokio::test]
+    async fn route_bound_features_force_full_dispatch() {
+        let mut site = route("site", "/site");
+        site.response_headers = vec![exyonq_config_ir::ResponseHeaderConfig {
+            name: "x-h".into(),
+            value: "v".into(),
+            always: false,
+        }];
+        let mut modules = exyonq_config_ir::ModulesConfig::default();
+        modules.auth.routes.insert(
+            "auth".into(),
+            exyonq_config_ir::AuthRouteConfig {
+                realm: "r".into(),
+                user_file: "/dev/null".into(),
+            },
+        );
+        modules
+            .ratelimit
+            .routes
+            .insert("limited".into(), "z".into());
+        modules.sub_filter.routes.insert(
+            "filtered".into(),
+            exyonq_config_ir::SubFilterRouteConfig {
+                rules: vec![exyonq_config_ir::SubFilterRule {
+                    pattern: "a".into(),
+                    replacement: "b".into(),
+                }],
+                once: true,
+                types: vec!["text/html".into()],
+                last_modified: false,
+            },
+        );
+        modules.mirror.routes.insert(
+            "mirrored".into(),
+            exyonq_config_ir::MirrorRouteConfig {
+                destinations: vec!["/sink".into()],
+                request_body: false,
+            },
+        );
+        modules.slice.routes.insert(
+            "sliced".into(),
+            exyonq_config_ir::SliceRouteConfig { size: 4096 },
+        );
+        let names = [
+            "site", "auth", "limited", "filtered", "mirrored", "sliced", "plain",
+        ];
+        let mut routes: Vec<RouteConfig> =
+            names.iter().map(|n| route(n, &format!("/{n}"))).collect();
+        // "site" needs the response_headers binding — rebuild it in place.
+        routes[0] = site;
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: names.iter().map(|n| n.to_string()).collect(),
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes,
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules,
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        for (idx, expected) in [
+            (0usize, true), // response_headers
+            (1, true),      // auth_basic
+            (2, true),      // zone ratelimit
+            (3, true),      // sub_filter
+            (4, true),      // mirror
+            (5, true),      // slice
+            (6, false),     // plain route stays wire-eligible
+        ] {
+            assert_eq!(
+                state.route_requires_full_dispatch(idx),
+                expected,
+                "route index {idx} ({})",
+                names[idx]
+            );
+        }
+    }
+
+    /// AUDIT-D1/D2: the wire admission gate composes both predicates — a wire
+    /// head for a protected route (or a generation with FPC/gunzip/response
+    /// WAF) must take full dispatch, never the transport shortcut.
+    #[tokio::test]
+    async fn wire_head_for_protected_route_requires_full_dispatch() {
+        let mut modules = exyonq_config_ir::ModulesConfig::default();
+        modules.auth.routes.insert(
+            "auth".into(),
+            exyonq_config_ir::AuthRouteConfig {
+                realm: "r".into(),
+                user_file: "/dev/null".into(),
+            },
+        );
+        let fpc = exyonq_config_ir::FullPageCacheConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["auth".into(), "open".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![route("auth", "/auth"), route("open", "/open")],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules,
+            static_section: Default::default(),
+            full_page_cache: fpc,
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        // FPC is generation-wide → every wire head requires full dispatch.
+        assert!(
+            crate::server::wire_dispatch::wire_head_requires_full_dispatch(
+                &state,
+                b"GET /open/x HTTP/1.1\r\nHost: h\r\n\r\n"
+            )
+        );
+        assert!(
+            crate::server::wire_dispatch::wire_head_requires_full_dispatch(
+                &state,
+                b"GET /auth/x HTTP/1.1\r\nHost: h\r\n\r\n"
+            )
+        );
+        assert!(state.wire_incompatible_features_active());
     }
 
     fn plan08_fcgi_config() -> AppConfig {

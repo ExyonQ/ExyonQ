@@ -31,6 +31,17 @@ use std::time::Duration;
 static WC3_PURGE_SUITE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 async fn fpc_state(gen: u64, route_a: &str, route_b: &str) -> (SharedServerState, u64, u64) {
+    fpc_state_extra(gen, route_a, route_b, "").await
+}
+
+/// `extra` is appended verbatim inside the `[full_page_cache]` table region —
+/// used by the D5 regression to enable `key.query` allowlists.
+async fn fpc_state_extra(
+    gen: u64,
+    route_a: &str,
+    route_b: &str,
+    extra: &str,
+) -> (SharedServerState, u64, u64) {
     let tmp = tempfile::tempdir().expect("tmp");
     std::fs::create_dir_all(tmp.path().join("public")).unwrap();
     std::fs::write(tmp.path().join("public/a.txt"), b"a").unwrap();
@@ -61,10 +72,12 @@ max_total_bytes = 1048576
 max_object_bytes = 1048576
 default_ttl_seconds = 60
 max_ttl_seconds = 300
+{extra}
 "#,
         root = tmp.path().display(),
         route_a = route_a,
         route_b = route_b,
+        extra = extra,
     );
     let config: AppConfig = raw.parse().expect("config");
     let proxy = exyonq_mod_proxy::build_incoming_client();
@@ -89,7 +102,27 @@ fn insert(
     path: &str,
     body: &'static [u8],
 ) {
-    let key = build_storage_cache_key(CacheKeyParts {
+    insert_variant(
+        cache, site_id, route_idx, backend_id, gen, host, path, "", "", body,
+    );
+}
+
+/// D5: same-URL variants (`vary`/`query`) share the URL group — returns the
+/// exact `CacheKey` so tests can assert per-variant presence/absence.
+#[allow(clippy::too_many_arguments)] // test helper
+fn insert_variant(
+    cache: &ResponseCache,
+    site_id: u64,
+    route_idx: usize,
+    backend_id: u32,
+    gen: u64,
+    host: &str,
+    path: &str,
+    query: &str,
+    vary: &str,
+    body: &'static [u8],
+) -> exyonq_cache::CacheKey {
+    let parts = CacheKeyParts {
         range: String::new(),
         site_id,
         namespace: 4,
@@ -101,12 +134,14 @@ fn insert(
         scheme: "http".into(),
         host: host.into(),
         path: path.into(),
-        query: String::new(),
+        query: query.into(),
         content_encoding: "identity".into(),
-        vary: String::new(),
-    });
+        vary: vary.into(),
+    };
+    let group = exyonq_cache::url_group(&parts);
+    let key = build_storage_cache_key(parts);
     cache.insert_entry(
-        key,
+        key.clone(),
         site_id,
         route_idx,
         gen,
@@ -117,8 +152,120 @@ fn insert(
         None,
         CacheNamespace::new(4),
         Arc::from([]),
+        Some(group),
         NamespaceMetrics::NONE,
     );
+    key
+}
+
+/// AUDIT-D5 regression: `purge.url` must (a) kill every `Vary` variant of the
+/// URL — the old exact `vary:""`-key path left them cached — and (b) resolve
+/// the compiled `key.query` allowlist, so a functional-param URL is purgeable
+/// instead of failing `invalid_key`.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn purge_url_covers_vary_variants_and_key_query() {
+    let _gate = WC3_PURGE_SUITE_GATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    reset_metrics_for_tests();
+    let (shared, site_a, _site_b) = fpc_state_extra(
+        7,
+        "d5-a",
+        "d5-b",
+        "[full_page_cache.key]\nquery = [\"p\"]\n",
+    )
+    .await;
+    let state = reload::read_state(&shared);
+    let cache = state.fpc_cache.as_ref().unwrap();
+    let be_a = state.snapshot.route_backend_id(0).unwrap().index();
+
+    // Same URL, three Vary variants — one URL group, three distinct keys.
+    let k0 = insert_variant(
+        cache,
+        site_a,
+        0,
+        be_a,
+        7,
+        "example.test",
+        "/a/x",
+        "",
+        "",
+        b"x0",
+    );
+    let k1 = insert_variant(
+        cache,
+        site_a,
+        0,
+        be_a,
+        7,
+        "example.test",
+        "/a/x",
+        "",
+        "lang=es",
+        b"x1",
+    );
+    let k2 = insert_variant(
+        cache,
+        site_a,
+        0,
+        be_a,
+        7,
+        "example.test",
+        "/a/x",
+        "",
+        "lang=en",
+        b"x2",
+    );
+    // Functional param inside the compiled allowlist — its own URL group.
+    let kq = insert_variant(
+        cache,
+        site_a,
+        0,
+        be_a,
+        7,
+        "example.test",
+        "/a/x",
+        "p=1",
+        "",
+        b"xq",
+    );
+    assert_eq!(cache.snapshot().entries, 4);
+
+    let port = CoreCachePurgePort {
+        shared: SharedServerState::clone(&shared),
+    };
+
+    // (a) purge.url kills ALL Vary variants of /a/x.
+    let url = port.purge(CachePurgeOp::Url {
+        site_id: site_a,
+        scheme: "http".into(),
+        host: "example.test".into(),
+        path: "/a/x".into(),
+        query: String::new(),
+    });
+    assert!(url.ok, "purge.url failed: {:?}", url.error);
+    assert_eq!(url.purged_entries, 3, "all Vary variants of /a/x purged");
+    assert!(cache.lookup(&k0).is_none());
+    assert!(cache.lookup(&k1).is_none());
+    assert!(cache.lookup(&k2).is_none());
+    assert!(
+        cache.lookup(&kq).is_some(),
+        "?p=1 is a different URL group and must survive"
+    );
+
+    // (b) purge.url resolves the compiled key.query allowlist — `?p=1` is a
+    // real cacheable key, not `invalid_key` (the old `&[]` allowlist bug).
+    let urlq = port.purge(CachePurgeOp::Url {
+        site_id: site_a,
+        scheme: "http".into(),
+        host: "example.test".into(),
+        path: "/a/x".into(),
+        query: "p=1".into(),
+    });
+    assert!(urlq.ok, "allowlisted-query purge failed: {:?}", urlq.error);
+    assert_eq!(urlq.purged_entries, 1);
+    assert_eq!(cache.snapshot().entries, 0);
 }
 
 #[tokio::test]
@@ -253,6 +400,7 @@ async fn purge_generation_and_tag_deferred() {
         None,
         CacheNamespace::new(4),
         Arc::from(vec!["post:1".to_string()]),
+        None,
         NamespaceMetrics::NONE,
     );
     assert_eq!(cache.snapshot().entries, 2);

@@ -2223,6 +2223,9 @@ fn client_response(
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(256 + body.len());
     out.extend_from_slice(format!("HTTP/1.1 {code} {reason}\r\n").as_bytes());
+    if !extras.iter().any(|(k, _)| k.eq_ignore_ascii_case("server")) {
+        out.extend_from_slice(b"Server: exyonq\r\n");
+    }
     for (k, v) in extras {
         out.extend_from_slice(k.as_bytes());
         out.extend_from_slice(b": ");
@@ -2252,7 +2255,7 @@ fn static_response_head(
     out.extend_from_slice(code.to_string().as_bytes());
     out.push(b' ');
     out.extend_from_slice(reason_phrase(code).as_bytes());
-    out.extend_from_slice(b"\r\nContent-Length: ");
+    out.extend_from_slice(b"\r\nServer: exyonq\r\nContent-Length: ");
     out.extend_from_slice(content_length.to_string().as_bytes());
     out.extend_from_slice(b"\r\nContent-Type: ");
     out.extend_from_slice(content_type.as_bytes());

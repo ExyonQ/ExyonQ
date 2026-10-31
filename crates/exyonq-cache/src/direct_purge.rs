@@ -114,7 +114,7 @@ impl CachePurgePort for DirectL1PurgePort {
                         return CachePurgeOutcome::fail("purge.url", site_id, gen, "invalid_key");
                     }
                 };
-                let key = build_storage_cache_key(CacheKeyParts {
+                let parts = CacheKeyParts {
                     range: String::new(),
                     site_id,
                     namespace: self.namespace,
@@ -129,8 +129,12 @@ impl CachePurgePort for DirectL1PurgePort {
                     query: canon_query,
                     content_encoding: "identity".into(),
                     vary: String::new(),
-                });
-                let stats = self.cache.invalidate_key(&key);
+                };
+                // AUDIT-D5: URL-group purge covers Vary/coding/range variants.
+                // This test port has no access to the compiled `key.query`
+                // allowlist, so functional-param URLs stay fail-closed
+                // (`invalid_key`) — same as before.
+                let stats = self.cache.invalidate_url_group(crate::url_group(&parts));
                 if stats.purged_entries == 0 {
                     return CachePurgeOutcome::fail("purge.url", site_id, gen, "not_found");
                 }
@@ -159,7 +163,7 @@ pub fn test_insert(
     body: &'static [u8],
 ) {
     let (host, path) = host_path;
-    let key = build_storage_cache_key(CacheKeyParts {
+    let parts = CacheKeyParts {
         range: String::new(),
         site_id,
         namespace: 4,
@@ -174,7 +178,9 @@ pub fn test_insert(
         query: String::new(),
         content_encoding: "identity".into(),
         vary: String::new(),
-    });
+    };
+    let group = crate::url_group(&parts);
+    let key = build_storage_cache_key(parts);
     cache.insert_entry(
         key,
         site_id,
@@ -187,6 +193,7 @@ pub fn test_insert(
         None,
         CacheNamespace::new(4),
         Arc::from([]),
+        Some(group),
         NamespaceMetrics::NONE,
     );
 }

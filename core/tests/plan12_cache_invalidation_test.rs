@@ -213,6 +213,7 @@ fn insert_static_entry(
         static_identity,
         STATIC_CACHE_NAMESPACE,
         tags,
+        None,
         NamespaceMetrics::NONE,
     );
 }

@@ -109,7 +109,7 @@ fn content_length_for_discard(head: &[u8]) -> Option<usize> {
 const STATIC_BLOCKING_QUEUE_DEFAULT: usize = 256;
 
 #[cfg(target_os = "linux")]
-const STATIC_BLOCKING_ADMISSION_REJECTED: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
+const STATIC_BLOCKING_ADMISSION_REJECTED: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
 
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
