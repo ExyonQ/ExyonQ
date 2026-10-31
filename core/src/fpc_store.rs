@@ -73,6 +73,7 @@ pub fn try_fpc_store_response(
             None,
             CacheNamespace::new(ctx.namespace),
             std::sync::Arc::clone(&ctx.tags),
+            Some(ctx.url_group),
             NamespaceMetrics::NONE,
         );
     })) {

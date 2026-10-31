@@ -281,6 +281,10 @@ impl WafEngine for NativeWafEngine {
     fn inspects_response_body(&self) -> bool {
         self.snapshot.load().inspects_response_body()
     }
+
+    fn inspects_responses(&self) -> bool {
+        self.snapshot.load().inspects_responses()
+    }
 }
 
 impl WafEngine for FixedWafEngine {
@@ -309,6 +313,10 @@ impl WafEngine for FixedWafEngine {
 
     fn inspects_response_body(&self) -> bool {
         self.snapshot.inspects_response_body()
+    }
+
+    fn inspects_responses(&self) -> bool {
+        self.snapshot.inspects_responses()
     }
 }
 

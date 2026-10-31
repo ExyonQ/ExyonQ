@@ -37,6 +37,9 @@ type HttpBoxBody = BoxBody<Bytes, hyper::Error>;
 pub struct FpcMissContext {
     pub cache: Arc<ResponseCache>,
     pub key: CacheKey,
+    /// AUDIT-D5: URL-level group for this key (all `Vary`/coding variants
+    /// share it) — lets `purge.url` invalidate every variant of the URL.
+    pub url_group: u64,
     pub site_id: u64,
     pub namespace: u16,
     pub route_idx: usize,
@@ -127,7 +130,7 @@ pub fn fpc_gate(
     } else {
         "http"
     };
-    let key = build_storage_cache_key(CacheKeyParts {
+    let parts = CacheKeyParts {
         range: String::new(),
         site_id,
         namespace: fpc.namespace,
@@ -142,11 +145,14 @@ pub fn fpc_gate(
         query: canon_query,
         content_encoding: "identity".into(),
         vary,
-    });
+    };
+    let url_group = exyonq_cache::url_group(&parts);
+    let key = build_storage_cache_key(parts);
 
     let miss_ctx = FpcMissContext {
         cache: Arc::clone(cache),
         key: key.clone(),
+        url_group,
         site_id,
         namespace: fpc.namespace,
         route_idx,
