@@ -68,7 +68,7 @@ See [`v044-specialized-proxy-dataplane-integration-design.md`](v044-specialized-
 ## Count summary (current → target)
 
 | Metric | Current (bounded) | Target |
-|--------|-------------------|--------|
+| --- | --- | --- |
 | Stages | 19 | **8** |
 | Task boundaries / req | 4–6 | **≤2** |
 | Channel boundaries / req | 2–4 | **≤1** |

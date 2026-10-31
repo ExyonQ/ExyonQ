@@ -19,7 +19,7 @@ identity, raw artifacts, and labels are complete and honest.
 At minimum a checkable package under `--check DIR` must include:
 
 | Artifact | Role |
-|----------|------|
+| --- | --- |
 | `run_meta.json` (or equivalent identity file) | commit/revision, command, host/arch, timestamp/run ID |
 | `raw/` (or declared raw evidence) | unmodified measurement outputs |
 | metrics / summary files | derived from raw only |

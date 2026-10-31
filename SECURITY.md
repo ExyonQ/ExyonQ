@@ -3,7 +3,7 @@
 ## Supported versions
 
 | Version   | Supported |
-|-----------|-----------|
+| --- | --- |
 | 0.7.x     | Yes (current release) |
 | 0.6.x     | Security fixes only until superseded |
 | < 0.6     | No |
@@ -59,7 +59,7 @@ Out of scope: third-party benchmark containers, rival server configurations, com
 ### In-scope surfaces
 
 | Surface | Location |
-|---------|----------|
+| --- | --- |
 | HTTP/1 raw + hyper | `core/src/server/` |
 | Static files | `crates/exyonq-mod-static/` |
 | Reverse proxy | `crates/exyonq-mod-proxy/` |
@@ -94,7 +94,7 @@ Checklist: [`docs/security/release-checklist.md`](docs/security/release-checklis
 ## Blocking criteria
 
 | Severity | Release policy |
-|----------|----------------|
+| --- | --- |
 | Critical / High | **Block** — must fix before tag |
 | Medium | Fix **or** documented waiver in version audit + exception register |
 | Low | Backlog OK with linked issue |

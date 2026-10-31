@@ -68,7 +68,7 @@ IS_CONFIG_PUBLICLY_SUPPORTED = YES  # CFD route line field
 ## Geometry matrix (Netcup VALID 20260831T012000Z)
 
 | GEO | shards | max | CLIENT_CONC | ESTAB peak | PHP overlap | Interpretation |
-|-----|--------|-----|-------------|------------|-------------|----------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | GEO-1 | 1 | 1 | 6 | **1** | **1** | serial baseline |
 | GEO-1 | 1 | 2 | 6 | **1** | **1** | indistinguishable from max=1 |
 | GEO-1 | 1 | 6 | 6 | **1** | **1** | indistinguishable from max=1 |
@@ -92,7 +92,7 @@ KEEP_CONN_REGRESSION = PASS (200 / 1 SYN)
 ## Audits
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | Orchestrator | CONDITIONAL_ACCEPT |
 | Vertex | LATENT_IDLE_CAP_UNDER_SERIAL_EXECUTE_GET; ARCHITECTURE_AUDIT=PASS |
 | Security | OPERATOR_RESOURCE_BOUND_TRUST=FAIL vs busy+idle; P6MAX-D not security MUST_FIX; PASS_WITH_NONBLOCKING |

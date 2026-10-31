@@ -5,7 +5,7 @@
 **Taxonomy:** see product target §6.1
 
 | Directive / construct | Classification | Importer | Notes |
-|----------------------|----------------|----------|-------|
+| --- | --- | --- | --- |
 | `Listen` | MIGRATED_TO_EXYONQ_CONSTRUCT | yes | → `[[server]].listen` (`0.0.0.0:port` if port-only) |
 | `<VirtualHost>` | MIGRATED_TO_EXYONQ_CONSTRUCT | yes | One ExyonQ `[[server]]` + routes |
 | `ServerName` | SUPPORTED_EXACT (intent) | yes | → `server_name` |

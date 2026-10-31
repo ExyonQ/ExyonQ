@@ -21,7 +21,7 @@ error_pages = { "404" = "/404.html", "500" = "/50x.html" }
 ```
 
 | Field | Type | Notes |
-|-------|------|--------|
+| --- | --- | --- |
 | `error_pages` | map string→string | Keys parse as `u16` in `400..=599`; values Cap035 absolute paths |
 
 No top-level `[error_pages]` in v0.5 (avoids dual attachment). No `=200`, `@named`, or `http://` targets.
@@ -48,7 +48,7 @@ Rematch failure → original plain-text error (fail-closed).
 ### Migrator
 
 | Form | Emit |
-|------|------|
+| --- | --- |
 | `error_page 404 /404.html` | `error_pages["404"]="/404.html")` |
 | `error_page 500 502 /50x.html` | one entry per code |
 | `ErrorDocument 404 /404.html` | same |
@@ -57,4 +57,4 @@ Rematch failure → original plain-text error (fail-closed).
 ## Consequences
 
 - Custom 404/50x bodies without changing status semantics.
-- Named locations and status rewrite remain residual — SoT [`F1_RESIDUALS`](../../ROADMAP%20EXYONQ/F1_RESIDUALS.md) `F1-R11`…`F1-R14`.
+- Named locations and status rewrite remain residual — SoT `F1_RESIDUALS` (local lab path, not published) `F1-R11`…`F1-R14`.

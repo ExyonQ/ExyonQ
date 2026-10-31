@@ -30,7 +30,7 @@ Phase 8 is an **attack / completeness** campaign against the current supported C
 Before Netcup execution, specialists bound scope and attack plan only (`PRODUCT_MUTATION=NO`):
 
 | Role | Phase | Verdict | Notes |
-|------|-------|---------|-------|
+| --- | --- | --- | --- |
 | Orchestrator | pre-evidence | **CONDITIONAL ACCEPT** | Evidence-only WIP; WAF-off P7R topology for WS1–WS4; no product/async FCGI/Phase 9 ([review](3dbc940c-d1d3-4e73-9f80-f452730831ff)) |
 | Vertex | pre-evidence brief | **BLOCKED** | Source reconstruction only; `RUNTIME_EVIDENCE_ABSENT` — no safety PASS without Linux campaign ([review](88f5c947-d044-467b-9df7-445ebc8861bf)) |
 | Security engineer | pre-evidence plan | **CONDITIONAL ACCEPT** | Attack plan, not close; TOCTOU / FCGI dup / stale-gen still `NOT_MEASURED` ([review](90b01b9e-e1c7-45e7-b62f-1fd9ad462380)) |
@@ -70,7 +70,7 @@ Source: `crates/exyonq-cfd-dataplane/src/static_serve.rs` `openat2_confined`.
 ## Invalid / aborted runs
 
 | Run | Class | Use as product truth |
-|-----|--------|----------------------|
+| --- | --- | --- |
 | `20260901T175801Z` | `INVALID_HARNESS` | **NO** — absolute symlink TOCTOU; `strace -p` + SIGINT interrupted the dataplane; live `RESULTS.env` classifiers contradict raw JSON |
 | `20260901T181000Z` | Authoritative attack; **aborted** after FIFO hang | Pre-FIFO slices usable; post-FIFO stages **NOT_MEASURED** |
 
@@ -81,7 +81,7 @@ Remote wrapper exit **143** (`SIGTERM`) on run `20260901T181000Z` is **operator 
 Usable because they completed **before** the FIFO GET:
 
 | Area | Oracle | Result |
-|------|--------|--------|
+| --- | --- | --- |
 | HTTP framing | `HTTP/raw/framing.json` | Fail-closed 400 on duplicate CL, CL+TE, TE-only, malformed TE, missing Host (H1.1), malformed chunked, extra bytes after CL0. `unexpected_success=[]`. HTTP/1.0 no-Host = 200 (in-parser policy, not H1.1 Host confusion). |
 | Request desync | raw-socket client + body markers | `MEASURED_0` **on constructed wires only**. No Static body bleed. Pipeline → `400 pipelining unsupported`. Not a universal “no smuggling” claim. |
 | Host routing | `HTTP/raw/host.json` | Duplicate/missing Host → 400. `HOST_ROUTE_CONFUSION=0`. |
@@ -98,7 +98,7 @@ Campaign **stopped** after MUST_FIX. Not repaired.
 ## Completeness matrix
 
 | AREA | CLAIM | PRE_PHASE8 | PHASE8_ORACLE | PHASE8_RESULT | NEW_STATUS | OPEN_DEFECT? | FUTURE_REVIEW? |
-|------|-------|------------|---------------|---------------|------------|--------------|----------------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | HTTP framing | fail-closed parse | source + P7 | raw sockets | FAIL_CLOSED on measured wires | STRONGLY_SUPPORTED (measured set) | NO on measured set | YES broader matrix |
 | request desync | no FE/BE disagreement | not adversarial | constructed wires | MEASURED_0 constructed | BOUNDED | NO proven desync | YES |
 | host routing | Cap033 | P7R | host.json | 0 confusion | STRONGLY_SUPPORTED | NO | NO unless contract change |
@@ -131,7 +131,7 @@ FIFO is **not** R9. It is a new MUST_FIX beside the entry ledger.
 ## Specialists
 
 | Role | Verdict |
-|------|---------|
+| --- | --- |
 | Vertex | **REJECT** ([review](73d98c1d-9747-40ad-8dc7-d58449fa656f)) |
 | Security | **REJECT** ([review](ca0c62c5-f02c-4174-abbd-78b61b43a2cf)) |
 | Research | **CONDITIONAL** ([review](ad181db2-f842-486a-b6ed-7d6c948f4d03)) |

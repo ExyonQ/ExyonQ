@@ -41,7 +41,7 @@ Not A/B: harness requires all three tracks `STRONG_CAUSAL_PASS`.
 ## Track results (VALID 20260831T005500Z)
 
 | Track | Claim | Oracles |
-|-------|--------|---------|
+| --- | --- | --- |
 | **TTL** | `STRONG_CAUSAL_PASS` | Warm **after** short-TTL publish; SPORT change; same-sleep long-TTL counterfactual reuse; increase bounds; multi 60→2→30→1 |
 | **MAX** | `INSUFFICIENT_EVIDENCE` | Concurrent ESTAB stays 1 under max=2 and max=6 — serial blocking `execute_get` + KEEP_CONN ⇒ `idle.len()≤1` on one shard. Not a proven product defect under ADR-040; strong external multi-idle oracle needs authorized async multi-inflight (PRODUCT_MUTATION=NO here). |
 | **GEN** | `STRONG_CAUSAL_PASS` | Dual retained docroots `GENMARK_A…D`; post-publish admissions; connection SPORT transition; multi; failed `script_suffix` publish EFFECT=NO |
@@ -71,7 +71,7 @@ HARNESS_MUTATION = YES
 ## Run disclosure
 
 | RUN_ID | Disposition |
-|--------|-------------|
+| --- | --- |
 | 20260831T002100Z | INVALID — `GEN_ID` stuck in `$(next_gen)` subshell |
 | 20260831T003600Z | INVALID — cargo not on PATH under bare nohup |
 | 20260831T003700Z | ABORTED — MAX shrink curl hang; TTL partial only |
@@ -81,7 +81,7 @@ HARNESS_MUTATION = YES
 ## Audits
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | Orchestrator | CONDITIONAL_ACCEPT (pre) |
 | Vertex | ARCHITECTURE_AUDIT=PASS |
 | Security | PASS_WITH_NONBLOCKING (post); checklist TTL/GEN met; MAX bound |

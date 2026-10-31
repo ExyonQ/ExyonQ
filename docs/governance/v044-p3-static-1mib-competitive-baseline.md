@@ -71,7 +71,7 @@ SPLICE_ITERATION_BYTES = NOT_MEASURED
 ## Authoritative three-way (docker-stats meter)
 
 | | ExyonQ | NGINX | OLS |
-|--|--|--|--|
+| --- | --- | --- | --- |
 | RPS median | 8227.76 | 8146.23 | **8244.15** |
 | MiB/s median | 8229.82 | 8149.06 | **8247.07** |
 | RPS CV | **0.017** | 0.031 | 0.026 |
@@ -102,7 +102,7 @@ EXYONQ_P99_VS_OLS_PERCENT = -19.20%
 ### Cgroup companion
 
 | | user µs/req | system µs/req | total |
-|--|-------------|---------------|-------|
+| --- | --- | --- | --- |
 | ExyonQ | **7.583** | **150.010** | **157.593** |
 | NGINX | 15.447 | 158.159 | 173.605 |
 | OLS | 21.725 | 154.491 | 176.216 |

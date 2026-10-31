@@ -86,7 +86,7 @@ Companion docs:
 Package `exyonq-config-ir` lives at `config/ir/` (not `crates/exyonq-config-ir/`).
 
 | Area | Reality at `1ed520e` |
-|------|----------------------|
+| --- | --- |
 | Upstream | `UpstreamConfig { name, target, timeout_ms }` — single HTTP target |
 | Server/listener | `ServerConfig { listen, server_name, routes, tls, http3_listen }` |
 | TLS | `TlsConfig { cert, key, acme? }` — paths; rustls `with_single_cert` |
@@ -105,7 +105,7 @@ Full findings matrix: see gap-analysis document.
 ### Alternatives evaluated
 
 | Option | Summary | Verdict |
-|--------|---------|---------|
+| --- | --- | --- |
 | A. User-provided ID | Operator/panel supplies stable name | Base requirement |
 | B. Content-derived ID | Hash of endpoints/policy | Useful fingerprint, unstable as rename identity |
 | C. Internally generated ID | UUID/ulid assigned by DP | Good for anonymous objects; poor for human ops |
@@ -178,7 +178,7 @@ Endpoint {
 ### Field semantics
 
 | Key | Definition |
-|-----|------------|
+| --- | --- |
 | ENDPOINT_SET_IDENTITY | `backend_id` |
 | ENDPOINT_IDENTITY | `endpoint_id` within set |
 | ADDRESS_MODEL | IPv4, IPv6, or hostname; normalized lowercase hostname; reject empty |
@@ -209,7 +209,7 @@ FAILOVER_PRIORITY = SEPARATE_PRIORITY_BANDS       # not fused into the WRR count
 `priority` selects which **band** is eligible. Within the highest non-empty eligible band, `LOAD_BALANCING_ALGORITHM` runs. Do not implement a single rigid primitive that conflates failover with weighted selection.
 
 | Algorithm / concern | Classification |
-|-----------|----------------|
+| --- | --- |
 | round-robin (equal weight) | REQUIRED_FOR_FIRST_IMPLEMENTATION (WRR special case) |
 | weighted round-robin | REQUIRED_FOR_FIRST_IMPLEMENTATION |
 | failover priority bands | REQUIRED_FOR_FIRST_IMPLEMENTATION (orthogonal to WRR) |
@@ -221,7 +221,7 @@ FAILOVER_PRIORITY = SEPARATE_PRIORITY_BANDS       # not fused into the WRR count
 ### Selection interactions
 
 | Condition | Behavior |
-|-----------|----------|
+| --- | --- |
 | weight 0 | never selected |
 | admin disabled | never selected |
 | draining | no **new** requests; existing may continue per drain contract |
@@ -241,7 +241,7 @@ EXYONQ_NATIVE_HEALTH_STATE_MODEL = DESIRED_ADMIN_IN_IR_PLUS_OBSERVED_RUNTIME_STA
 ```
 
 | State | Belongs in | Authority |
-|-------|------------|-----------|
+| --- | --- | --- |
 | administratively enabled/disabled | IR / desired | config producer |
 | drain requested | IR or control op | producer / operator |
 | ready (runtime) | runtime observed | data plane (+ adapter hints) |
@@ -269,7 +269,7 @@ EXYONQ_NATIVE_DRAIN_MODEL = BEST_EFFORT_ADMIN_DRAIN_WITH_DEADLINE
 Honest limit: current runtime has process-level drain (`lifecycle.rs`) but **not** per-endpoint drain. Contract must not promise stronger semantics than P2 can deliver.
 
 | Key | Definition |
-|-----|------------|
+| --- | --- |
 | DRAIN_REQUEST | mark endpoint/admin set draining via snapshot or control op |
 | DRAIN_STATE | Requested → InProgress → Complete \| TimedOut \| Cancelled |
 | DRAIN_DEADLINE | mandatory timeout; PROVISIONAL default 30s; hard max candidate 300s |
@@ -305,7 +305,7 @@ BackendId → EndpointSet
 Optional weighted multi-backend at route level (canary across backends) as list of `(BackendId, weight)` — CONTRACT_ONLY for first IR if endpoint weights already cover canary; **recommend** endpoint weights inside one backend for MVP, route-level backend split as soon as Gateway canary needs distinct Services.
 
 | Case | Behavior |
-|------|----------|
+| --- | --- |
 | backend missing | REJECT snapshot |
 | backend empty | ACCEPT config; runtime empty-backend error |
 | duplicate backend refs | ALLOW |
@@ -326,7 +326,7 @@ EXYONQ_NATIVE_TIMEOUT_MODEL = SPLIT_TIMEOUTS_WITH_EXPLICIT_UNITS_MS
 Replace ambiguous single `timeout_ms` as **final** contract. Migration: keep `timeout_ms` as deprecated alias mapping to `total_request_deadline_ms` until schema major bump completes.
 
 | Timeout | Unit | Default (PROVISIONAL) | Min | Max candidate | `0` | null/absent |
-|---------|------|------------------------|-----|---------------|-----|-------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | connect_ms | ms | 500 (align Hyper client today) | 1 | 120_000 | REJECT | use default |
 | request_response_ms | ms | 30_000 | 1 | 600_000 | REJECT | use default |
 | idle_ms | ms | pool/idle policy | 1 | 600_000 | means no idle reuse where applicable | default |
@@ -348,7 +348,7 @@ IMPLEMENTATION_AUTHORIZED = NO
 ```
 
 | Field | Intent |
-|-------|--------|
+| --- | --- |
 | max_attempts | inclusive original try; PROVISIONAL default 1 (no retry) |
 | retry_on | connect_failure, reset_before_headers, selected 5xx (configurable), timeout — never opaque |
 | methods | default safe/idempotent only (GET/HEAD/OPTIONS); others require explicit `allow_non_idempotent=true` **and** `body_replayable=true` |
@@ -372,7 +372,7 @@ EXYONQ_NATIVE_TLS_CERTIFICATE_SET_MODEL = CERTIFICATE_SET_WITH_REFERENCE_PROVIDE
 Separate:
 
 | Concept | Role |
-|---------|------|
+| --- | --- |
 | TLS_CERTIFICATE_REFERENCE | id + SNI names + default flag + provider ref |
 | TLS_CERTIFICATE_MATERIAL_PROVIDER | file \| acme \| memory_control \| external_secret_provider \| future_k8s_adapter |
 | TLS_RUNTIME_MATERIAL | loaded bytes in memory only; never in IR canonical hash as raw key |
@@ -396,7 +396,7 @@ EXYONQ_NATIVE_GENERATION_MODEL = HYBRID_PRODUCER_EPOCH_PLUS_DP_MONOTONIC_APPLY_G
 ```
 
 | Field | Role |
-|-------|------|
+| --- | --- |
 | schema_version | contract major.minor |
 | content_fingerprint | hash of canonical IR/snapshot bytes |
 | source_revision | optional producer revision string |
@@ -450,7 +450,7 @@ States: RECEIVED, VALIDATED, STAGED, APPLIED, REJECTED, ROLLED_BACK, STALE, CONF
 ### Transport comparison
 
 | Option | BENEFITS | RISKS | ATOMICITY | ACK_SUPPORT | SECURITY | CROSS_PLATFORM | PANELS | K8S | MULTINODE | RECOMMENDATION |
-|--------|----------|-------|-----------|-------------|----------|----------------|--------|-----|-----------|----------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A atomic file + watcher | Simple; fits today reload | weak ACK; TOCTOU | good with rename | weak | FS perms | good | medium | good via emptyDir | weak | USE as material carrier |
 | B Unix socket | Exists (`ops-runtime`) | local only | via commands | strong | SO_PEERCRED later | Unix | good local | via sidecar | weak | **ACK channel MVP** |
 | C REST local | panel-friendly | auth surface | needs design | strong | TLS/auth | good | **best** | possible | medium | EVOLVE Control API |
@@ -478,7 +478,7 @@ EXYONQ_NATIVE_CONTRACT_VERSIONING = MAJOR_MINOR_PLUS_CAPABILITY_FLAGS
 ```
 
 | Field | Rule |
-|-------|------|
+| --- | --- |
 | CONTRACT_MAJOR | incompatible break |
 | CONTRACT_MINOR | compatible add |
 | CAPABILITIES | advertised by data plane |
@@ -500,7 +500,7 @@ EXYONQ_NATIVE_MULTIPLE_PRODUCER_MODEL =
 ```
 
 | Model | Verdict |
-|-------|---------|
+| --- | --- |
 | A single authoritative producer | **INITIAL SELECT** |
 | B namespace/partition ownership | **FUTURE** |
 | C overlay layers | limited (discovery overlay today); danger if unbounded |
@@ -528,7 +528,7 @@ SECRET_DATA_IN_METRICS = FORBIDDEN
 ```
 
 | Entity | Stable ID | Metric token | Display |
-|--------|-----------|--------------|---------|
+| --- | --- | --- | --- |
 | route | route name/id | capped registry / hash16 | name |
 | backend | BACKEND_ID | capped | DISPLAY_NAME |
 | endpoint set | BACKEND_ID | same | — |
@@ -549,7 +549,7 @@ EXYONQ_NATIVE_LIMITS_MODEL = PROVISIONAL_DEFAULTS_WITH_HARD_MAX_REJECT
 All numeric values **PROVISIONAL** candidates pending evidence:
 
 | Limit | DEFAULT | HARD_MAX | CONFIGURABLE | REJECTION_BEHAVIOR | OBSERVABILITY | SECURITY_REASON |
-|-------|---------|----------|--------------|--------------------|---------------|-----------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | listeners | 16 | 256 | YES | REJECT snapshot | count | FD/exhaustion |
 | routes | 256 | 10_000 | YES | REJECT | count | CPU match |
 | backends | 128 | 4_096 | YES | REJECT | count | memory |
@@ -573,7 +573,7 @@ EXYONQ_NATIVE_FAILURE_MODEL = STRUCTURED_ERROR_CODES_WITH_LAST_GOOD_RETENTION
 ```
 
 | Failure | ERROR_CODE | USER_VISIBLE_MESSAGE (pattern) | SECRET_REDACTION | RETRYABLE | LAST_GOOD_BEHAVIOR | STATUS_IMPACT | RECOVERY_ACTION |
-|---------|------------|--------------------------------|------------------|-----------|--------------------|---------------|-----------------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | invalid snapshot | `SNAPSHOT_INVALID` | validation failed at path | redact key material | NO | retain | REJECTED | fix config |
 | broken reference | `REF_MISSING` | backend/cert id missing | OK | NO | retain | REJECTED | fix refs |
 | invalid certificate | `TLS_CERT_INVALID` | cert failed checks | no key bytes | NO | retain | REJECTED | replace cert |
@@ -671,7 +671,7 @@ EXYONQ_RUST_ONLY_SCOPE =
 ### Component reformulation
 
 | Component | COMPONENT_TYPE | Notes |
-|-----------|----------------|-------|
+| --- | --- | --- |
 | `exyonq-core` | RUST_LIBRARY_CRATE (existing) | no K8s types |
 | `exyonq-config-ir` | RUST_LIBRARY_CRATE at `config/ir` | native contracts |
 | `exyonq-runtime-plan` | RUST_LIBRARY_CRATE (existing) | compile target |
@@ -730,7 +730,7 @@ EXYONQ_K8S_CONTROLLER_RUST_FEASIBILITY = FEASIBLE_WITH_PRE_IMPLEMENTATION_SPIKES
 ```
 
 | Area | CURRENT_ECOSYSTEM_SUPPORT | EXPECTED_IMPLEMENTATION_APPROACH | KNOWN_RISK | MITIGATION | SPIKE_REQUIRED | BLOCKING_FOR_K8S_P3 |
-|------|---------------------------|----------------------------------|------------|------------|----------------|---------------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | RUST_K8S_CLIENT_MODEL | Mature-enough via `kube`/`k8s-openapi` (to be validated) | typed client in controller crate only | API drift vs cluster | pin versions; spike | R1 | YES until R1 PASS |
 | RUST_WATCH_MODEL | Supported by kube-runtime watchers | watch → event queue | missed events / bookmarks | resync + resourceVersion discipline | R1 | YES |
 | RUST_REFLECTOR_MODEL | Store/reflector patterns exist | reflector+indexer | memory growth | namespace scoping; limits | R1/R5 | YES |
@@ -763,7 +763,7 @@ SPIKES_EXECUTED_THIS_PHASE = NO
 ```
 
 | Spike | OBJECTIVE | AUTHORIZED_SCOPE | DEPENDENCIES | SUCCESS_CRITERIA | FAILURE_CRITERIA | SECURITY_GATES | OUTPUT | PRODUCT_CODE_REUSABLE |
-|-------|-----------|------------------|--------------|------------------|------------------|----------------|--------|------------------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | SPIKE_R1 | watch + reflector + minimal reconcile | disposable spike tree/docs evidence only when later authorized | kube stack candidates | continuous watch; resync OK | missed events unhandled | no cluster-admin | report | NO_UNLESS_LATER_AUTHORIZED |
 | SPIKE_R2 | GatewayClass/Gateway/HTTPRoute types | spike only | gateway API CRDs | decode/roundtrip sample objects | incompatible fields blocking Core | no persist secrets | report | NO_UNLESS_LATER_AUTHORIZED |
 | SPIKE_R3 | status subresource + conditions | spike only | apiserver | patch Accepted/Programmed | lost updates / races | RBAC minimal | report | NO_UNLESS_LATER_AUTHORIZED |

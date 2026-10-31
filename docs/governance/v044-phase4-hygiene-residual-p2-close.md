@@ -25,7 +25,7 @@ Three P3 findings remain as **documented non-blocking** (not MUST_FIX).
 ## Build hygiene
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | `cargo fmt --all -- --check` | PASS |
 | `cargo check --workspace --all-targets` | PASS |
 | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
@@ -74,7 +74,7 @@ Evidence: `crates/exyonq-cfd-dataplane/tests/slowloris_header_deadline.rs`
 ## P3 ledger (non-blocking)
 
 | ID | Classification | MUST_FIX_NOW | Notes |
-|----|----------------|--------------|-------|
+| --- | --- | --- | --- |
 | L4-P3-001 | DOCUMENTED_NONBLOCKING | NO | `bytes_out` undercount after `RelayBuf` clear — metrics only |
 | L4-P3-002 | DOCUMENTED_NONBLOCKING | NO | `force_client_close` always false; upstream `Connection: close` correctly poisons **upstream reuse** via hop-by-hop filter; client KA is independent (intentional reverse-proxy semantics). No request mis-association on supported CL path. |
 | L4-P3-003 | DOCUMENTED_NONBLOCKING | NO | `MAX_CHUNK_*` unused because chunked TE is fail-closed by design |

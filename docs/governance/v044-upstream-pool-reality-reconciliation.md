@@ -11,7 +11,7 @@ PHASE_6_AUTHORIZED = NO
 ## Chronology (do not erase)
 
 | Era | WHAT_WAS_CLAIMED | WHAT_WAS_ACTUALLY_PROVEN | WHAT_IS_TRUE_NOW |
-|-----|------------------|-------------------------|------------------|
+| --- | --- | --- | --- |
 | Phase 2 terminal | Shard-local upstream KA pool + poison discard; client + upstream keepalive | Pool **API + put path existed**; CFD-L06 proves a socket was pooled then reused (stale→502). **Hit-rate / connect≪requests not proven** | Historical claim **partially true** (mechanism), **overstated** as unqualified “KA pools delivered” |
 | Phase 4 bodies / framing | Fail-closed trailing-byte policy | `POOL_INTERACTION = STRONGLY_SUPPORTED (no upstream reuse after response)`; security: `UPSTREAM_TRAILING_BYTES = POISON` | Intentional **disable of put** for smuggling/framing safety |
 | Phase 5 / Profile A / EXT-A | Competitive frontier (CPU/RPS) | Client keepalive on CFD path; OpenCode EXT-A: connect-per-request upstream | **Upstream reuse = NO**; `UpstreamPool::put` unreachable; `take` always misses |
@@ -23,7 +23,7 @@ PHASE_6_AUTHORIZED = NO
 > **Supersession (non-erasing):** WIP `V044_SAFE_H1_UPSTREAM_REUSE_RESTORATION` (URR-A) re-enabled **safe** Hybrid-F put under ADR-021 after this reconciliation froze the discard-only era. The table below remains the **UPRR-era** snapshot. Live post-repair truth: see `docs/governance/v044-safe-h1-upstream-reuse-restoration.md`.
 
 | Question | Answer (UPRR-era) | Evidence |
-|----------|-------------------|----------|
+| --- | --- | --- |
 | Client keepalive | **YES** | `finish_response` → `reset_for_keepalive` when `!client_close` |
 | Upstream keepalive / reuse | **NO** (at UPRR freeze) | Always `UpstreamPool::discard` after response |
 | `UpstreamPool::take` reachable | **YES** | `attach_upstream` / `pool.take` |
@@ -59,7 +59,7 @@ PRODUCT_REPAIR_RECOMMENDED = OPTIONAL future WIP if restoring C5 under safe idle
 Asymmetry is **anti-ExyonQ** (extra upstream connect work vs rivals that reuse). Therefore:
 
 | Claim | Impact |
-|-------|--------|
+| --- | --- |
 | P5CPU-A | **UNCHANGED** |
 | EXT-A | **UNCHANGED** |
 | CPU / RPS frontier | **UNCHANGED** (conservative vs rivals) |
@@ -79,7 +79,7 @@ DOES_THIS_RECONCILIATION_INCREASE_MIGRATION_VALUE = YES
 ## Resource risk (architecture, not measured campaign)
 
 | Risk | Level |
-|------|-------|
+| --- | --- |
 | Upstream connection pressure | **MEDIUM** (connect≈request) |
 | Ephemeral ports / TIME_WAIT | **MEDIUM** under high concurrency |
 | Upstream FD churn | **MEDIUM** |
@@ -93,7 +93,7 @@ EXPECTED_PERFORMANCE_GAIN_IF_REENABLED = UNKNOWN_UNTIL_MEASURED
 ## Documentation inventory (selected)
 
 | Doc | Classification |
-|-----|----------------|
+| --- | --- |
 | `docs/governance/v044-competitive-frontier-real-h1-routing-headers.md` (“KA pools”) | **OVERSTATED / HISTORICALLY_TRUE_CURRENTLY_FALSE** on live reuse |
 | `docs/architecture/v044-competitive-frontier-real-h1-routing-headers.md` §6 | Scaffold **CURRENTLY_TRUE**; reuse **CURRENTLY_FALSE** |
 | `docs/performance/v044-competitive-frontier-request-bodies-backpressure-budget.md` | **CURRENTLY_TRUE** (no reuse after response) |

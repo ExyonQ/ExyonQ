@@ -92,7 +92,7 @@ NO_UPSTREAM_SIDE_EFFECT_BEFORE_REQUIRED_SECURITY_POLICY_PASS = YES
 ## 3. ADR-021 production stack recommendation
 
 | ID | Option | Verdict |
-|----|--------|---------|
+| --- | --- | --- |
 | A | Extend 925-LOC prototype literally into ExyonQ | **REJECT** as product source — geometry yes, code copy no |
 | **B** | **mio TPC shell + mature httparse (+ socket2); harden H1** | **RECOMMENDED** |
 | C | Sharded current-thread Tokio | Weaker EP-C falsifier; optional later experiment |
@@ -124,7 +124,7 @@ NEVER store request policy on connection for keepalive reuse
 ### 4.2 Minimum fields (v1 GET known-length)
 
 | Field | Purpose |
-|-------|---------|
+| --- | --- |
 | `generation_id` | Freshness; recheck each request |
 | `method` | GET-only in first slice |
 | `path_query` | Normalized target |
@@ -166,7 +166,7 @@ NO_UPSTREAM_SIDE_EFFECT_BEFORE_REQUIRED_SECURITY_POLICY_PASS = YES
 ## 5. Request parsing ownership
 
 | Option | Verdict |
-|--------|---------|
+| --- | --- |
 | **A dataplane owns wire parse → NormalizedRequestView** | **SELECTED** for specialized path |
 | B Hyper parses then transfers | Double work; handoff tax |
 | C Shared parser both paths | Acceptable long-term if one representation |
@@ -188,7 +188,7 @@ admission that never enters specialized parse for unsupported classes.
 ## 6. H1 required feature matrix (implementation gate; not built now)
 
 | Feature | First product slice | Later | Notes |
-|---------|---------------------|-------|-------|
+| --- | --- | --- | --- |
 | request-line + headers | REQUIRED | — | httparse |
 | Host | REQUIRED | — | |
 | Content-Length request == 0 / absent | REQUIRED | — | reject body |
@@ -222,7 +222,7 @@ GLOBAL_CONNECTION_LOCK = NO
 ```
 
 | Accept model | Linux | macOS | Windows |
-|--------------|-------|-------|---------|
+| --- | --- | --- | --- |
 | **A SO_REUSEPORT per shard** | **Preferred** (EP-C) | Supported via mio | Later / different |
 | B single acceptor + one-time dispatch | Portable fallback | OK | OK |
 | C platform-specific | Optional | — | IOCP readiness |
@@ -312,7 +312,7 @@ Do not silently weaken global quotas.
 ### Module API
 
 | Hook class | Specialized path |
-|------------|------------------|
+| --- | --- |
 | HOT_SYNCHRONOUS (`on_request`/`on_route` that must run) | Compile to flags / deny / FALLBACK |
 | RESPONSE_MUTATING (compression, …) | FALLBACK initially |
 | BODY_MUTATING | FALLBACK / later |
@@ -345,7 +345,7 @@ governance; document exact policy in implementation WIP).
 ## 12. Retry / timeouts / backpressure
 
 | Concern | Design |
-|---------|--------|
+| --- | --- |
 | Retry | Pre-commit only; attempt in plan; no retry after downstream commit (PXDP-P0) |
 | Timeouts | Shard timer wheel / mio poll deadline — **not** per-request Tokio timers |
 | Backpressure | Bounded buffers; disable upstream read on downstream high-water; no whole-body buffer |
@@ -355,7 +355,7 @@ governance; document exact policy in implementation WIP).
 ## 13. Protocol futures (compatibility, not scope)
 
 | Domain | Relation |
-|--------|----------|
+| --- | --- |
 | Request body | HOLD; architecture must allow later streaming + WAF body gate |
 | Chunked / SSE / long streams | Framing state machine extension |
 | WS / CONNECT | Shard ownership advantageous; separate tunnel phase |
@@ -423,7 +423,7 @@ side-by-side metrics vs legacy
 ## 17. PXDP relation
 
 | Asset | Future |
-|-------|--------|
+| --- | --- |
 | PXDP Hyper execution code | **RETIRE / SUPERSEDE** for competitive H1 path (after SDP proves) |
 | PXDP-P0 contracts (fresh plan, WAF order, retry, framing, disposition) | **ADAPT → ProxyExecutionPlan / SDP shell** |
 | PXDP architecture design (worker-local shell) | **ADAPT geometry** from Tokio-task to mio-shard |
@@ -452,7 +452,7 @@ Carry forward as SDP gates:
 ## 19. Migration phases (recommended)
 
 | Phase | Content | Gate |
-|-------|---------|------|
+| --- | --- | --- |
 | **SDP-D0** | This design (contracts) | SD-A/B |
 | **SDP-D1** | Shadow: plan build + metrics only (optional) | correctness |
 | **SDP-P1** | Product slice: GET CL upstream, flag OFF default | ≥15% RPS vs current ExyonQ (≥20% preferred) |
@@ -479,7 +479,7 @@ PRODUCT_IMPLEMENTATION_AUTHORIZED = NO  # until owner opens SDP-P1
 ## 20. Component preserve matrix
 
 | Component | Action |
-|-----------|--------|
+| --- | --- |
 | routing | **PRESERVE** |
 | WAF policy SSOT | **PRESERVE**; execution location **ADAPT** (compiled) |
 | module API | **PRESERVE** / admission **ADAPT** |
@@ -509,7 +509,7 @@ PRODUCT_IMPLEMENTATION_AUTHORIZED = NO  # until owner opens SDP-P1
 ## 21. Risk ledger (ranked)
 
 | Risk | Sev | Note |
-|------|-----|------|
+| --- | --- | --- |
 | H1 protocol / smuggling burden | High | Matrix + fuzz gates |
 | WAF locality vs advantage | High | Compiled artifacts mandatory |
 | Module compatibility | High | Fallback eligibility |
@@ -531,7 +531,7 @@ SAFE_RUST_FEASIBLE = YES
 ## 22. Dependencies (proposed; no Cargo.toml change)
 
 | Crate | Role | License (typical) | Note |
-|-------|------|-------------------|------|
+| --- | --- | --- | --- |
 | mio | readiness | MIT | EP-C proven |
 | httparse | H1 headers | MIT/Apache-2.0 | keep |
 | socket2 | REUSEPORT / nodelay | MIT/Apache-2.0 | keep |
@@ -561,7 +561,7 @@ Compact hot-path enum (adapt PXDP-P0 `ProxyError` taxonomy): protocol, policy re
 ## 25. CASE discrimination
 
 | Case | Why not / why |
-|------|----------------|
+| --- | --- |
 | SD-A | Almost — but compiled WAF/rate/module admission needs **bounded** new contracts |
 | **SD-B** | **Selected** |
 | SD-C | Module/security not blocking if FALLBACK eligibility holds |

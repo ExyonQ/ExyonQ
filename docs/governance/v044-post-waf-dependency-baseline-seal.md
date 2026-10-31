@@ -43,7 +43,7 @@ CLI_DEPENDS_ON_CONCRETE_WAF = YES
 ## Verification (integration track — not Cap015)
 
 | Check | Result |
-|-------|--------|
+| --- | --- |
 | `cargo audit` (post-lock) | 0 vulnerabilities |
 | `project-integrity-gate --tree .` | PASS |
 | Darwin `cargo check` WAF/core/CLI | PASS |

@@ -4,13 +4,13 @@
 DOCUMENT = ROADMAP.md
 DOCUMENT_ROLE = CANONICAL_GLOBAL_ROADMAP (lab tracker)
 AUTHORITY = SOLE for R* global phase identifiers in lab
-LAST_UPDATED = 2026-08-04
-BRANCH = release/v0.4.3-integration
+LAST_UPDATED = 2026-10-31
+BRANCH = release/v0.4.4-integration
 EXYONQ_LAB_ROLE = DEVELOPMENT_INTEGRATION_QUALIFICATION
 EXYONQ_GITHUB_ROLE = CANONICAL_RELEASE_CLOUD_AUTHORITY
-PUBLIC_RELEASE = v0.4.3
-FINAL_RELEASE_HEAD = 3a8af75dd0939e5aae2f4d09b842573499e15a1c
-EXYONQ_GITHUB_POST_RELEASE_HEAD = 22b20dfcce6718a0cad64938436af87e27ff383e
+PUBLIC_RELEASE = v0.8.0
+FINAL_RELEASE_HEAD = 5f3b64830467b353de42d5a16df1000b6860d6d6
+EXYONQ_GITHUB_POST_RELEASE_HEAD = 314b422
 R3_PRODUCT_BASELINE = f0b2d67
 R3_CLOSE_DOCUMENTATION_TIP = d0814bc79ea08b91b753269e0883ab249bf7c3b9
 R5_STATUS = COMPLETE
@@ -22,7 +22,7 @@ R6_STATUS = NOT_STARTED
 Status companion: [`PROJECT_STATUS.md`](PROJECT_STATUS.md)  
 Documentation map: [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)
 
-**Paridad funcional vs NGINX/Apache/OLS (F1–F8, versiones 0.5→1.2):** SoT en [`ROADMAP EXYONQ/ROADMAP_PARIDAD_EXYONQ.md`](ROADMAP%20EXYONQ/ROADMAP_PARIDAD_EXYONQ.md) + checklists por versión en [`ROADMAP EXYONQ/ROADMAP/`](ROADMAP%20EXYONQ/ROADMAP/). Esa pista **no** redefine `R*`; es el roadmap de producto de migración/paridad.
+**Paridad funcional vs NGINX/Apache/OLS (F1–F8, versiones 0.5→1.2):** SoT en `ROADMAP EXYONQ/ROADMAP_PARIDAD_EXYONQ.md` + checklists por versión en `ROADMAP EXYONQ/ROADMAP/` (rutas locales del lab, no publicadas). Esa pista **no** redefine `R*`; es el roadmap de producto de migración/paridad.
 
 ```text
 Only R* determines the current global project phase.
@@ -132,7 +132,7 @@ Evidence: `.exyonq-local/tmp/r2d-20260801/`, `.exyonq-local/tmp/r2e-20260801/`.
 ### Demonstrated
 
 | Item | Result |
-|------|--------|
+| --- | --- |
 | fmt / workspace check | PASS |
 | workspace tests | PASS Darwin (R2E ws-3) + Netcup + Oracle |
 | Clippy supported gates | PASS Darwin+Linux |
@@ -306,7 +306,7 @@ PROJECT_PHASE_2_STATUS = NOT_STARTED
 ## Track ID taxonomy (non-global)
 
 | Prefix | Meaning |
-|--------|---------|
+| --- | --- |
 | `R*` | Global roadmap (this document) |
 | `BV04-P*` | Benchmark v0.4.x scenarios |
 | `K8S-P*` | Kubernetes wedge phases |

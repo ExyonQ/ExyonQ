@@ -17,7 +17,7 @@ are buffered → Cap067 hands the conn to Hyper. Static Cap067 peak (~280–310k
 ## Candidate mutations (pick one to A/B)
 
 | ID | Idea | Risk |
-|----|------|------|
+| --- | --- | --- |
 | **A** Dual `SO_REUSEPORT` | Tokio + Cap067 both listen; Cap067 peeks only when bytes ready; Tokio owns unread | Complexity; fair-share accept |
 | **B** Hyper→Cap067 divert | After Hyper reads first line, divert static-eligible to Cap067 keepalive/sendfile | Mid-conn ownership (P4-LA-001 sticky care) |
 | **C** Deferred peek | Cap067 StayAttached on WouldBlock but arm short timer / edge wait before Hyper | Re-risk P5 map fill if timer wrong |

@@ -6,7 +6,7 @@ TRACKING = force-tracked under /docs/security/** (see .gitignore exceptions)
 ```
 
 | Path | Purpose | Consumer |
-|------|---------|----------|
+| --- | --- | --- |
 | [audit-template.md](audit-template.md) | Template for `audit-vX.Y.Z.md` | `xtask security audit`, release |
 | [release-checklist.md](release-checklist.md) | Pre-tag security checklist | Maintainers, rule 103 |
 | [review-checklist.md](review-checklist.md) | Finding format for audits | Audit authors |

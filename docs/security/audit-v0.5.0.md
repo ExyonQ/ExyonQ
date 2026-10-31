@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.5.0
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.5.0 |
 | **Commit** | `e2f0a3827d71f8f6a92c20e4fcfff954432b10c7` |
 | **Date** | 2026-10-18 |
@@ -18,7 +18,7 @@ Nightly fuzz, Miri, and an official benchmark were not run for this cut.
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | not run on this commit | Tag workflow runs after the tag is pushed |
 | Security (`security.yml`) | `cargo deny` advisories fail | Wasmtime 49.0.2, 12 vulnerability errors |
 | Nightly fuzz | skipped | Not run for this cut |
@@ -47,7 +47,7 @@ None for publication of the images that pass the container E2E gate. Wasmtime ad
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | Server image config | high | Default config and document root so the container stays up and `GET /` is 200 |
 | Addon core range | high | Official modules accept 0.5.x (`>=0.1.0, <0.6.0`) |
 | WordPress `.htaccess` | high | Overlay no longer uses directives the 0.5 compiler rejects, so `/` reaches the installer |
@@ -55,7 +55,7 @@ None for publication of the images that pass the container E2E gate. Wasmtime ad
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | | | | | |
 
 ## Surfaces reviewed

@@ -20,7 +20,7 @@ Related: [`v044-p1-default-worker-geometry-8.md`](v044-p1-default-worker-geometr
 ## Verdict
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Tokio runtimes in serve | **1** |
 | Block B | Cap067 OS pool (not 2nd Tokio RT) |
 | Fan-out | Independent CPU-derived pools — **proven** |

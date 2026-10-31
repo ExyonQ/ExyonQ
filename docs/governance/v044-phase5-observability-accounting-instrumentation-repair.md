@@ -12,7 +12,7 @@ PHASE_6 = NO
 ## Binding defects (closed)
 
 | ID | Severity | Repair |
-|----|----------|--------|
+| --- | --- | --- |
 | OBS-P5-P0-001 | P0 | `obs_finalize` once-per-request on `Conn` for all terminal outcomes |
 | OBS-P5-P1-001 | P1 | `events_exported` only when every *configured* event sink accepts (open-fail blocks) |
 | OBS-P5-P1-002 | P1 | `export_spawn_outcome`: OBS env configured ⇒ spawn failure is startup-fatal |

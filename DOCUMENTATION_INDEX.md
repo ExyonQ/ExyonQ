@@ -29,7 +29,7 @@ NOT_CANONICAL_UNLESS_PROMOTED
 ## Phase ID taxonomy
 
 | Prefix | Meaning | Global phase authority? |
-|--------|---------|-------------------------|
+| --- | --- | --- |
 | `R*` | Global roadmap (`ROADMAP.md`) | **YES — only these** |
 | `BV04-P*` | Benchmark v0.4.x | No |
 | `K8S-P*` | Kubernetes wedge | No |
@@ -46,7 +46,7 @@ Only R* determines the current global project phase.
 ## Classification vocabulary
 
 | STATUS | Meaning |
-|--------|---------|
+| --- | --- |
 | `CANONICAL` | Sole authority for its function |
 | `IMPLEMENTED_REFERENCE` | Describes behavior backed by code/tests/accepted close |
 | `IMPLEMENTATION_IN_PROGRESS` | Active design/build; not finished |
@@ -64,7 +64,7 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 ## A. Canonical authorities (new)
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
-|------|-------|------------------|------|---------------|--------|---------------------|----------------------|--------------------|---------------|--------------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `PROJECT_STATUS.md` | Project Status | TRACKED (this commit) | project | status | CANONICAL | — | current | 2026-07-31 | ROADMAP, this index | KEEP_ACTIVE |
 | `ROADMAP.md` | Global Roadmap R0–R6 | TRACKED (this commit) | project | roadmap | CANONICAL | — | current | 2026-07-31 | PROJECT_STATUS | KEEP_ACTIVE |
 | `DOCUMENTATION_INDEX.md` | Documentation Index | TRACKED (this commit) | project | index | CANONICAL | — | current | 2026-07-31 | PROJECT_STATUS | KEEP_ACTIVE |
@@ -74,7 +74,7 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 ## B. Tracked product / maintainer documentation
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
-|------|-------|------------------|------|---------------|--------|---------------------|----------------------|--------------------|---------------|--------------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.4.2 line | 2026-07 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
 | `ARCHITECTURE.md` | Source-tree architecture | TRACKED | architecture | overview | IMPLEMENTED_REFERENCE | — | layout current | 2026-07 | README | KEEP_ACTIVE |
 | `CHANGELOG.md` | Changelog | TRACKED | release | changelog | HISTORICAL_EVIDENCE | — | partial vs HEAD | UNKNOWN | packaging | REVIEW vs Changeset A/B |
@@ -116,7 +116,7 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 Note: `/docs/*` is ignored with explicit exceptions for `security/`, `governance/`, and `releases/`.
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
-|------|-------|------------------|------|---------------|--------|---------------------|----------------------|--------------------|---------------|--------------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `docs/releases/p14v041-scope-audit.md` | P14V041 scope audit | TRACKED | P14 | audit | HISTORICAL_EVIDENCE / SUPERSEDED | PROJECT_STATUS + ROADMAP | frozen | ~2026-07 | p14v042 | KEEP_ACTIVE (history) |
 | `docs/releases/p14v041-execution.md` | P14V041 execution | TRACKED | P14 | ledger | HISTORICAL_EVIDENCE | — | frozen | ~2026-07 | close | KEEP_ACTIVE |
 | `docs/releases/p14v041-close.md` | P14V041 close | TRACKED | P14 | close | HISTORICAL_EVIDENCE | — | frozen | ~2026-07 | — | KEEP_ACTIVE |
@@ -142,7 +142,7 @@ NOT_CANONICAL_UNLESS_PROMOTED = YES
 ### C1. `study/reports/**` (untracked; referenced by tracked architecture scripts)
 
 | PATH | TITLE | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | RECOMMENDED_ACTION |
-|------|-------|------|---------------|--------|---------------------|--------------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | `study/reports/11-phase0-kernel-freeze-signoff.md` | Phase 0 freeze signoff | architecture | contract | HISTORICAL_EVIDENCE / IMPLEMENTED_REFERENCE (local) | promote candidate | KEEP_LOCAL_ONLY; REVIEW promote |
 | `study/reports/KERNEL-AUDIT-current-vs-phase0.md` | Kernel audit current vs P0 | architecture | audit | HISTORICAL_EVIDENCE | — | KEEP_LOCAL_ONLY; REVIEW promote |
 | `study/reports/KERNEL-AUDIT-v1-archive.md` | Kernel audit v1 archive | architecture | audit | HISTORICAL_EVIDENCE | — | KEEP_LOCAL_ONLY |
@@ -154,7 +154,7 @@ NOT_CANONICAL_UNLESS_PROMOTED = YES
 ### C2. Ignored `docs/**` on disk (beyond force-tracked releases)
 
 | PATH | TITLE | AREA | STATUS | RECOMMENDED_ACTION |
-|------|-------|------|--------|--------------------|
+| --- | --- | --- | --- | --- |
 | `docs/build/ALLOCATOR_SELECTION.md` | Allocator selection | build | UNKNOWN_REVIEW / DUPLICATE risk vs product | REVIEW; possible promote |
 | `docs/product/build/ALLOCATOR_SELECTION.md` | Allocator selection (product copy) | build | DUPLICATE | REVIEW vs docs/build |
 | `docs/architecture/**` | Architecture panel/local | architecture | UNKNOWN_REVIEW | REVIEW |
@@ -164,7 +164,7 @@ NOT_CANONICAL_UNLESS_PROMOTED = YES
 ### C3. Cursor IDE (`.cursor/**`) — LOCAL_ONLY
 
 | GROUP | COUNT (approx) | STATUS | RECOMMENDED_ACTION |
-|-------|----------------|--------|--------------------|
+| --- | --- | --- | --- |
 | `.cursor/rules/*.mdc` | ~35 | IMPLEMENTED_REFERENCE (local governance) | KEEP_LOCAL_ONLY; not GitHub release content |
 | `.cursor/agents/*.md` | ~17 | LOCAL tooling | KEEP_LOCAL_ONLY |
 | `.cursor/plans/**` | ~50+ | mixed FUTURE_DESIGN / HISTORICAL / SUPERSEDED | KEEP_LOCAL_ONLY; do not treat as R\* |
@@ -178,7 +178,7 @@ Notable historical/active local plans: `00-roadmap-core-modules-migration`, `08-
 ### C4. Other local / generated
 
 | PATH | STATUS | RECOMMENDED_ACTION |
-|------|--------|--------------------|
+| --- | --- | --- |
 | `graphify-out/**` | GENERATED_REPORT | KEEP_LOCAL_ONLY / DELETE_LATER |
 | `benchmarks/results/**/*.md` | GENERATED_REPORT / HISTORICAL_EVIDENCE | KEEP_LOCAL_ONLY |
 | `waf/exyonq-waf-package-20260726/.cursor/**` | UNKNOWN_REVIEW (empty package scaffold) | REVIEW; KEEP_LOCAL_ONLY |
@@ -191,7 +191,7 @@ Notable historical/active local plans: `00-roadmap-core-modules-migration`, `08-
 ## D. Proposed promotions (later; not this commit)
 
 | Candidate | Why |
-|-----------|-----|
+| --- | --- |
 | `study/reports/11-phase0-kernel-freeze-signoff.md` | Referenced as contract by tracked `verify-phase0-kernel.sh` |
 | `study/reports/KERNEL-AUDIT-current-vs-phase0.md` | Linked from tracked architecture README |
 | `docs/build/ALLOCATOR_SELECTION.md` (if still accurate) | Build policy may belong in tracked docs after allowlist |
@@ -203,7 +203,7 @@ Promotion requires: owner allowlist, secret scan, and decision whether `/docs/` 
 ## E. Proposed future moves / deletions (later)
 
 | Action | Paths | Notes |
-|--------|-------|-------|
+| --- | --- | --- |
 | MOVE_TO_HISTORY_LATER | none yet as repo `docs/history/` | Prefer SUPERSEDED headers over new `Archivo/` in git |
 | DELETE_LATER | `graphify-out/**`, `.pytest_cache/**`, duplicate allocator copy if confirmed | After owner auth |
 | DELETE_LATER (local bench) | see prior benchmark storage triage | Not documentation |

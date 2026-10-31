@@ -59,7 +59,7 @@ LOCKS_REMOVED = per-request Mutex acquire on Cap067 match/begin/release
 ## Gates
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | fmt (`epoll_session.rs`) | PASS |
 | ownership_tests (Linux, parallel + serial pin lock) | PASS (4/4) |
 | logic audit | PASS (P0/P1=0; P3 nonblocking) |
@@ -71,7 +71,7 @@ LOCKS_REMOVED = per-request Mutex acquire on Cap067 match/begin/release
 ## Performance (Netcup amd64 · clean A/B `20260821T005954Z`)
 
 | | BEFORE (reporting) | AFTER Root1 |
-|--|-------------------|-------------|
+| --- | --- | --- |
 | Binary SHA-256 | `5a31ccf3…0a13c40` | `14d22eae…57ce91` |
 | RPS (median) | 163858.57 | 156952.95 (−4.2%) |
 | CPU avg % | 413.08 | 294.02 |

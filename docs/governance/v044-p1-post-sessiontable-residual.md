@@ -10,7 +10,7 @@
 ## Frozen prior roots (do not reopen without contradictory evidence)
 
 | Item | Status |
-|------|--------|
+| --- | --- |
 | `OLD_STATIC_TX_FUNCTIONAL_DEFECT` | `FIXED_AND_RUNTIME_PROVEN` |
 | `OLD_STATIC_TX_RPS_ATTRIBUTION` | `FALSIFIED_OR_MATERIALLY_INCOMPLETE` |
 | `OLD_SESSIONTABLE_MUTEX` | `FIXED_AND_CAUSALLY_CONFIRMED` |
@@ -22,7 +22,7 @@ SessionTable acceptance: `docs/governance/v044-p1-cap067-sessiontable-lock.md`.
 ## This-session control (canonical P1; supersedes prior post-fix medians for attribution)
 
 | Server | Runs (RPS) | Median |
-|--------|------------|--------|
+| --- | --- | --- |
 | ExyonQ | 128892, 139909, 130422, 133763, 128349 | **130421.60** |
 | NGINX | 164193, 167715, 163046, 148328, 169155 | **164192.77** |
 | OLS | 141963, 135654, 142687, 156412, 137006 | **141962.77** |
@@ -37,7 +37,7 @@ Historical post-fix control (143182 / 164066 / 140570, −12.7% / +1.9%) remains
 ## Runtime verification
 
 | Check | Result |
-|-------|--------|
+| --- | --- |
 | Binary SHA-256 | `5a31ccf3decabed3071e587ad1c68fa5fb673f2b130ef8f63e70f7a5c0a13c40` |
 | Rust / Cargo | 1.97.1 |
 | Cargo.lock SHA-256 | `6086f47d…bef6` unchanged |
@@ -50,7 +50,7 @@ Historical post-fix control (143182 / 164066 / 140570, −12.7% / +1.9%) remains
 ## Syscall geometry (retry with worker PIDs)
 
 | Server | syscalls/req | Dominant |
-|--------|--------------|----------|
+| --- | --- | --- |
 | ExyonQ | **7.847** | futex≈1.70, read≈1.05, close≈1.01, write+sendto+sendfile+openat2 ≈1 each |
 | NGINX | **4.092** | close+recvfrom+writev+sendfile ≈1 each; openat2=0; futex≈0 |
 | OLS | INSUFFICIENT | attach did not capture hot workers |
@@ -65,7 +65,7 @@ Questions answered:
 ## Workers / CPU
 
 | Measure | Value |
-|---------|-------|
+| --- | --- |
 | Configured / active / idle | 4 / 4 / ~4–5 idle tokio threads |
 | RPS @ 1/2/4/8 host CPUs | 40435 / 78998 / 140792 / 135274 |
 | Scaling 4→8 host CPUs | **−3.92%** (flat) |
@@ -76,7 +76,7 @@ Questions answered:
 ## WAF / tracing
 
 | Item | Result |
-|------|--------|
+| --- | --- |
 | WAF keys in bench.toml | none |
 | WAF required in P1 RAW | **NO** |
 | regex_automata / exyonq_waf samples | **~3.2%** (accidental path under RAW-off — contract question, not authorization to optimize) |
@@ -92,7 +92,7 @@ Questions answered:
 ## New residual causal ranking
 
 | Rank | Cause | Confidence | Product optimizable |
-|------|-------|------------|---------------------|
+| --- | --- | --- | --- |
 | 1 | Syscall geometry (openat2 + futex + MSG_MORE write/sendto) | MEDIUM | PARTIAL |
 | 2 | Worker parallelism (worker=8 +7.4% diagnostic) | MEDIUM / PARTIAL | YES but unauthorized |
 | 3 | Static metadata path (~8% samples) | MEDIUM; FD reuse **NOT_PROVEN** | PARTIAL |

@@ -4,18 +4,18 @@
 DOCUMENT = PROJECT_STATUS.md
 DOCUMENT_ROLE = CANONICAL_PROJECT_STATUS (lab tracker)
 AUTHORITY = SOLE for current lab phase answers
-LAST_UPDATED = 2026-10-12
-BRANCH = release/v0.4.4-integration
+LAST_UPDATED = 2026-10-31
+LAB_BRANCH = release/v0.4.4-integration
 EXYONQ_LAB_ROLE = DEVELOPMENT_INTEGRATION_QUALIFICATION
 EXYONQ_GITHUB_ROLE = CANONICAL_RELEASE_CLOUD_AUTHORITY
-LAB_TARGET_CUT = 0.4.11
-WORKSPACE_VERSION = 0.4.11
+LAB_TARGET_CUT = 0.9.0
+WORKSPACE_VERSION = 0.8.0
 V0411_STATUS = PUBLISHED_ON_GITHUB (tag v0.4.11 @ 3736455; lab may diverge)
 V0411_APACHE_EQUIV_IMPORTER = LANDED (Gate A NOT closed; TOTAL_COMPAT_PROMISE=FORBIDDEN)
 V043_RELEASE_STATUS = PUBLISHED
-PUBLIC_RELEASE = v0.4.11
-FINAL_RELEASE_HEAD = 37364553677fd9283bebf9e36ea514e4e157ef9a
-EXYONQ_GITHUB_POST_RELEASE_HEAD = bbeb4db
+PUBLIC_RELEASE = v0.8.0
+FINAL_RELEASE_HEAD = 5f3b64830467b353de42d5a16df1000b6860d6d6
+EXYONQ_GITHUB_POST_RELEASE_HEAD = 314b422
 SUPERSEDED_RELEASE_CANDIDATE = f25137bff3b6fc0d4fc1b7f4c6d736b100fae741
 PRODUCT_QUALIFIED_REVISION = 2f8e869f97c36e18ca7976d673dd6db2aa16e45e
 R2_FINAL_QUALIFICATION_HEAD = 9176c374876d7c4bf503db1c1a02c885bb02fad9
@@ -35,7 +35,7 @@ R6_STATUS = NOT_STARTED
 Companion authorities:
 
 | Function | Document |
-|----------|----------|
+| --- | --- |
 | Global roadmap | [`ROADMAP.md`](ROADMAP.md) |
 | Documentation map | [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) |
 
@@ -55,9 +55,9 @@ GITHUB_RELEASE_AUTHORITY =
   <repo>
   ROLE = CANONICAL_RELEASE_CLOUD_AUTHORITY
   BRANCH = main
-  FINAL_RELEASE_HEAD = 37364553677fd9283bebf9e36ea514e4e157ef9a
-  EXYONQ_GITHUB_POST_RELEASE_HEAD = bbeb4db
-  PUBLIC_RELEASE = v0.4.11
+  FINAL_RELEASE_HEAD = 5f3b64830467b353de42d5a16df1000b6860d6d6
+  EXYONQ_GITHUB_POST_RELEASE_HEAD = 314b422
+  PUBLIC_RELEASE = v0.8.0
 
 LAB_HEAD_IS_NOT_PUBLIC_RELEASE_HEAD = YES
 PRODUCT_QUALIFIED_REVISION = 2f8e869f97c36e18ca7976d673dd6db2aa16e45e
@@ -357,7 +357,7 @@ EVIDENCE = .exyonq-local/tmp/r2d-20260801/ + .exyonq-local/tmp/r2e-20260801/
 ### Demonstrated local results
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | `cargo fmt --check` | PASS | |
 | `cargo check --workspace --all-targets` | PASS | warnings only (unused imports) |
 | `cargo test --workspace --all-targets` | PASS (Darwin R2E) | KD3 501-counter race fixed via `proxy_metrics_assert_guard`; workspace-3 EXIT=0 |
@@ -496,7 +496,7 @@ R2_STATUS_AFTER_R2E =
 ### Legacy diagnostic scripts (HISTORICAL / NOT_EVIDENCE / NON_AUTHORITATIVE)
 
 | SCRIPT | CAPABILITY | STATUS | ENVIRONMENT | FAILURE_CLASS |
-|--------|------------|--------|-------------|---------------|
+| --- | --- | --- | --- | --- |
 | `kd2-5-static-qual.sh` (historical name) | static | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
 | `kd3-proxy-qual.sh` (historical name) | proxy | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
 | `plan08-fcgi-real-qual.sh` (historical name) | FastCGI | SKIP | Darwin | NOT_APPLICABLE (Linux-only) |
@@ -520,7 +520,7 @@ version claim = 0.4.3 (workspace; publication still FORBIDDEN)
 Status vocabulary: `PASS_REAL_E2E` | `PASS` | `CONDITIONAL` | `PARTIAL` | `BLOCKED` | `NOT_STARTED` | `DEFERRED` | `UNKNOWN`
 
 | AREA | STATUS | EVIDENCE | OPEN BLOCKERS | NEXT ACTION |
-|------|--------|----------|---------------|-------------|
+| --- | --- | --- | --- | --- |
 | core HTTP | PASS | Netcup+Oracle core/workspace; Darwin R2E workspace-3 PASS | — | — |
 | static serving | PASS_REAL_E2E | `scripts/e2e/static-e2e.sh` dual-arch NS5 | — | protect |
 | reverse proxy | PASS_REAL_E2E | `scripts/e2e/proxy-e2e.sh` → kd3 dual-arch NS5 | deepen optional | protect |
@@ -563,7 +563,7 @@ K8S_P2C_OPENED = NO
 ## 5. Capability inventory (implementation evidence)
 
 | Capability | Status | Evidence basis |
-|------------|--------|----------------|
+| --- | --- | --- |
 | HTTP/1.1 | IMPLEMENTED | core + integration tests |
 | static serving | IMPLEMENTED | `exyonq-mod-static`, dispatch tests |
 | routing | IMPLEMENTED | BackendTable / RouteDecision |
@@ -825,7 +825,7 @@ Owner-authorized track closed **current** `R5_RELEASE_BLOCKER=YES` governance ga
 **before** opening R4. This is **not** R5 freeze/release execution.
 
 | Phase | Result |
-|-------|--------|
+| --- | --- |
 | GRC-R5A docs SoT (gitignore exceptions) | PASS — `docs/security/**` + `docs/governance/**` (+ releases) tracked |
 | GRC-R5B security SoT | PASS — template/checklist/PMZ/waiver requirements |
 | GRC-R5C release audit repair | PASS — selftest + dry-run-infra (`RELEASE_AUDIT_MISSING_PATHS=0`) |
@@ -876,7 +876,7 @@ SUPPLY_CHAIN_GOVERNANCE = PARTIAL (deny/audit/SBOM + verify tooling; production 
 ### Particular rechecks vs current tree (post GRC-R5 remediation)
 
 | # | Finding | Classification | Notes |
-|---|---------|----------------|-------|
+| --- | --- | --- | --- |
 | 1 | `docs/security` missing | STALE_FIXED | Tracked SoT restored |
 | 2 | `docs/governance` missing | STALE_FIXED | Tracked SoT restored |
 | 3 | `/docs/` gitignore SoT | STALE_FIXED | `/docs/*` + exceptions for security/governance/releases |
@@ -918,7 +918,7 @@ GRC_CURRENT_LOW = 5
 ### CURRENT R5/release-scoped GRC blockers (not auto-opened)
 
 | GRC_FINDING | SEVERITY | CURRENT | PRODUCT_BLOCKER | R4_BLOCKER | R5_RELEASE_BLOCKER | GRC_P1_DESIGN_DEPENDENCY | REMEDIATION_REQUIRED_BEFORE_RELEASE |
-|-------------|----------|---------|-----------------|------------|--------------------|--------------------------|-------------------------------------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | Canonical `docs/security` audit SoT missing | Critical | NO (FIXED) | NO | NO | NO | — | CLOSED_BY_GRC_R5 |
 | Release audit depends on missing files | Critical | NO (FIXED) | NO | NO | NO | — | CLOSED_BY_GRC_R5 |
 | `/docs/` SoT conflict (ignore vs required paths) | Critical | NO (FIXED) | NO | NO | NO | — | CLOSED_BY_GRC_R5 |
@@ -958,7 +958,7 @@ PRE_R5_GRC_READINESS = PASS
 ### R2 dual-arch matrix (reconciled; R2E)
 
 | CAPABILITY | DARWIN | AMD64 | ARM64 | OCI_AMD64 | OCI_ARM64 |
-|------------|--------|-------|-------|-----------|-----------|
+| --- | --- | --- | --- | --- | --- |
 | workspace check | PASS | PASS | PASS | — | — |
 | workspace tests | PASS | PASS | PASS | — | — |
 | Clippy supported | PASS | PASS | PASS | — | — |

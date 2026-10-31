@@ -20,7 +20,7 @@ Purpose: separate candidate work for a possible **private** `v0.4.2` after `P14V
 ## 1. Dependencies still pending
 
 | Item | Status after v0.4.1 | v0.4.2 posture (proposal) |
-|------|---------------------|---------------------------|
+| --- | --- | --- |
 | Transitive `socket2` **0.5.10** via `redis` | Direct product use is on **0.6.5**; dual version remains (DBEX-006 residual) | **Policy review first** — eliminate only with redis upgrade path / containment plan; not a blind Dependabot unify |
 | `serde_json` **1.0.150** | Left intentionally (no advisory/coupling in 0.4.1) | Reassess only if serde group or advisory pulls it |
 | `notify` **9.0.0-rc.*** | Explicitly forbidden in 0.4.1 (prerelease + MSRV) | Keep **out** until stable + MSRV policy allows |
@@ -32,7 +32,7 @@ Purpose: separate candidate work for a possible **private** `v0.4.2` after `P14V
 ## 2. Demonstrated functional defects / honesty gaps
 
 | Finding | Evidence | Candidate for 0.4.2? |
-|---------|----------|----------------------|
+| --- | --- | --- |
 | OCI image `exyonq --version` reports `source_revision=unknown` | Netcup/Oracle digest smoke on `ghcr.io/exyonq/exyonq@sha256:ac0d74f1…` | **Yes (small)** — wire build-time revision into binary metadata (or document that only OCI label carries revision) |
 | Config watcher thrash on parent `/tmp` | Fixed in 0.4.1 (`path-filter`) | **Closed** — regression guard only if touched |
 | CHANGELOG still says 0.4.1 “not published” / `PUBLICATION_STATUS=FORBIDDEN` in places | Stale relative to private close | **Docs honesty** — eligible as docs-only when 0.4.2 opens |
@@ -45,7 +45,7 @@ No new blocking functional defect was left open that required retagging `v0.4.1`
 ## 3. Security
 
 | Item | Disposition |
-|------|-------------|
+| --- | --- |
 | `RUSTSEC-2025-0134` `rustls-pemfile` unmaintained | Tracked in 0.4.1; **migration to `rustls-pki-types`** proposed for 0.4.2+ unless severity rises earlier |
 | `EXYONQ-SEC-PRIVATE-MATERIAL-ZERO` | Keep fail-closed; no private TLS fixtures |
 | Actions SHA-pin retention | Preserve; any new Action = SHA-pin required |
@@ -57,7 +57,7 @@ No new blocking functional defect was left open that required retagging `v0.4.1`
 ## 4. Performance
 
 | Item | Disposition |
-|------|-------------|
+| --- | --- |
 | 0.4.1 dual-arch interleaved A/B | No durable >3% median product regression attributed to maturation |
 | New perf work in 0.4.2 | **Only** with hypothesis + Netcup/Oracle evidence; no speculative hot-path refactors |
 | Protectors | If shared paths change: P2–P13 no-regression discipline |

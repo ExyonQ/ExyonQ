@@ -88,7 +88,7 @@ accept_workers=8 epoll_pool_threads=8
 ## Gates vs AB3 / old default
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | P1 RPS vs old seal (141938) | **+8.54%** (≥ +5%) |
 | P1 RPS vs AB3 A0 (139350) | **+10.56%** |
 | P1 P99 vs old seal (1.81→1.71) | **−5.5%** (no >+5% regress) |
@@ -108,7 +108,7 @@ Contract: Static keepalive HTTP/1.1; cpuset 0–7; RAW WAF OFF; rewrk −c 100 �
 ### P1 — 1 KiB
 
 | | ExyonQ | NGINX | OLS |
-|--|-------:|------:|----:|
+| --- | ---: | ---: | ---: |
 | RPS median | 154062 | **168895** | 133498 |
 | core-ms/req | 0.130 | 0.161 | **0.122** |
 | RSS MiB | 13.86 | **8.42** | 13.97 |
@@ -128,7 +128,7 @@ P1_MARKET_READINESS = NOT_READY
 ### P2 — 64 KiB
 
 | | ExyonQ | NGINX | OLS |
-|--|-------:|------:|----:|
+| --- | ---: | ---: | ---: |
 | RPS median | **104041** | 90212 | 101791 |
 | core-ms/req | **0.197** | 0.235 | 0.226 |
 | RSS MiB | 21.64 | **13.14** | 19.27 |
@@ -144,7 +144,7 @@ P2_MARKET_READINESS = NOT_READY
 ### P3 — 1 MiB
 
 | | ExyonQ | NGINX | OLS |
-|--|-------:|------:|----:|
+| --- | ---: | ---: | ---: |
 | RPS median | 8683 | 8594 | **8709** |
 | core-ms/req | **1.146** | 1.151 | 1.207 |
 | RSS MiB | 71.95 | **58.82** | 65.26 |

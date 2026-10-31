@@ -35,7 +35,7 @@ No P1 filename special case, no second sendfile engine, no loadgen detection bra
 ## Eligibility contract (unchanged semantics, corrected parsing)
 
 | Request-target | Sendfile candidate |
-|----------------|-------------------|
+| --- | --- |
 | `GET /site/1k.bin` | yes (static GET/HEAD, Linux Cap067 auto-on) |
 | `GET http://host/site/1k.bin` | yes (same origin path) |
 | `GET http://host/api/x` | no |

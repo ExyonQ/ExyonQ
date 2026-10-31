@@ -14,7 +14,7 @@ QUEJAS_NGINX §2.2–2.3: operators get opaque 502/503/504 and silent “variabl
 ### Emission rules
 
 | Rule | Requirement |
-|------|-------------|
+| --- | --- |
 | Failure-only | Emit on final failed outcome (after Cap021 retries exhausted), drain reject, or unknown `$map` reference — **never** on successful 2xx/3xx proxy completions |
 | Status unchanged | Diagnostics are logs only; HTTP status mapping stays Cap021/Cap040 |
 | Context | Prefer `cluster_id`, `path`, `peer` (when known), `host`, `cause` |
@@ -23,7 +23,7 @@ QUEJAS_NGINX §2.2–2.3: operators get opaque 502/503/504 and silent “variabl
 ### Codes
 
 | Code | When | Typical status |
-|------|------|----------------|
+| --- | --- | --- |
 | `EXY-RT-0001` | Final upstream connect failure (includes DNS resolve failure) | 502 |
 | `EXY-RT-0002` | Final upstream attempt / shared-deadline timeout | 504 |
 | `EXY-RT-0003` | No eligible peer / missing cluster binding | 503 |

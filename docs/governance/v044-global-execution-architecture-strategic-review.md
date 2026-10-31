@@ -32,7 +32,7 @@ Orchestrator admission: **ACCEPT** (read-only). Tech-lead CASE draft: **GA-B**. 
 ## Verdict
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | CASE | **GA-B** — hybrid execution architecture recommended |
 | Whole-product rewrite | **NO** |
 | Product logic rewrite | **NO** |

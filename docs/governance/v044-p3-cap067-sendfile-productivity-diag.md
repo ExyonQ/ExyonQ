@@ -31,7 +31,7 @@ not admitted.
 ## Measured geometry (sendfile64-only bpf)
 
 | | ExyonQ | NGINX |
-|--|--------|-------|
+| --- | --- | --- |
 | sendfile64 / req | **8.005** | **1.009** |
 | avg `count` arg | **131 067** (~128 KiB) | **1 042 774** (~1 MiB) |
 | SENDFILE_IO self% | **0.58** | **12.29** |

@@ -16,7 +16,7 @@ NOTION_RECONCILIATION_REQUIRED = YES
 ## Ledger (cumulative)
 
 | Phase | Case | Notes |
-|-------|------|-------|
+| --- | --- | --- |
 | Foundations | CFD-A | separate process |
 | H1 routing | CFH2-B | |
 | PCR-B / CM-B | PCR-B / CM-B | historical RPS/CPU/RSS GET |

@@ -82,7 +82,7 @@ HARNESS = scripts/reality/run-phase7-static-proxy-coexistence-netcup.sh
 ```
 
 | Probe | Result |
-|-------|--------|
+| --- | --- |
 | Publish same gen: `/api/` Proxy + `/app/` FastCGI + `/` FastCGI | PASS |
 | GET existing `/static/hello.txt` | **404**; body SHA ≠ file SHA |
 | GET missing `/static/missing…` under `/` FC | **200 FASTCGI** (front-controller catch-all) |
@@ -111,7 +111,7 @@ Full `--workspace` ambient gates not treated as Phase 7 attribution (dirty tree)
 ## Specialist consensus (post-evidence)
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | Orchestrator | `CONDITIONAL_ACCEPT` — L2 evidence-only; defect → P7-C STOP; no PASS without Netcup |
 | Vertex | `CONDITIONAL` — Proxy+Fastcgi Cap033 OK; native three-handler Static **INSUFFICIENT** |
 | Research | `PARTIAL` — migration value PARTIAL if Static claimed as native |
@@ -122,7 +122,7 @@ Full `--workspace` ambient gates not treated as Phase 7 attribution (dirty tree)
 ## Terminal taxonomy
 
 | Case | Meaning | Selected |
-|------|---------|----------|
+| --- | --- | --- |
 | P7-A | Three-way coexistence VERIFIED_REAL_PRODUCTION | **NO** |
 | P7-B | Coexistence with nonblocking qualifications | **NO** — three-way not materially proven |
 | P7-C | Supported product defect | **NO** — Static was never a supported CFD `BackendKind`; absence is a **capability gap**, not a broken supported contract |

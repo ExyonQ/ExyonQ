@@ -63,7 +63,7 @@ PUBLIC_OPENING_AUTHORIZED = NO
 ### 1.1 Development (`<repo>`)
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Branch | `perf/p8o-finite-sse-batch` |
 | HEAD | `9dad9587c94f3732c1c3f8bc8153ac3b26f6e0bc` |
 | `main` | `1c43f718f91c4fd115b70b919439644af4d64ac2` |
@@ -79,7 +79,7 @@ Local `.exyonq-local/status/p14v040-STATUS.env` still shows stale `OPEN` / Phase
 ### 1.2 GitHub canonical (`<repo>`)
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Branch | `main` |
 | HEAD | `d326b02b4ebc3b8dd7a8a3dbe7deeab5251d4910` |
 | Working tree | clean |
@@ -105,7 +105,7 @@ No files were copied between trees during this audit.
 ## 2. Toolchain / MSRV
 
 | Item | Evidence |
-|------|----------|
+| --- | --- |
 | Effective toolchain | `rust-toolchain.toml` = `1.93.0` (both trees) |
 | Local `rustc` / `cargo` | `1.93.0` / `1.93.0` (audit host) |
 | `package.rust-version` / workspace MSRV field | **absent** in `Cargo.toml` |
@@ -137,7 +137,7 @@ Policy for v0.4.1: do **not** raise toolchain or introduce incidental MSRV eleva
 Deferred explicitly from `docs/release/p14v040-phase0-notes.md` to **0.4.1**:
 
 | PR | Proposal |
-|----|----------|
+| --- | --- |
 | #7 | bytes 1.12.0 → 1.12.1 |
 | #6 | anyhow 1.0.103 → 1.0.104 |
 | #5 | socket2 0.5.10 → 0.6.4 |
@@ -151,7 +151,7 @@ Remote Dependabot branches also exist for criterion, io-uring, matchit, memmap2,
 ### 3.3 `actions/cache` / `actions/setup-go`
 
 | Action | Current use | Current pin style | Latest stable observed | Decision |
-|--------|-------------|-------------------|------------------------|----------|
+| --- | --- | --- | --- | --- |
 | `actions/cache` | **Active** — `ci.yml` (cargo-semver-checks tools), `security.yml` (cargo-deny/about tools) at `@v5` | Floating major tag (not immutable SHA) | `v6` / `v6.1.0` (tag `v6` → commit `55cc8345…`) | `UPDATE_V041` (isolated CI commit) + SHA pin |
 | `actions/setup-go` | **Active** — `release.yml` `package-linux` installs pinned `nfpm` via Go | `@v6` floating tag (tag `v6` → `924ae3a1…`) | `v7.0.0` (tag `v7` → `b7ad1dad…`) | `UPDATE_V041` optional; **not** `REMOVE_UNUSED` |
 
@@ -195,7 +195,7 @@ No key backups or signing volumes were accessed.
 From `docs/release/p14v040-phase0-notes.md` and related release notes:
 
 | Item | Disposition for v0.4.1 |
-|------|-------------------------|
+| --- | --- |
 | Dependabot PRs #1–#7 | Primary dependency candidates (this audit) |
 | OCI local crypto proof / OCI publication | **Do not reopen** as a publication phase; dual-arch OCI **smoke** only if later authorized under correctness/OCI criteria |
 | Public opening / `latest` | Deferred to 0.4.5 / 0.5.0 — stay out |
@@ -424,7 +424,7 @@ Versions verified via crates.io (2026-07-28) and GitHub `Cargo.lock` at `d326b02
 ### anyhow
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | anyhow |
 | CURRENT_DIRECT_VERSION | `1` (workspace) |
 | CURRENT_LOCKED_VERSION | `1.0.103` |
@@ -449,7 +449,7 @@ Versions verified via crates.io (2026-07-28) and GitHub `Cargo.lock` at `d326b02
 ### bytes
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | bytes |
 | CURRENT_DIRECT_VERSION | `1` (workspace) |
 | CURRENT_LOCKED_VERSION | `1.12.0` |
@@ -476,7 +476,7 @@ Evidence: Bytes v1.12.1 release notes — *“Properly handle when `Box::new` pa
 ### serde (+ serde_derive)
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | serde / serde_derive |
 | CURRENT_DIRECT_VERSION | `serde = { version = "1", features = ["derive"] }` |
 | CURRENT_LOCKED_VERSION | `1.0.228` / `1.0.228` |
@@ -501,7 +501,7 @@ Evidence: Bytes v1.12.1 release notes — *“Properly handle when `Box::new` pa
 ### serde_json
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | serde_json |
 | CURRENT_DIRECT_VERSION | `1` |
 | CURRENT_LOCKED_VERSION | `1.0.150` |
@@ -514,7 +514,7 @@ Evidence: Bytes v1.12.1 release notes — *“Properly handle when `Box::new` pa
 ### notify
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | notify |
 | CURRENT_DIRECT_VERSION | `7` (workspace) |
 | CURRENT_LOCKED_VERSION | `7.0.0` |
@@ -543,7 +543,7 @@ Evidence: Bytes v1.12.1 release notes — *“Properly handle when `Box::new` pa
 #### socket2 @ platform-linux (0.5.x)
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | socket2 (exyonq-platform-linux) |
 | CURRENT_DIRECT_VERSION | `0.5` |
 | CURRENT_LOCKED_VERSION | `0.5.10` |
@@ -558,7 +558,7 @@ Evidence: Bytes v1.12.1 release notes — *“Properly handle when `Box::new` pa
 #### socket2 @ mod-fastcgi (0.6.x)
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | socket2 (exyonq-mod-fastcgi) |
 | CURRENT_DIRECT_VERSION | `0.6` |
 | CURRENT_LOCKED_VERSION | `0.6.4` |
@@ -580,7 +580,7 @@ Dependabot PR “0.5.10 → 0.6.4” as a single unify step: **`DEFER_V042_PLUS`
 ### actions/cache
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | actions/cache |
 | CURRENT_DIRECT_VERSION | `@v5` (floating) |
 | CURRENT_LOCKED_VERSION | tag `v5` → `caa296126883cff596d87d8935842f9db880ef25` (resolved at audit time; **not** pinned in YAML) |
@@ -596,7 +596,7 @@ Dependabot PR “0.5.10 → 0.6.4” as a single unify step: **`DEFER_V042_PLUS`
 ### actions/setup-go
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | DEPENDENCY | actions/setup-go |
 | CURRENT_DIRECT_VERSION | `@v6` |
 | CURRENT_LOCKED_VERSION | tag `v6` → `924ae3a1cded613372ab5595356fb5720e22ba16` (unpinned in YAML) |

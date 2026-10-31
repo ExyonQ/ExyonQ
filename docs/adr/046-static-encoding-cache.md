@@ -16,7 +16,7 @@ CONTRACT = CONDITIONAL ACCEPT (exyonq-architecture-contract 2026-09-22)
 MVP Option A (disk cache) is **authorized for Cap067** under this follow-up:
 
 | Surface | Choice |
-|---------|--------|
+| --- | --- |
 | Plane | Cap067 / `exyonq-mod-static` only (no Cap067↔CFD handoff) |
 | Storage | Managed dir `[static.encoding_cache]` (default OFF) |
 | Miss | A1 sync compress-once (`flate2` gzip level 6; optional brotli) + atomic tmp+rename |
@@ -44,7 +44,7 @@ P9 (`/site/64k.txt`, `Accept-Encoding: gzip`) on Netcup DEV (`p9-gzip-profile-20
 `p9-cl824-20260922T135045Z`) shows:
 
 | Server | Model | med RPS | gzip CL |
-|--------|--------|---------|---------|
+| --- | --- | --- | --- |
 | OLS | static gzip cache + sendfile | ~214k | **412** (= zlib gzip-6 of payload) |
 | nginx | on-the-fly zlib level 1 | ~36k | **650** |
 | ExyonQ | per-request `flate2::GzEncoder` level 1 | ~49k | **824** (= flate2/miniz gzip-1; valid gunzip) |
@@ -72,7 +72,7 @@ differs from nginx/zlib (650) and OLS/zlib-6 (412).
 ## Options considered
 
 | ID | Option | RPS path | Cap067 | Complexity | Verdict |
-|----|--------|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- | --- |
 | A | Disk sidecar / managed cache dir + sendfile of coded file | high | yes | med | **ACCEPT MVP** |
 | B | In-memory cache keyed by file identity + coding | high (small working set) | partial (no zero-copy) | med | ACCEPT phase-1.5 / hot-file |
 | C | Status quo dynamic filter only | low | Cap067 OFF for gzip | low | REJECT as end state for P9 competitiveness |
@@ -118,7 +118,7 @@ differs from nginx/zlib (650) and OLS/zlib-6 (412).
 ## Feature admission (106)
 
 | # | Question | Answer |
-|---|----------|--------|
+| --- | --- | --- |
 | 1 | Problem | Hot-path zlib every static gzip request |
 | 2 | Metric | P9 RPS / CPU / p95–p99 on Netcup; CL/coding parity as oracle |
 | 3 | Competitor | OLS `gzipAutoUpdateStatic` |

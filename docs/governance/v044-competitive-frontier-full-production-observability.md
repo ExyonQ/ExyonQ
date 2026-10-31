@@ -59,7 +59,7 @@ CAP061_REGRESSIONS = none intended
 ## Modes
 
 | Mode | Sinks |
-|------|-------|
+| --- | --- |
 | O0 | OpenMetrics scrape (if listen env set) / counters only |
 | O1 | + console JSON events |
 | O2 | + file(+size rotate) and/or syslog and/or journald |

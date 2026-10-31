@@ -11,7 +11,7 @@ These scripts prove real product behavior end-to-end. There is no
 operational smoke category in this workspace (FORBIDDEN).
 
 | Script | Capability | Class target |
-|--------|------------|--------------|
+| --- | --- | --- |
 | `static-e2e.sh` | static serving | C+ |
 | `proxy-e2e.sh` | reverse proxy | C+ (controlled HTTP peer) |
 | `fastcgi-php-fpm-e2e.sh` | FastCGI + real PHP-FPM | C+ |

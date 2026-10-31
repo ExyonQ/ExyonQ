@@ -92,7 +92,7 @@ Dockerfile sets `ARG EXYONQ_GIT_REVISION=unknown` for **OCI labels only**. Build
 ### Measured matrix (v0.4.1)
 
 | Surface | Result |
-|---------|--------|
+| --- | --- |
 | `P14V042_SOURCE_REVISION_LOCAL_RELEASE` | **PASS** when built in a git checkout (build.rs → HEAD). Not separately re-built in this audit. |
 | `P14V042_SOURCE_REVISION_PACKAGED_BINARY` | **PASS** — amd64 + arm64 `exyonq-0.4.1-linux-*.tar.gz` contain `source_revision=43805eb04a79babfbe443e2db4ca0d5b6658c80c` (string extract). |
 | `P14V042_SOURCE_REVISION_OCI_AMD64` | **FAIL** — image smoke: `source_revision=unknown` (Netcup digest smoke). |
@@ -133,7 +133,7 @@ P14V042_SOURCE_REVISION_WORK =
 ### Classification
 
 | Document | Class | Disposition |
-|----------|-------|-------------|
+| --- | --- | --- |
 | `docs/releases/p14v041-scope-audit.md` | **Frozen historical** (`PUBLICATION_STATUS=FORBIDDEN` at audit time) | **Do not rewrite** to pretend it knew the close outcome. |
 | `docs/releases/p14v041-execution.md` / `p14v041-close.md` | **Frozen close ledgers** (`PRIVATE_V041_RELEASE_COMPLETE`) | **Do not rewrite** history; already accurate. |
 | `CHANGELOG.md` § `[0.4.1]` | **Living** | Claims `not published`, `P14V041_RELEASE_EXECUTED=NO`, `PUBLICATION_STATUS=FORBIDDEN` — **stale** vs private release. Update to private-published facts without erasing that maturation phase started unpublished. |
@@ -158,7 +158,7 @@ P14V042_HONESTY_WORK =
 ### Inventory
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Locked | `rustls-pemfile 2.2.0` (crates.io max stable still 2.2.0 — no newer fix) |
 | Direct | **YES** — workspace `rustls-pemfile = "2"`; `exyonq-mod-tls`; also `core` (tests) |
 | Usage | PEM load of certs / PKCS#8 keys in `crates/exyonq-mod-tls/src/lib.rs` (`certs`, `pkcs8_private_keys`) → `rustls::pki_types::{CertificateDer,PrivateKeyDer}` |
@@ -168,7 +168,7 @@ P14V042_HONESTY_WORK =
 ### Options
 
 | Option | Verdict |
-|--------|---------|
+| --- | --- |
 | **A** Migrate PEM parsing to `rustls-pki-types` / current rustls-supported PEM helpers | **PREFERRED** — removes unmaintained direct dep; aligns with already-used `pki_types` |
 | **B** Update “owning” crate only | N/A as primary — ExyonQ **is** the direct owner; bumping 2.2.0 does not clear unmaintained |
 | **C** Keep temporary with technical lock | Only if A blocked by API/MSRV; requires dated waiver + owner accept — **not default** |
@@ -191,7 +191,7 @@ P14V042_RUSTLS_PEMFILE_WORK =
 ## D. serde_json (P1)
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Locked | `1.0.150` |
 | Latest stable (crates.io audit time) | `1.0.151` |
 | Workspace | `serde_json = "1"` |
@@ -219,7 +219,7 @@ P14V042_DEPENDENCY_MATRIX
 ```
 
 | DEPENDENCY | CURRENT | LATEST_STABLE | DIRECT/TRANSITIVE | USAGE | HOT_PATH | BREAKING | MSRV_DELTA | SECURITY | RUNTIME | DECISION |
-|------------|---------|---------------|-------------------|-------|----------|----------|------------|----------|---------|----------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | serde_json | 1.0.150 | 1.0.151 | direct (workspace) | config/IR/JSON | control-plane / some request | patch | none expected | low | yes | **INCLUDE_V042** |
 | rustls-pemfile | 2.2.0 | 2.2.0 | direct | TLS PEM load | startup/reload TLS | remove | check pki APIs | **unmaintained** | yes | **INCLUDE_V042** (remove) |
 | rustls | 0.23.40 | 0.23.42 | direct/transitive TLS stack | TLS | handshake | patch | none expected | yes | yes | **DEFER_WITH_REASON** unless pulled by pemfile/TLS work; separate commit + dual-arch TLS smoke |

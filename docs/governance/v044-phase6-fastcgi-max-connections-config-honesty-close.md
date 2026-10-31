@@ -48,7 +48,7 @@ IMPORTER_CONTRACT_DRIFT = NO
 ## Netcup evidence (VALID)
 
 | Check | Result |
-|-------|--------|
+| --- | --- |
 | reject max_conn=6 | PASS |
 | reject max_conn=0 | PASS |
 | accept max_conn=1 + dynamic PHP | PASS |
@@ -68,7 +68,7 @@ P6MAX-C = IMMUTABLE (not rewritten as STRONG_CAUSAL_PASS)
 ## Audits
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | Orchestrator | CONDITIONAL_ACCEPT → executed REJECT_GT1 |
 | Vertex | ARCHITECTURE_AUDIT=PASS; TRUTHFUL_ENFORCED_AT_PARSE_TIME |
 | Security | SECURITY_ACCEPT; honesty PASS; RESOURCE_BOUND_PUBLIC_CLAIM_ALLOWED=NO |

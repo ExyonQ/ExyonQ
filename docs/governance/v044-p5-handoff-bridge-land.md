@@ -19,7 +19,7 @@ SUITE = p5-handoff-remasure-20260923T150839Z
 ## Mutation landed
 
 | Piece | Behavior |
-|-------|----------|
+| --- | --- |
 | Cap067→Tokio handoff bridge | OS-thread handoffs enqueue; Tokio consumers `spawn` (not `Handle::spawn` from Cap067) |
 | WouldBlock on accept peek | `force_hyper` / HyperReady |
 | EPOLLET listen | drain while `accept_batch` returns full `ACCEPT_BATCH_LIMIT` |
@@ -35,7 +35,7 @@ SUITE = p5-handoff-remasure-20260923T150839Z
 ## Netcup remasure 20260923T150839Z (wrk -t2 -c100 -d12s Connection:close `/api/`)
 
 | Arm | median RPS | runs |
-|-----|----------:|------|
+| --- | ---: | --- |
 | B `EPOLL_LISTEN=1` | **43126** | 45302 / 41018 / 43126 |
 | A `EPOLL_LISTEN=0` | 41243 | 41243 / 42778 / 39017 |
 | HAProxy | ~10k med (noisy; r1 28665) | 28665 / 10256 / 2608 |

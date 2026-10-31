@@ -40,7 +40,7 @@ blacklist = ["203.0.113.0/24"]
 ### Defaults when enabled and no builtins table
 
 | Detector | Default action |
-|----------|----------------|
+| --- | --- |
 | SQL injection | Block |
 | XSS | Block |
 | Path traversal | Block |
@@ -52,7 +52,7 @@ blacklist = ["203.0.113.0/24"]
 ## Built-in rule IDs (current implementation)
 
 | Rule ID | Family | Phase / input |
-|---------|--------|---------------|
+| --- | --- | --- |
 | `EXY-SQL-1001` | SQLi | path/query/body (normalized) |
 | `EXY-SQL-1002` | SQLi | path/query/body |
 | `EXY-SQL-1003` | SQLi | path/query/body |
@@ -89,7 +89,7 @@ rule_ids = ["EXY-XSS-1001"]
 ```
 
 | Selector | Behavior |
-|----------|----------|
+| --- | --- |
 | `host` | When set, must match request host |
 | `path_prefix` | Matches exact path or `prefix + "/" + remainder` only |
 | `method` | When set, must match |

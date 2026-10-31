@@ -43,7 +43,7 @@ EVIDENCE =
 ```
 
 | Run | CORE_STATIC | CORE_PROXY | CORE_FASTCGI | CORE_OPERATIONS | RESULT |
-|-----|-------------|------------|--------------|-----------------|--------|
+| --- | --- | --- | --- | --- | --- |
 | LOCAL_RUN_1 (`linux-netcup-1`) | PASS | PASS | PASS | PASS | PASS |
 | LOCAL_RUN_2 (`linux-netcup-2`) | PASS | PASS | PASS | PASS | PASS |
 | LOCAL_RUN_3 (`linux-netcup-3`) | PASS | PASS | PASS | PASS | PASS |

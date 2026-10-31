@@ -5,7 +5,7 @@ Offline migration tools only. ExyonQ **never** reads Apache/NGINX/IIS config at 
 Importers live under `compat/` and are invoked via `exyonq-compat migrate`.
 
 | Source | Crate | Notes |
-|--------|-------|-------|
+| --- | --- | --- |
 | NGINX | `nginx/` | Tier1/2 + static/proxy/fastcgi MVPs |
 | Apache | `apache/` | **0.4.11** equivalent map (static, redirect, TLS, proxy, PHP-FPM); see `APACHE_STATIC_VHOST_MVP.md` |
 

@@ -26,7 +26,7 @@ SOURCE_BINARY_SHA256 = e28c0abe18587f2d911d492be64cbec42372383e011417a6c578be52d
 ## 0. Binding architecture (PXDP-B recap)
 
 | Decision | Value |
-|----------|-------|
+| --- | --- |
 | Execution shell | Worker-local `ProxyConnection` (one long-lived connection task) |
 | Request plan | **New** immutable `ProxyRequestPlan` per request — never connection-global |
 | Upstream | `UpstreamLease` (RAII) + Hyper global pool v1 |
@@ -58,7 +58,7 @@ Always per keepalive request:
 Each candidate type passed the filter:
 
 | Contract | Single responsibility | Removes invalid state | Hot path | Verdict |
-|----------|----------------------|----------------------|----------|---------|
+| --- | --- | --- | --- | --- |
 | `ProxyRequestPlan` | YES | YES (immutable admission snapshot) | read-only | **ACCEPT** |
 | `ProxyConnection` | YES | YES (connection vs request separation) | YES | **ACCEPT** |
 | `ProxyPhase` | YES | YES (legal transitions) | YES | **ACCEPT** |
@@ -265,7 +265,7 @@ INVARIANTS = REQUEST_TERMINAL_EVENT_EXACTLY_ONCE=YES; ATTEMPT_TERMINAL_EVENT_EXA
 ### 3.1 Field ledger
 
 | Field | Canonical source | Why needed | Copy/borrow | Lifetime | Security | Can stale |
-|-------|------------------|------------|-------------|----------|----------|-----------|
+| --- | --- | --- | --- | --- | --- | --- |
 | `generation: GenerationId` | `ServerState.generation` at plan build | bind config snapshot; lease validity | copy (newtype u64) | REQUEST | YES | NO for active request |
 | `request_id: RequestId` | new at plan build | logs/traces/retries | owned | REQUEST | no | NO |
 | `attempt_id: AttemptId` | reset per retry attempt | disambiguate retries | owned scalar | ATTEMPT | no | NO |
@@ -567,7 +567,7 @@ CANCELLATION_RULE = drop relay buffer; cancel upstream body; poison if bytes com
 **Decision:** split enums (removes more invalid states than combined enum).
 
 | Concern | SSOT | Values |
-|---------|------|--------|
+| --- | --- | --- |
 | On-wire body shape | `FramingDecision` | `KnownLength(n)`, `Chunked`, `Bodyless`, `UpgradeTunnel` |
 | Socket after response | `ConnectionDisposition` | `KeepAliveEligible`, `CloseAfterResponse`, `Poisoned` |
 
@@ -618,7 +618,7 @@ NO_FRAME_RELEASE_BEFORE_FULL_WRITE = YES
 **One classification authority:** `ProxyError` in shell layer maps all sources.
 
 | Class | Maps from (current product) | Before commit status | After commit action | Retryable | Client reuse | Upstream reuse | Obs class |
-|-------|----------------------------|----------------------|---------------------|-----------|--------------|----------------|-----------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | `ClientProtocol` | bad request line, smuggling | 400 | poison | NO | NO | release | client_error |
 | `ClientDisconnected` | read/write EOF | — | abort | NO | NO | cancel | client_cancel |
 | `PolicyRejected` | WAF/rate deny | 403/429 | close | NO | NO | N/A | policy |
@@ -662,7 +662,7 @@ Generation change between attempts:
 ### 12.2 Timeout ownership
 
 | Timer | Start | Reset | End | Expiry error | Poison |
-|-------|-------|-------|-----|--------------|--------|
+| --- | --- | --- | --- | --- | --- |
 | client header | first byte | per request | headers complete | ClientProtocol/Timeout | rarely |
 | client body | headers done | — | body consumed | ClientDisconnected | if partial upstream |
 | upstream connect | UpstreamPending | per attempt | connected | UpstreamConnect/Timeout | no |
@@ -736,7 +736,7 @@ Wire Cap034 encoder currently skips Connection/TE/CL on copy — must stay consi
 ## 14. Module hooks (inventory)
 
 | Hook | Current owner | Before shell | Inside shell | After shell | Per request | Per frame | Plan flag |
-|------|---------------|--------------|--------------|-------------|-------------|-----------|-----------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | `might_use_proxy_wire` | mod-proxy | YES | — | — | conn | no | admission |
 | `plan_wire_decision` | core/kernel | YES | — | — | conn | no | — |
 | `resolve_proxy_route` | core | YES (in plan build) | — | — | req | no | frozen in plan |
@@ -756,7 +756,7 @@ Wire Cap034 encoder currently skips Connection/TE/CL on copy — must stay consi
 ## 15. Security invariant ledger
 
 | ID | Invariant | Enforced by |
-|----|-----------|-------------|
+| --- | --- | --- |
 | SEC-01 | NO_REQUEST_SMUGGLING | parser + plan build + request_headers_safe | CONTRACT + EXISTING |
 | SEC-02 | NO_RESPONSE_SMUGGLING | FramingDecision + DownstreamWriter | CONTRACT |
 | SEC-03 | NO_CL_TE_CONFLICT | type exclusion + parser gate | CONTRACT + EXISTING |
@@ -782,7 +782,7 @@ SECURITY_INVARIANT_LEDGER_COMPLETE = YES
 ## 16. Invalid-state ledger (selected)
 
 | Invalid combination | Prevention |
-|--------------------|------------|
+| --- | --- |
 | Poisoned + KeepAliveEligible | ConnectionDisposition mutual exclusion |
 | HeadersCommitted + Retry | ResponseCommit gate |
 | KnownLength + Chunked | FramingDecision enum |
@@ -828,7 +828,7 @@ SELF_REFERENTIAL_UNSAFE_REQUIRED = NO preferred (single task; no self-referentia
 ## 18. Identity types
 
 | Type | Purpose | Newtype? |
-|------|---------|----------|
+| --- | --- | --- |
 | `ConnectionId` | connection logs | YES (process-wide counter) |
 | `RequestId` | per-request obs | YES |
 | `AttemptId` | retry correlation | YES (u8 sufficient) |
@@ -843,7 +843,7 @@ Do not use ConnectionId as RequestId.
 ## 19. Drop policy
 
 | Type | Drop MAY | Drop MUST NOT |
-|------|----------|---------------|
+| --- | --- | --- |
 | `UpstreamLease` | mark poison; sync cancel signal | await pool |
 | `ProxyBodyRelay` | release buffers | emit terminal obs |
 | `ProxyObsSpan` | emit terminal if not yet (sync counter) | duplicate terminal on normal path |
@@ -884,7 +884,7 @@ PLAN_ALLOCATIONS small bounded constant
 ## 21. Arc & lock policy
 
 | Arc site | Why shared | Clones/req | Verdict |
-|----------|------------|------------|---------|
+| --- | --- | --- | --- |
 | `UpstreamTarget.path_uris` | immutable map | 0 on hot path if snapshot in plan | OK in plan snapshot |
 | `ProxyRuntime` | process pinned | once per connection | OK cold |
 | Body `Bytes` | refcount move | minimize | prefer move |
@@ -912,7 +912,7 @@ Single-task ownership — Sync not required on hot path types.
 ## 23. Async cancellation safety (await boundaries)
 
 | Await | Cancellation safe | Notes |
-|-------|-------------------|-------|
+| --- | --- | --- |
 | pool checkout | REQUIRES_STATE | lease partial ⇒ drop |
 | upstream send | REQUIRES_STATE | attempt counter |
 | headers read | REQUIRES_STATE | retry if pre-commit |
@@ -936,7 +936,7 @@ Tokio poll state; Hyper Incoming; parser carry buffer internals; chunk hex stack
 ### TYPE → FUTURE_CRATE_OWNER
 
 | Type | Crate | Visibility |
-|------|-------|------------|
+| --- | --- | --- |
 | `ProxyRequestPlan`, shell types | `exyonq-mod-proxy` (internal) | PRIVATE_IMPLEMENTATION |
 | `UpstreamTarget` snapshot | `exyonq-mod-proxy` | CRATE_INTERNAL |
 | `strip_hop_by_hop_headers` | `module-api` | MODULE_API_STABLE |
@@ -977,7 +977,7 @@ ProxyPlanDiagnosticView = read-only optional compare (route, cluster, generation
 ### Feature admission (predicates only)
 
 | Feature | Class |
-|---------|-------|
+| --- | --- |
 | H1 GET/HEAD wire | SHELL_NATIVE (target) |
 | known-length response | SHELL_NATIVE |
 | chunked response | SHELL_NATIVE |
@@ -1007,7 +1007,7 @@ NORMAL_FRAMING_AFTER_UPGRADE = FORBIDDEN
 ## 27. Memory lifetime ledger
 
 | Object | Lifetime | Owner | Max/conn | Hot |
-|--------|----------|-------|----------|-----|
+| --- | --- | --- | --- | --- |
 | ProxyConnection | CONNECTION | task | 1 | yes |
 | ProxyRequestPlan | REQUEST | connection | 1 active | read |
 | UpstreamLease | ATTEMPT | connection | 1 | yes |
@@ -1023,7 +1023,7 @@ NORMAL_FRAMING_AFTER_UPGRADE = FORBIDDEN
 ## 28. SSOT map
 
 | Concern | Canonical owner | IR field/interface |
-|---------|-----------------|-------------------|
+| --- | --- | --- |
 | routing | `wire_dispatch::resolve_proxy_route` | route_id, cluster_id, route_authority |
 | cluster | ServerState snapshot | cluster_id, upstream_target |
 | WAF | `evaluate_wire_waf` / `core/waf` | waf_admission |
@@ -1045,7 +1045,7 @@ NORMAL_FRAMING_AFTER_UPGRADE = FORBIDDEN
 ## 29. Commit / poison matrix (summary)
 
 | Failure | Before headers | After headers | Mid body | Client reuse | Upstream reuse | Retry | Status |
-|---------|----------------|---------------|----------|--------------|----------------|-------|--------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | UpstreamConnect | 502/503 | — | — | yes | release | YES pre-commit | 502 |
 | UpstreamTimeout pre-commit | 504 | — | — | yes | release | maybe | 504 |
 | UpstreamTimeout streaming | — | — | poison | no | poison | NO | 504 |

@@ -14,7 +14,7 @@ QUEJAS_NGINX §2.1–2.3 ask for operator warnings on shaded routes, duplicate h
 ### Layering
 
 | Pass | Owner | Severity | Default exit |
-|------|-------|----------|--------------|
+| --- | --- | --- | --- |
 | Parse + IR validate | `exyonq-config-ir` / merge | `Error` | fail |
 | Predictive lint | `exyonq-config-cli` after successful load | `Warning` | 0 unless `--strict` |
 
@@ -23,7 +23,7 @@ Predictive analysis is **offline**, **pure on IR** (no DNS, no probes, no `core/
 ### Codes (`EXY-LINT-xxxx`)
 
 | Code | Rule |
-|------|------|
+| --- | --- |
 | `EXY-LINT-0001` | Prefix/suffix route partially shaded by a longer same-host pattern |
 | `EXY-LINT-0002` | Duplicate `proxy_set_headers` name on one route |
 | `EXY-LINT-0003` | Upstream with endpoints and `health_check.enabled = false` |

@@ -21,7 +21,7 @@ Product defaults were **correct**. The defect was benchmark methodology assuming
 ## What changed (harness only)
 
 | Path | Change |
-|------|--------|
+| --- | --- |
 | `benchmarks/configs/exyonq/bench.toml` | Explicit `[waf] enabled=false mode="disabled"` |
 | `scripts/gates/p1-raw-waf-off-gate.sh` | Fail-closed effective-semantics gate |
 | `scripts/remote/v044-p1-raw-waf-normalization.sh` | Rebuild + runtime proof + 3-way RAW |
@@ -48,7 +48,7 @@ RUNTIME_WAF_OFF_PROOF = PASS
 ## Authoritative three-way P1 RAW (WAF-off)
 
 | Server | Runs (RPS) | Median | CV% |
-|--------|------------|--------|-----|
+| --- | --- | --- | --- |
 | ExyonQ | 161508, 181709, 135708, 164532, 163179 | **163178.95** | 10.10 |
 | NGINX | 147181, 156961, 142221, 129549, 139628 | **142221.03** | 7.08 |
 | OLS | 128931, 141452, 138120, 148637, 132186 | **138120.08** | 5.62 |
@@ -83,7 +83,7 @@ Preserved causal history:
 ## Default product vs RAW
 
 | Profile | WAF |
-|---------|-----|
+| --- | --- |
 | Product default (absent section) | Monitor |
 | Canonical P1 RAW (this WIP) | Explicitly disabled |
 | DEFAULT_PRODUCT / SECURE_DEFAULT benches | Separate; not changed here |
@@ -111,7 +111,7 @@ SOURCE = MIXED
 Closed competitive RPS baseline is preserved. Latency/CPU/memory come from a same-contract reporting capture using `rewrk --pct` (real histogram table) and container `docker stats`.
 
 | Metric | ExyonQ | NGINX | OLS |
-|--------|--------|-------|-----|
+| --- | --- | --- | --- |
 | P99 (median of runs, ms) | 1.65 | 1.69 | 1.59 |
 | CPU avg % (docker, 8-core cpuset) | 413.08 | 280.54 | 189.66 |
 | CPU normalized (avg%/(100×8)) | 0.516 | 0.351 | 0.237 |

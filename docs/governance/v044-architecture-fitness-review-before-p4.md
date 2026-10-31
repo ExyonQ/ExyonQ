@@ -37,7 +37,7 @@ SMALL_MEDIUM_REQUEST_ARCHITECTURE_FITNESS = NOT_PROVEN
 ## Cross-profile matrix (authoritative seals)
 
 | Axis | P1 (1 KiB) | P2 (64 KiB) | P3 (1 MiB) |
-|------|------------|-------------|------------|
+| --- | --- | --- | --- |
 | RPS vs NGINX | LOSS (−12.5%) | slight WIN (+1.9%) | slight WIN (+1.0%) |
 | RPS vs OLS | slight WIN | LOSS (−3.6%) | near PARITY (−0.2%) |
 | CPU/req | WIN vs NGINX; LOSS vs OLS | WIN both | WIN both |
@@ -51,7 +51,7 @@ SMALL_MEDIUM_REQUEST_ARCHITECTURE_FITNESS = NOT_PROVEN
 Measured TOTAL (not invented):
 
 | Profile | bytes | ExyonQ µs | NGINX µs | OLS µs |
-|---------|------:|----------:|---------:|-------:|
+| --- | ---: | ---: | ---: | ---: |
 | P1 | 1024 | 11.52 | 13.69 | 10.51 |
 | P2 | 65536 | 19.34 | 20.47 | 20.59 |
 | P3 | 1048576 | 101.51 | 107.76 | 111.49 |
@@ -59,7 +59,7 @@ Measured TOTAL (not invented):
 Linear fit `TOTAL_us ≈ F + k·bytes` using **P1+P3 only** (P2 as check):
 
 | Server | F (µs) fixed estimate | k (µs/KiB) | P2 pred vs actual |
-|--------|----------------------:|-----------:|-------------------|
+| --- | ---: | ---: | --- |
 | ExyonQ | **11.43** | 0.0859 | 17.1 vs 19.3 (−12%) |
 | NGINX | **13.60** | 0.0898 | 19.5 vs 20.5 (−5%) |
 | OLS | **10.41** | 0.0964 | 16.7 vs 20.6 (−19%) |
@@ -73,7 +73,7 @@ OLS_FIXED_COST_ESTIMATE    ≈ 10.4 µs/req
 Cgroup companion (separate meter; includes more system time):
 
 | | P1 total µs | P2 total µs | P3 total µs |
-|--|------------:|------------:|------------:|
+| --- | ---: | ---: | ---: |
 | ExyonQ | 32.62 | 26.46 | 157.59 |
 | NGINX | 39.27 | 29.49 | 173.61 |
 | OLS | 31.00 | 33.54 | 176.22 |
@@ -149,7 +149,7 @@ IS_HYBRID_TOKIO_PLUS_EPOLL_COSTLY = PARTIAL / STRONGLY_SUPPORTED_FOR_FIRST_REQUE
 Stages still paid (code map):
 
 | Stage | Classification |
-|-------|----------------|
+| --- | --- |
 | epoll_wait readiness | ESSENTIAL |
 | nonblocking header read | ESSENTIAL |
 | header safety / generation / drain gates | CONTRACT_REQUIRED |
@@ -212,7 +212,7 @@ COLD_CONTROL_PLANE + MINIMAL_HOT_DATA_PLANE = PARTIALLY_SATISFIED
 ## Architecture options (no implementation)
 
 | Option | Evidence | P1 effect | P2 effect | P3 effect | Complexity | Risk | Recommend |
-|--------|----------|-----------|-----------|-----------|------------|------|-----------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | A KEEP CURRENT | P3 already wins | none | none | preserve | Low | Low | NO as sole strategy if migration goal includes P1/P2 |
 | B TARGETED SMALL-REQ FAST PATH | stage depth + locks | potentially multi-metric | likely help | low regression if invariants kept | Med | Med | **YES (direction)** |
 | C SEPARATE DATA-PLANE ENGINE | insufficient | unknown | unknown | high risk | High | High | NO |
@@ -246,7 +246,7 @@ WOULD_THREAD_PER_CORE_HELP = UNKNOWN / NOT_PROVEN
 ## Architecture decision table (required)
 
 | ARCH_OPTION | EVIDENCE | P1_GAIN | P2_GAIN | P3_EFFECT | CPU | MEM | TAIL | CX | RISK | PORT | MAINT | REC |
-|-------------|----------|---------|---------|-----------|-----|-----|------|----|------|------|-------|-----|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | CURRENT | PROVEN P3 win | 0 | 0 | keep | — | — | — | L | L | L | L | NO alone |
 | TARGETED_FAST_PATH | STRONGLY_SUPPORTED | multi-metric **if** fixed stages/parallelism addressed | likely | preserve | ↓ fixed | maybe ↓ | ↓ P1 | M | M | L | M | **YES** |
 | THREAD_PER_CORE | HYPOTHESIS | unbound | unbound | risk | ? | ? | ? | H | H | L | H | NO now |

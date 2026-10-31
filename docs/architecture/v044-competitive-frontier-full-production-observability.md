@@ -18,7 +18,7 @@ competitive split-plane (CFD) **without** making observability the dataplane?
 ## Existing observability SSOT
 
 | Surface | Location | Disposition |
-|---------|----------|-------------|
+| --- | --- | --- |
 | Cap061 ADR | `docs/adr/037-observability-architecture.md` | PRESERVE |
 | Cap061 leaf | `crates/exyonq-observability` | PRESERVE (control / product plane) |
 | Cap054 metrics | `modules/metrics` + scrape | PRESERVE |
@@ -54,7 +54,7 @@ CFD speaks Cap061 **semantics** via a tokio-free local projection + export threa
 Compared before mutation:
 
 | Option | Summary | Verdict |
-|--------|---------|---------|
+| --- | --- | --- |
 | **A** | Per-request cross-process event messages | **REJECT** — reintroduces control RPC / hot-path coupling |
 | **B** | Shard-local counters + bounded event ring + periodic publication | **SELECT** (core) |
 | **C** | Shared-memory counters / snapshots | DEFER — portability + lifetime cost not justified for Phase 5 |
@@ -100,7 +100,7 @@ Status class is bounded (`2xx|3xx|4xx|5xx|other`). WAF decision is `allow|deny|e
 ## Modes (production, not bench-secret)
 
 | Mode | Meaning |
-|------|---------|
+| --- | --- |
 | O0 | Metrics scrape only (default if no sink env set) |
 | O1 | O0 + console JSON + structured access/error events |
 | O2 | O1 + file(+rotation) and/or syslog and/or journald as configured |

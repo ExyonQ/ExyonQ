@@ -40,7 +40,7 @@ prove a commercial win or a reason to migrate from NGINX, OpenLiteSpeed, or HAPr
 Every profile/scale combination maintains independent fields:
 
 | Axis | Values |
-|------|--------|
+| --- | --- |
 | `TECHNICAL_CORRECTNESS` | PASS / FAIL / NOT_VERIFIED |
 | `ENGINEERING_BASELINE` | CLOSED / OPEN / NOT_MEASURED |
 | `PERFORMANCE_COMPETITIVENESS` | AHEAD / PARITY / BEHIND / MIXED / NOT_MEASURED |

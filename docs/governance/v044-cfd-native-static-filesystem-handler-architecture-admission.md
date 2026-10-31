@@ -54,7 +54,7 @@ Ambient dirty tree preserved (tracked product + untracked CFD). No cleanup / sta
 ### Entry freeze (ambient classification)
 
 | Class | Tracked diff | Untracked |
-|-------|--------------|-----------|
+| --- | --- | --- |
 | product / Cargo | 31 | 10 |
 | docs | 10 | 93 |
 | harness / scripts | 2 | 51 |
@@ -122,7 +122,7 @@ listener (mio shard accept)
 ```
 
 | Concern | SSOT |
-|---------|------|
+| --- | --- |
 | Route table / Cap033 | `crates/exyonq-cfd-gen/src/route_table.rs` (`RouteTable::lookup`, `CompiledRoute`) |
 | Backend kind | `BackendKind::{Proxy=0, Fastcgi=1, Reject=2}` — **no Static** |
 | Dispatch target | `BackendTarget::{Proxy, Fastcgi, Reject}` |
@@ -146,7 +146,7 @@ CURRENT_ROUTE_SSOT               = crates/exyonq-cfd-gen/src/route_table.rs CFDR
 Primary crate: `crates/exyonq-mod-static` (+ `module-api/src/static_wire.rs` hooks into core epoll/Tokio).
 
 | Capability | Status in product plane |
-|------------|-------------------------|
+| --- | --- |
 | root / docroot | `StaticRoot` + canonicalize + Linux root dirfd |
 | alias | not required for CFD MVP (see §16) |
 | DirectoryIndex | product/FastCGI ADR-043; not Static listing |
@@ -187,7 +187,7 @@ CAP067_STATIC_PATH_ON_CFD = NOT_APPLICABLE
 ```
 
 | Reuse | Must not copy blindly |
-|-------|------------------------|
+| --- | --- |
 | Cap004 open-under-root / `openat2(RESOLVE_BENEATH)` + ENOSYS fallback | Entire `exyonq-mod-static` dependency graph / Tokio |
 | Regular-file + fstat identity after open | Product `StaticRoot` preload HashMap as CFD gen default |
 | Nonblocking sendfile pump / EAGAIN park *pattern* | Cap067 FD cache keys tied to product generation/site_slot |
@@ -214,7 +214,7 @@ Native CFD Static must **not** casually reintroduce per-request open/stat/close 
 Can current CFD support **native** static without a new handler category?
 
 | Interpretation | Result |
-|----------------|--------|
+| --- | --- |
 | Reuse Proxy | Serves HTTP upstream — **not** NATIVE_STATIC |
 | Reuse FastCGI | Application/script execution; DI/FC NotFound ≠ file serve (`fcgi_route.rs`) |
 | Reuse Reject | Error only |
@@ -232,7 +232,7 @@ WHY = no existing BackendKind opens/serves filesystem objects inside CFD;
 ## 6. Architecture alternatives
 
 | ID | Option | Verdict |
-|----|--------|---------|
+| --- | --- | --- |
 | A | `BackendKind::Static` | **ACCEPT** — mirrors ADR-038 FastCGI IR extension |
 | B | Rename to `HandlerKind`/`RouteAction` | Equivalent rename; unnecessary churn |
 | C | Static policy outside BackendKind, same dispatch | Extra SSOT; higher ambiguity |
@@ -295,7 +295,7 @@ STATIC_CONFIG_SSOT = generation-compiled CompiledStaticPolicy on the route (no p
 ```
 
 | Field | Class |
-|-------|-------|
+| --- | --- |
 | absolute docroot | MVP_REQUIRED |
 | route path prefix (Cap033) | MVP_REQUIRED |
 | index basenames (optional, basename-only) | MVP_REQUIRED (may be empty = no index) |
@@ -513,7 +513,7 @@ residual are **nonblocking qualifications** for CASE B (not architecture MUST_FI
 Specialist / auditor results:
 
 | Role | Verdict |
-|------|---------|
+| --- | --- |
 | Vertex | PASS (P7STATICADM-B) |
 | Security | PASS (architecture docs; mutation still unauthorized) |
 | Research | PASS |

@@ -26,7 +26,7 @@ Parent: [`v044-global-execution-architecture-strategic-review.md`](v044-global-e
 ## Verdict
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | CASE | **EP-C** — competitive breakthrough vs NGINX/OLS class on P4 |
 | Value gate ≥15% vs ExyonQ | **PASS** (+38.2%) |
 | Specialized dataplane justified | **YES** |

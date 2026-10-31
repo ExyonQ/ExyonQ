@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.4.12
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.4.12 |
 | **Commit** | `2c9de255b1963878aa6085f310dc28a45010954d` |
 | **Date** | 2026-10-12 |
@@ -18,7 +18,7 @@ Nightly fuzz, Miri, and an official benchmark were not run for this cut.
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | not run on this commit | Tag workflow runs after publish |
 | Security (`security.yml`) | host `cargo audit` | Required clean before tag |
 | Nightly fuzz | skipped | Not run for this cut |
@@ -37,7 +37,7 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | Dependabot wat 1.260.0 → 1.261.0 | low | Merged [#40](https://github.com/ExyonQ/ExyonQ/pull/40) on main |
 | Dependabot crypto-common 0.1.6 → 0.1.7 | low | Merged [#43](https://github.com/ExyonQ/ExyonQ/pull/43) on main |
 

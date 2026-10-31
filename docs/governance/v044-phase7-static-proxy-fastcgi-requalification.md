@@ -19,7 +19,7 @@ Can **current** ExyonQ CFD serve **real native Static**, **real reverse Proxy**,
 ## Terminal disposition
 
 | Field | Value |
-|---|---|
+| --- | --- |
 | **CASE** | **P7R-B** — `STATIC_PROXY_FASTCGI_COEXISTENCE_VERIFIED_WITH_NONBLOCKING_QUALIFICATIONS` |
 | **Authoritative RUN_ID** | `20260901T140000Z` |
 | **CORE_MATRIX** | PASS (`CORE_MATRIX_FAILURES=0`) |
@@ -33,7 +33,7 @@ Invalid harness runs (`20260901T132500Z`, `20260901T134500Z`) are **not** author
 ## Lineage (immutable preserved truths)
 
 | Terminal | Preserved claim |
-|---|---|
+| --- | --- |
 | **P7STATICIMPL-B** | Native `BackendKind::Static`, CFDRT005, StaticSend, Netcup static matrix |
 | **P7-E** | Pre-Static: Proxy+FastCGI only; Static **falsified absent** — do not reuse as pass |
 | **P6G-A** | Real FastCGI / KEEP_CONN contract (`max_conn=1`) |
@@ -70,7 +70,7 @@ fcgi-front-controller|1|/index.php
 ## Authoritative evidence summary (`20260901T140000Z`)
 
 | Gate | Result |
-|---|---|
+| --- | --- |
 | SAME_GENERATION_STATIC_PROXY_FASTCGI | PASS |
 | EXACTLY_ONE_HANDLER_OWNS_REQUEST | PASS |
 | THREE_WAY_INTERLEAVING | PASS (`ROUTE_CROSS_CONTAMINATION=MEASURED_0`) |
@@ -103,7 +103,7 @@ Remote driver: `scripts/remote/v044-phase7-static-proxy-fastcgi-requalification-
 ## Specialist audits (HEAD `d94856663f42ffce16a3c0ccc1291feb4d7083e4`)
 
 | Auditor | Verdict |
-|---|---|
+| --- | --- |
 | Vertex architect | CONDITIONAL_ACCEPT |
 | Security engineer | CONDITIONAL (`MUST_FIX=0`) |
 | Research engineer | CONDITIONAL (credible migration topology class) |

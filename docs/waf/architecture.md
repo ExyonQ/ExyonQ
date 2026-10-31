@@ -3,7 +3,7 @@
 ## Dependency boundary
 
 | Edge | Status |
-|------|--------|
+| --- | --- |
 | `exyonq-core` → `exyonq-waf-api` | required |
 | `exyonq-core` → `exyonq-waf` | **forbidden** |
 | CLI (`exyonq`) → `exyonq-waf` + `exyonq-waf-api` + `exyonq-ratelimit` | required |
@@ -73,7 +73,7 @@ RATE_LIMIT_DOES_NOT_ERASE_SIGNATURE_BLOCK = YES
 ## Protocol / backend wiring
 
 | Path | Wired through WAF security path |
-|------|----------------------------------|
+| --- | --- |
 | HTTP/1.1 | Yes |
 | HTTP/2 | Yes (shared handler path) |
 | HTTP/3 | Yes (shared semantic hooks) |

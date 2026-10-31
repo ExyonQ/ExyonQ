@@ -39,7 +39,7 @@ Note: user inspection path `crates/exyonq-config-ir/` does **not** exist; packag
 ## Findings matrix
 
 | FINDING_ID | FILE | SYMBOL | CURRENT_BEHAVIOR | LIMITATION | CONTRACT_IMPACT | K8S_RELEVANCE | NON_K8S_RELEVANCE | ACTION_REQUIRED |
-|------------|------|--------|------------------|------------|-----------------|---------------|-------------------|-----------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | F01 | `config/ir/src/lib.rs` | `UpstreamConfig` | `name` + single `target` + `timeout_ms` | no endpoint set/weights/policy | blocks Contracts 2–3,7 | High | High | schema evolution |
 | F02 | `crates/exyonq-runtime-plan/src/runtime_plan.rs` | `CompiledCluster` / proxy slots | one URI/timeout per upstream | not multi-endpoint | RuntimePlan must gain endpoint set | High | High | P2 compile model |
 | F03 | `crates/exyonq-mod-proxy/src/upstream.rs` | `UpstreamDescriptor` | single target metadata | same | DP selection API | High | High | P2 |
@@ -73,7 +73,7 @@ Note: user inspection path `crates/exyonq-config-ir/` does **not** exist; packag
 ## Config IR gap vs target contracts
 
 | CONTRACT_AREA | CURRENT_TYPE_OR_SYMBOL | CURRENT_CAPABILITY | TARGET_CAPABILITY | BREAKING_CHANGE_REQUIRED | BACKWARD_COMPATIBILITY | MIGRATION_REQUIRED | IMPLEMENTATION_PHASE | PRODUCT_RISK |
-|---------------|------------------------|--------------------|-------------------|--------------------------|------------------------|--------------------|----------------------|--------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Backend identity | `UpstreamConfig.name` | name=identity+pool key | BackendId+source+display | NO if keep `name` as BackendId | keep `[[upstream]] name` | map name→backend_id | P1 design / P2 code | Low |
 | Endpoint set | `target: String` | single URL | `endpoints[]` | **YES** if remove `target` | keep `target` as legacy single-endpoint sugar | expand target→one endpoint | P2 | Medium |
 | LB policy | none | implicit single | WRR+priority | NO (additive enum) | default RR/WRR | defaults | P2 | Medium |

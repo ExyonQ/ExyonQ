@@ -22,7 +22,7 @@ Not **P8TECH-B**: no new supported product defect proven in-scope for this WIP.
 ## What closed
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | PASS (commit `42f045b9`) |
 | `cargo fmt` / `cargo check --all-features` / `cargo test --workspace --all-targets --all-features` | PASS (Darwin) |
 | FCGI pool `apply_timeouts…` 20-rep | 0/20 fail Darwin + Netcup + Oracle |
@@ -35,7 +35,7 @@ Not **P8TECH-B**: no new supported product defect proven in-scope for this WIP.
 ## What remains open
 
 | Residual | Status |
-|----------|--------|
+| --- | --- |
 | `STATIC_PREAD_FALLBACK_RUNTIME` | NOT_MEASURED (reachability documented; blocks P8TECH-A) |
 | `GATE_PHASE6B_FCGI` / `trailing_data_forces_discard_error` | Intermittent Linux FAIL (amd64 12/20, arm64 9/20 in this WIP series); Darwin 0/20 |
 | Parent P3 IDs | Still open unless separately closed (pread/TOCTOU hash/config disclosure accounting) |

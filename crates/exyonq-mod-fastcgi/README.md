@@ -19,7 +19,7 @@ those “live HTTP still 501” rows.
 ## Current product path (post PR5-B / CLI registration)
 
 | Policy | Current |
-|--------|---------|
+| --- | --- |
 | **Registration** | CLI registers `FcgiModuleExecutor::production_pools` |
 | **Live HTTP** | Success → real CGI status (incl. **200**); wire failures → **502** / **503** / **504** |
 | **Scripted peers** | Unit/composition only (`ScriptedFcgiExecutor` / `ScriptedFpmTransport`) — not CLI serve |
@@ -31,7 +31,7 @@ those “live HTTP still 501” rows.
 **HISTORICAL / SUPERSEDED** by CLI live registration above.
 
 | Policy | PR5-A2-min (historical) |
-|--------|-------------------------|
+| --- | --- |
 | **`adapter.rs`** | Maps module transport/client errors → closed `FcgiDispatchOutcome` in `exyonq-module-api` |
 | **Registration** | Unit/composition only at that phase |
 | **Live HTTP (then)** | Success upstream → **501** (`SuccessNotAuthorized501`) — **no longer current** |
@@ -48,7 +48,7 @@ Accepted with **CONDITIONAL ACCEPT** from security-compiler and local-debugger; 
 ### Deferred (Medium / Low)
 
 | Item | Disposition |
-|------|-------------|
+| --- | --- |
 | **`fcgi_request_timeout`** (300s, packet §7) | Deferred to **PR5-A2** / async Tokio path |
 | **`UnixStream::connect` without timeout** | Accepted for PR5-A-min module tests only; resolve in PR5-A2 if used on a real hot path |
 | **`wire_caps.rs` STDIN cap test** | Allocates ~32 MiB + 1 byte to validate cap; accepted while CI passes — monitor memory on Linux CI |

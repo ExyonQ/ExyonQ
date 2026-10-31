@@ -20,7 +20,7 @@ AUTHORITATIVE_SUCCESS MUST NOT PRECEDE REAL_SIDE_EFFECT_COMPLETION
 ```
 
 | Domain | Invariant |
-|--------|-----------|
+| --- | --- |
 | CHANNEL-SEND (accepted) | Redis ACK MUST occur only after real local admission (`try_send` success). Full queue → no ACK; event remains recoverable via Redis pending. |
 | PROTOCOL-WRITE (accepted) | Delivery-specific access outcome (`waf_*`, `bad_request`, etc.) MUST NOT be recorded before the real write succeeds. Write Err → `response_write_failed` (or equivalent non-delivery), not delivery outcomes. |
 
@@ -98,7 +98,7 @@ defect**; **no product mutation**.
 Evidence: `.exyonq-local/tmp/mrc-let-b5-classifications.json`
 
 | Subroot | Inst | Terminal disposition summary |
-|---------|------|------------------------------|
+| --- | --- | --- |
 | SUB-LET-GLOBAL-INSTALL-SET | 15/15 | PROVEN_RECONSTRUCTABLE_STATE (10) + PROVEN_IDEMPOTENT_DUPLICATE_SET (5) |
 | SUB-LET-STATE-MISC | 10/10 | TOOLING_ONLY (1) + TEST_ONLY (1) + PROVEN_RECONSTRUCTABLE_STATE (5) + PROVEN_BEST_EFFORT (2) + PROVEN_NO_FALSE_SUCCESS (1) |
 | SUB-LET-CLEANUP | 5/5 | TEST_ONLY (2) + PROVEN_SHUTDOWN_ONLY (3) |
@@ -119,14 +119,14 @@ not leave required component uninstalled or create generation divergence.
 `install_waf_runtime_binding` also writes `current_binding_slot().store(...)`.
 
 | Disposition | Role |
-|-------------|------|
+| --- | --- |
 | PROVEN_RECONSTRUCTABLE_STATE | First-wins platform hook registration; authoritative state via getters / ArcSwap |
 | PROVEN_IDEMPOTENT_DUPLICATE_SET | WAF engine/challenge/Cap013 hook duplicate `set()` — idempotent composition root |
 
 #### SUB-LET-STATE-MISC (10/10)
 
 | ID | Disposition | Notes |
-|----|-------------|-------|
+| --- | --- | --- |
 | LET-001 | TOOLING_ONLY | `l2_coord_lab` purge — `EXYONQ_L2_COORD_LAB=1` only |
 | LET-025 | PROVEN_RECONSTRUCTABLE_STATE | shutdown watch `changed().await` discard after early return |
 | LET-026 | TEST_ONLY | lifecycle drain test |
@@ -137,14 +137,14 @@ not leave required component uninstalled or create generation divergence.
 #### SUB-LET-CLEANUP (5/5)
 
 | ID | Disposition | Role |
-|----|-------------|------|
+| --- | --- | --- |
 | LET-038,186 | TEST_ONLY | test thread `join()` |
 | LET-054,079,206 | PROVEN_SHUTDOWN_ONLY | worker/subscriber/pool shutdown join after abort |
 
 #### SUB-LET-OTHER-MISC (58/58) — micro-clusters
 
 | Cluster | Count | Disposition | Pass 2 highlights |
-|---------|------:|-------------|-------------------|
+| --- | ---: | --- | --- |
 | MC-OM-01 config `?` Ok discard | 1 | FALSE_POSITIVE | LET-007 `user_backend_id()?` |
 | MC-OM-02 compile structural asserts | 13 | PROVEN_INVARIANT | kernel/platform contract consumers |
 | MC-OM-03 integration tests | 17 | TEST_ONLY | fcgi/proxy/ws/control/wire harness |
@@ -195,7 +195,7 @@ PRODUCT_BEHAVIOR_BIND = 41d41fbdc077d321819661f0084c9697fa86ac26
 Evidence: `.exyonq-local/tmp/mrc-let-b4-classifications.json`
 
 | Subroot | Inst | Disposition |
-|---------|------|-------------|
+| --- | --- | --- |
 | SUB-LET-METRICS | 4/4 | TEST_ONLY (2) + PROVEN_RECONSTRUCTABLE_STATE (2) |
 | SUB-LET-LOGGING | 2/2 | PROVEN_ADVISORY_OBSERVABILITY |
 | SUB-LET-FLUSH | 1/1 | PROVEN_ADVISORY_OBSERVABILITY |
@@ -204,7 +204,7 @@ Evidence: `.exyonq-local/tmp/mrc-let-b4-classifications.json`
 #### SUB-LET-METRICS (4/4)
 
 | ID | Expression | Role | Disposition |
-|----|------------|------|-------------|
+| --- | --- | --- | --- |
 | LET-123/127 | `drain_one_fcgi_request(...).map(...)` | `#[test]` fcgi peer server | TEST_ONLY — scanner misclassified `Option::map` as metrics |
 | LET-151 | `GLOBAL_METRICS.set(...)` | ProxyRuntime OnceLock install | PROVEN_RECONSTRUCTABLE_STATE — first-wins; `global_hyper_metrics()` default fallback |
 | LET-167 | `install_epoll_metrics_hooks(...)` | Static kernel hook registration | PROVEN_RECONSTRUCTABLE_STATE — OnceLock first-wins @ startup |
@@ -215,7 +215,7 @@ themselves are advisory observability, not admission gates.
 #### SUB-LET-LOGGING (2/2)
 
 | ID | Path | Disposition |
-|----|------|-------------|
+| --- | --- | --- |
 | LET-191 | `install.rs` FanoutLayer text `format_fields` | PROVEN_ADVISORY_OBSERVABILITY — operational log formatting; parallel file path uses `note_sink_error` |
 | LET-196 | `syslog_sink.rs` Layer `format_fields` → `emit_formatted` | PROVEN_ADVISORY_OBSERVABILITY — `emit_formatted` increments `SINK_ERROR_COUNT` on syslog I/O failure |
 
@@ -265,7 +265,7 @@ false-success or panic defect proven. Socket options and epoll drain writes sati
 the seven-condition best-effort standard.
 
 | Subroot | Inst | Historical | Current disposition | Changed |
-|---------|------|------------|---------------------|---------|
+| --- | --- | --- | --- | --- |
 | SUB-LET-SOCKET-OPTION | 14 | BEST_EFFORT | PROVEN_BEST_EFFORT (14) | NO |
 | SUB-LET-OK-DISCARD-AFTER-EXPECT | 6 | BEST_EFFORT | TEST_ONLY (5) + PROVEN_UNUSED_OK_VALUE (1) | YES |
 | SUB-LET-EPOLL-DRAIN-WRITE-BEST-EFFORT | 2 | BEST_EFFORT | PROVEN_BEST_EFFORT + PROVEN_NO_FALSE_DELIVERY_CLAIM | NO |
@@ -282,7 +282,7 @@ static blocking serve). Code comment @ redis `with_cmd` explicitly documents
 best-effort command timeout.
 
 | ID | Option | When | FALSE_SUCCESS |
-|----|--------|------|---------------|
+| --- | --- | --- | --- |
 | LET-036/037 | nodelay + read_timeout | drain-reject / admit header read | NO |
 | LET-051 | SO_REUSEPORT | listener bind (after required reuseaddr?) | NO |
 | LET-082/083 | read/write timeout | redis `with_cmd` | NO |
@@ -299,7 +299,7 @@ Historical best-effort label **invalid** — none are production hot-path error
 swallows. Each `.expect()` audited separately.
 
 | ID | Context | Expect target | Disposition |
-|----|---------|---------------|-------------|
+| --- | --- | --- | --- |
 | LET-023 | `#[test]` wire planner | `plan_wire_decision` on synthetic head | TEST_ONLY |
 | LET-184 | `#[test]` blocking pool | `client1.read` on tcp_pair | TEST_ONLY |
 | LET-185 | `#[test]` keepalive timeout | `s.read` first response | TEST_ONLY |
@@ -316,7 +316,7 @@ Distinct instances from DRAIN-BOUNDARY canonical LET-057; **same causal contract
 (probe-aware drain reject, no delivery claim on write failure).
 
 | ID | Stage | Authoritative outcome after discard |
-|----|-------|-------------------------------------|
+| --- | --- | --- |
 | LET-214 | `serve_epoll_fd` drain branch | `Err(ConnectionAborted, "draining")` |
 | LET-215 | `sendfile_read_and_serve` drain branch | `remove_conn` → `ReadServe::Closed` |
 
@@ -346,7 +346,7 @@ Rebind @ current HEAD: historical `F` / strong-defect labels were **stale** for
 all 15 instances — product repairs predated B2. No new fixes required.
 
 | Subroot | Inst | Historical | Current disposition | Changed |
-|---------|------|------------|---------------------|---------|
+| --- | --- | --- | --- | --- |
 | SUB-LET-H3-ERROR-RESPONSE-WRITE | 6 | F | ALREADY_FIXED_CURRENT_CONTRACT | YES |
 | SUB-LET-WIRE-REJECT-WRITE | 2 | F | ALREADY_FIXED_CURRENT_CONTRACT | YES |
 | SUB-LET-CTRL-WRITE-FALSE-OK | 1 | F | ALREADY_FIXED_CURRENT_CONTRACT | YES |
@@ -434,7 +434,7 @@ swallowing. Bindings are unused-value silencing: tuple destructure `(a, b)`,
 loop variables, enum/type touch for exhaustiveness, `size_of` compile checks.
 
 | Disposition | Count | Examples |
-|-------------|-------|----------|
+| --- | --- | --- |
 | PROVEN_SCANNER_NON_RESULT | 59 | `epoll_attach.rs` tuple discards; `connection_errors.rs` variant touch in `#[test]`; `wire.rs` `write!` header assembly |
 | TOOLING_ONLY | 3 | `compat/nginx/src/location.rs`, `map_ir.rs`; `config/cli/src/lib.rs` (`opts.color` reserved) |
 
@@ -460,7 +460,7 @@ reads real FastCGI records via `drain_one_fcgi_request`, responds with
 the discarded writes are on the **test server thread**, not production forward path.
 
 | ID | Role |
-|----|------|
+| --- | --- |
 | LET-119–121 | `respond_twice` test helper writes |
 | LET-124–126, 128–130 | `stale_idle_retries_once_then_succeeds` server thread writes |
 
@@ -498,7 +498,7 @@ false delivery claim.
 **Non-defect instances (do not rewrite for scanner silence):**
 
 | ID | Disposition |
-|----|-------------|
+| --- | --- |
 | LET-010 | TEST_ONLY |
 | LET-064 | TEST_ONLY |
 | LET-065 | TEST_ONLY |
@@ -530,7 +530,7 @@ All three instances are inside `crates/exyonq-mod-proxy/src/websocket.rs`
 `#[cfg(test)] mod tests` → `spawn_ws_echo_upstream` (local test peer only).
 
 | ID | Disposition | Notes |
-|----|-------------|-------|
+| --- | --- | --- |
 | LET-153 | TEST_ONLY | coalesced upgrade + frame write in test helper |
 | LET-154 | TEST_ONLY | upgrade response write in test helper |
 | LET-155 | TEST_ONLY | echo text frame write in test helper |
@@ -563,7 +563,7 @@ Established-connection sends (post-handshake) propagate `send_to` errors except
 `WouldBlock` — see `run_blocking` send loop ~L389–406.
 
 | ID | Disposition | Role | Notes |
-|----|-------------|------|-------|
+| --- | --- | --- | --- |
 | LET-097 | PROVEN_NO_FALSE_DELIVERY_CLAIM | Version Negotiation (unsupported QUIC version) | `quiche::negotiate_version` builds VN bytes; UDP send is advisory. Send failure → client may retry Initial; no server connection state to diverge. |
 | LET-098 | PROVEN_NO_FALSE_DELIVERY_CLAIM | Retry (empty address-validation token) | `quiche::retry` builds Retry bytes; token is stateless (`mint_token`). Send failure → handshake stalls; no false delivery or connection reuse. |
 
@@ -607,7 +607,7 @@ delivery state; connection never enters active set; drain lifecycle does not
 depend on client receiving bytes.
 
 | Oracle field | Value |
-|--------------|-------|
+| --- | --- |
 | FALSE_DELIVERY_SUCCESS_POSSIBLE | NO |
 | FALSE_503_DELIVERY_CLAIM_POSSIBLE | NO |
 | CONNECTION_REUSE_AFTER_FAILED_WRITE_POSSIBLE | NO |
@@ -619,7 +619,7 @@ depend on client receiving bytes.
 **WRITE-IO-MISC fold (same root cause, not separate WIP):**
 
 | ID | Location | Fold |
-|----|----------|------|
+| --- | --- | --- |
 | LET-035 | `connection_executor.rs` `write_drain_boundary` | YES — `try_admit` reject → probe-aware bytes → `DrainRejected` |
 | LET-052 | `server/mod.rs` `serve_hyper` admit reject | YES — same probe-aware boundary, no admission |
 | LET-216 | `epoll_worker.rs` accept attach drain reject | YES — pre-admit generic 503; socket dropped, not registered |
@@ -643,7 +643,7 @@ Compact final accounting after B5. Historical scanner-era labels preserved in
 inventory; **current terminal class** below.
 
 | SUBROOT | INST | TERMINAL_STATUS | TERMINAL_DISPOSITION | PRODUCT_MUTATION | EVIDENCE_BIND |
-|---------|-----:|-----------------|----------------------|--------------------|---------------|
+| --- | ---: | --- | --- | --- | --- |
 | SUB-LET-SCANNER-NON-RESULT | 62 | CLOSED | PROVEN_SCANNER_NON_RESULT + TOOLING_ONLY | NO | B1 / d1382a9 |
 | SUB-LET-TEST-FIXTURE-WRITE | 9 | CLOSED_TEST_ONLY | TEST_ONLY | NO | B1 / d1382a9 |
 | SUB-LET-CHANNEL-SEND | 8 | CLOSED | CHANNEL_ACK_AFTER_ADMIT_CONTRACT | NO | pre-B5 / 662fc088 |
@@ -697,7 +697,7 @@ BENCHMARK_REENTRY = YES
 ### Gate results @ seal authority
 
 | Gate | Result | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | Authority / clean tree | PASS | branch `release/v0.4.4-integration`; Cargo.lock SHA256 matches baseline |
 | MRC-LET accounting | PASS | 245 unique IDs · 28/28 subroots · 0 duplicate · WRITE-IO-MISC fold = disposition only |
 | Global clippy | PASS | `cargo clippy --workspace --all-targets -- -D warnings` exit 0 |
@@ -712,7 +712,7 @@ BENCHMARK_REENTRY = YES
 ### ZERO-FAKE supplementary reconciliation
 
 | Check | Raw | Reconciled |
-|-------|-----|--------------|
+| --- | --- | --- |
 | `exyonq-owned-mock-references-gate` | FAIL (50 hits) | Dev bench logs under `benchmarks/results-dev/` and `benchmarks/performance-contract/results/` — Docker log lines naming `mock-upstream` containers, not product mock backends |
 | `zero-smoke-category-gate` | FAIL (4 paths) | `scripts/integrity/fixtures/**` — auditor regression fixtures intentionally named `*smoke*` |
 | `no-smoke-as-proof-gate` | PASS | — |

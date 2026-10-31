@@ -40,7 +40,7 @@ containing only accepted server blocks.
 Inside each `server`:
 
 | Directive | Rule |
-|-----------|------|
+| --- | --- |
 | `listen` | Required. Single address/port form mappable to ExyonQ `[[server]].listen`. |
 | `server_name` | Optional. Literal names only (same limits as `static-mvp`). |
 | `location PATH` | Exactly one. Simple **prefix** location only (no regex, no `=`, no `^~`, no named `@`). |

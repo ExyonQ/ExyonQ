@@ -28,7 +28,7 @@ P99 = rewrk --pct after the 5-rep series
 ## Live results (median)
 
 | | ExyonQ (Root1+Root3) | NGINX stable | OLS latest |
-|--|--|--|--|
+| --- | --- | --- | --- |
 | RPS | 150317.86 | 158753.80 | 132838.55 |
 | RPS CV | 0.084 | 0.039 | 0.124 |
 | CPU avg % | 199.86 | 217.48 | 137.38 |
@@ -54,7 +54,7 @@ OVERALL_CPU_DEFECT_STATUS = OPEN_PROVEN_OLS_DIFFERENTIAL__FD_GEOMETRY_MATERIAL
 ## Read-only FD discrimination (strace -c, ~15s load)
 
 | Syscall/req (approx) | ExyonQ | OLS |
-|--|--|--|
+| --- | --- | --- |
 | openat2 / openat | **≈1.0** | ≈0.0001 |
 | statx / fstat | **≈1.0** | ≈0.0001 |
 | close | **≈1.0** | ≈0.0002 |

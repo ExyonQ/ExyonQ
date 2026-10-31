@@ -20,7 +20,7 @@ Primary question: under canonical P4 proxy 1 KiB workload, does a minimal Hyper+
 ## Scope allowed
 
 | Allowed | Forbidden |
-|---------|-----------|
+| --- | --- |
 | Standalone control under `.exyonq-local/experiments/minimal-hyper-tokio-proxy/` | ExyonQ routing, modules, reload, observability |
 | Same P4 harness, upstream, cpuset `0-7`, Netcup amd64 | Product semantic shortcuts |
 | Read-only ExyonQ binary (P5 terminal image) | Request-body relay, PXDP P6 |

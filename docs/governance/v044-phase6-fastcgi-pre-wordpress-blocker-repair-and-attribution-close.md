@@ -13,14 +13,14 @@ WORDPRESS = NO
 ## Two tracks (not conflated)
 
 | Track | Problem | Outcome |
-|-------|---------|---------|
+| --- | --- | --- |
 | **A** | FastCGI residuals A1/A2/A3 | A1 qualified no-fix; A2 fail-closed; A3 dead field removed |
 | **B** | Workspace attribution + proxy_sdp hang | B1 attributable worktree; hang ENVIRONMENTAL; WS test PASS |
 
 ## Track A ledger
 
 | ID | Classification | Mutation | Status |
-|----|----------------|----------|--------|
+| --- | --- | --- | --- |
 | A1 SG-FCGI-06 | VALID_QUALIFICATION_NO_FIX_REQUIRED | NO | A1-B SINGLE_TENANT_ADMIN_FS sufficient; peercred future |
 | A2 script_suffix | REAL_SUPPORTED_HARDENING (config honesty) | YES | Reject nonempty at control + IR; `CONFIG_ACCEPTED_BUT_SEMANTICALLY_IGNORED=NO` after fix |
 | A3 FCGI reuse_ok | DEAD_OR_UNUSED_CODE_CLEANUP | YES | Removed; `FcgiPoolMap::put` remains checkin SSOT |
@@ -54,7 +54,7 @@ TTL/MAX/GEN policy oracles = NOT_MEASURED (survival-after-publish only; LA-001)
 ## Audits
 
 | Audit | Verdict |
-|-------|---------|
+| --- | --- |
 | Architecture | PASS |
 | Security | PASS_WITH_NONBLOCKING |
 | GRC | PASS |

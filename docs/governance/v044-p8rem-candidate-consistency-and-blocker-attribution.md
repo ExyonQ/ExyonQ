@@ -15,7 +15,7 @@ Read-only reconciliation of the isolated `local/phase8-remainder-source-cleanlin
 ## Candidate identity
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Reported historical tip | `3d692422…` (finalize P8REM-D bind) |
 | Logic-audit bind | `3f0d1c40d30778d9b7119f3b3d2879280df6996e` |
 | Reconciled entry HEAD (pre-this-WIP) | `3f0d1c40…` / tree `f5c1869f…` |
@@ -38,7 +38,7 @@ Before: three unstaged tracked paths (competitive dashboard HTML/JSON + generato
 Parent `FINAL_OPEN_LOGIC_P3=3` maps to residual **not-measured** fields from P8RBRDOCINT/P8R-BR (no separate LA IDs in that seal):
 
 | ID | Description |
-|----|-------------|
+| --- | --- |
 | P8RBR-P3-001 | `TOCTOU_HASH_MISMATCHES=NOT_MEASURED` |
 | P8RBR-P3-002 | `CONFIG_DISCLOSURE=NOT_MEASURED` |
 | P8RBR-P3-003 | `ANTI_KOBAYASHI=NOT_MEASURED` (parent) |
@@ -70,7 +70,7 @@ ANTI_KOBAYASHI = NOT_PROVEN_FROM_AVAILABLE_EVIDENCE
 ## Blocker attribution (no repair)
 
 | Blocker | Attribution |
-|---------|-------------|
+| --- | --- |
 | Clippy `--all-features` | `PREEXISTING_WORKSPACE_GATE_FAILURE` on entry `cd14277e`; 9× `dead_code` in `streaming_wire_writer.rs`; **blocks Phase 8 gate** |
 | Darwin FCGI pool 2/20 | Intermittent Dirty≠Clean; product defect **not proven** |
 | Linux `trailing_data` 11/20 | Intermittent; product defect **not proven**; drives `GATE_PHASE6B_FCGI=FAIL` |

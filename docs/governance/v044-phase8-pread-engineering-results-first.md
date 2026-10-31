@@ -13,7 +13,7 @@ OWNER_AUTHORIZATION = YES_ENGINEERING_AND_RUNTIME_EVIDENCE
 Linux static TCP body path in `exyonq-cfd-dataplane` uses `sendfile` with fallback to `read_at` (pread) on **EINVAL** or **ENOSYS** only, reusing the same confined FD (`static_serve.rs`).
 
 | Check | Result |
-|-------|--------|
+| --- | --- |
 | Natural trigger (Netcup amd64 / Oracle arm64) | **Not observed** — regular file→pipe sendfile succeeds |
 | Controlled oracle (`test-utils`) | **20/20** integration reps per arch + strace `pread64` on payload |
 | Normal sendfile control | **5/5** per arch |
@@ -24,7 +24,7 @@ Linux static TCP body path in `exyonq-cfd-dataplane` uses `sendfile` with fallba
 ## Code audit
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Sendfile | `linux_sendfile` → `send_static_body_sendfile` |
 | Pread fallback | `send_static_body_pread` via `file.read_at()` |
 | Eligible errnos | `EINVAL`, `ENOSYS` |
@@ -33,7 +33,7 @@ Linux static TCP body path in `exyonq-cfd-dataplane` uses `sendfile` with fallba
 ## Commits (candidate worktree)
 
 | Commit | Summary |
-|--------|---------|
+| --- | --- |
 | `03518a75` | test-utils sendfile errno seam + oracles + harness |
 | `aa2398f0` | strace/oracle fixes; ineligible control semantics |
 | `c82bbcdc` | strace `-f`; unit-test syscall capture |

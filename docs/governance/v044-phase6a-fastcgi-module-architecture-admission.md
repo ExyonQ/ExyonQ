@@ -40,7 +40,7 @@ Ambient dirty tree exists (CFD WIP + other); Phase 6A attributes **no** product 
 ### Required agents
 
 | Agent | Path | Status |
-|-------|------|--------|
+| --- | --- | --- |
 | exyonq-orchestrator | `.cursor/agents/exyonq-orchestrator.md` | PRESENT |
 | exyonq-vertex-architect | `.cursor/agents/exyonq-vertex-architect.md` | PRESENT |
 | exyonq-security-engineer | `.cursor/agents/exyonq-security-engineer.md` | PRESENT |
@@ -74,7 +74,7 @@ NEW_GLOBAL_HOT_LOCK                             = FORBIDDEN
 ## 1. Primary answers (§4)
 
 | # | Question | Answer |
-|---|----------|--------|
+| --- | --- | --- |
 | 1 | What FastCGI exists today? | Full production crate `crates/exyonq-mod-fastcgi`: wire codec, PARAMS, STDIN, KEEP_CONN `ConnPool`, generation drain, `CommitStage` safe-retry, Unix+TCP, CLI→core registration, cache hook surface. |
 | 2 | What Module API exists today? | `module-api`: async `Module` trait (`on_init`/`on_request`/`on_route`/`on_upstream`/`on_response`/`on_shutdown`), registry, `fcgi_dispatch` contracts, Hyper `HttpRequest`/`HttpResponse`, addon-api re-exports. Prefer addon-api 1.x; Module path is legacy-compatible. |
 | 3 | Source-reachable? | **YES** — FastCGI + Module API compiled into product CLI/core path. |
@@ -92,7 +92,7 @@ NEW_GLOBAL_HOT_LOCK                             = FORBIDDEN
 ## 2. FastCGI source map
 
 | Area | Location | Notes |
-|------|----------|-------|
+| --- | --- | --- |
 | Crate | `crates/exyonq-mod-fastcgi` | Production wire via executor + ConnPool |
 | Record/wire | `record.rs`, `encode.rs`, `parser.rs`, `wire.rs`, `fcgi_stream.rs` | FCGI_KEEP_CONN, PARAMS/STDIN/STDOUT/STDERR/END_REQUEST |
 | Pool | `conn_pool.rs`, `pool.rs`, `pooled_forward.rs` | checkout/checkin/discard; generation; idle prune; one stale-idle safe retry |
@@ -111,7 +111,7 @@ NEW_GLOBAL_HOT_LOCK                             = FORBIDDEN
 ### Reachability classification (not synonyms)
 
 | Component | SOURCE_EXISTS | SOURCE_REACHABLE | ROUTING_REACHABLE | CURRENT_PRODUCT_REACHABLE | REAL_RUNTIME_PROVEN | CURRENT_SHIPPING_ADMISSIBLE |
-|-----------|---------------|------------------|-------------------|---------------------------|---------------------|-----------------------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | Wire codec | YES | YES | YES (product) | YES (when registered) | HISTORICAL | CONDITIONAL |
 | ConnPool KEEP_CONN | YES | YES | YES (product) | YES | HISTORICAL | CONDITIONAL |
 | Safe retry | YES | YES | YES | YES | UNIT+HISTORICAL | YES (contract) |
@@ -139,7 +139,7 @@ accept (product Hyper/Tokio listener)
 ```
 
 | FILE | TYPE | FUNCTION | CALLER | CALLEE |
-|------|------|----------|--------|--------|
+| --- | --- | --- | --- | --- |
 | `cli/exyonq/src/main.rs` | composition | register FastCGI | startup | `exyonq_mod_fastcgi` + `register_fcgi_*` |
 | `core/src/execute_backend.rs` | dispatch | `execute_backend(Fastcgi)` | handler | `FcgiDispatchService` or 501 |
 | `…/runtime.rs` | runtime | `run_delegate` / dispatch | service | `spawn_blocking` → pool forward |
@@ -153,7 +153,7 @@ accept (product Hyper/Tokio listener)
 ## 4. Legacy dependency classification
 
 | Dependency | Class |
-|------------|-------|
+| --- | --- |
 | Tokio runtime / `spawn_blocking` / semaphore / timeout | **DATAPLANE_BLOCKER** for competitive H1 process |
 | Hyper Request/Response / body types (Module + cache_serve) | **DATAPLANE_BLOCKER** on competitive H1 path |
 | `async_trait` Module hooks | **DATAPLANE_BLOCKER** (async shell) |
@@ -174,7 +174,7 @@ MODULE_LEGACY_HYPER_DEPENDENCY   = YES
 ## 5. Architecture classification
 
 | Component | Class |
-|-----------|-------|
+| --- | --- |
 | FastCGI record codec / PARAMS encode / response parse | DIRECTLY_PORTABLE (logic) → needs sync shell |
 | ConnPool KEEP_CONN + generation + discard rules | THIN_ADAPTER_REQUIRED → shard-local redesign |
 | `FcgiRuntime` Tokio wrapper | DATAPLANE_REIMPLEMENTATION_REQUIRED |
@@ -243,7 +243,7 @@ ARBITRARY_THIRD_PARTY_NATIVE_IN_DP = FORBIDDEN_UNTIL_BOUNDARIES
 ### Security gap ledger (selected)
 
 | ID | THREAT | CURRENT | GAP | REACHABILITY | MUST_FIX | PHASE6B_BLOCKER |
-|----|--------|---------|-----|--------------|----------|-----------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | SG-FCGI-04 | CGI CL vs body mismatch | hop-by-hop strip | no CL↔body check | High if hostile FPM | YES | YES (ship path) |
 | SG-FCGI-05 | trailing bytes after END_REQUEST | discard on error; idle probe | silent drop then checkin | Medium | YES | YES |
 | SG-FCGI-06 | Unix socket peer trust | path connect | no peercred | High multi-tenant | YES | CONDITIONAL |
@@ -263,7 +263,7 @@ FASTCGI_SECURITY_STATUS = CONDITIONAL
 ## 8. Reality / WordPress
 
 | Claim | Grade |
-|-------|-------|
+| --- | --- |
 | Cap008 real php-fpm dual-Linux | HISTORICAL_ONLY (2026-08-07; HEAD ≠ current) |
 | Cap009 php/wordpress profiles | HISTORICAL_ONLY; wordpress = **fixture profile**, not full CMS |
 | Cap038 pooling | HISTORICAL_ONLY (2026-08-11) |
@@ -280,7 +280,7 @@ PROFILE_A_FRONTIER_PROVES_FASTCGI_PERF         = NO
 ### Test trust
 
 | Gate | FastCGI | Module API |
-|------|---------|------------|
+| --- | --- | --- |
 | ZERO_FAKE harness design | PASS (Cap008/009 ban stubs) | N/A product hooks |
 | Current ZERO_FAKE readiness | FAIL (no current HEAD package) | FAIL for DP hooks |
 | NO_SMOKE harness design | PASS | PASS |
@@ -302,7 +302,7 @@ Scripted peers are confined to unit/component tests; CLI production registration
 Hooks: `on_init`, `on_request`, `on_route`, `on_upstream`, `on_response`, `on_shutdown`.
 
 | Hook execution today | Plane |
-|----------------------|-------|
+| --- | --- |
 | Product Hyper handler + module-pipeline | LEGACY_REQUEST_PROCESS / PRODUCT |
 | Competitive CFD dataplane | NOT_CURRENTLY_REACHABLE |
 
@@ -358,7 +358,7 @@ HYPER_IN_COMPETITIVE_DATAPLANE_REQUIRED      = NO_REQUIRED
 ### Architecture gaps
 
 | ID | CAPABILITY | CURRENT | TARGET | GAP | IMPACT | REQUIRED_MUTATION | BLOCKS_6B | EVIDENCE |
-|----|------------|---------|--------|-----|--------|-------------------|-----------|----------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | AG-01 | FastCGI in competitive DP | absent | sync execute or explicit out-of-scope | full | migration | CFD reimplement or IR reject | YES if 6B=DP execute | CFD grep=0 |
 | AG-02 | Module hooks in DP | absent | defer or sync narrow hooks | design | extensibility | new contract | NO for min 6B | module-pipeline product-only |
 | AG-03 | Generation FastCGI kind | proxy upstream_id only | Fastcgi\|Reject | schema | mis-route risk | gen IR | YES for safe CFD | cfd-gen RouteTable |
@@ -367,7 +367,7 @@ HYPER_IN_COMPETITIVE_DATAPLANE_REQUIRED      = NO_REQUIRED
 ### Reality gaps
 
 | ID | CLAIM | SOURCE | REACHABLE | CURRENT_RUNTIME_PROOF | HISTORICAL_ONLY | REQUAL_REQUIRED |
-|----|-------|--------|-----------|----------------------|-----------------|-----------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | RG-01 | Real PHP-FPM E2E | Cap008 scripts | YES | NO | YES | YES |
 | RG-02 | WordPress product | Cap009 fixture / p1.2 | PARTIAL | NO | YES/MISSING | YES |
 | RG-03 | FastCGI perf frontier | none | N/A | NO | N/A | YES (later) |
@@ -375,7 +375,7 @@ HYPER_IN_COMPETITIVE_DATAPLANE_REQUIRED      = NO_REQUIRED
 ### Performance risks (no benchmark)
 
 | Risk | Class |
-|------|-------|
+| --- | --- |
 | Tokio/Hyper re-entry into CFD | HIGH |
 | Per-request IPC/RPC | HIGH (forbidden) |
 | Full body buffer vs streaming | MEDIUM |
@@ -450,7 +450,7 @@ PHASE_6B_AUTHORIZED   = NO
 Owner CASE taxonomy:
 
 | Case | Meaning |
-|------|---------|
+| --- | --- |
 | P6A-A | Ready for minimal Phase 6B implementation |
 | P6A-B | Ready with nonblocking qualifications |
 | P6A-C | Blocking product or architecture gaps |
@@ -489,7 +489,7 @@ FASTCGI_PERFORMANCE_CURRENTLY_PROVEN = NO
 ## 16. Documentation / Notion
 
 | Doc | Action |
-|-----|--------|
+| --- | --- |
 | This file | CREATE (SoT for Phase 6A) |
 | Architecture / roadmap / FastCGI / Module contracts | reconcile references only when touched; **no implementation begun claim** |
 

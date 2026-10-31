@@ -2,7 +2,7 @@
 
 ExyonQ is a modular HTTP server and reverse proxy written in Rust: static files, FastCGI/PHP-FPM, TLS, HTTP/2 and HTTP/3, full page cache, WAF, and a balancer with nginx/Apache-compatible configuration migration.
 
-This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark suites, methodology docs, and evidence packs are intentionally not included.
+This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark campaigns and raw evidence packs are intentionally not included; methodology notes and summary dashboards live under `docs/benchmarks/`.
 
 Lab integration tree. Public product release: **v0.8.0** on [exyonq-github](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0) (`ghcr.io/exyonq/exyonq:0.8.0`, `ghcr.io/exyonq/exyonq-wordpress:0.8.0`, `exyonq/exyonq:0.8.0` on Docker Hub — no `:latest`). This lab worktree may diverge; do not treat lab HEAD as the published tag.
 

@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.7.0
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.7.0 |
 | **Commit** | `48174b2f7c400f54a6494db77bcc2ee69f7ea99b` |
 | **Date** | 2026-10-24 |
@@ -14,7 +14,7 @@ v0.7.0 is the F3 "Borde y balanceo" release: proxy/LB parity work (NG-06..NG-11,
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | Veyra Proof audit | pass | `ACCEPTED` — evidence `.veyra/evidence/20261023T222202Z/` on HEAD `13cc7ea` (Docker-only commit `48174b2` touches no Rust); rustfmt, cargo-check, clippy, cargo-test, nextest, llvm-cov, audit, deny, machete all OK; geiger INCONCLUSIVE (cosmetic matcher warnings, honest report); dylint/semver-checks/veyra-e2e SKIPPED (no config, reported not green) |
 | Tests | pass | 1860/1860 nextest PASS after machete dead-dep cleanup (`13cc7ea`) |
 | `cargo audit` | pass | 0 vulnerabilities, 516 crates scanned, 2026-10-24 |
@@ -35,7 +35,7 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | WAF-001 | High | UTF-8 fail-open closed in `5e5895f` — WAF no longer fails open on malformed UTF-8 |
 | SDP-001 | High | WAF theater closed in `5e5895f` — SDP path now enforces the WAF runtime binding |
 | Docker base CVEs | Medium | Debian bookworm bases (10H/10M, unfixed packages) replaced by `gcr.io/distroless/cc-debian12:nonroot` + `cgr.dev/chainguard/wolfi-base` — Scout 0C/0H/0M (`48174b2`) |
@@ -43,7 +43,7 @@ None.
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | — | — | — | — | — |
 
 ## Surfaces reviewed
