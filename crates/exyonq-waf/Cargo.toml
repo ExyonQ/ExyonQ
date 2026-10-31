@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fancy-regex = "0.17"
+base64 = "0.22"
 arc-swap.workspace = true
 exyonq-waf-api.workspace = true
 getrandom.workspace = true
@@ -14,5 +16,7 @@ ipnetwork.workspace = true
 regex.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
+tempfile = "3"

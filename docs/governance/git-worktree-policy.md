@@ -13,8 +13,8 @@ RELATED = exyonq-worktree-contract | publication-privacy | 0-core-architecture |
 Git worktrees are an allowed isolation mechanism. They do **not** change canonical authority and do **not** authorize sharing mutable state between concurrent executions.
 
 ```text
-CANONICAL_DEVELOPMENT_TREE = <repo>
-PUBLIC_CLOUD_AUTHORITY     = <repo>
+CANONICAL_DEVELOPMENT_TREE = /Volumes/Lexar/Cursor/exyonq-laboratorio
+PUBLIC_CLOUD_AUTHORITY     = /Volumes/Lexar/Cursor/exyonq-github
 
 WORKTREE_ROLE = ISOLATED_DEVELOPMENT_DIAGNOSTIC_EXPERIMENT_ONLY
 WORKTREE_IS_PUBLICATION_AUTHORITY = NO
@@ -75,7 +75,7 @@ Therefore:
 
 ```text
 release/v0.4.4-integration remains checked out only in:
-  <repo>
+  /Volumes/Lexar/Cursor/exyonq-laboratorio
 
 DO_NOT_CHECK_OUT_SAME_BRANCH_IN_ANOTHER_WORKTREE = YES
 ```
@@ -93,7 +93,7 @@ Approved extra-worktree placements:
 
 ```text
 <canonical>/.exyonq-local/worktrees/<name>
-<worktree>   # only when the owner names that path
+/Volumes/Lexar/Cursor/exyonq-laboratorio-wt-<name>   # only when the owner names that path
 ```
 
 `/private/tmp` and `/tmp` are **not** approved placements for new worktrees.
@@ -164,12 +164,12 @@ Preferred rule: `<worktree>/.exyonq-local/` is private to that worktree.
 Examples:
 
 ```text
-<repo>/.exyonq-local/
-<repo>/.exyonq-local/worktrees/<name>/.exyonq-local/
-<worktree>/.exyonq-local/
+/Volumes/Lexar/Cursor/exyonq-laboratorio/.exyonq-local/
+/Volumes/Lexar/Cursor/exyonq-laboratorio/.exyonq-local/worktrees/<name>/.exyonq-local/
+/Volumes/Lexar/Cursor/exyonq-laboratorio-wt-<name>/.exyonq-local/
 ```
 
-No runtime or evidence state may silently resolve back to the canonical `exyonq/.exyonq-local` directory unless the access is explicitly read-only and named in the current task.
+No runtime or evidence state may silently resolve back to the canonical `exyonq-laboratorio/.exyonq-local` directory unless the access is explicitly read-only and named in the current task.
 
 Nested worktrees under `.exyonq-local/worktrees/<name>` MUST still use their own nested `.exyonq-local/` for writable state. They must not write evidence, logs, PIDs, sockets, or caches into the parent canonical `.exyonq-local/` except when copying a finished artifact as an explicit, labeled handoff.
 
@@ -325,7 +325,7 @@ PUBLICATION = NO
 SYNC_TO_GITHUB = NO
 ```
 
-A worktree never implies permission to sync to `exyonq-github`. Local worktree paths (`<workspace>/exyonq-*`, `exyonq-wt-*`, `<tmp>/exyonq-*`) must not be published.
+A worktree never implies permission to sync to `exyonq-github`. Local worktree paths (`/Volumes/Lexar/Cursor/exyonq-*`, `exyonq-laboratorio-wt-*`, `/private/tmp/exyonq-*`) must not be published.
 
 ---
 

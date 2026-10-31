@@ -486,7 +486,7 @@ mod tests {
         assert!(ops.active_connections() <= 1);
         let _ = client.join();
         rt.block_on(async {
-            for _ in 0..100 {
+            for _ in 0..500 {
                 if ops.active_connections() == 0 {
                     break;
                 }

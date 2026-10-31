@@ -264,6 +264,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: name.to_string(),
             r#match: RouteMatch::prefix(path),

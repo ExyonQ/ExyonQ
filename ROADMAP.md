@@ -88,7 +88,7 @@ R0_STATUS = COMPLETE
 
 Delivered:
 
-- Worktree authority on `<repo>`
+- Worktree authority on `/Volumes/Lexar/Cursor/exyonq-laboratorio`
 - Branch `release/v0.4.3-integration` @ product parent `fd41b761…` + docs `b3a24ca…`
 - Product baseline = v0.4.2 + Changeset A + Changeset B
 - Tracked tree clean of ambient product dirt (untracked `study/` preserved intentionally)

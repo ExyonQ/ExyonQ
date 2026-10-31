@@ -115,6 +115,7 @@ impl CachePurgePort for DirectL1PurgePort {
                     }
                 };
                 let key = build_storage_cache_key(CacheKeyParts {
+                    range: String::new(),
                     site_id,
                     namespace: self.namespace,
                     backend_id: self.backend_id,
@@ -159,6 +160,7 @@ pub fn test_insert(
 ) {
     let (host, path) = host_path;
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id,
         namespace: 4,
         backend_id,
@@ -200,6 +202,7 @@ pub fn test_has(
     path: &str,
 ) -> bool {
     let key = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id,
         namespace: 4,
         backend_id,

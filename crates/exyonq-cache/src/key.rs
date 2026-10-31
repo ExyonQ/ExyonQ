@@ -39,6 +39,8 @@ pub struct CacheKeyParts {
     /// NG-15: canonical variant material from keyed cookies/headers
     /// (`fpc_vary_variant`). Empty when no variant is keyed.
     pub vary: String,
+    /// NG-18 Phase E: `start-end` for a sliced segment; empty for a full object.
+    pub range: String,
 }
 
 impl CacheKeyParts {
@@ -159,6 +161,7 @@ mod tests {
             query: query.into(),
             content_encoding: "identity".into(),
             vary: String::new(),
+            range: String::new(),
         }
     }
 

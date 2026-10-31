@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-use crate::compile::{compile_waf, CompileError, WafCompileInput};
+use crate::compile::{compile_waf, compile_waf_with_crs, CompileError, WafCompileInput};
 use crate::snapshot::{strongest_action, CompiledWafSnapshot};
 use crate::RULE_ID_BODY_INSPECTION_LIMIT;
 use arc_swap::ArcSwap;
 use exyonq_waf_api::{
     apply_waf_mode, BodyInspectionState, OnInspectionLimit, WafAction, WafDecision, WafEngine,
-    WafEvidence, WafPhase, WafRequest, WafRuleId, WafViolation,
+    WafEvidence, WafPhase, WafRequest, WafResponse, WafRuleId, WafViolation,
 };
 use std::sync::{Arc, Mutex};
 
@@ -122,6 +122,15 @@ impl FixedWafEngine {
 
     pub fn compile(input: WafCompileInput) -> Result<Self, CompileError> {
         Ok(Self::from_snapshot(Arc::new(compile_waf(input)?)))
+    }
+
+    pub fn compile_with_crs(
+        input: WafCompileInput,
+        crs: &[crate::CrsRulesetInput],
+    ) -> Result<Self, CompileError> {
+        Ok(Self::from_snapshot(Arc::new(compile_waf_with_crs(
+            input, crs,
+        )?)))
     }
 
     pub fn snapshot(&self) -> &Arc<CompiledWafSnapshot> {
@@ -259,6 +268,19 @@ impl WafEngine for NativeWafEngine {
     ) -> WafDecision {
         inspect_body_with_snap(&self.snapshot.load(), req, chunk, end_of_stream, state)
     }
+
+    fn inspect_response(
+        &self,
+        phase: WafPhase,
+        req: &WafRequest<'_>,
+        resp: &WafResponse<'_>,
+    ) -> WafDecision {
+        inspect_response_with_snap(&self.snapshot.load(), phase, req, resp)
+    }
+
+    fn inspects_response_body(&self) -> bool {
+        self.snapshot.load().inspects_response_body()
+    }
 }
 
 impl WafEngine for FixedWafEngine {
@@ -275,6 +297,32 @@ impl WafEngine for FixedWafEngine {
     ) -> WafDecision {
         inspect_body_with_snap(&self.snapshot, req, chunk, end_of_stream, state)
     }
+
+    fn inspect_response(
+        &self,
+        phase: WafPhase,
+        req: &WafRequest<'_>,
+        resp: &WafResponse<'_>,
+    ) -> WafDecision {
+        inspect_response_with_snap(&self.snapshot, phase, req, resp)
+    }
+
+    fn inspects_response_body(&self) -> bool {
+        self.snapshot.inspects_response_body()
+    }
+}
+
+fn inspect_response_with_snap(
+    snap: &CompiledWafSnapshot,
+    phase: WafPhase,
+    req: &WafRequest<'_>,
+    resp: &WafResponse<'_>,
+) -> WafDecision {
+    if !snap.enabled() || snap.mode() == exyonq_waf_api::WafMode::Disabled {
+        return WafDecision::allow();
+    }
+    let hits = snap.evaluate_response_phase(phase, req, resp);
+    decide_from_hits(snap, hits, false)
 }
 
 fn limit_violation(phase: WafPhase, message: &str) -> WafViolation {

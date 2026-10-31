@@ -33,7 +33,7 @@ Parent: [`v044-phase7-static-proxy-coexistence.md`](v044-phase7-static-proxy-coe
 ## 0. Scope guard
 
 ```text
-CURRENT_WORKTREE             = <repo>
+CURRENT_WORKTREE             = /Volumes/Lexar/Cursor/exyonq-laboratorio
 AUTHORIZED_SCOPE             = architecture admission docs + ADR-as-docs + evidence under .exyonq-local/
 FILES_ALLOWED_TO_CHANGE      =
   docs/governance/v044-cfd-native-static-filesystem-handler-architecture-admission.md

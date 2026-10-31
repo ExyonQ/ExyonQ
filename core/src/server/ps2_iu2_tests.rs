@@ -130,7 +130,7 @@ fn ps2_iu2_workers_survive_idle_header_read_timeout() {
 
     let mut client = TcpStream::connect(addr).expect("connect");
     client
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");
     client
         .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")

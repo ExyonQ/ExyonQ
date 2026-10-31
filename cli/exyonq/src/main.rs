@@ -320,6 +320,10 @@ async fn async_main() -> anyhow::Result<()> {
             exyonq_module_api::register_prometheus_appender(
                 exyonq_mod_proxy::append_health_prometheus,
             );
+            // Q-10: WAF decision/rule/latency counters on /metrics.
+            exyonq_module_api::register_prometheus_appender(exyonq_core::append_waf_prometheus);
+            // NG-18: mirror subrequest lifecycle counters on /metrics.
+            exyonq_module_api::register_prometheus_appender(exyonq_core::append_mirror_prometheus);
             exyonq_reload_runtime::register_reload_runtime()
                 .map_err(|_| anyhow::anyhow!("reload runtime already registered"))?;
             l2_coord_lab::maybe_install_l2_coord_lab(&app_config)?;
@@ -657,6 +661,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_include_fastcgi_pool_document_root() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {
@@ -705,6 +710,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_empty_without_overlay_routes() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {

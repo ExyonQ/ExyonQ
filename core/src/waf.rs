@@ -28,6 +28,7 @@ use arc_swap::ArcSwap;
 use exyonq_waf_api::{
     BodyInspectionState, ChallengeVerifyResult, EmptyHeaders, HeaderView, NopWafEngine,
     WafAbuseGate, WafAction, WafChallengeHandler, WafDecision, WafEngine, WafPhase, WafRequest,
+    WafResponse,
 };
 use http::HeaderMap;
 use std::net::IpAddr;
@@ -284,6 +285,7 @@ pub fn parse_client_ip(raw: Option<&str>) -> IpAddr {
 }
 
 fn emit_decision(phase: WafPhase, decision: &WafDecision) {
+    crate::waf_metrics::note_decision(decision);
     if decision.violations.is_empty() && decision.action == WafAction::Allow {
         return;
     }
@@ -465,7 +467,9 @@ pub(crate) fn inspect_request_headers(
         client_ip,
         route_id,
     };
+    let started = std::time::Instant::now();
     let decision = waf.inspect(WafPhase::RequestHeaders, &req);
+    crate::waf_metrics::note_inspection(WafPhase::RequestHeaders, started.elapsed());
     match finish(
         WafPhase::RequestHeaders,
         decision,
@@ -494,6 +498,93 @@ pub(crate) fn inspect_request_headers(
     }
 }
 
+/// CRS phase 3: response header inspection.
+pub(crate) fn inspect_response_headers(
+    waf: &dyn WafEngine,
+    method: &str,
+    host: Option<&str>,
+    path: &str,
+    query: Option<&str>,
+    headers: &dyn HeaderView,
+    client_ip: IpAddr,
+    route_id: Option<&str>,
+    status: u16,
+    response_headers: &dyn HeaderView,
+    generation: u64,
+    enforce: bool,
+) -> WafHookResult {
+    let req = WafRequest {
+        method,
+        host,
+        path,
+        query,
+        headers,
+        client_ip,
+        route_id,
+    };
+    let resp = WafResponse {
+        status,
+        headers: response_headers,
+        body: None,
+    };
+    let started = std::time::Instant::now();
+    let decision = waf.inspect_response(WafPhase::ResponseHeaders, &req, &resp);
+    crate::waf_metrics::note_inspection(WafPhase::ResponseHeaders, started.elapsed());
+    finish(
+        WafPhase::ResponseHeaders,
+        decision,
+        client_ip,
+        host,
+        path,
+        generation,
+        enforce,
+    )
+}
+
+/// CRS phase 4: response body inspection.
+pub(crate) fn inspect_response_body(
+    waf: &dyn WafEngine,
+    method: &str,
+    host: Option<&str>,
+    path: &str,
+    query: Option<&str>,
+    headers: &dyn HeaderView,
+    client_ip: IpAddr,
+    route_id: Option<&str>,
+    status: u16,
+    response_headers: &dyn HeaderView,
+    body: &[u8],
+    generation: u64,
+    enforce: bool,
+) -> WafHookResult {
+    let req = WafRequest {
+        method,
+        host,
+        path,
+        query,
+        headers,
+        client_ip,
+        route_id,
+    };
+    let resp = WafResponse {
+        status,
+        headers: response_headers,
+        body: Some(body),
+    };
+    let started = std::time::Instant::now();
+    let decision = waf.inspect_response(WafPhase::ResponseBodyChunk, &req, &resp);
+    crate::waf_metrics::note_inspection(WafPhase::ResponseBodyChunk, started.elapsed());
+    finish(
+        WafPhase::ResponseBodyChunk,
+        decision,
+        client_ip,
+        host,
+        path,
+        generation,
+        enforce,
+    )
+}
+
 /// H3: body chunk / complete — does **not** run abuse gate.
 pub(crate) fn inspect_request_body(
     waf: &dyn WafEngine,
@@ -518,7 +609,9 @@ pub(crate) fn inspect_request_body(
         route_id,
     };
     let mut state = BodyInspectionState::default();
+    let started = std::time::Instant::now();
     let decision = waf.inspect_body_chunk(&req, body, true, &mut state);
+    crate::waf_metrics::note_inspection(WafPhase::RequestBodyComplete, started.elapsed());
     finish(
         WafPhase::RequestBodyComplete,
         decision,
@@ -551,7 +644,9 @@ pub(crate) fn handle_waf_challenge_verify(
         client_ip,
         route_id: None,
     };
+    let started = std::time::Instant::now();
     let decision = waf.inspect(WafPhase::RequestHeaders, &req);
+    crate::waf_metrics::note_inspection(WafPhase::RequestHeaders, started.elapsed());
     if enforce && decision.action == WafAction::Block {
         emit_decision(WafPhase::RequestHeaders, &decision);
         return WafReject {

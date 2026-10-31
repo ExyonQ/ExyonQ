@@ -23,16 +23,22 @@
 
 mod challenge;
 mod compile;
+mod crs;
 mod detect;
 mod engine;
 mod exclusion;
+mod multipart;
 mod normalize;
 mod snapshot;
+mod xml;
 
 pub use challenge::ChallengeService;
 pub use compile::{
     compile_waf, BuiltinDetectors, CompileError, DetectorToggle, ExclusionInput, FailPolicy,
     IpFilterInput, MatchTarget, RuleInput, RulesetInput, WafCompileInput,
+};
+pub use crs::{
+    parse_rule_file, parse_rule_file_with_base, CrsOp, CrsRuleInput, CrsRulesetInput, CrsTarget,
 };
 pub use engine::{FixedWafEngine, NativeWafEngine};
 pub use normalize::NormalizeBudget;

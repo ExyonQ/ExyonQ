@@ -112,10 +112,14 @@ pub type ProxyWireServeFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<u16>> + Send>>;
 
 /// Async proxy wire serve — module-owned FSM; core passes compiled cluster id only.
+#[allow(clippy::type_complexity)]
 pub struct ProxyWireAsyncHooks {
     pub serve_proxy_wire: fn(
         cluster_id: u32,
         generation: u64,
+        // Q-15: matched IR route name + upstream name for metrics labels.
+        route: String,
+        upstream: String,
         x_forwarded_for: String,
         stream: BoxedWireStream,
         head: bytes::Bytes,
@@ -136,9 +140,12 @@ fn async_hooks() -> &'static ProxyWireAsyncHooks {
         .expect("ProxyWireAsyncHooks not installed — register proxy module from CLI")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn serve_proxy_wire(
     cluster_id: u32,
     generation: u64,
+    route: String,
+    upstream: String,
     x_forwarded_for: String,
     stream: BoxedWireStream,
     head: bytes::Bytes,
@@ -148,6 +155,8 @@ pub fn serve_proxy_wire(
     (async_hooks().serve_proxy_wire)(
         cluster_id,
         generation,
+        route,
+        upstream,
         x_forwarded_for,
         stream,
         head,

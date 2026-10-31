@@ -99,13 +99,70 @@ pub fn map_to_ir(
     };
     let mut upstreams = map_http_upstreams(&upstream_index, report);
     let mut pools_fcgi = map_fcgi_pools_from_upstreams(&upstream_index, report);
+    let mut sub_filters: std::collections::BTreeMap<
+        String,
+        exyonq_config_ir::SubFilterRouteConfig,
+    > = std::collections::BTreeMap::new();
+    let mut mirror_routes: std::collections::BTreeMap<String, exyonq_config_ir::MirrorRouteConfig> =
+        std::collections::BTreeMap::new();
+    let mut slice_routes: std::collections::BTreeMap<String, exyonq_config_ir::SliceRouteConfig> =
+        std::collections::BTreeMap::new();
+    let mut auth_routes: std::collections::BTreeMap<String, exyonq_config_ir::AuthRouteConfig> =
+        std::collections::BTreeMap::new();
+    let mut rate_zones: std::collections::BTreeMap<String, exyonq_config_ir::RateLimitZoneConfig> =
+        analyzed
+            .limit_zones_http
+            .iter()
+            .map(|(name, zone)| {
+                (
+                    name.clone(),
+                    exyonq_config_ir::RateLimitZoneConfig {
+                        key: zone.key.clone(),
+                        requests_per_second: zone.requests_per_second,
+                        burst: 1,
+                    },
+                )
+            })
+            .collect();
+    let mut rate_routes: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
 
     for (server_index, server) in analyzed.servers.iter().enumerate() {
         let (listen, proxy_protocol_flag) = map_listen(server, report);
         let server_names = map_server_names(server, report);
         let mut route_names = Vec::new();
+        // NG-17: nginx inherits `add_header` / `expires` into a location only
+        // when that location declares neither. Map the server scope once.
+        let server_headers = map_add_header_directives(&server.directives, report);
+        let server_expires = map_expires_directive(&server.directives, report).flatten();
+        let server_sub_filter = crate::analyze::parse_sub_filter(&server.directives, report);
+        let server_mirror = crate::analyze::parse_mirror(&server.directives, report);
+        let server_slice = crate::analyze::parse_slice(&server.directives, report);
+        let server_auth = crate::analyze::parse_auth(&server.directives, report);
+        if let Some(v) = server.gunzip {
+            report.push(
+                &server.loc,
+                "gunzip",
+                CompatStatus::Supported,
+                format!(
+                    "server gunzip {} → per-route [[route]] gunzip (Phase B)",
+                    if v { "on" } else { "off" }
+                ),
+                Some(format!("[[route]] gunzip = {v}")),
+            );
+        }
+        if let Some(total) = server.gunzip_buffers {
+            report.push(
+                &server.loc,
+                "gunzip_buffers",
+                CompatStatus::Supported,
+                format!("server gunzip_buffers {total} is process-global in ExyonQ"),
+                None,
+            );
+        }
 
-        if let Some(route) = map_server_return(server_index, server, report) {
+        if let Some(mut route) = map_server_return(server_index, server, report) {
+            route.gunzip = server.gunzip;
             route_names.push(route.name.clone());
             routes.push(route);
         } else {
@@ -121,19 +178,72 @@ pub fn map_to_ir(
                     report,
                     allow_tcp_fastcgi,
                 ) {
-                    // ADR-062: location add_header → route.response_headers
-                    route.response_headers =
-                        map_add_header_directives(&location.directives, report);
-                    // Server-scoped add_header → catch-all / DocumentRoot route only.
-                    if route_is_server_header_target(&route) {
-                        for h in map_add_header_directives(&server.directives, report) {
-                            if !route
-                                .response_headers
-                                .iter()
-                                .any(|e| e.name.eq_ignore_ascii_case(&h.name))
-                            {
-                                route.response_headers.push(h);
-                            }
+                    // nginx inherits only when the location declares no `add_header`,
+                    // even if every declared header was rejected by the denylist.
+                    let declares_headers =
+                        location.directives.iter().any(|d| d.name == "add_header");
+                    let location_headers = map_add_header_directives(&location.directives, report);
+                    route.response_headers = if declares_headers {
+                        location_headers
+                    } else {
+                        server_headers.clone()
+                    };
+                    // NG-17: nginx `expires` → route cache_headers (`*` MIME).
+                    // `Some(None)` (off/unsupported) overrides inheritance.
+                    route.cache_headers = match map_expires_directive(&location.directives, report)
+                    {
+                        Some(setting) => setting,
+                        None => server_expires.clone(),
+                    };
+                    // NG-18 / ADR-064: location gunzip overrides server/http.
+                    let (location_gunzip, _) = map_gunzip_directive(&location.directives, report);
+                    route.gunzip = location_gunzip.or(server.gunzip);
+                    let location_sub_filter =
+                        crate::analyze::parse_sub_filter(&location.directives, report);
+                    if let Some(cfg) = merge_sub_filter(
+                        location_sub_filter,
+                        server_sub_filter.clone(),
+                        analyzed.sub_filter_http.clone(),
+                    ) {
+                        sub_filters.insert(route.name.clone(), cfg);
+                    }
+                    let location_mirror =
+                        crate::analyze::parse_mirror(&location.directives, report);
+                    if let Some(cfg) = merge_mirror(
+                        location_mirror,
+                        server_mirror.clone(),
+                        analyzed.mirror_http.clone(),
+                    ) {
+                        mirror_routes.insert(route.name.clone(), cfg);
+                    }
+                    let location_slice = crate::analyze::parse_slice(&location.directives, report);
+                    if let Some(size) = location_slice
+                        .or(server_slice)
+                        .or(analyzed.slice_http)
+                        .map(|s| s.size)
+                    {
+                        slice_routes.insert(
+                            route.name.clone(),
+                            exyonq_config_ir::SliceRouteConfig { size },
+                        );
+                    }
+                    let location_auth = crate::analyze::parse_auth(&location.directives, report);
+                    if let Some(cfg) = merge_auth(
+                        location_auth,
+                        server_auth.clone(),
+                        analyzed.auth_http.clone(),
+                    ) {
+                        auth_routes.insert(route.name.clone(), cfg);
+                    }
+                    let location_limit =
+                        crate::analyze::parse_limit_req(&location.directives, report);
+                    if let Some(req) = location_limit
+                        .or(server.limit_req.clone())
+                        .or(analyzed.limit_req_http.clone())
+                    {
+                        if let Some(zone) = rate_zones.get_mut(&req.zone) {
+                            zone.burst = req.burst;
+                            rate_routes.insert(route.name.clone(), req.zone);
                         }
                     }
                     route_names.push(route.name.clone());
@@ -143,7 +253,21 @@ pub fn map_to_ir(
 
             if route_names.is_empty() {
                 if let Some(mut route) = server_default_route(server_index, server, report) {
-                    route.response_headers = map_add_header_directives(&server.directives, report);
+                    route.response_headers = server_headers.clone();
+                    route.cache_headers = server_expires.clone();
+                    route.gunzip = server.gunzip;
+                    if let Some(cfg) = merge_sub_filter(
+                        None,
+                        server_sub_filter.clone(),
+                        analyzed.sub_filter_http.clone(),
+                    ) {
+                        sub_filters.insert(route.name.clone(), cfg);
+                    }
+                    if let Some(cfg) =
+                        merge_mirror(None, server_mirror.clone(), analyzed.mirror_http.clone())
+                    {
+                        mirror_routes.insert(route.name.clone(), cfg);
+                    }
                     route_names.push(route.name.clone());
                     routes.push(route);
                 }
@@ -166,7 +290,7 @@ pub fn map_to_ir(
     }
 
     let maps = map_nginx_maps(&analyzed.maps, report);
-    let app = AppConfig {
+    let mut app = AppConfig {
         config_version: CONFIG_VERSION_V1,
         includes: Vec::new(),
         servers,
@@ -185,6 +309,10 @@ pub fn map_to_ir(
                     .clone()
                     .unwrap_or_else(|| "x-forwarded-for".to_string()),
             },
+            gunzip: exyonq_config_ir::GunzipConfig {
+                enabled: analyzed.gunzip_http.unwrap_or(false),
+                buffer_bytes: analyzed.gunzip_buffers_http.unwrap_or(32 * 1024),
+            },
             ..ModulesConfig::default()
         },
         static_section: Default::default(),
@@ -194,6 +322,15 @@ pub fn map_to_ir(
         logging: Default::default(),
     };
 
+    app.modules.sub_filter.routes = sub_filters;
+    app.modules.mirror.routes = mirror_routes;
+    app.modules.slice.routes = slice_routes;
+    app.modules.auth.routes = auth_routes;
+    if !rate_zones.is_empty() {
+        app.modules.ratelimit.enabled = true;
+        app.modules.ratelimit.zones = rate_zones;
+        app.modules.ratelimit.routes = rate_routes;
+    }
     report.summary.servers_parsed = analyzed.servers.len();
     report.summary.listeners_generated = app.servers.len();
     report.summary.sites_generated = app
@@ -635,6 +772,7 @@ fn map_location(
             if let Ok(rule) = parse_rewrite(&d.loc, &d.args) {
                 if let Some((status, _from, target)) = is_safe_literal_redirect(&rule) {
                     return Some(RouteConfig {
+                        gunzip: None,
                         cache_tags: Vec::new(),
                         name: route_name.to_string(),
                         r#match: route_match.clone(),
@@ -660,6 +798,7 @@ fn map_location(
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
                     return Some(RouteConfig {
+                        gunzip: None,
                         cache_tags: Vec::new(),
                         name: route_name.to_string(),
                         r#match: route_match.clone(),
@@ -729,6 +868,7 @@ fn map_location(
         let (fallback_rewrite, try_uri, try_uri_dir) =
             map_location_try_files(location).unwrap_or((None, None, None));
         return Some(RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: route_name.to_string(),
             r#match: route_match,
@@ -876,6 +1016,7 @@ fn map_proxy(
     let proxy_set_headers = map_location_proxy_set_headers(location, report);
     let location_rewrite = map_location_proxy_redirects(location, target, route_match, report);
     Some(RouteConfig {
+        gunzip: None,
         cache_tags: Vec::new(),
         name: route_name.to_string(),
         r#match: route_match.clone(),
@@ -895,6 +1036,27 @@ fn map_proxy(
         response_headers: Vec::new(),
         location_rewrite,
     })
+}
+
+/// NG-18 / 0.7: allowed variables in `proxy_redirect` `to`.
+fn has_unsupported_redirect_var(value: &str, allow_captures: bool) -> bool {
+    let mut rest = value;
+    while let Some(idx) = rest.find('$') {
+        rest = &rest[idx + 1..];
+        let len = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .count();
+        let var = &rest[..len];
+        rest = &rest[len..];
+        let ok = matches!(var, "scheme" | "host" | "server_port")
+            || (allow_captures
+                && matches!(var, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
+        if !ok {
+            return true;
+        }
+    }
+    false
 }
 
 /// F3-R20: `proxy_redirect` → `route.location_rewrite` (`Location`,
@@ -940,12 +1102,53 @@ fn map_location_proxy_redirects(
                 out.push(rule);
             }
             [from, to] => {
-                if from.contains('$') || to.contains('$') || to.starts_with('~') {
+                if let Some(re) = from.strip_prefix('~') {
+                    if regex::Regex::new(re).is_err() {
+                        report.push(
+                            &d.loc,
+                            "proxy_redirect",
+                            CompatStatus::Error,
+                            format!("proxy_redirect regex `{from}` is invalid"),
+                            None,
+                        );
+                        continue;
+                    }
+                    if has_unsupported_redirect_var(to, true) {
+                        report.push(
+                            &d.loc,
+                            "proxy_redirect",
+                            CompatStatus::Partial,
+                            format!(
+                                "proxy_redirect `{from}` `{to}`: only $1..$9 and $scheme/$host/$server_port in `to`"
+                            ),
+                            None,
+                        );
+                        continue;
+                    }
+                    report.push(
+                        &d.loc,
+                        "proxy_redirect",
+                        CompatStatus::Supported,
+                        format!("proxy_redirect regex `{from}` `{to}` → location_rewrite"),
+                        Some("route.location_rewrite".into()),
+                    );
+                    out.push(exyonq_config_ir::LocationRewriteConfig {
+                        from: from.to_string(),
+                        to: to.to_string(),
+                    });
+                    continue;
+                }
+                if from.contains('$')
+                    || to.starts_with('~')
+                    || has_unsupported_redirect_var(to, false)
+                {
                     report.push(
                         &d.loc,
                         "proxy_redirect",
                         CompatStatus::Partial,
-                        format!("proxy_redirect `{from}` `{to}`: variables/regex not supported"),
+                        format!(
+                            "proxy_redirect `{from}` `{to}`: only $scheme/$host/$server_port vars in `to` are supported"
+                        ),
                         None,
                     );
                     continue;
@@ -986,9 +1189,158 @@ fn map_location_proxy_redirects(
     out
 }
 
-/// ADR-062: catch-all / DocumentRoot route receives server-scoped `add_header`.
-fn route_is_server_header_target(route: &RouteConfig) -> bool {
-    route.r#match.path == "/" && route.r#match.regex.is_none() && route.r#match.suffix.is_none()
+/// NG-17: `expires <time|max|off|epoch>` → `cache_headers.by_mime."*"`.
+///
+/// ADR-061 only carries a positive `max_age` and applies to static 200s, so
+/// `epoch`/`0`/`modified`/`@time` are reported instead of silently dropped.
+fn map_expires_directive(
+    directives: &[crate::ast::Directive],
+    report: &mut CompatibilityReport,
+) -> Option<Option<exyonq_config_ir::CacheHeadersConfig>> {
+    let mut found: Option<&crate::ast::Directive> = None;
+    for d in directives {
+        if d.name != "expires" {
+            continue;
+        }
+        if found.is_some() {
+            report.push(
+                &d.loc,
+                "expires",
+                CompatStatus::Error,
+                "duplicate `expires` in the same scope",
+                None,
+            );
+            return Some(None);
+        }
+        found = Some(d);
+    }
+    let d = found?;
+    let Some(first) = d.args.first() else {
+        report.push(
+            &d.loc,
+            "expires",
+            CompatStatus::Error,
+            "expires requires a time argument",
+            None,
+        );
+        return Some(None);
+    };
+    let lower = first.to_ascii_lowercase();
+    if lower == "modified" {
+        report.push(
+            &d.loc,
+            "expires",
+            CompatStatus::Unsupported,
+            "expires modified depends on Last-Modified and is not mapped",
+            None,
+        );
+        return Some(None);
+    }
+    if d.args.len() != 1 {
+        report.push(
+            &d.loc,
+            "expires",
+            CompatStatus::Error,
+            "expires requires exactly one time argument",
+            None,
+        );
+        return Some(None);
+    }
+    let arg = first.as_str();
+    if lower == "off" {
+        report.push(
+            &d.loc,
+            "expires",
+            CompatStatus::Supported,
+            "expires off → no Cache-Control",
+            None,
+        );
+        return Some(None);
+    }
+    let max_age = match lower.as_str() {
+        "max" => 315_360_000,
+        "epoch" | "0" => {
+            report.push(
+                &d.loc,
+                "expires",
+                CompatStatus::Unsupported,
+                "expires epoch/0 needs `Cache-Control: no-cache`; ADR-061 only carries a positive max_age",
+                Some("add_header Cache-Control \"no-cache\"".into()),
+            );
+            return Some(None);
+        }
+        _ if lower.starts_with('@') || lower.starts_with('+') => {
+            report.push(
+                &d.loc,
+                "expires",
+                CompatStatus::Unsupported,
+                format!("expires `{arg}` depends on the clock and is not mapped"),
+                None,
+            );
+            return Some(None);
+        }
+        _ => match parse_nginx_expires_seconds(arg) {
+            Some(secs) if (1..=315_360_000).contains(&secs) => secs,
+            Some(_) => {
+                report.push(
+                    &d.loc,
+                    "expires",
+                    CompatStatus::Unsupported,
+                    format!("expires `{arg}` is outside 1..=315360000s"),
+                    None,
+                );
+                return Some(None);
+            }
+            None => {
+                report.push(
+                    &d.loc,
+                    "expires",
+                    CompatStatus::Error,
+                    format!("expires `{arg}` is not a supported nginx time"),
+                    None,
+                );
+                return Some(None);
+            }
+        },
+    };
+    report.push(
+        &d.loc,
+        "expires",
+        CompatStatus::Partial,
+        format!(
+            "expires `{arg}` → cache_headers.by_mime.\"*\" max_age={max_age} (static responses only, ADR-061)"
+        ),
+        Some(format!(
+            "[route.cache_headers.by_mime.\"*\"] max_age = {max_age}"
+        )),
+    );
+    let mut by_mime = std::collections::BTreeMap::new();
+    by_mime.insert(
+        "*".to_string(),
+        exyonq_config_ir::MimeCacheHeader {
+            max_age,
+            immutable: false,
+        },
+    );
+    Some(Some(exyonq_config_ir::CacheHeadersConfig { by_mime }))
+}
+
+/// nginx time: `s|m|h|d|w|M|y` or bare seconds. `M` is 30 days, `y` 365.
+fn parse_nginx_expires_seconds(s: &str) -> Option<u64> {
+    let last = s.chars().next_back()?;
+    let (digits, mult) = match last {
+        's' => (&s[..s.len() - 1], 1u64),
+        'm' => (&s[..s.len() - 1], 60),
+        'h' => (&s[..s.len() - 1], 3_600),
+        'd' => (&s[..s.len() - 1], 86_400),
+        'w' => (&s[..s.len() - 1], 604_800),
+        'M' => (&s[..s.len() - 1], 2_592_000),
+        'y' => (&s[..s.len() - 1], 31_536_000),
+        c if c.is_ascii_digit() => (s, 1),
+        _ => return None,
+    };
+    let n: u64 = digits.parse().ok()?;
+    n.checked_mul(mult)
 }
 
 /// ADR-062 / F1-R19: `add_header Name Value [always];` → `response_headers`.
@@ -1270,6 +1622,7 @@ fn map_fastcgi(
             );
         }
         return Some(RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: route_name.to_string(),
             r#match: route_match.clone(),
@@ -1339,6 +1692,7 @@ fn map_fastcgi(
                 );
             }
             return Some(RouteConfig {
+                gunzip: None,
                 cache_tags: Vec::new(),
                 name: route_name.to_string(),
                 r#match: route_match.clone(),
@@ -1379,6 +1733,7 @@ fn map_fastcgi(
             report,
         )?;
         return Some(RouteConfig {
+            gunzip: None,
             cache_tags: Vec::new(),
             name: route_name.to_string(),
             r#match: route_match.clone(),
@@ -1520,6 +1875,7 @@ fn map_return(
                 },
             );
             Some(RouteConfig {
+                gunzip: None,
                 cache_tags: Vec::new(),
                 name: route_name.to_string(),
                 r#match: route_match.clone(),
@@ -1619,6 +1975,7 @@ fn server_default_route(
         Some("route.root".into()),
     );
     Some(RouteConfig {
+        gunzip: None,
         cache_tags: Vec::new(),
         name: format!("srv{}_root", server_index + 1),
         r#match: RouteMatch {
@@ -1654,9 +2011,174 @@ fn admin_state_toml(state: AdminEndpointState) -> &'static str {
     }
 }
 
+/// NG-18 / ADR-064: location-scope `gunzip` / `gunzip_buffers`.
+fn map_gunzip_directive(
+    directives: &[crate::ast::Directive],
+    report: &mut CompatibilityReport,
+) -> (Option<bool>, Option<usize>) {
+    let mut gunzip = None;
+    let mut buffers = None;
+    for d in directives {
+        match d.name.as_str() {
+            "gunzip" => match crate::analyze::parse_on_off(d) {
+                Ok(v) => {
+                    gunzip = Some(v);
+                    report.push(
+                        &d.loc,
+                        "gunzip",
+                        CompatStatus::Supported,
+                        format!(
+                            "location gunzip {} → [[route]] gunzip (Phase B)",
+                            if v { "on" } else { "off" }
+                        ),
+                        Some(format!("[[route]] gunzip = {v}")),
+                    );
+                }
+                Err(msg) => report.push(&d.loc, "gunzip", CompatStatus::Error, msg, None),
+            },
+            "gunzip_buffers" => match crate::analyze::parse_gunzip_buffers(d) {
+                Ok(total) => {
+                    buffers = Some(total);
+                    report.push(
+                        &d.loc,
+                        "gunzip_buffers",
+                        CompatStatus::Supported,
+                        format!("location gunzip_buffers {total} is process-global in ExyonQ"),
+                        Some(format!("[modules.gunzip] buffer_bytes = {total}")),
+                    );
+                }
+                Err(msg) => report.push(&d.loc, "gunzip_buffers", CompatStatus::Error, msg, None),
+            },
+            _ => {}
+        }
+    }
+    (gunzip, buffers)
+}
+
+/// NG-18 Phase C: nginx inheritance. Rules: nearest non-empty scope wins;
+/// scalar flags inherit individually.
+fn merge_sub_filter(
+    location: Option<crate::ast::ParsedSubFilter>,
+    server: Option<crate::ast::ParsedSubFilter>,
+    http: Option<crate::ast::ParsedSubFilter>,
+) -> Option<exyonq_config_ir::SubFilterRouteConfig> {
+    if location.is_none() && server.is_none() && http.is_none() {
+        return None;
+    }
+    let rules = location
+        .as_ref()
+        .filter(|p| !p.rules.is_empty())
+        .map(|p| p.rules.clone())
+        .or_else(|| {
+            server
+                .as_ref()
+                .filter(|p| !p.rules.is_empty())
+                .map(|p| p.rules.clone())
+        })
+        .or_else(|| {
+            http.as_ref()
+                .filter(|p| !p.rules.is_empty())
+                .map(|p| p.rules.clone())
+        })
+        .unwrap_or_default();
+    let once = location
+        .as_ref()
+        .and_then(|p| p.once)
+        .or_else(|| server.as_ref().and_then(|p| p.once))
+        .or_else(|| http.as_ref().and_then(|p| p.once))
+        .unwrap_or(true);
+    let types = location
+        .as_ref()
+        .and_then(|p| p.types.clone())
+        .or_else(|| server.as_ref().and_then(|p| p.types.clone()))
+        .or_else(|| http.as_ref().and_then(|p| p.types.clone()))
+        .unwrap_or_else(|| vec!["text/html".to_string()]);
+    let last_modified = location
+        .as_ref()
+        .and_then(|p| p.last_modified)
+        .or_else(|| server.as_ref().and_then(|p| p.last_modified))
+        .or_else(|| http.as_ref().and_then(|p| p.last_modified))
+        .unwrap_or(false);
+    Some(exyonq_config_ir::SubFilterRouteConfig {
+        rules,
+        once,
+        types,
+        last_modified,
+    })
+}
+
+/// NG-18 Phase D: nginx mirror inheritance. The nearest scope with `mirror`
+/// (destinations or `off`) wins; `mirror_request_body` is a separate scalar
+/// inherited from the nearest explicit scope (nginx 1.27 default: on).
+fn merge_mirror(
+    location: Option<crate::ast::ParsedMirror>,
+    server: Option<crate::ast::ParsedMirror>,
+    http: Option<crate::ast::ParsedMirror>,
+) -> Option<exyonq_config_ir::MirrorRouteConfig> {
+    let scopes = [&location, &server, &http];
+    let nearest = scopes
+        .into_iter()
+        .flatten()
+        .find(|p| p.off || !p.destinations.is_empty())?;
+    if nearest.off {
+        return None;
+    }
+    let request_body = scopes
+        .into_iter()
+        .flatten()
+        .find_map(|p| p.request_body)
+        .unwrap_or(true);
+    Some(exyonq_config_ir::MirrorRouteConfig {
+        destinations: nearest.destinations.clone(),
+        request_body,
+    })
+}
+
+fn merge_auth(
+    location: Option<crate::ast::ParsedAuth>,
+    server: Option<crate::ast::ParsedAuth>,
+    http: Option<crate::ast::ParsedAuth>,
+) -> Option<exyonq_config_ir::AuthRouteConfig> {
+    let cfg = location.or(server).or(http)?;
+    if cfg.off {
+        return None;
+    }
+    Some(exyonq_config_ir::AuthRouteConfig {
+        realm: cfg.realm?,
+        user_file: cfg.user_file?,
+    })
+}
+
 fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> String {
     let mut out = String::new();
     out.push_str(&format!("config_version = {}\n\n", app.config_version));
+    if app.modules.gunzip.enabled || app.modules.gunzip.buffer_bytes != 32 * 1024 {
+        out.push_str("[modules.gunzip]\n");
+        out.push_str(&format!("enabled = {}\n", app.modules.gunzip.enabled));
+        out.push_str(&format!(
+            "buffer_bytes = {}\n\n",
+            app.modules.gunzip.buffer_bytes
+        ));
+    }
+    for (route, cfg) in &app.modules.sub_filter.routes {
+        out.push_str(&format!("[modules.sub_filter.routes.{route:?}]\n"));
+        out.push_str(&format!("once = {}\n", cfg.once));
+        out.push_str(&format!("last_modified = {}\n", cfg.last_modified));
+        out.push_str(&format!(
+            "types = [{}]\n",
+            cfg.types
+                .iter()
+                .map(|t| format!("{t:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        for rule in &cfg.rules {
+            out.push_str(&format!("[[modules.sub_filter.routes.{route:?}.rules]]\n"));
+            out.push_str(&format!("pattern = {:?}\n", rule.pattern));
+            out.push_str(&format!("replacement = {:?}\n", rule.replacement));
+        }
+        out.push('\n');
+    }
 
     for server in &app.servers {
         out.push_str("[[server]]\n");
@@ -1708,6 +2230,46 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
                 "proxy_protocol = {{ enabled = {}, trusted = [{}] }}\n",
                 pp.enabled, trusted
             ));
+        }
+        out.push('\n');
+    }
+    for (route, cfg) in &app.modules.mirror.routes {
+        out.push_str(&format!("[modules.mirror.routes.{route:?}]\n"));
+        out.push_str(&format!(
+            "destinations = [{}]\n",
+            cfg.destinations
+                .iter()
+                .map(|d| format!("{d:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!("request_body = {}\n\n", cfg.request_body));
+    }
+    for (route, cfg) in &app.modules.slice.routes {
+        out.push_str(&format!("[modules.slice.routes.{route:?}]\n"));
+        out.push_str(&format!("size = {}\n\n", cfg.size));
+    }
+    for (route, cfg) in &app.modules.auth.routes {
+        out.push_str(&format!("[modules.auth.routes.{route:?}]\n"));
+        out.push_str(&format!("realm = {:?}\n", cfg.realm));
+        out.push_str(&format!("user_file = {:?}\n\n", cfg.user_file));
+    }
+    if !app.modules.ratelimit.zones.is_empty() {
+        out.push_str("[modules.ratelimit]\nenabled = true\n");
+        for (name, zone) in &app.modules.ratelimit.zones {
+            out.push_str(&format!("[modules.ratelimit.zones.{name:?}]\n"));
+            out.push_str(&format!("key = {:?}\n", zone.key));
+            out.push_str(&format!(
+                "requests_per_second = {}\n",
+                zone.requests_per_second
+            ));
+            out.push_str(&format!("burst = {}\n", zone.burst));
+        }
+        if !app.modules.ratelimit.routes.is_empty() {
+            out.push_str("[modules.ratelimit.routes]\n");
+            for (route, zone) in &app.modules.ratelimit.routes {
+                out.push_str(&format!("{route:?} = {zone:?}\n"));
+            }
         }
         out.push('\n');
     }
@@ -1791,6 +2353,18 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
                 ));
             }
             out.push_str("]\n");
+        }
+        if let Some(gunzip) = route.gunzip {
+            out.push_str(&format!("gunzip = {gunzip}\n"));
+        }
+        if let Some(ch) = &route.cache_headers {
+            for (mime, h) in &ch.by_mime {
+                out.push_str(&format!("[route.cache_headers.by_mime.{mime:?}]\n"));
+                out.push_str(&format!("max_age = {}\n", h.max_age));
+                if h.immutable {
+                    out.push_str("immutable = true\n");
+                }
+            }
         }
         for h in &route.response_headers {
             out.push_str("[[route.response_headers]]\n");

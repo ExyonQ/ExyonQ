@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a disposable static-mvp dual-Linux admission transfer package from
 # tracked lab sources only. Generated artifacts live under
-# <workspace>/temp/<OUT_NAME>/ — never under the canonical tree.
+# /Volumes/Lexar/Cursor/temp/<OUT_NAME>/ — never under the canonical tree.
 #
 # USAGE:
 #   bash scripts/gates/build-static-mvp-admit-package.sh [--out-name NAME]
@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 OUT_NAME="${OUT_NAME:-exyonq-static-mvp-admit-$(date -u +%Y%m%dT%H%M%SZ)}"
-OUT_ROOT="<workspace>/temp/${OUT_NAME}"
+OUT_ROOT="/Volumes/Lexar/Cursor/temp/${OUT_NAME}"
 if [[ -e "$OUT_ROOT" ]]; then
   echo "ERROR: OUT_ROOT already exists: $OUT_ROOT" >&2
   exit 2

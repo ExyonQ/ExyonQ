@@ -26,7 +26,7 @@ not `root /var/www/html` for every location.
 `/wp-content` and `/wp-includes` serve files. A `.php`, `.phtml`, `.phar`,
 `.ht*` or dotfile on those routes is denied. `.well-known` stays reachable.
 Plugin PHP is loaded by PHP-FPM from disk, not by downloading the file.
-The database file `.ht.sqlite` is in that denied set.
+The database file is in that denied set.
 
 The `/` route executes an existing `.php`. An existing directory runs its
 `index.php`, or serves `index.html` when that is the only index. Every
@@ -108,8 +108,10 @@ docker pull ghcr.io/exyonq/exyonq-wordpress:0.7.0
 ```
 
 Open `http://localhost:8080/` and finish the WordPress installer. The
-database file is `wp-content/database/.ht.sqlite`. Fetching that URL, or
-`/wp-content/db.php`, must not return the file.
+database file is `wp-content/database/db.sqlite` — one fixed, predictable
+file. Set `EXYONQ_WP_DB_PATH` to move it (for example onto a dedicated
+volume outside the docroot). Fetching that URL, or `/wp-content/db.php`,
+must not return the file.
 
 After a WordPress core update, the next request for a replaced CSS or
 JavaScript file reads the new bytes. An unchanged file stays preloaded.

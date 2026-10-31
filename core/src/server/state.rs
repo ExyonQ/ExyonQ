@@ -142,6 +142,17 @@ impl ServerState {
         self.snapshot.compression_configured()
     }
 
+    /// NG-18: any route or the global module enables `gunzip`.
+    pub fn gunzip_configured(&self) -> bool {
+        self.config.modules.gunzip.enabled
+            || self.config.routes.iter().any(|r| r.gunzip == Some(true))
+    }
+
+    /// NG-18: any route mirrors, so requests must reach the dispatch body hook.
+    pub fn mirror_configured(&self) -> bool {
+        !self.config.modules.mirror.routes.is_empty()
+    }
+
     pub fn wire_cheap_modules_active(&self) -> bool {
         self.snapshot.wire_cheap_modules_active()
     }

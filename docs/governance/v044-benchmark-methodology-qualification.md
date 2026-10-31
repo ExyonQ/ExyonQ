@@ -112,8 +112,8 @@ Absolute RPS must **not** be compared across Netcup↔Oracle (different core cou
 
 | Host | Remote | Local fetch |
 | --- | --- | --- |
-| Netcup | `/tmp/exyonq-p1-methodqual-netcup-20260905T074622Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/netcup/` |
-| Oracle | `/tmp/exyonq-p1-methodqual-oracle-20260905T075946Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/oracle/` |
+| Netcup | `/tmp/exyonq-p1-methodqual-netcup-20260905T074622Z/` | `/Volumes/Lexar/Cursor/temp/exyonq-p1-methodqual-20260905/fetched/netcup/` |
+| Oracle | `/tmp/exyonq-p1-methodqual-oracle-20260905T075946Z/` | `/Volumes/Lexar/Cursor/temp/exyonq-p1-methodqual-20260905/fetched/oracle/` |
 
 Lab context HEAD at P1 qualification time: `5e5895f58e056e6b73a82c732245f3241b4c17fa` / tree `f81dcb95a7788610014bd0a57a76966b86e5a476` (product binary authority remains the seal image / seal-tree build — not a rebuild of that HEAD).
 
@@ -177,8 +177,8 @@ UPSTREAM_OR_PHP_FPM_HEALTH = PASS (200/1024 probes on all three reverse proxies 
 
 | Host | Remote | Local fetch |
 | --- | --- | --- |
-| Netcup | `/tmp/exyonq-p4-methodqual-netcup-20260905T085821Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/proxy-netcup/` |
-| Oracle | `/tmp/exyonq-p4-methodqual-oracle-20260905T085832Z/` | `<workspace>/temp/exyonq-p1-methodqual-20260905/fetched/proxy-oracle/` |
+| Netcup | `/tmp/exyonq-p4-methodqual-netcup-20260905T085821Z/` | `/Volumes/Lexar/Cursor/temp/exyonq-p1-methodqual-20260905/fetched/proxy-netcup/` |
+| Oracle | `/tmp/exyonq-p4-methodqual-oracle-20260905T085832Z/` | `/Volumes/Lexar/Cursor/temp/exyonq-p1-methodqual-20260905/fetched/proxy-oracle/` |
 
 Lab entry HEAD for this Proxy extension: `791d71cef6bd4fd23dceca4532117dbebef2b101` / tree `5a03c51d89d11402cb24f8f9ff716dfd55407201`. Binary authority remains the seal image / seal-tree build.
 

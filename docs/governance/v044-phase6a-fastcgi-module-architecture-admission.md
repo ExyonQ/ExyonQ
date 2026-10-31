@@ -25,7 +25,7 @@ NOTION_RECONCILIATION_REQUIRED = YES
 Owner-authorized **admission only**. No FastCGI/Module product code change. No Phase 6B start.
 
 ```text
-CURRENT_WORKTREE     = <repo>
+CURRENT_WORKTREE     = /Volumes/Lexar/Cursor/exyonq-laboratorio
 CANONICAL_MERGE      = NO
 PUSH                 = NO
 TAG                  = NO

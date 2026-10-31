@@ -465,6 +465,7 @@ max_ttl_seconds = 300
     let site_id = stable_fpc_site_id("php");
     let backend_id = state_g1.snapshot.route_backend_id(0).unwrap().index();
     let key_g1 = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id,
         namespace: 4,
         backend_id,
@@ -480,6 +481,7 @@ max_ttl_seconds = 300
         vary: String::new(),
     });
     let key_g2 = build_storage_cache_key(CacheKeyParts {
+        range: String::new(),
         site_id,
         namespace: 4,
         backend_id,

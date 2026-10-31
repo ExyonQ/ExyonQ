@@ -965,10 +965,45 @@ async fn write_fixed_close<S: AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// Compatibility entry point (tests/other callers): labels default to proxy/proxy.
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)] // peer_fd is cfg(linux)-only; arg count differs per OS
 pub async fn serve<S>(
     cluster_id: u32,
     generation: u64,
+    stream: S,
+    first_head: Bytes,
+    carry: Bytes,
+    x_forwarded_for: HeaderValue,
+    real_ip: Option<exyonq_module_api::real_ip::RealIpTrust>,
+    #[cfg(target_os = "linux")] peer_fd: Option<RawFd>,
+) -> Result<u16>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    serve_with_labels(
+        cluster_id,
+        generation,
+        "proxy".to_string(),
+        "proxy".to_string(),
+        stream,
+        first_head,
+        carry,
+        x_forwarded_for,
+        real_ip,
+        #[cfg(target_os = "linux")]
+        peer_fd,
+    )
+    .await
+}
+
+/// Q-15: wire proxy with matched route/upstream labels.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_with_labels<S>(
+    cluster_id: u32,
+    generation: u64,
+    route: String,
+    upstream: String,
     mut stream: S,
     first_head: Bytes,
     _carry: Bytes,
@@ -1210,7 +1245,14 @@ where
         admission_status = last_status;
         let path = path_and_query.split('?').next().unwrap_or(path_and_query);
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-        exyonq_module_api::wire_record_exchange("GET", path, last_status, elapsed_ms);
+        exyonq_module_api::wire_record_exchange_labeled(
+            "GET",
+            path,
+            last_status,
+            elapsed_ms,
+            &route,
+            &upstream,
+        );
         match outcome {
             WireWriteOutcome::Close => {
                 // Cap034 one-shot: half-close by default. Abortive linger is

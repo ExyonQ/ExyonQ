@@ -211,7 +211,10 @@ async fn oversized_content_length_rejects_without_dispatch() {
         false,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY.as_u16());
+    // The bound rejects the client's own request body: nginx client_max_body_size
+    // semantics → 413, matching the HTTP/3 path for the same limit (previously
+    // 502, corrected — 502 claimed an upstream failure that never happened).
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE.as_u16());
     assert_eq!(
         counting.dispatches.load(Ordering::SeqCst),
         0,

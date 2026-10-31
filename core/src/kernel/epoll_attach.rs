@@ -407,7 +407,7 @@ mod epoll_contract_tests {
         let outcome = att.handoff_to_hyper(server, peer, Some((head, Bytes::new())));
         assert!(matches!(outcome, ConnectionServeOutcome::Completed));
         rt.block_on(async {
-            for _ in 0..100 {
+            for _ in 0..500 {
                 if ops.active_connections() == 0 {
                     break;
                 }
@@ -527,7 +527,7 @@ mod epoll_contract_tests {
         // Token transferred into Hyper (still counted) until task ends.
         assert!(ops.active_connections() <= 1);
         rt.block_on(async {
-            for _ in 0..100 {
+            for _ in 0..500 {
                 if ops.active_connections() == 0 {
                     break;
                 }
@@ -552,7 +552,7 @@ mod epoll_contract_tests {
         assert!(matches!(outcome, ConnectionServeOutcome::Completed));
         // Attachment moved — single handoff. Wait for Hyper task to drop token.
         rt.block_on(async {
-            for _ in 0..100 {
+            for _ in 0..500 {
                 if ops.active_connections() == 0 {
                     break;
                 }

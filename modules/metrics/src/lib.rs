@@ -44,6 +44,8 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 const MAX_LABELED_SERIES: usize = 64;
+/// Q-15: bounded route × upstream histogram series (same cap as labeled counters).
+const MAX_LABELED_DURATION_SERIES: usize = 64;
 
 const HISTOGRAM_BUCKETS_MS: &[f64] = &[
     0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
@@ -77,6 +79,8 @@ struct ProcessHttpMetrics {
     addon_invocations: AtomicU64,
     labeled_dropped: AtomicU64,
     labeled: Mutex<Vec<LabeledSeries>>,
+    duration_labeled_dropped: AtomicU64,
+    duration_labeled: Mutex<Vec<LabeledDurationSeries>>,
 }
 
 impl ProcessHttpMetrics {
@@ -96,6 +100,8 @@ impl ProcessHttpMetrics {
             addon_invocations: AtomicU64::new(0),
             labeled_dropped: AtomicU64::new(0),
             labeled: Mutex::new(Vec::new()),
+            duration_labeled_dropped: AtomicU64::new(0),
+            duration_labeled: Mutex::new(Vec::new()),
         }
     }
 }
@@ -125,6 +131,16 @@ struct LabeledSeries {
     method: String,
     status: String,
     route: String,
+    count: u64,
+}
+
+/// Q-15: one route × upstream latency histogram.
+#[derive(Debug, Clone)]
+struct LabeledDurationSeries {
+    route: String,
+    upstream: String,
+    buckets: Vec<u64>,
+    sum_us: u64,
     count: u64,
 }
 
@@ -276,6 +292,24 @@ impl MetricsModule {
         Self::bump_duration_ms(elapsed_ms);
     }
 
+    /// Q-15: wire observation with matched route + backend label.
+    pub fn wire_record_exchange_labeled(
+        method: &str,
+        path: &str,
+        status: u16,
+        elapsed_ms: f64,
+        route: &str,
+        upstream: &str,
+    ) {
+        if !PROCESS_WIRE_METRICS_ENABLED.load(Ordering::Acquire) {
+            return;
+        }
+        Self::wire_record_response(status);
+        Self::bump_labeled(method, status, path);
+        Self::bump_duration_ms(elapsed_ms);
+        Self::bump_duration_labeled(elapsed_ms, route, upstream);
+    }
+
     fn bump_duration_ms(elapsed_ms: f64) {
         if !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
             return;
@@ -291,6 +325,59 @@ impl MetricsModule {
         for (idx, bound) in HISTOGRAM_BUCKETS_MS.iter().enumerate() {
             if elapsed_ms <= *bound {
                 PROCESS_HTTP.duration_buckets[idx].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Q-15: record latency under the matched route + upstream label.
+    pub fn record_duration_labeled(&self, elapsed_ms: f64, route: &str, upstream: &str) {
+        Self::bump_duration_labeled(elapsed_ms, route, upstream);
+    }
+
+    fn bump_duration_labeled(elapsed_ms: f64, route: &str, upstream: &str) {
+        if !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
+            return;
+        }
+        let us = (elapsed_ms * 1000.0).round();
+        let us = if us.is_finite() && us >= 0.0 && us <= u64::MAX as f64 {
+            us as u64
+        } else {
+            0
+        };
+        let route = sanitize_metric_label(route);
+        let upstream = sanitize_metric_label(upstream);
+        let mut series = match PROCESS_HTTP.duration_labeled.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let idx = match series
+            .iter()
+            .position(|s| s.route == route && s.upstream == upstream)
+        {
+            Some(idx) => idx,
+            None => {
+                if series.len() >= MAX_LABELED_DURATION_SERIES {
+                    PROCESS_HTTP
+                        .duration_labeled_dropped
+                        .fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                series.push(LabeledDurationSeries {
+                    route,
+                    upstream,
+                    buckets: vec![0; HISTOGRAM_BUCKETS_MS.len()],
+                    sum_us: 0,
+                    count: 0,
+                });
+                series.len() - 1
+            }
+        };
+        let entry = &mut series[idx];
+        entry.count += 1;
+        entry.sum_us = entry.sum_us.saturating_add(us);
+        for (i, bound) in HISTOGRAM_BUCKETS_MS.iter().enumerate() {
+            if elapsed_ms <= *bound {
+                entry.buckets[i] += 1;
             }
         }
     }
@@ -358,6 +445,69 @@ impl MetricsModule {
             "exyonq_http_request_duration_milliseconds_count {duration_count}\n"
         ));
 
+        // Q-15: seconds histogram (same observations, Prometheus base unit).
+        out.push_str(
+            "# HELP exyonq_http_request_duration_seconds Request latency in seconds from module on_request until after response-body materialization in the module pipeline.\n",
+        );
+        out.push_str("# TYPE exyonq_http_request_duration_seconds histogram\n");
+        for (idx, bound_ms) in HISTOGRAM_BUCKETS_MS.iter().enumerate() {
+            let bound = bound_ms / 1000.0;
+            let count = PROCESS_HTTP.duration_buckets[idx].load(Ordering::Relaxed);
+            out.push_str(&format!(
+                "exyonq_http_request_duration_seconds_bucket{{le=\"{bound}\"}} {count}\n"
+            ));
+        }
+        out.push_str(&format!(
+            "exyonq_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {duration_count}\n"
+        ));
+        out.push_str(&format!(
+            "exyonq_http_request_duration_seconds_sum {}\n",
+            duration_sum_us as f64 / 1_000_000.0
+        ));
+        out.push_str(&format!(
+            "exyonq_http_request_duration_seconds_count {duration_count}\n"
+        ));
+
+        let duration_labeled_dropped = PROCESS_HTTP
+            .duration_labeled_dropped
+            .load(Ordering::Relaxed);
+        out.push_str(
+            "# HELP exyonq_http_request_duration_labeled_dropped_total Route/upstream latency observations dropped after the 64-series cap (process lifetime).\n",
+        );
+        out.push_str("# TYPE exyonq_http_request_duration_labeled_dropped_total counter\n");
+        out.push_str(&format!(
+            "exyonq_http_request_duration_labeled_dropped_total {duration_labeled_dropped}\n"
+        ));
+        if let Ok(series) = PROCESS_HTTP.duration_labeled.lock() {
+            out.push_str(
+                "# HELP exyonq_http_request_duration_seconds_by_route Request latency in seconds by matched route and backend (process lifetime; max 64 series).\n",
+            );
+            out.push_str("# TYPE exyonq_http_request_duration_seconds_by_route histogram\n");
+            for s in series.iter() {
+                let route = escape_label(&s.route);
+                let upstream = escape_label(&s.upstream);
+                for (idx, bound_ms) in HISTOGRAM_BUCKETS_MS.iter().enumerate() {
+                    let bound = bound_ms / 1000.0;
+                    out.push_str(&format!(
+                        "exyonq_http_request_duration_seconds_by_route_bucket{{route=\"{route}\",upstream=\"{upstream}\",le=\"{bound}\"}} {}\n",
+                        s.buckets[idx]
+                    ));
+                }
+                out.push_str(&format!(
+                    "exyonq_http_request_duration_seconds_by_route_bucket{{route=\"{route}\",upstream=\"{upstream}\",le=\"+Inf\"}} {}\n",
+                    s.count
+                ));
+                out.push_str(&format!(
+                    "exyonq_http_request_duration_seconds_by_route_sum{{route=\"{route}\",upstream=\"{upstream}\"}} {}\n",
+                    s.sum_us as f64 / 1_000_000.0
+                ));
+                out.push_str(&format!(
+                    "exyonq_http_request_duration_seconds_by_route_count{{route=\"{route}\",upstream=\"{upstream}\"}} {}\n",
+                    s.count
+                ));
+            }
+        }
+
         out.push_str(
             "# HELP exyonq_addon_invocations_total Metrics-module hook invocations observed (process lifetime).\n",
         );
@@ -418,6 +568,24 @@ fn sanitize_route_label(route: &str) -> String {
     }
     if out.len() > 48 {
         let mut end = 48;
+        while end > 0 && !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+    }
+    out
+}
+
+/// Route/upstream labels are config names, not paths: keep them verbatim
+/// (bounded), unlike [`sanitize_route_label`] which maps paths to `_a_b`.
+fn sanitize_metric_label(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "-".to_string();
+    }
+    let mut out = trimmed.to_string();
+    if out.len() > 64 {
+        let mut end = 64;
         while end > 0 && !out.is_char_boundary(end) {
             end -= 1;
         }
@@ -534,6 +702,9 @@ impl Module for MetricsModule {
         if let Some(start) = req.extensions().get::<RequestStart>() {
             let elapsed_ms = start.0.elapsed().as_secs_f64() * 1000.0;
             self.record_duration_ms(elapsed_ms);
+            if let Some(labels) = req.extensions().get::<exyonq_module_api::RouteLabels>() {
+                self.record_duration_labeled(elapsed_ms, &labels.route, &labels.upstream);
+            }
         }
         Ok(())
     }
@@ -720,5 +891,54 @@ mod tests {
     #[test]
     fn sanitize_route_strips_query() {
         assert_eq!(sanitize_route_label("/api/x?y=1"), "_api_x");
+    }
+
+    #[test]
+    fn q15_wire_labeled_exchange_records_route_upstream() {
+        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.2.0", None);
+        MetricsModule::set_wire_enabled(true);
+        MetricsModule::wire_record_exchange_labeled(
+            "GET",
+            "/api/wire",
+            200,
+            5.0,
+            "api_wire",
+            "backend_wire",
+        );
+        MetricsModule::set_wire_enabled(false);
+        let body = module.render_prometheus();
+        assert!(
+            body.contains(
+                "exyonq_http_request_duration_seconds_by_route_count{route=\"api_wire\",upstream=\"backend_wire\"} 1"
+            ),
+            "wire labeled series missing"
+        );
+    }
+
+    #[test]
+    fn q15_seconds_histogram_and_route_upstream_labels() {
+        let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.2.0", None);
+        module.record_duration_labeled(12.5, "wordpress", "fcgi:php");
+        let body = module.render_prometheus();
+        assert!(
+            body.contains("# TYPE exyonq_http_request_duration_seconds histogram"),
+            "seconds histogram missing"
+        );
+        assert!(
+            body.contains("exyonq_http_request_duration_seconds_bucket{le=\"0.025\"}"),
+            "seconds buckets missing"
+        );
+        assert!(
+            body.contains(
+                "exyonq_http_request_duration_seconds_by_route_bucket{route=\"wordpress\",upstream=\"fcgi:php\",le=\"0.025\"} 1"
+            ),
+            "labeled bucket missing: {body}"
+        );
+        assert!(
+            body.contains(
+                "exyonq_http_request_duration_seconds_by_route_count{route=\"wordpress\",upstream=\"fcgi:php\"} 1"
+            ),
+            "labeled count missing"
+        );
     }
 }

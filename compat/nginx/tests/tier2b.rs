@@ -403,3 +403,331 @@ fn tier2b_json_report_has_stable_fields() {
     assert!(json.contains("semantic_form"));
     assert!(json.contains("rewrite"));
 }
+
+#[test]
+fn tier2b_expires_maps_and_inherits_server_scope() {
+    let (toml, report) = migrate_fixture("tier2b-expires.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let route = |path: &str| {
+        cfg.routes
+            .iter()
+            .find(|r| r.r#match.path == path)
+            .unwrap_or_else(|| panic!("route {path}"))
+    };
+    let max_age = |path: &str, mime: &str| {
+        route(path)
+            .cache_headers
+            .as_ref()
+            .expect("cache_headers")
+            .lookup(mime)
+            .expect("mime")
+            .max_age
+    };
+
+    assert_eq!(max_age("/static/", "text/html"), 2_592_000, "server 30d");
+    assert_eq!(max_age("/assets/", "text/css"), 3_600, "location 1h wins");
+    assert_eq!(max_age("/api/", "application/json"), 315_360_000, "max");
+
+    assert!(route("/static/")
+        .response_headers
+        .iter()
+        .any(|h| h.name == "X-Server"));
+    assert!(route("/assets/")
+        .response_headers
+        .iter()
+        .any(|h| h.name == "X-Server"));
+    assert!(route("/api/")
+        .response_headers
+        .iter()
+        .any(|h| h.name == "X-Api"));
+    assert!(
+        !route("/api/")
+            .response_headers
+            .iter()
+            .any(|h| h.name == "X-Server"),
+        "location add_header replaces the inherited set (nginx)"
+    );
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "expires" && e.status == NginxCompatStatus::Partial));
+}
+
+#[test]
+fn tier2b_location_off_and_denied_header_override_inheritance() {
+    let (toml, _) = migrate_fixture("tier2b-inheritance-overrides.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let route = |path: &str| {
+        cfg.routes
+            .iter()
+            .find(|r| r.r#match.path == path)
+            .unwrap_or_else(|| panic!("route {path}"))
+    };
+
+    assert_eq!(
+        route("/inherit/")
+            .cache_headers
+            .as_ref()
+            .expect("inherited expires")
+            .lookup("text/html")
+            .expect("mime")
+            .max_age,
+        2_592_000
+    );
+    assert!(route("/inherit/")
+        .response_headers
+        .iter()
+        .any(|h| h.name == "X-Server"));
+
+    assert!(
+        route("/off/").cache_headers.is_none(),
+        "location `expires off` must not inherit the server value"
+    );
+    assert!(
+        !route("/denied/")
+            .response_headers
+            .iter()
+            .any(|h| h.name == "X-Server"),
+        "a location add_header (even rejected) replaces the inherited set"
+    );
+}
+
+#[test]
+fn ng18_gunzip_http_server_location_and_inheritance() {
+    let (toml, report) = migrate_fixture("ng18/gunzip/nginx-migrate.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    assert!(cfg.modules.gunzip.enabled, "http gunzip on");
+    assert_eq!(cfg.modules.gunzip.buffer_bytes, 32 * 1024);
+    let route = |name: &str| {
+        cfg.routes
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("route {name}"))
+    };
+    // http on; location /off/ overrides off; location / inherits (None).
+    assert_eq!(route("srv1_loc1").gunzip, None);
+    assert_eq!(route("srv1_loc2").gunzip, Some(false));
+    // server off; location /on/ overrides on; location / inherits off.
+    assert_eq!(route("srv2_loc1").gunzip, Some(false));
+    assert_eq!(route("srv2_loc2").gunzip, Some(true));
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "gunzip" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn ng18_sub_filter_http_location_inheritance() {
+    let (toml, report) = migrate_fixture("ng18/sub_filter/nginx-migrate.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let root = cfg
+        .modules
+        .sub_filter
+        .routes
+        .get("srv1_loc1")
+        .expect("root route sub_filter");
+    assert_eq!(root.rules[0].pattern, "http://");
+    assert_eq!(root.rules[0].replacement, "https://");
+    assert!(!root.once, "http sub_filter_once off inherited");
+    assert_eq!(root.types, vec!["text/html".to_string()]);
+    let off = cfg
+        .modules
+        .sub_filter
+        .routes
+        .get("srv1_loc2")
+        .expect("off route sub_filter");
+    assert_eq!(off.rules[0].pattern, "foo");
+    assert!(!off.once, "scalar flags inherit from http");
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "sub_filter" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn ng18_mirror_http_location_inheritance() {
+    let (toml, report) = migrate_fixture("ng18/mirror/nginx-migrate.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let root = cfg
+        .modules
+        .mirror
+        .routes
+        .get("srv1_loc1")
+        .expect("root route mirror");
+    assert_eq!(root.destinations, vec!["/mirror".to_string()]);
+    assert!(
+        root.request_body,
+        "nginx 1.27 defaults mirror_request_body to on"
+    );
+    let off = cfg
+        .modules
+        .mirror
+        .routes
+        .get("srv1_loc2")
+        .expect("off route mirror");
+    assert_eq!(off.destinations, vec!["/off-mirror".to_string()]);
+    assert!(!off.request_body, "explicit mirror_request_body off");
+    assert!(
+        !cfg.modules.mirror.routes.contains_key("srv1_loc3"),
+        "`mirror off` must not inherit the http-level destinations"
+    );
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "mirror" && e.status == NginxCompatStatus::Supported));
+    assert!(
+        report
+            .entries
+            .iter()
+            .any(|e| e.directive == "mirror_request_body"
+                && e.status == NginxCompatStatus::Supported),
+        "mirror_request_body on must be Supported, not Unsupported"
+    );
+}
+
+#[test]
+fn ng18_slice_http_location_inheritance() {
+    let (toml, report) = migrate_fixture("ng18/slice/nginx-migrate.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    assert_eq!(
+        cfg.modules
+            .slice
+            .routes
+            .get("srv1_loc1")
+            .expect("root slice")
+            .size,
+        1024 * 1024
+    );
+    assert_eq!(
+        cfg.modules
+            .slice
+            .routes
+            .get("srv1_loc2")
+            .expect("off slice")
+            .size,
+        2 * 1024 * 1024
+    );
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "slice" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn ng07_proxy_redirect_scheme_host_port_vars() {
+    let (toml, report) = migrate_fixture("ng18/proxy-redirect-vars.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    assert_eq!(
+        cfg.routes[0].location_rewrite[0].to,
+        "$scheme://$host:$server_port/"
+    );
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "proxy_redirect" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn ng07_proxy_redirect_regex_captures() {
+    let (toml, report) = migrate_fixture("ng18/proxy-redirect-regex.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    assert_eq!(
+        cfg.routes[0].location_rewrite[0].from,
+        "~^http://127.0.0.1:9000/(.*)$"
+    );
+    assert_eq!(cfg.routes[0].location_rewrite[0].to, "/$1");
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "proxy_redirect" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn ng05_auth_basic_maps_realm_and_file() {
+    let (toml, report) = migrate_fixture("ng18/auth-basic.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let auth = cfg
+        .modules
+        .auth
+        .routes
+        .get("srv1_loc1")
+        .expect("route auth");
+    assert_eq!(auth.realm, "Restricted");
+    assert_eq!(auth.user_file, "/etc/nginx/.htpasswd");
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "auth_basic" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn ng05_limit_req_zone_importer() {
+    let (toml, report) = migrate_fixture("ng18/limit-req.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let zone = cfg.modules.ratelimit.zones.get("one").expect("zone");
+    assert_eq!(zone.key, "ip");
+    assert_eq!(zone.requests_per_second, 1);
+    assert_eq!(zone.burst, 5);
+    assert_eq!(
+        cfg.modules
+            .ratelimit
+            .routes
+            .get("srv1_loc1")
+            .map(String::as_str),
+        Some("one")
+    );
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "limit_req_zone" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn tier2b_body_transforms_are_imported_not_dropped() {
+    let (toml, report) = migrate_fixture("tier2b-body-transforms.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    for directive in [
+        "sub_filter",
+        "sub_filter_types",
+        "sub_filter_once",
+        "slice",
+        "mirror",
+    ] {
+        assert!(
+            report
+                .entries
+                .iter()
+                .any(|e| { e.directive == directive && e.status == NginxCompatStatus::Supported }),
+            "{directive} must be reported Supported (NG-18)"
+        );
+    }
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| e.directive == "gunzip" && e.status == NginxCompatStatus::Supported));
+    assert!(!cfg.modules.sub_filter.routes.is_empty());
+    assert!(!cfg.modules.slice.routes.is_empty());
+    let mirror = cfg
+        .modules
+        .mirror
+        .routes
+        .get("srv1_loc1")
+        .expect("mirror route");
+    assert_eq!(mirror.destinations, vec!["/mirror".to_string()]);
+    assert!(mirror.request_body, "mirror_request_body defaults to on");
+}
+
+#[test]
+fn tier2b_expires_epoch_and_modified_are_reported_not_dropped() {
+    let (toml, report) = migrate_fixture("tier2b-expires-unsupported.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    assert!(cfg.routes.iter().all(|r| r.cache_headers.is_none()));
+    assert_eq!(
+        report
+            .entries
+            .iter()
+            .filter(|e| e.directive == "expires" && e.status == NginxCompatStatus::Unsupported)
+            .count(),
+        2
+    );
+}

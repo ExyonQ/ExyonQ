@@ -112,6 +112,8 @@ pub enum DiagnosticCode {
     LintUnusedMap,
     /// EXY-LINT-0006 — predictive: hostless catch-all vs host routes
     LintHostlessCatchAll,
+    /// EXY-LINT-0007 — predictive: FPC serve window outlives anonymous nonces
+    LintFpcNonceWindow,
     /// EXY-RT-0001 — runtime: upstream connect/DNS failed (Q-02 / ADR-054)
     RtUpstreamConnectFailed,
     /// EXY-RT-0002 — runtime: upstream attempt timeout
@@ -186,6 +188,7 @@ impl DiagnosticCode {
             Self::LintWeakRegexRoute => "EXY-LINT-0004",
             Self::LintUnusedMap => "EXY-LINT-0005",
             Self::LintHostlessCatchAll => "EXY-LINT-0006",
+            Self::LintFpcNonceWindow => "EXY-LINT-0007",
             Self::RtUpstreamConnectFailed => "EXY-RT-0001",
             Self::RtUpstreamTimeout => "EXY-RT-0002",
             Self::RtNoEligiblePeer => "EXY-RT-0003",
@@ -241,6 +244,7 @@ impl DiagnosticCode {
             "EXY-LINT-0004" => Self::LintWeakRegexRoute,
             "EXY-LINT-0005" => Self::LintUnusedMap,
             "EXY-LINT-0006" => Self::LintHostlessCatchAll,
+            "EXY-LINT-0007" => Self::LintFpcNonceWindow,
             "EXY-RT-0001" => Self::RtUpstreamConnectFailed,
             "EXY-RT-0002" => Self::RtUpstreamTimeout,
             "EXY-RT-0003" => Self::RtNoEligiblePeer,

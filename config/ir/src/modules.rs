@@ -28,6 +28,199 @@ pub struct ModulesConfig {
     pub ratelimit: RateLimitConfig,
     #[serde(default)]
     pub real_ip: RealIpConfig,
+    /// NG-18 / ADR-064: `gunzip` response filter (default off).
+    #[serde(default, skip_serializing_if = "GunzipConfig::is_default")]
+    pub gunzip: GunzipConfig,
+    /// NG-18 / ADR-064 Phase C: nginx `sub_filter` rules per route.
+    #[serde(default, skip_serializing_if = "SubFilterConfig::is_default")]
+    pub sub_filter: SubFilterConfig,
+    /// NG-18 / ADR-064 Phase D: nginx `mirror` per route.
+    #[serde(default, skip_serializing_if = "MirrorConfig::is_default")]
+    pub mirror: MirrorConfig,
+    /// NG-18 / ADR-064 Phase E: nginx `slice` per route.
+    #[serde(default, skip_serializing_if = "SliceConfig::is_default")]
+    pub slice: SliceConfig,
+    /// 0.5: nginx `auth_basic` per route.
+    #[serde(default, skip_serializing_if = "AuthConfig::is_default")]
+    pub auth: AuthConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthRouteConfig {
+    pub realm: String,
+    /// htpasswd file path.
+    pub user_file: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthConfig {
+    #[serde(default)]
+    pub routes: std::collections::BTreeMap<String, AuthRouteConfig>,
+}
+
+impl AuthConfig {
+    pub fn is_default(&self) -> bool {
+        self.routes.is_empty()
+    }
+
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        for (route, cfg) in &self.routes {
+            if cfg.realm.trim().is_empty() {
+                return Err(crate::ConfigError::Parse(format!(
+                    "modules.auth.routes.{route}: empty realm"
+                )));
+            }
+            if cfg.user_file.trim().is_empty() {
+                return Err(crate::ConfigError::Parse(format!(
+                    "modules.auth.routes.{route}: empty user_file"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Effective nginx `slice` policy for one route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SliceRouteConfig {
+    /// Segment size in bytes (`slice 1m` → 1048576).
+    pub size: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SliceConfig {
+    #[serde(default)]
+    pub routes: std::collections::BTreeMap<String, SliceRouteConfig>,
+}
+
+impl SliceConfig {
+    pub fn is_default(&self) -> bool {
+        self.routes.is_empty()
+    }
+
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        for (route, cfg) in &self.routes {
+            if !(1024..=1_073_741_824).contains(&cfg.size) {
+                return Err(crate::ConfigError::Parse(format!(
+                    "modules.slice.routes.{route}.size must be 1024..=1073741824, got {}",
+                    cfg.size
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Effective nginx `mirror` policy for one route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MirrorRouteConfig {
+    /// Internal destination paths (`mirror /path;`).
+    #[serde(default)]
+    pub destinations: Vec<String>,
+    /// `mirror_request_body` (nginx 1.27 default: on).
+    #[serde(default = "default_true")]
+    pub request_body: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MirrorConfig {
+    #[serde(default)]
+    pub routes: std::collections::BTreeMap<String, MirrorRouteConfig>,
+}
+
+impl MirrorConfig {
+    pub fn is_default(&self) -> bool {
+        self.routes.is_empty()
+    }
+
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        for (route, cfg) in &self.routes {
+            if cfg.destinations.is_empty() {
+                return Err(crate::ConfigError::Parse(format!(
+                    "modules.mirror.routes.{route}: no destinations"
+                )));
+            }
+            for dest in &cfg.destinations {
+                if !dest.starts_with('/') {
+                    return Err(crate::ConfigError::Parse(format!(
+                        "modules.mirror.routes.{route}: destination `{dest}` must be an internal path"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One nginx `sub_filter <pattern> <replacement>` rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubFilterRule {
+    pub pattern: String,
+    pub replacement: String,
+}
+
+/// Effective `sub_filter` policy for one route (importer resolves
+/// http/server/location inheritance).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubFilterRouteConfig {
+    #[serde(default)]
+    pub rules: Vec<SubFilterRule>,
+    /// nginx `sub_filter_once` (default on).
+    #[serde(default = "default_true")]
+    pub once: bool,
+    /// nginx `sub_filter_types` (default `text/html`).
+    #[serde(default = "default_sub_filter_types")]
+    pub types: Vec<String>,
+    /// nginx `sub_filter_last_modified` (default off: remove Last-Modified).
+    #[serde(default = "default_false")]
+    pub last_modified: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_sub_filter_types() -> Vec<String> {
+    vec!["text/html".to_string()]
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubFilterConfig {
+    #[serde(default)]
+    pub routes: std::collections::BTreeMap<String, SubFilterRouteConfig>,
+}
+
+impl SubFilterConfig {
+    pub fn is_default(&self) -> bool {
+        self.routes.is_empty()
+    }
+
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        for (route, cfg) in &self.routes {
+            for rule in &cfg.rules {
+                if rule.pattern.is_empty() {
+                    return Err(crate::ConfigError::Parse(format!(
+                        "modules.sub_filter.routes.{route}: empty pattern"
+                    )));
+                }
+            }
+            if cfg.types.iter().any(|t| t.trim().is_empty()) {
+                return Err(crate::ConfigError::Parse(format!(
+                    "modules.sub_filter.routes.{route}: empty sub_filter_types entry"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// NG-11: trust-aware client-IP resolution (nginx `set_real_ip_from` +
@@ -123,6 +316,48 @@ impl Default for MetricsConfig {
     }
 }
 
+/// NG-18 / ADR-064: nginx `gunzip` response filter.
+///
+/// `buffer_bytes` bounds the decoder output per poll; it is the ExyonQ
+/// equivalent of `gunzip_buffers number size` (total bytes).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GunzipConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_gunzip_buffer_bytes")]
+    pub buffer_bytes: usize,
+}
+
+fn default_gunzip_buffer_bytes() -> usize {
+    32 * 1024
+}
+
+impl Default for GunzipConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            buffer_bytes: default_gunzip_buffer_bytes(),
+        }
+    }
+}
+
+impl GunzipConfig {
+    pub fn is_default(&self) -> bool {
+        !self.enabled && self.buffer_bytes == default_gunzip_buffer_bytes()
+    }
+
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        if !(1024..=1_048_576).contains(&self.buffer_bytes) {
+            return Err(crate::ConfigError::Parse(format!(
+                "modules.gunzip.buffer_bytes must be 1024..=1048576, got {}",
+                self.buffer_bytes
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompressionConfig {
@@ -154,6 +389,23 @@ pub struct RateLimitConfig {
     pub requests_per_second: u32,
     #[serde(default = "default_burst")]
     pub burst: u32,
+    /// 0.5: nginx `limit_req_zone` equivalents.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub zones: std::collections::BTreeMap<String, RateLimitZoneConfig>,
+    /// 0.5: route name → zone name (`limit_req zone=...`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub routes: std::collections::BTreeMap<String, String>,
+}
+
+/// 0.5: one `limit_req_zone` (key is `ip`, `host`, or `header:<name>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitZoneConfig {
+    pub key: String,
+    #[serde(default = "default_rps")]
+    pub requests_per_second: u32,
+    #[serde(default = "default_burst")]
+    pub burst: u32,
 }
 
 impl Default for RateLimitConfig {
@@ -162,6 +414,8 @@ impl Default for RateLimitConfig {
             enabled: false,
             requests_per_second: default_rps(),
             burst: default_burst(),
+            zones: std::collections::BTreeMap::new(),
+            routes: std::collections::BTreeMap::new(),
         }
     }
 }
