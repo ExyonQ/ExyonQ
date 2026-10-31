@@ -1071,6 +1071,7 @@ dependencies = [
  "exyonq-cfd-control",
  "exyonq-cfd-gen",
  "exyonq-fastcgi-wire",
+ "exyonq-linux-ffi",
  "exyonq-waf",
  "exyonq-waf-api",
  "libc",

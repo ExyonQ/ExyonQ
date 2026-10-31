@@ -891,6 +891,7 @@ pub fn clear_sendfile_session(fd: RawFd, session: u64) {
 /// Clears sessions on the **calling** thread only (TLS). Tests that drive Cap067 from a
 /// dedicated worker must clear on that same thread.
 #[cfg(any(test, feature = "test-utils"))]
+#[allow(dead_code)] // enabled via test-utils in non-test builds where callers are cfg(test)
 pub fn clear_all_sessions_for_test() {
     with_sessions_mut(|table| {
         table.by_id.clear();

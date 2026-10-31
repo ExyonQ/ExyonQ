@@ -1048,7 +1048,7 @@ mod tests {
     use bytes::Bytes;
     use exyonq_mod_proxy::build_incoming_client;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex, Once};
+    use std::sync::{Arc, Once};
 
     fn ensure_wire_hooks() {
         static ONCE: Once = Once::new();
@@ -1060,11 +1060,10 @@ mod tests {
             exyonq_mod_proxy::install_kernel_hooks(proxy_rt);
         });
     }
-    use std::time::Duration;
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
     /// Process-global write-error counter is shared; serialize these two tests.
-    static WIRE_REJECT_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static WIRE_REJECT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Cap061 LA-008: wire static admits `/health` only (not `/metrics`, not bench filenames).
     const WIRE_STATIC_HEADS: &[&[u8]] =
@@ -1150,6 +1149,13 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+            cache_headers: None,
+            response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         };
         let api = RouteConfig {
             cache_tags: Vec::new(),
@@ -1170,6 +1176,13 @@ mod tests {
             fastcgi: None,
             htaccess: Default::default(),
             cache: None,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            proxy_set_headers: Vec::new(),
+            cache_headers: None,
+            response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1192,6 +1205,7 @@ mod tests {
             upstreams,
             pools_fcgi: HashMap::new(),
             cache_policies: HashMap::new(),
+            maps: HashMap::new(),
             modules: Default::default(),
             static_section: Default::default(),
             full_page_cache: Default::default(),
@@ -1525,9 +1539,7 @@ mod tests {
         use std::time::Duration;
         use tokio::io::AsyncReadExt;
         ensure_wire_hooks();
-        let _lock = WIRE_REJECT_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _lock = WIRE_REJECT_TEST_LOCK.lock().await;
         let (state, _guard) = state_for(bench_site_config(None)).await;
         assert!(
             !state.modules_enabled(),
@@ -1590,9 +1602,7 @@ mod tests {
         use std::os::fd::AsRawFd;
         use std::time::Duration;
         ensure_wire_hooks();
-        let _lock = WIRE_REJECT_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _lock = WIRE_REJECT_TEST_LOCK.lock().await;
         let (state, _guard) = state_for(bench_site_config(None)).await;
         let before = super::wire_reject_response_write_errors();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1672,9 +1682,7 @@ mod tests {
         }
 
         ensure_wire_hooks();
-        let _lock = WIRE_REJECT_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _lock = WIRE_REJECT_TEST_LOCK.lock().await;
         crate::waf::install_waf_runtime_binding(WafRuntimeBinding {
             engine: Arc::new(NopWafEngine),
             abuse: Some(Arc::new(AlwaysRateLimit)),
@@ -1750,9 +1758,7 @@ mod tests {
         }
 
         ensure_wire_hooks();
-        let _lock = WIRE_REJECT_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _lock = WIRE_REJECT_TEST_LOCK.lock().await;
         crate::waf::install_waf_runtime_binding(WafRuntimeBinding {
             engine: Arc::new(NopWafEngine),
             abuse: Some(Arc::new(AlwaysRateLimit)),
