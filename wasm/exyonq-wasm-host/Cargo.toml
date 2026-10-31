@@ -1,6 +1,7 @@
 [package]
 name = "exyonq-wasm-host"
 description = "Wasmtime host for ExyonQ L4 plugins (v0.4 prep)"
+publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
