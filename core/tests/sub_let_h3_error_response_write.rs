@@ -307,9 +307,9 @@ async fn s2n_error_response_write_failure_is_observed() {
         .send_data(oversized)
         .await
         .expect("send oversized body chunk");
-    // Reset the client->server half so the server's drain exits promptly and it
-    // reaches the already-stopped response write.
-    stream.stop_stream(Code::H3_REQUEST_CANCELLED);
+    // FIN (no reset) keeps the request stream resolvable; the server's drain
+    // exits on end-of-body and its response write hits the already-stopped send.
+    let _ = stream.finish().await;
 
     let mut observed = before;
     for _ in 0..200 {
