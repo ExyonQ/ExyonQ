@@ -81,6 +81,6 @@ pub fn openat2_rdonly_beneath(dir_fd: RawFd, rel_c_path: &CStr) -> Result<File, 
         dir_fd,
         rel_c_path,
         (libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC) as u64,
-        libc::RESOLVE_BENEATH as u64,
+        libc::RESOLVE_BENEATH,
     )
 }

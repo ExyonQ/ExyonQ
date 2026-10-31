@@ -157,10 +157,7 @@ pub struct StaticWireServeHooks {
         head: bytes::Bytes,
         rest: bytes::Bytes,
     ) -> BlockingAdmission,
-    pub shed_blocking_admission:
-        fn(
-            std::net::TcpStream,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send>>,
+    pub shed_blocking_admission: fn(std::net::TcpStream) -> StaticWireServeFuture,
 }
 
 #[cfg(target_os = "linux")]
@@ -221,9 +218,7 @@ pub fn take_lifecycle_hold() -> Option<Box<dyn Send>> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn shed_blocking_admission(
-    stream: std::net::TcpStream,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send>> {
+pub fn shed_blocking_admission(stream: std::net::TcpStream) -> StaticWireServeFuture {
     (serve_hooks().shed_blocking_admission)(stream)
 }
 

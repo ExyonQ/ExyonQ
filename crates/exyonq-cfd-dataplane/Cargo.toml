@@ -22,6 +22,7 @@ exyonq-fastcgi-wire = { path = "../exyonq-fastcgi-wire" }
 # Product WAF engine (sync, no Tokio/Hyper) — Phase-3 compiled projection execution.
 exyonq-waf = { path = "../exyonq-waf" }
 exyonq-waf-api = { path = "../exyonq-waf-api" }
+exyonq-linux-ffi = { path = "../exyonq-linux-ffi" }
 # mio + socket2 authorized only in this dataplane crate (CFD).
 # socket2 `all` required solely for SO_REUSEPORT among dataplane shards.
 # libc: flock for single-process exclusivity (pre-existing Phase-1 unsafe).
