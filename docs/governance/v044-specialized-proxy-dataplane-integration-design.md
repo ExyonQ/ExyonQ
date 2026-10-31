@@ -27,7 +27,7 @@ Evidence: `.exyonq-local/evidence/specialized-proxy-dataplane-design/20260827-20
 ## Verdict
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | CASE | **SD-B** — feasible with bounded product contract changes |
 | Geometry | mio TPC shard-local (EP-C validated) |
 | Stack | Extend geometry + httparse/mio; do not merge prototype sources |

@@ -21,7 +21,7 @@ PRODUCT_DEFECT_PROVEN = NO
 ## Causal evidence
 
 | Variant | Result (20 reps) |
-|---------|------------------|
+| --- | --- |
 | A cobuffered END+TRAIL one write | TrailingData 20/20 (Darwin + amd64 + arm64) |
 | B2 END then 50ms then TRAIL | Ok 20/20 (late not required at completion) |
 | F clean | Ok 20/20 |
@@ -43,7 +43,7 @@ ORACLE_STRENGTH_PRESERVED = YES
 ## Requalification
 
 | Gate | Darwin | Netcup | Oracle |
-|------|--------|--------|--------|
+| --- | --- | --- | --- |
 | trailing_data 20-rep | 0 fail | 0 fail | 0 fail |
 | FCGI pool 20-rep | 0 fail | 0 fail | 0 fail |
 | Phase 8 `GATE_PHASE6B_FCGI` | — | PASS | PASS |

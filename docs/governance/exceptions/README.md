@@ -9,7 +9,7 @@ ENFORCEMENT = scripts/gates/waiver-expiry-gate.sh
 Live entries:
 
 | EXCEPTION_ID | Status | Expiry/review |
-|--------------|--------|---------------|
+| --- | --- | --- |
 | [RUSTSEC-2026-0222](RUSTSEC-2026-0222.md) | REMEDIATED_D11 | CLOSED_BY_D11 (wasmtime 46.0.2) |
 
 Field requirements: [`docs/security/waiver-requirements.md`](../../security/waiver-requirements.md).

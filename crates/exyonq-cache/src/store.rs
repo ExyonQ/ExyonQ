@@ -1,3 +1,18 @@
+/*
+ * Copyright 2026 Antonio Cantallops Alba
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 use crate::metrics::{note_eviction, note_expired, note_hit, note_insertion, note_miss};
 use crate::namespace::{CacheNamespace, HitValidation, HitValidator, NamespaceMetrics};
 use bytes::Bytes;
@@ -889,11 +904,11 @@ mod tests {
     #[test]
     fn stale_lookup_expires_after_the_window() {
         let cache = ResponseCache::with_limits(10, 1024 * 1024)
-            .with_stale_retention(Duration::from_millis(20));
+            .with_stale_retention(Duration::from_millis(200));
         insert_plain(&cache, 1, "/w", b"w", Duration::from_millis(1));
-        std::thread::sleep(Duration::from_millis(10));
-        assert!(cache.lookup_stale(&sample_key_for_site(1, "/w")).is_some());
         std::thread::sleep(Duration::from_millis(30));
+        assert!(cache.lookup_stale(&sample_key_for_site(1, "/w")).is_some());
+        std::thread::sleep(Duration::from_millis(400));
         assert!(
             cache.lookup_stale(&sample_key_for_site(1, "/w")).is_none(),
             "past the retention window the entry is not stale-servable"

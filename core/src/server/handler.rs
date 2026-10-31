@@ -3418,7 +3418,7 @@ mod tests {
     }
 
     fn plan08_fcgi_config() -> AppConfig {
-        let raw = include_str!("../../../scripts/architecture/fixtures/plan08/minimal-fcgi.toml");
+        let raw = include_str!("../../../tests/fixtures/minimal-fcgi.toml");
         raw.parse().expect("plan08 fixture")
     }
 

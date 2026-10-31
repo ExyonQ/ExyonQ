@@ -66,7 +66,7 @@ profiling-session RPS and causal metrics only.
 ## 2. P4P-B reproduction
 
 | Metric | P4P-B (203611Z) | This run (230314Z) | Ratio |
-|--------|----------------:|-------------------:|------:|
+| --- | ---: | ---: | ---: |
 | RPS | 76215 | **74100** | 0.97 |
 | cycles/req | 34,617,095 | **37,571,899** | 1.09 |
 | instructions/req | 25,460,815 | **28,887,876** | 1.13 |
@@ -85,7 +85,7 @@ Variance within expected host noise; causal class ranking unchanged.
 ## 3. perf stat — process-wide (ExyonQ)
 
 | Metric | ExyonQ | NGINX (ref) | OLS (ref) |
-|--------|-------:|------------:|----------:|
+| --- | ---: | ---: | ---: |
 | RPS | **74100** | 101425 | 93852 |
 | cycles/req | **37,571,899** | 1,843,744 | 1,726,055 |
 | instructions/req | **28,887,876** | 1,894,111 | 2,070,159 |
@@ -128,7 +128,7 @@ P4 hot path: `GET /api/*` → epoll declines keepalive (`GET /api/` forces Tokio
 `write_proxy_response_wire` → `write_streaming_te_progressive` (chunked + close).
 
 | STAGE_ID | SOURCE | FUNCTION | DOMAIN | ALLOC/CLONE/CHANNEL |
-|----------|--------|----------|--------|---------------------|
+| --- | --- | --- | --- | --- |
 | CLIENT_CONNECTION | epoll_worker / server | accept / handoff_to_hyper | epoll thread → Tokio | NOT_MEASURED |
 | CLIENT_HTTP_PARSE | core/server/io | read_until_headers | Tokio task | Bytes carry clone BOUNDED |
 | WIRE_DECISION | core/server/wire_dispatch | plan_wire_decision / might_use_proxy_wire | Tokio | none |
@@ -159,7 +159,7 @@ P4_POLL_READY_BOUNDARY_COUNT = BOUNDED 4–8 (client + upstream socket registrat
 ## 5. perf record — top exclusive symbols (ExyonQ worker sample)
 
 | % self | Symbol / class |
-|-------:|----------------|
+| ---: | --- |
 | 4.90% | kernel IPI / reschedule |
 | 3.62% | **malloc** |
 | 2.72% | kernel spin unlock (wake path) |
@@ -183,7 +183,7 @@ socket churn via chunked progressive writes + separate upstream reads.
 ### CPU cost-class aggregation (exclusive, non-overlapping sum ≤100%)
 
 | Class | Est. exclusive % | Evidence |
-|-------|----------------:|----------|
+| --- | ---: | --- |
 | TOKIO_SCHEDULER | **2.0** | poll_ready, task poll, accept_loop |
 | TOKIO_IO | **1.5** | (overlap with scheduler) |
 | HYPER_POOL | **0.8** | Checkout::poll |
@@ -216,7 +216,7 @@ WORKER_IMBALANCE = BOUNDED (container lacks ps; 18 Tokio threads observed at sta
 **Concurrency discriminator (single-worker perf stat during sweep):**
 
 | C | RPS | ctx/req (worker) | instructions/req (worker) |
-|--:|----:|-----------------:|--------------------------:|
+| ---: | ---: | ---: | ---: |
 | 1 | 12783 | 30.98 | 1,928,282 |
 | 8 | 49542 | 11.39 | 1,766,470 |
 | 32 | 72313 | 7.45 | 1,779,715 |
@@ -233,7 +233,7 @@ DOES_ALLOCATOR_COST_GROW_WITH_CONTENTION = PLAUSIBLE (malloc hot under load)
 **Ranked wakeup sources (classification):**
 
 | Rank | Source | Evidence |
-|-----:|--------|----------|
+| ---: | --- | --- |
 | 1 | CLIENT_IO_WAKE | poll_ready + kernel tcp recv path |
 | 2 | UPSTREAM_IO_WAKE | Hyper Incoming poll + recvfrom |
 | 3 | HYPER_MPSC_WAKE | mpsc send 0.70% + ctx switches |
@@ -244,7 +244,7 @@ DOES_ALLOCATOR_COST_GROW_WITH_CONTENTION = PLAUSIBLE (malloc hot under load)
 ### ROOT_1F subroots
 
 | Subroot | Evidence | Recoverable |
-|---------|----------|-------------|
+| --- | --- | --- |
 | ROOT_1F_1_IO_WAKEUPS | STRONGLY_SUPPORTED | BOUNDED 5–10% RPS |
 | ROOT_1F_2_MPSC_WAKEUPS | STRONGLY_SUPPORTED | BOUNDED 3–8% RPS (overlap 1F_1) |
 | ROOT_1F_3_CROSS_CORE_MIGRATION | BOUNDED | BOUNDED 2–5% RPS |
@@ -255,7 +255,7 @@ DOES_ALLOCATOR_COST_GROW_WITH_CONTENTION = PLAUSIBLE (malloc hot under load)
 ## 7. Hyper integration decomposition (ROOT_1A)
 
 | Candidate | Exclusive % | Est. µs/req | Recoverability |
-|-----------|------------:|------------:|----------------|
+| --- | ---: | ---: | --- |
 | HYPER_POOL_CHECKOUT | 0.79 | BOUNDED ~6 | BOUNDED |
 | HYPER_SEND_REQUEST | 0.56 | BOUNDED ~4 | BOUNDED |
 | HYPER_MPSC | 0.70 | BOUNDED ~5 | BOUNDED if async boundary reduced |
@@ -277,7 +277,7 @@ AVOIDABLE_GLUE_COST = STRONGLY_SUPPORTED (BoxBody, chunked A0, epoll handoff)
 ### ROOT_1A subroots
 
 | Subroot | Evidence |
-|---------|----------|
+| --- | --- |
 | ROOT_1A_1_POOL_CHECKOUT | STRONGLY_SUPPORTED |
 | ROOT_1A_2_HYPER_CHANNEL_DISPATCH | STRONGLY_SUPPORTED |
 | ROOT_1A_3_BODY_FRAME_ADAPTER | STRONGLY_SUPPORTED |
@@ -344,7 +344,7 @@ BODY_PIPELINE_TRANSITIONS_PER_REQ = BOUNDED 8–12 type transitions
 ### ROOT_1G subroots
 
 | Subroot | Evidence |
-|---------|----------|
+| --- | --- |
 | ROOT_1G_1_BYTES_REFCOUNT | STRONGLY_SUPPORTED (~4.5% exc) |
 | ROOT_1G_2_FRAME_ALLOC | STRONGLY_SUPPORTED |
 | ROOT_1G_3_HEADER_ALLOC | BOUNDED |
@@ -357,7 +357,7 @@ BODY_PIPELINE_TRANSITIONS_PER_REQ = BOUNDED 8–12 type transitions
 Estimated ~888k requests in window.
 
 | Syscall | calls/req |
-|---------|----------:|
+| --- | ---: |
 | recvfrom | 0.83 |
 | sendto | 0.42 |
 | writev | 0.42 |
@@ -378,7 +378,7 @@ Rivals: ~1 writev + ~1 recvfrom per request (simpler geometry).
 ## 11. Memory footprint
 
 | | ExyonQ | NGINX | OLS |
-|--|-------:|------:|----:|
+| --- | ---: | ---: | ---: |
 | PSS MiB | **43.85** | 3.55 | 1.89 |
 | Private_Clean MiB | 10.46 | 3.10 | 1.30 |
 | Private_Dirty MiB | **32.82** | 0.15 | 0.26 |
@@ -396,7 +396,7 @@ ROOT_1G_RESIDENT_MEMORY_CONTRIBUTION = BOUNDED majority of Private_Dirty (Hyper/
 ## 12. Source-level hotspot ledger
 
 | ID | File | Function | Class | CPU% | Root | Recoverability |
-|----|------|----------|-------|-----:|------|----------------|
+| --- | --- | --- | --- | ---: | --- | --- |
 | HS-01 | hyper_util/client/legacy/pool | Checkout::poll | HYPER_POOL | 0.79 | 1A_1 | BOUNDED |
 | HS-02 | hyper/client/dispatch | mpsc send | HYPER_CHANNELS | 0.70 | 1A_2 | BOUNDED |
 | HS-03 | hyper_forward.rs | attempt_forward_empty_body | HYPER_REQUEST | 0.56 | 1A_2 | BOUNDED |
@@ -434,7 +434,7 @@ Do NOT sum 1A + 1F + 1G exclusive percents as independent recoverable value.
 ## 14. Recoverable-cost model (non-overlapping)
 
 | Subroot | Measured µs/req | Recoverable fraction | Expected RPS gain | Evidence |
-|---------|----------------:|---------------------|------------------:|----------|
+| --- | ---: | --- | ---: | --- |
 | ROOT_1A_3 body adapter | BOUNDED 8–15 | 40–70% | 4–9% | STRONGLY_SUPPORTED |
 | ROOT_1A_2 mpsc/Hyper dispatch | BOUNDED 5–10 | 30–60% | 3–7% | STRONGLY_SUPPORTED |
 | ROOT_1F scheduler handoffs | BOUNDED 50–100 | 20–40% | 4–10% | STRONGLY_SUPPORTED |
@@ -452,7 +452,7 @@ TOTAL_NON_OVERLAPPING_EXPECTED_RPS_GAIN_RANGE = BOUNDED 12–22% RPS
 ## 15. Architecture questions (terminal)
 
 | Question | Answer |
-|----------|--------|
+| --- | --- |
 | IS_HYPER_INTRINSIC_COST_THE_DOMINANT_ROOT | **REJECTED** |
 | IS_EXYONQ_HYPER_INTEGRATION_COST_THE_DOMINANT_ROOT | **STRONGLY_SUPPORTED** |
 | IS_TOKIO_SCHEDULER_INTRINSIC_COST_THE_DOMINANT_ROOT | **REJECTED** |
@@ -469,7 +469,7 @@ TOTAL_NON_OVERLAPPING_EXPECTED_RPS_GAIN_RANGE = BOUNDED 12–22% RPS
 ## 16. Architecture options (evaluation only)
 
 | Option | Expected gain | Evidence | Complexity | Risk |
-|--------|---------------|----------|------------|------|
+| --- | --- | --- | --- | --- |
 | A KEEP_CURRENT | 0% | — | LOW | — |
 | B TARGETED_HYPER_INTEGRATION | 8–15% | STRONGLY_SUPPORTED | MEDIUM | MEDIUM |
 | C REDUCE_TASK_CHANNEL_HANDOFFS | 5–12% | STRONGLY_SUPPORTED | MEDIUM | MEDIUM |

@@ -36,7 +36,7 @@ Full Hyper Service body filters run only when AE prefers a content coding. WAF
 ## P5 bounded tranche (implementation)
 
 | Item | Type | Change |
-|------|------|--------|
+| --- | --- | --- |
 | POL-05 generation on keepalive | repair | `read_state(shared)` each P4 loop iteration |
 | QUAL-KEEPALIVE-RELOAD-G1G2 | qualification | same-socket R1@G1 → reload → R2@G2 |
 | QUAL-KEEPALIVE-100-SEQ | qualification | 100 sequential GET on one connection |
@@ -58,7 +58,7 @@ Same-connection PXDP→Hyper handoff remains **forbidden** (P4-LA-001 class).
 ## P4 deferred items — P5 disposition
 
 | Item | P5 result |
-|------|-----------|
+| --- | --- |
 | KEEPALIVE_RELOAD_G1_G2 | **PASS** (same-socket qual + generation refresh) |
 | KEEPALIVE_100_REQUEST_SEQUENCE | **PASS** (qual harness) |
 | KEEPALIVE_IDLE_TIMEOUT | **EXPLICIT_NONBLOCKING** (no new idle timer in P5; documented) |
@@ -66,7 +66,7 @@ Same-connection PXDP→Hyper handoff remains **forbidden** (P4-LA-001 class).
 ## Migration coverage matrix (conceptual — NOT migration ready)
 
 | Workload facet | PXDP | Legacy only | Deferred |
-|----------------|------|-------------|----------|
+| --- | --- | --- | --- |
 | GET /api reverse proxy (no modules) | SUPPORTED_IN_PXDP | — | — |
 | Config rate limit on proxy | — | LEGACY_ONLY | wire projection WIP |
 | POST/PUT bodies | — | LEGACY_ONLY | REQUEST_BODY WIP |

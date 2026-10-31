@@ -32,7 +32,7 @@ on **that exact binary**.
 ## Results
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | BINARY_IDENTITY | PASS |
 | DOCROOT_ESCAPE (stable snapshot, DI+FC) | 0 |
 | SYMLINK_*_ESCAPE | BLOCKED |

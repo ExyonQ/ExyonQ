@@ -26,7 +26,7 @@ When `EXYONQ_SDP_P1=1` (Linux, cleartext):
 ## Value gate (Netcup P4)
 
 | Case | Condition |
-|------|-----------|
+| --- | --- |
 | SP1-A | RPS ≥ +20% vs current ExyonQ (flag off) + correctness PASS |
 | SP1-B | +15% ≤ gain < 20% → owner review |
 | SP1-C | gain < 15% → STOP architecture integration |

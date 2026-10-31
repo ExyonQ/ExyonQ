@@ -29,7 +29,7 @@ current truthful contract (`max_conn=1`, serial `execute_get`, no async FastCGI)
 ## Environment
 
 | Item | Value |
-|------|-------|
+| --- | --- |
 | Platform | LINUX_AMD64_NETCUP |
 | OS/kernel | Ubuntu, 6.8.0-134-generic |
 | CPU/RAM | 8 / ~15 GiB |
@@ -56,7 +56,7 @@ STATIC = Proxy → local Python SimpleHTTPRequestHandler on docroot (no native S
 ## Results (VALID_RUN)
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | REAL_WORDPRESS / PHP-FPM / DATABASE | PASS |
 | WORDPRESS_INSTALL / FRONT_PAGE | PASS |
 | STATIC_PHP_COEXISTENCE | PASS (via CFD Proxy sidecar; not native static) |
@@ -106,7 +106,7 @@ No WordPress-specific product fast path was added. P6MAXHONEST-A / ADR-042 prese
 ## Invalid / discarded runs
 
 | RUN_ID | Reason |
-|--------|--------|
+| --- | --- |
 | 20260831T142105Z | Host without port → self-301; `set -e` abort before completion |
 | 20260831T142326Z | DB user password drift after DROP DATABASE |
 
@@ -136,7 +136,7 @@ Specialist review on terminal HEAD (no product mutation). Full ledger:
 `.exyonq-local/evidence/phase6e-current-head-real-wordpress-qualification/20260831T142351Z/AUDITS.md`.
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | exyonq-orchestrator | CONDITIONAL ACCEPT |
 | exyonq-vertex-architect | CONDITIONAL ACCEPT |
 | exyonq-security-engineer | CONDITIONAL ACCEPT |

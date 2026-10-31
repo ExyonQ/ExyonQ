@@ -20,7 +20,7 @@ V044_WAF_INTEGRATION_STATUS = COMPLETE
 ## Modes (signature engine)
 
 | `waf.mode` | Detectors | Host reject of signature Block |
-|------------|-----------|--------------------------------|
+| --- | --- | --- |
 | `disabled` (or `enabled = false`) | No-op compile path | No |
 | `monitor` | Run; signature `Block` coerced to `Log` | No (abuse may still Challenge/429) |
 | `block` | Run; signature `Block` enforceable | Yes when enforce is on (`EXYONQ_WAF_ENFORCE` / default with mode=block) |

@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.6.0
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.6.0 |
 | **Commit** | `39c85c1ec2a1754446f307df211a614adef0b247` |
 | **Date** | 2026-10-18 |
@@ -14,7 +14,7 @@
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | pending | Runs after push/tag |
 | Security (`security.yml`) | expect deny advisories fail | Wasmtime 49.0.2 (carry-forward) |
 | Nightly fuzz | skipped | Not claimed for this cut |
@@ -39,13 +39,13 @@ None for publication of the images that pass the container E2E gate. Wasmtime ad
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | Addon core range for 0.6.x | high | `official_core_compat` → `>=0.1.0, <0.7.0` |
 
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | | | | | |
 
 ## Surfaces reviewed

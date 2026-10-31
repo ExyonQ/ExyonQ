@@ -40,7 +40,7 @@ Ambient dirty tree declared under evidence root (`AMBIENT_DIRT_DECLARATION.txt`)
 ## Runs disclosed
 
 | RUN_ID | CLASS | Note |
-|--------|-------|------|
+| --- | --- | --- |
 | `20260830T193154Z` | INVALID | Incomplete FPM tree kill (orphaned workers kept listen); SUMMARY aborted on self-`cp`; retained |
 | `20260830T194007Z` | VALID | Supersedes INVALID for stress matrix; full listen-tree kill → 502 |
 
@@ -77,7 +77,7 @@ Independent logic/GRC audits also require SUMMARY honesty: several counters were
 ## Audits
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | Orchestrator | CONDITIONAL_ACCEPT (qualification-only) |
 | Vertex architect | CONDITIONAL_ACCEPT |
 | Security (terminal) | PASS_WITH_NONBLOCKING |

@@ -5,7 +5,7 @@ Tier 1 release artifacts and Docker images for ExyonQ.
 ## Tier 1 targets
 
 | OS | Arch | Artifact |
-|----|------|----------|
+| --- | --- | --- |
 | Linux | x86_64 | `exyonq-linux-amd64.tar.gz` (flat: binaries + legal + SBOM) |
 | Linux | arm64 | `exyonq-linux-arm64.tar.gz` (flat: binaries + legal + SBOM) |
 | Linux | x86_64 | `exyonq-${VERSION}-linux-amd64.tar.gz` (versioned FHS layout) |
@@ -43,7 +43,7 @@ bash scripts/release/nfpm-package-linux.sh \
 Examples (Redis not bundled; private network only):
 
 | Path | Purpose |
-|------|---------|
+| --- | --- |
 | `config/distributed-cache-redis.example.toml` | IR contract snippet (default off) |
 | `config/distributed-cache-health.example.md` | Dataplane vs coordination health |
 | `systemd/exyonq-l2-coord.env.example` | Env / secret-file mounts |
@@ -65,11 +65,11 @@ cargo build --release -p exyonq-compat
 Public Tier 1 artifacts must ship:
 
 | File | Purpose |
-|------|---------|
+| --- | --- |
 | `LICENSE` | ExyonQ Apache-2.0 license text |
 | `NOTICE` | Project attribution |
 | `THIRD_PARTY_NOTICES.md` | Human-readable third-party licenses (cargo-about) |
-| `sbom.cdx.json` | CycloneDX SBOM for supply-chain audit (cargo-cyclonedx) |
+| `sbom.cdx.json` | CycloneDX SBOM for supply-chain audit (cargo-cyclonedx; covers the published binaries' dependency tree, not the whole workspace) |
 
 ```bash
 cargo install cargo-about --locked --features cli
@@ -87,7 +87,7 @@ See [ADR-024](../docs/adr/024-license-compliance-third-party-notices.md).
 ## CI gates
 
 | Gate | Workflow | When |
-|------|----------|------|
+| --- | --- | --- |
 | License compliance | `security.yml` → `legal-compliance` | Every PR and push to `main` |
 | Advisories | `security.yml` → `deps-deny-advisories` | Push to `main` only (not PRs) |
 | Release legal + SBOM | `release.yml` → `compliance-artifacts` | Tags `v*` |

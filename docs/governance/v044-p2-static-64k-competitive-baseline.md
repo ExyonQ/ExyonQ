@@ -75,7 +75,7 @@ Historical CAUSE3C / splice_pipe soft budget are **context only** — not curren
 ## Authoritative three-way (docker-stats meter)
 
 | | ExyonQ | NGINX | OLS |
-|--|--|--|--|
+| --- | --- | --- | --- |
 | RPS median | **97931.70** | 96136.12 | **101594.97** |
 | RPS CV | 0.090 | **0.041** | **0.037** |
 | core-ms/req | **0.019339** | 0.020473 | 0.020591 |
@@ -97,7 +97,7 @@ EXYONQ_RSS_VS_OLS_PERCENT = -73.51%
 ### Cgroup companion (separate meter)
 
 | | user µs/req | system µs/req | total |
-|--|-------------|---------------|-------|
+| --- | --- | --- | --- |
 | ExyonQ | **3.579** | **22.884** | **26.464** |
 | NGINX | 4.344 | 25.146 | 29.490 |
 | OLS | 5.663 | 27.873 | 33.537 |

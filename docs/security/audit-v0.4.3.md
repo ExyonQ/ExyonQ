@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.4.3
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.4.3 |
 | **Commit** | `e8fa4dca9336bb8293b56ca8ad47e24bfd4fd792` |
 | **Date** | 2026-08-04 |
@@ -21,7 +21,7 @@ does **not** authorize tag, production signing, push, GHCR, or public release.
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | pass (local matrix) | Darwin fmt/check/clippy/tests PASS (`r5-darwin-20260803T162707Z`); Linux amd64+arm64 workspace/check/clippy/tests PASS (composites) |
 | Security (`security.yml` local equiv.) | pass | `cargo audit` EC0 (advisory ignored under registered waiver); `cargo deny check` EC0; PMZ `--git-tree` PASS; waiver-expiry PASS |
 | Nightly fuzz | skipped | Not re-executed in this freeze window; no parser surface change claimed beyond R4 endpoint-set/WRR already dual-arch tested |
@@ -40,14 +40,14 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | P2B-OPEN-002 (eligible==1 Multi→Single) | Medium (correctness) | Closed in product `1d815fe`; Linux protectors tip-bound PASS |
 | BENCH_API_CACHE_PATHS / integrity remediation lineage | Critical (integrity) | Removed earlier on product line; integrity gates PASS on tip |
 
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | RUSTSEC-2026-0222 | Low | Temporary v0.4.3 waiver; Wasmtime remains 45.0.2; **VULNERABILITY_FIXED=NO** | `deny.toml` + `.cargo/audit.toml` ignore; reachability rationale in exception register; revisit ≥46.0.2 | v0.4.4 |
 
 ```text
@@ -78,7 +78,7 @@ Exception SoT: [`docs/governance/exceptions/RUSTSEC-2026-0222.md`](../governance
 ## Evidence binding (local)
 
 | Claim | Host / arch | Run / path |
-|-------|-------------|------------|
+| --- | --- | --- |
 | Darwin freeze gates | Darwin / local | `.exyonq-local/release/r5-freeze-6270968/darwin/r5-darwin-20260803T162707Z-*` |
 | Linux amd64 qual | Netcup amd64 | `.exyonq-local/release/r5-freeze-6270968/evidence/R5_AMD64_COMPOSITE.txt` |
 | Linux arm64 qual | Oracle arm64 | `.exyonq-local/release/r5-freeze-6270968/evidence/R5_ARM64_COMPOSITE.txt` |

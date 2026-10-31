@@ -14,7 +14,7 @@ QUEJAS_APACHE §2.2 / QUEJAS_OLS §2.1: operators believe `Require all denied` /
 ### Fail-closed classes
 
 | Class | Code | Directives (case-insensitive) | Publish |
-|-------|------|-------------------------------|---------|
+| --- | --- | --- | --- |
 | Forbidden (security/auth/ACL) | `EXY-HTACCESS-0003` | `Require`, `Deny`, `Allow`, `Order`, `Satisfy`, `AuthType`, `AuthUserFile`, `AuthName`, `AuthGroupFile`, `AllowOverride`, `php_value`, `php_flag` | **No** — compile error |
 | Unsupported (headers/expires/containers) | `EXY-HTACCESS-0002` | `Header`, `ExpiresActive`, `ExpiresByType`, `ExpiresDefault`; container openers `<FilesMatch>`, `<Files>`, `<Directory>`, `<IfModule>`, `<Limit>`, `<LimitExcept>` | **No** — compile error |
 

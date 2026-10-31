@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.4.9
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.4.9 |
 | **Commit** | `d18daa9f69fd07804d6d38ec1bd8c8754499af49` |
 | **Date** | 2026-10-09 |
@@ -16,7 +16,7 @@ Host tests covered the static deny, the `.htaccess` compiler and watcher, the Fa
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | not run on this commit | Tag workflow runs after publish |
 | Security (`security.yml`) | inherited fail | `cargo audit` on v0.4.8 reported RUSTSEC-2026-0325, RUSTSEC-2026-0326, and RUSTSEC-2026-0327 against wasmtime 49.0.1. The pin is unchanged |
 | Nightly fuzz | skipped | Not run for this cut |
@@ -45,13 +45,13 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | static PHP and dotfile download | alta | Static routes return 403 for `.php`, `.phtml`, `.phar`, and dotfile names. `.well-known` stays reachable. `allow_sensitive = true` is the opt-in |
 
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | | | | | |
 
 ## Surfaces reviewed

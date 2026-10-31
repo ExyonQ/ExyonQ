@@ -12,7 +12,7 @@ QUEJAS_OLS §2.7 / comparative reports: ExyonQ FPC leaves no client-visible trac
 ## Decision
 
 | Outcome | Headers | Where |
-|---------|---------|-------|
+| --- | --- | --- |
 | L1 HIT | `X-Cache: hit` | `fpc_lookup::served_entry_to_response` |
 | Eligible MISS (origin fill) | `X-Cache: miss` | `static_dispatch_fpc_fill` / `fastcgi_dispatch_fpc_fill` |
 | FPC enabled but skipped | `X-Cache: bypass` + `X-Cache-Reason: <token>` | gate `Bypass` → handler `maybe_apply_bypass` |

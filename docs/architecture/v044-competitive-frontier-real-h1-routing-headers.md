@@ -7,7 +7,7 @@
 ## Owner-frozen architecture (inherited)
 
 | Decision | Value |
-|----------|-------|
+| --- | --- |
 | Process model | `HYBRID` — Tokio control + separate OS process dataplane |
 | Dataplane runtime | std threads + mio (no Tokio) |
 | Competitive H1 accept | dataplane only |

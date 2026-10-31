@@ -30,7 +30,7 @@ La meta no es copiar la implementación, los MPM ni cada módulo histórico de A
 Para ExyonQ, el objetivo se divide en tres niveles:
 
 | Nivel | Definición | Declaración permitida |
-|---|---|---|
+| --- | --- | --- |
 | **A — Sustitución web PHP** | Sitios estáticos, virtual hosts, TLS, PHP-FPM, redirecciones y reescrituras habituales | “Alternativa para sitios PHP y contenido estático cubiertos” |
 | **B — Sustitución de aplicación web** | Añade auth, proxy, WebSocket, balanceo, límites, observabilidad y operación | “Alternativa a Apache para el catálogo de aplicaciones web definido” |
 | **C — Compatibilidad Apache V1** | Todo el catálogo V1 se migra sin pérdida semántica no declarada; lo no soportado se rechaza inequívocamente | “Compatibilidad Apache V1 verificada” |
@@ -219,7 +219,7 @@ Apache permite configuración por directorio. Es una razón frecuente por la que
 ExyonQ debe ofrecer dos caminos:
 
 | Modo | Comportamiento | Prioridad |
-|---|---|---|
+| --- | --- | --- |
 | **Migración recomendada** | Importar `.htaccess` hacia configuración central, mostrar diferencias y rechazos | P0 |
 | **Compatibilidad controlada** | Leer reglas por directorio solo en vhosts habilitados y con cache/invalidador seguro | P2 |
 
@@ -242,7 +242,7 @@ El importador es parte esencial de la sustitución. Debe aceptar un conjunto exp
 ### 6.1 Clasificación obligatoria de directivas
 
 | Estado | Significado |
-|---|---|
+| --- | --- |
 | **SUPPORTED_EXACT** | Comportamiento equivalente dentro del contrato |
 | **SUPPORTED_DECLARED_DIFFERENCE** | Diferencia conocida, visible y aceptada por el operador |
 | **MIGRATED_TO_EXYONQ_CONSTRUCT** | Se convierte a una construcción propia equivalente |
@@ -320,7 +320,7 @@ HTTP/2 completo, HTTP/3 si está justificado por evidencia, y superficie de exte
 Toda funcionalidad Apache-compat debe aportar pruebas reales que preserven el contrato existente de ExyonQ:
 
 | Área | Casos mínimos |
-|---|---|
+| --- | --- |
 | Static | GET/HEAD, rangos si soportados, binarios, grandes, caché, traversal, symlinks, FIFO/sockets y TOCTOU |
 | Rewrite | reglas, condiciones, captures, loops, query string, redirects y precedencia |
 | TLS | SNI, múltiples certificados, handshake inválido, reload, HTTP→HTTPS y mTLS si aplica |

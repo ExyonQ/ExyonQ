@@ -20,7 +20,7 @@ Evidence-accounting seal: [v044-static-p8rbr-evidence-accounting-documentation-i
 ## Authority runs
 
 | Arch | RUN_ID | Host | Terminal |
-|------|--------|------|----------|
+| --- | --- | --- | --- |
 | amd64 | `20260902T080000Z` | Netcup native | `TERMINAL_REORACLE_RUN=PASS` (`remote_run.log` ≡ `RESULTS.env`) |
 | arm64 | `20260902T080000Z-arm64` | Oracle native | `TERMINAL_REORACLE_RUN=PASS` (`remote_run.log` ≡ `RESULTS.env`) |
 
@@ -49,7 +49,7 @@ CLEAN_GIT_REPRODUCIBILITY = NO
 ## Runtime oracles (authoritative artifacts)
 
 | Claim | Arch | Raw artifact | Observed | Final | Qualification |
-|-------|------|--------------|----------|-------|---------------|
+| --- | --- | --- | --- | --- | --- |
 | Static small/binary/large hash | AMD64/ARM64 | `RESULTS.env` + body SHA files | PASS | PASS | per-run docroot |
 | HEAD body bytes | both | `RESULTS.env` | PASS | PASS | |
 | FIFO matrix (no-writer…races) | both | `RESULTS.env` / FIFO/* | PASS | PASS | causal path `FIFO_PATH_A` |
@@ -64,7 +64,7 @@ CLEAN_GIT_REPRODUCIBILITY = NO
 ### Sendfile / EAGAIN / partial (payload SHA)
 
 | Arch | Sendfile calls | Length | Payload SHA256 |
-|------|----------------|--------|----------------|
+| --- | --- | --- | --- |
 | AMD64 | 2 | 2097152 | `4e2ae58a344bd6103798f604750486fecf1fe53857f59b2face919b7901cab73` |
 | ARM64 | 2 | 2097152 | `c608832cb398dc7e4cc2028bbba7c8a4616a7e668788bba6ec794c9834393f91` |
 
@@ -82,7 +82,7 @@ Raw samples: `RESOURCES/series.txt` (both arches). Units:
 - **THREADS** = `/proc/$DP_PID/status` `Threads`
 
 | Series | AMD64 | ARM64 | Classification |
-|--------|-------|-------|----------------|
+| --- | --- | --- | --- |
 | FD | `12,12,12,12,12,12,12,12` | `12,12,12,12,12,12,12,12` | CAPTURED |
 | RSS (KiB) | `3440,3540,3540,3540,3540,3540,3540,3540` | `2880,3124,3124,3124,3124,3124,3124,3124` | CAPTURED |
 | THREADS | `8,8,8,8,8,8,8,8` | `8,8,8,8,8,8,8,8` | CAPTURED |

@@ -17,7 +17,7 @@ Phase-4 fail-closed: non-blocking trailing-byte probe can race with peer writes;
 ## Ownership / mutability
 
 | Object | Owner | Mutability |
-|--------|-------|------------|
+| --- | --- | --- |
 | Idle map | Shard-local `UpstreamPool` | `&mut` on shard thread only |
 | TcpStream | Conn → pool or drop | move-only; no `Arc<Mutex<TcpStream>>` |
 | `reuse_ok` | Computed at header parse | Currently ignored at finish |
@@ -49,7 +49,7 @@ Shard-local only; no cross-shard sharing. No new global locks.
 ## Alternatives
 
 | ID | Approach | Pros | Cons |
-|----|----------|------|------|
+| --- | --- | --- | --- |
 | **A** | Restore direct `put` after complete known-length relay | Minimal diff; matches Phase-2 shape | Must solve trailing-byte race |
 | **B** | RAII lease: drop returns only if `CleanComplete` typestate | Harder to forget put; explicit states | More types; careful cancel paths |
 | **C** | State-machine disposition enum on Conn | Clear auditability | Larger shard refactor |

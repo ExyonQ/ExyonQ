@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.4.13
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.4.13 |
 | **Commit** | `886b1cadeb8737856d014cf105217bb49512b049` |
 | **Date** | 2026-10-14 |
@@ -18,7 +18,7 @@ Nightly fuzz, Miri, and an official benchmark were not run for this cut.
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | not run on this commit | Tag workflow runs after publish |
 | Security (`security.yml`) | host `cargo audit` | Required clean before tag |
 | Nightly fuzz | skipped | Not run for this cut |
@@ -37,7 +37,7 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | WP installer CSS/JS → php-fpm 403 | high (product usability) | Htaccess front-controller serves existing non-PHP as static; FastCGI dispatch skips non-PHP script names |
 | RUSTSEC-2026-0346 (rustls 0.23.45 Debug secrets) | medium | Bump workspace `rustls` to **0.23.46** (also clears 0347–0349 Low) |
 

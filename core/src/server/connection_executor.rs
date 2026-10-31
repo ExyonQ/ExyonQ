@@ -227,10 +227,11 @@ impl CoreConnectionExecutor {
         // - while structural reload is in progress, always load ServerState (LA-CAP067-R3-001)
         // - re-sample published flag after reload_in_progress so a concurrent WAF-enable
         //   cannot complete between the two loads and skip inspect (LA-CAP067-R3-002)
-        if !reload::waf_wire_inspection_active_published() {
-            if !reload::reload_in_progress() && !reload::waf_wire_inspection_active_published() {
-                return None;
-            }
+        if !reload::waf_wire_inspection_active_published()
+            && !reload::reload_in_progress()
+            && !reload::waf_wire_inspection_active_published()
+        {
+            return None;
         }
         let state = reload::read_state(&self.shared);
         // Cap015: when WAF is active this still runs on every keepalive request.

@@ -30,7 +30,7 @@ Out of scope (unchanged): cluster/mesh, ExyApp, ACME complete, `.exy` parser, HT
 ## C0–C6 rollup
 
 | Gate | Verdict | Evidence |
-|------|---------|----------|
+| --- | --- | --- |
 | **C0** Canonical state | **CLOSED** (historical) | plan + tracker |
 | **C1** Release gate (v0.3.3 era) | **SUPERSEDED** by public cuts through **v0.4.11** | GitHub release + GHCR |
 | **C2** FastCGI production-grade | **ACCEPT (host)** | FCGI lib **64/64**; policy [`fcgi-saturation-policy-v1.md`](fcgi-saturation-policy-v1.md); dual-Linux fcgi E2E **PASS** |
@@ -42,7 +42,7 @@ Out of scope (unchanged): cluster/mesh, ExyApp, ACME complete, `.exy` parser, HT
 ## Dependency bump (authorized)
 
 | Package | From | To |
-|---------|------|-----|
+| --- | --- | --- |
 | wasmtime (workspace pin) | `=46.0.2` | `=49.0.2` |
 | wat (exyonq-wasm-host) | `1` / 1.254.0 | `=1.260.0` |
 | h2 | 0.4.15 | 0.4.20 |
@@ -59,14 +59,14 @@ EVIDENCE = .exyonq-local/tmp/phase1-e2e-20261012T122123Z/
 ```
 
 | Arch | static | proxy | fcgi | http2 | tls |
-|------|--------|-------|------|-------|-----|
+| --- | --- | --- | --- | --- | --- |
 | amd64 | PASS | PASS | PASS | PASS | PASS |
 | arm64 | PASS | PASS | PASS | PASS | PASS |
 
 ## Soaks (optional, executed)
 
 | Soak | Run ID | Duration | amd64 | arm64 |
-|------|--------|----------|-------|-------|
+| --- | --- | --- | --- | --- |
 | p1.1 correctness/stability | `p1-1-soak-wasm49-20261012T131801Z` | 180s | **PASS** | **PASS** |
 | p1.3a proxy/TLS/H2 | `p13a-soak-wasm49-20261012T133554Z` | 180s + 15s warmup | **FAIL** (PROXY_DRAIN; 58 PASS / 11 FAIL gates) | **FAIL** (same PROXY_DRAIN pattern) |
 | p1.2 wordpress / p1.3b http3 | — | — | **not run** this session | — |
@@ -97,7 +97,7 @@ R6_STATUS = NOT_STARTED
 ## Sign-off
 
 | Role | Status |
-|------|--------|
+| --- | --- |
 | Dual-Linux E2E gates | **ACCEPT** |
 | cargo-audit (lab lock) | **ACCEPT** |
 | p1.1 soak | **ACCEPT** |

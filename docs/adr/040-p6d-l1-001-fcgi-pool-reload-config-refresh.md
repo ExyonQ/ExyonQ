@@ -84,7 +84,7 @@ take/put:
 ## ALTERNATIVES
 
 | ID | Design | Verdict |
-|----|--------|---------|
+| --- | --- | --- |
 | A | Mutate config in place only | **INSUFFICIENT alone** — misses immediate idle reconcile on TTL/max shrink |
 | B | Replace entire `PoolIdle` on change | ACCEPTABLE fallback; drops reusable idle on any change; heavier than needed |
 | C | Version pools by gen/config identity | **REJECT** — new keying pattern; map growth risk |
@@ -103,7 +103,7 @@ FALLBACK_IF_D_FAILS_PROOF = B
 ## OWNERSHIP
 
 | Object | Owner | Notes |
-|--------|-------|-------|
+| --- | --- | --- |
 | `FcgiPoolMap` | Shard thread only (`&mut`) | No Arc/Mutex; no cross-thread share |
 | `PoolIdle` policy fields | Updated only via `ensure_pool` from presented `CompiledFcgiPool` | SSOT application point |
 | Idle streams | `PoolIdle.idle` until take | Exclusive |

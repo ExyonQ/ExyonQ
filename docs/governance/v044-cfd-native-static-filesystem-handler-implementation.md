@@ -22,7 +22,7 @@ Implemented **Accept A** from ADR-044: sync CFD-native `BackendKind::Static` wit
 ## Product surfaces
 
 | Surface | Path |
-|---------|------|
+| --- | --- |
 | IR / CFDRT005 | `crates/exyonq-cfd-gen/src/route_table.rs` |
 | Control publish text | `crates/exyonq-cfd-control/src/project.rs` |
 | Open/containment/MIME/IO | `crates/exyonq-cfd-dataplane/src/static_serve.rs` |
@@ -76,7 +76,7 @@ Binary: `b43781b1fb06a2c003c7be9b6ee1095b19483af553fb17e88a4be4a5d019b0ce` (linu
 ## Specialist audits (implementation HEAD)
 
 | Agent | Verdict |
-|-------|---------|
+| --- | --- |
 | Vertex | PASS |
 | Security | CONDITIONAL (TOCTOU residual; MUST_FIX=0) |
 | Research | CONDITIONAL (primary sendfile proven; fallback/EAGAIN not runtime-proven) |

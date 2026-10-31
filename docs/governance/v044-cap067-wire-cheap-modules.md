@@ -22,7 +22,7 @@ even for AE-idle wrk (no Accept-Encoding).
 **Decision (early gate only):**
 
 | Predicate | Behavior |
-|-----------|----------|
+| --- | --- |
 | `compression_configured()` | IR `filter_chain.compression` |
 | `hyper_required_for_modules()` | always false for compression (no headerless force) |
 | `modules_require_hyper_for_request_head(head)` | configured ∧ AE prefers gzip/br/deflate/zstd (q>0) |
@@ -46,7 +46,7 @@ Clients that need compression must send AE on the first request (Hyper from admi
 ## Causal (Netcup DEV 20260923)
 
 | Config | P4 `/api/` med RPS |
-|--------|--------------------:|
+| --- | ---: |
 | modules OFF | ~122k |
 | modules ON + compression=true (old all-TCP Hyper) | ~45–56k |
 | modules ON + compression=false (wire-cheap) | **~126k** |
@@ -56,14 +56,14 @@ Clients that need compression must send AE on the first request (Hyper from admi
 AE-gate causal (`p10p12-ae-gate-20260923T145238Z`, DEV≠official):
 
 | corridor | exyonq med | ols med |
-|----------|----------:|--------:|
+| --- | ---: | ---: |
 | AE-idle (compression ON) | ~136k | ~123k |
 | AE:gzip | ~56k | — |
 
 Final wire-cheap matrix (`p10p12-wire-cheap-final-20260923T135804Z`, DEV≠official):
 
 | sc | exyonq | ols | vs ols |
-|----|-------:|----:|-------:|
+| --- | ---: | ---: | ---: |
 | P4 | 126115 | 116511 | +8.2% |
 | P10 | 122542 | 117681 | +4.1% |
 | P12 | 115353 | 114570 | +0.7% |
@@ -79,7 +79,7 @@ AE:gzip corridor measured as Hyper-pipeline (DEV≠official).
 Post P5-handoff + metrics-scrape pipeline fix (`p10p12-modules-epoll-on-20260923T153150Z`, DEV≠official):
 
 | sc | exyonq med | ols med | vs ols |
-|----|----------:|--------:|-------:|
+| --- | ---: | ---: | ---: |
 | P4 | 135540 | 127292 | +6.5% |
 | P10 | 132845 | 126634 | +4.9% |
 | P12 | 130674 | 123223 | +6.0% |

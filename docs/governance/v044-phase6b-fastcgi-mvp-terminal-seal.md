@@ -117,7 +117,7 @@ Seal Netcup harness used TCP `127.0.0.1` FPM — peercred N/A for that transport
 ## 7. P3 ledger (four items)
 
 | ID | Description | Classification | Blocks P6C | Blocks shipping |
-|----|-------------|----------------|------------|-----------------|
+| --- | --- | --- | --- | --- |
 | P6B-P3-01 | KEEP_CONN causal reuse unmeasured | **CLOSED_BY_CURRENT_EVIDENCE** (Netcup SYN) | NO | NO (for causal claim) |
 | P6B-P3-02 | SG-FCGI-06 no peercred | OPEN_NONBLOCKING_PHASE6 / QUALIFIED | NO | YES if multi-tenant Unix |
 | P6B-P3-03 | FCGI-RACE-01 checkout→BEGIN | OPEN_NONBLOCKING_PHASE6 → DEFERRED_TO_P6C | NO | NO for MVP |

@@ -38,7 +38,7 @@ This A/B sets `EPOLL_POOL_THREADS` explicitly.
 ## Arms
 
 | Arm | WT | AW | EPOLL_POOL | Intent |
-|-----|---:|---:|-----------:|--------|
+| --- | ---: | ---: | ---: | --- |
 | A0 | 4 | 4 | 4 | Canonical seal geometry |
 | A1 | 8 | 8 | 8 | Full scale (Tokio+accept+Cap067) |
 | A2 | 6 | 6 | 6 | Intermediate |
@@ -48,7 +48,7 @@ This A/B sets `EPOLL_POOL_THREADS` explicitly.
 ## A/B-A results (P1)
 
 | Arm | Median RPS | CV | CPU% med | core-ms/req | P50 | P95 | P99 | RSS MiB |
-|-----|-----------:|---:|---------:|------------:|----:|----:|----:|--------:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | A0 | 139350 | 0.083 | 221.5 | 0.1272 | 0.83 | 1.32 | 1.68 | 10.2 |
 | **A1** | **153789** | **0.058** | 254.5 | 0.1324 | 0.89 | **1.21** | **1.51** | 11.8 |
 | A2 | 150751 | 0.069 | 245.4 | 0.1302 | 0.81 | 1.22 | 1.57 | 12.1 |
@@ -58,7 +58,7 @@ This A/B sets `EPOLL_POOL_THREADS` explicitly.
 ### Deltas vs A0
 
 | Arm | RPS | core-ms | P50 | P95 | P99 |
-|-----|----:|--------:|----:|----:|----:|
+| --- | ---: | ---: | ---: | ---: | ---: |
 | **A1** | **+10.36%** | +4.08% | +7.23% | **−8.33%** | **−10.12%** |
 | A2 | +8.18% | +2.41% | −2.41% | −7.58% | −6.55% |
 | A_TOKIO | −4.28% | +10.73% | +3.61% | +3.03% | +2.38% |
@@ -83,7 +83,7 @@ Host→container IP wall times showed ~100 ms on every new TCP connect (artifact
 In-docker curl (bench-runner):
 
 | Step | time_starttransfer |
-|------|-------------------:|
+| --- | ---: |
 | close (varies) | ~1.6–90 ms |
 | ka1 (first on conn) | ~94 ms |
 | ka2 / ka3 (reuse) | **~0.15–0.18 ms** |
@@ -119,7 +119,7 @@ FSM_STAGE_DEPTH_COST = NOT_ISOLATED_AS_DOMINANT_VS_PARALLELISM
 ## P3 short sanity (relative only; not full rebaseline)
 
 | Arm | RPS | P50 | P95 | P99 |
-|-----|----:|----:|----:|----:|
+| --- | ---: | ---: | ---: | ---: |
 | A0 | 5640 | 18.55 | 26.85 | 37.45 |
 | A1 | 6209 | 20.63 | 28.66 | 37.89 |
 

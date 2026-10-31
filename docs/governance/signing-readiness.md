@@ -25,7 +25,7 @@ Canonical public trust material and policy:
 ## Signature types (explicit)
 
 | Surface | Type | Authenticated object | Public material |
-|---------|------|----------------------|-----------------|
+| --- | --- | --- | --- |
 | Git tag | **SSH** annotated tag signing | Tag object → commit | `exyonq-release-tag-ssh-v1.pub`, `exyonq-release-tag-signers` |
 | Artifacts / checksums | **Cosign blob** (`sign-blob`) | Root object `SHA256SUMS.txt` | `exyonq-cosign.pub` |
 | OCI | **Cosign OCI** digest signing | Image digest `@sha256:…` only (mutable tags forbidden) | `exyonq-cosign.pub` |
@@ -42,7 +42,7 @@ V043_PRODUCTION_SIGNING = PASS
 ## Verification tooling (must exist; exercised without production keys)
 
 | Script | Role |
-|--------|------|
+| --- | --- |
 | `scripts/release/verify-tag-signature.sh` | SSH tag verify |
 | `scripts/release/verify-checksums.sh` | Checksum integrity |
 | `scripts/release/verify-cosign-blob.sh` | Cosign blob verify |
@@ -56,7 +56,7 @@ Cursor agents must not access private signing media (`EXYONQ-SIGNING-A` volume p
 ## Readiness vs execution
 
 | Check | Status |
-|-------|--------|
+| --- | --- |
 | Design + public trust files present | YES |
 | Verify scripts present | YES |
 | Ephemeral selftests allowed | YES (marked non-production) |

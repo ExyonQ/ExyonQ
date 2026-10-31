@@ -16,7 +16,7 @@ Performance report: [`../performance/v044-pxdp-performance-reality-check.md`](..
 ## Authority
 
 | Item | Value |
-|------|-------|
+| --- | --- |
 | Run ID | `20260826-223445` |
 | Evidence | `.exyonq-local/evidence/pxdp-performance-reality/20260826-223445/` |
 | P5 terminal HEAD | `0bc2b973e5ff62b2316fbc7c3f002d673c65d791` |
@@ -27,7 +27,7 @@ Performance report: [`../performance/v044-pxdp-performance-reality-check.md`](..
 ## Integrity
 
 | Gate | Status |
-|------|--------|
+| --- | --- |
 | BENCHMARK_INTEGRITY | PASS (no product semantic shortcuts; WAF off; no modules) |
 | DATA_PROVENANCE | PASS (real execution; HAProxy history not fabricated) |
 | CORRECTNESS | PASS (200 + 1024 B + body hash parity all products) |
@@ -65,7 +65,7 @@ MARKET_READINESS = NOT_READY
 ## Five states (separate)
 
 | State | Verdict |
-|-------|---------|
+| --- | --- |
 | Architecture correctness (P5) | CLOSED_QUALIFIED |
 | PXDP performance value (P4) | **NOT demonstrated** |
 | P4 competitive position | **BEHIND** |

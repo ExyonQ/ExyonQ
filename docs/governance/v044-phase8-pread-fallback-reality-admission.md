@@ -21,7 +21,7 @@ Prompt required candidate HEAD exactly:
 Observed on `local/phase8-remainder-source-cleanliness`:
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | Actual HEAD | `82ac4ec2c404158aa5c369811d601636c1cb6094` |
 | Actual tree | `d956cda3175d424f775e443a8852e7da3c2caeb1` |
 | Clean | YES |

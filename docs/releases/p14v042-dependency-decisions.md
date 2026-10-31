@@ -14,7 +14,7 @@ Execution: `docs/releases/p14v042-execution.md`
 ## Decisions
 
 | Dependency | Before | After | Status | Reason |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | rustls-pemfile | 2.2.0 direct | **removed** | `REMOVE_UNUSED` / `UPDATED_V042` | OPTION_A via `rustls-pki-types` PEM; PKCS#8-only preserved; RUSTSEC-2025-0134 gone from lock |
 | serde_json | 1.0.150 | **1.0.151** | `UPDATED_V042` | admitted patch |
 | redis | 0.27.6 | **0.32.7** | `UPDATED_V042` | lowest maintained line with `socket2 ^0.6`; not 1.x |

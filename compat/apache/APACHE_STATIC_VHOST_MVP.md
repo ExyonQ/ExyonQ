@@ -8,7 +8,7 @@ Maps Apache constructs onto **existing** ExyonQ IR/runtime equivalents. Fail-clo
 ## Mapped equivalents (product already exists)
 
 | Apache | ExyonQ IR |
-|--------|-----------|
+| --- | --- |
 | `Listen` / `<VirtualHost *:port>` | `[[server]].listen` |
 | `ServerName` / `ServerAlias` | `server_name` |
 | `DocumentRoot` + `DirectoryIndex` | `[[route]]` static `root` / `index` |
@@ -22,7 +22,7 @@ Maps Apache constructs onto **existing** ExyonQ IR/runtime equivalents. Fail-clo
 ## Still rejected (no product equivalent yet)
 
 | Apache | Why |
-|--------|-----|
+| --- | --- |
 | `ErrorDocument` URL/texto | ADR-050 maps path form only (`error_pages`); URL/text still rejected |
 | `AuthType` / `AuthUserFile` / `Require` | Auth module absent |
 | `ProxyPassReverse` | No response `Location` rewrite |

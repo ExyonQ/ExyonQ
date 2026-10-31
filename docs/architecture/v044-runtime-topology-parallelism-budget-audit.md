@@ -24,7 +24,7 @@ WG-B “Block B” (+8 `tokio-rt-worker` names) is **not** a second Tokio runtim
 ## Runtime ledger
 
 | ID | Kind | Constructor | Workers | Control |
-|----|------|-------------|---------|---------|
+| --- | --- | --- | --- | --- |
 | **RT-01** | Tokio multi_thread | `cli/exyonq/src/main.rs` Builder | `EXYONQ_WORKER_THREADS` / `default_runtime_parallelism()` | env |
 | **POOL-CAP067** | OS threads | `epoll_worker::start_keepalive_pool` | follows accept / `EXYONQ_EPOLL_POOL_THREADS` | env |
 | notify-rs | OS thread | `notify` watcher | 1 | n/a |
@@ -36,7 +36,7 @@ DB5 contract: sole production `Builder::new_multi_thread` is CLI. No production 
 ## Block A / Block B
 
 | Block | Owner | Formula | Proof |
-|-------|-------|---------|-------|
+| --- | --- | --- | --- |
 | A | RT-01 | `EXYONQ_WORKER_THREADS` | TID cohort size; futex park stacks |
 | B | Cap067 OS pool | `resolve_epoll_pool_threads(accept)` (=8 on cpuset 0–7 when unset) | perf → `start_keepalive_pool` |
 
@@ -54,7 +54,7 @@ client → RT-01 accept_loop task → Hyper/wire → ProxyConnection → Hyper u
 ## Accept / Cap067 / Conn pool
 
 | Component | Model | P4 default |
-|-----------|-------|------------|
+| --- | --- | --- |
 | Accept | **Tokio tasks** on RT-01 (`tokio::spawn` × `resolve_accept_workers()`) | 8 tasks; **not** OS threads; **does not** create a Runtime |
 | Cap067 | OS epoll workers | Active (prepared + lazy-started); 8 OS threads |
 | Conn pool | OS threads (`EXYONQ_CONN_POOL_SIZE` default 64) | **Inactive** (`sync_accept=false`) |
@@ -68,7 +68,7 @@ client → RT-01 accept_loop task → Hyper/wire → ProxyConnection → Hyper u
 ## Host projections (defaults, MAX=16)
 
 | CPUs | Tokio | Accept tasks | Cap067 OS | ≈ OS threads (main+Tokio+Cap067+notify) |
-|-----:|------:|-------------:|----------:|----------------------------------------:|
+| ---: | ---: | ---: | ---: | ---: |
 | 2 | 2 | 2 | 2 | 6 |
 | 4 | 4 | 4 | 4 | 10 |
 | 8 | 8 | 8 | 8 | 18 |

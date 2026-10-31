@@ -26,7 +26,7 @@ compilers, linters, coverage and CI do not catch it.
 The guard targets sixteen recurring failure classes:
 
 | # | Failure class |
-|---|---|
+| --- | --- |
 | 1 | claim inflation |
 | 2 | evidence-scope laundering |
 | 3 | execution-class inflation |
@@ -60,7 +60,7 @@ source state, and the non-equivalences `HYPOTHESIS != ROOT_CAUSE`,
 ## Components
 
 | Component | Location | Role |
-|---|---|---|
+| --- | --- | --- |
 | Always-active rule | Cursor rule `claim-evidence-integrity` (local IDE config, not versioned) | Requires a claim/evidence block before any material status |
 | Readonly auditor | Cursor agent `epistemic-contract-auditor` (local IDE config, not versioned) | Independently attempts to falsify material claims |
 | Deterministic checker | `scripts/integrity/claim-evidence-check.sh` | Mechanical verification of structured blocks |
@@ -193,7 +193,7 @@ bash scripts/integrity/claim-evidence-check.sh --check <file-or-directory>
 ```
 
 | Exit | Meaning |
-|---|---|
+| --- | --- |
 | 0 | `CEI_CHECK=PASS` — no mechanically provable mismatch |
 | 1 | `CEI_CHECK=FAIL` — proven claim/evidence mismatch |
 | 2 | `CHECKER_ERROR` — unparseable input or engine failure |

@@ -19,7 +19,7 @@ Close the claim/evidence gap left by URR-A package-scoped cargo gates, and measu
 ## Workspace reseal (real commands)
 
 | Gate | Command / scope | Result | Classification |
-|------|-----------------|--------|----------------|
+| --- | --- | --- | --- |
 | fmt | `cargo fmt --all -- --check` (after mechanical rustfmt on URR CFD files) | PASS | mechanical repair in URR-A files only |
 | check | `cargo check --workspace --all-targets` | PASS | — |
 | feature matrix | default workspace + `http3-provider-quiche` package runs (canonical) | PASS | scope = supported release matrix |
@@ -50,7 +50,7 @@ RUN_ID = seal-20260830T014442Z
 ```
 
 | Metric (median) | PRE | POST | Delta |
-|-----------------|-----|------|-------|
+| --- | --- | --- | --- |
 | CPU µs/req | 11.987579 | 12.152931 | −1.38% (higher CPU = worse) |
 | RPS | 148878.75 | 153921.59 | +3.39% |
 | P95 µs | 1250 | 1270 | −1.6% |

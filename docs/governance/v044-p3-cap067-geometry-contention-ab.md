@@ -29,21 +29,21 @@ might cut lock/memcg contention and improve P3 RPS / core-ms.
 ## Arms (same binary + clamp)
 
 | Arm | Geometry |
-|-----|----------|
+| --- | --- |
 | A | ACCEPT/WORKER/EPOLL_POOL = **8** |
 | B | ACCEPT/WORKER/EPOLL_POOL = **4** |
 
 ## Results (ExyonQ medians)
 
 | Arm | P1 RPS | P1 p99 | P2 RPS | P2 p99 | P3 RPS | P3 p99 | P3 core-ms |
-|-----|--------|--------|--------|--------|--------|--------|------------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | A geom8 | 149230 | 1.44 | 89995 | 2.70 | **6109** | 32.46 | **0.412** |
 | B geom4 | 156298 | 1.34 | 82270 | 2.58 | 6035 | 33.81 | 0.430 |
 
 ### Δ B vs A
 
 | Profile | dRPS% | dP99% | dCMS% |
-|---------|-------|-------|-------|
+| --- | --- | --- | --- |
 | P1 | **+4.7%** | −6.9% | −10.2% |
 | P2 | **−8.6%** | −4.4% | −4.1% |
 | P3 | **−1.2%** | +4.2% | **+4.4%** |

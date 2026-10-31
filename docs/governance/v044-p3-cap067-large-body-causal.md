@@ -23,7 +23,7 @@ HARNESS = scripts/remote/v044-p3-cap067-large-body-causal-netcup.sh
 Clean window (no bpf/perf observers), P3 `/site/1m.bin`, c=100 t=2, warm 20s / measure 30s.
 
 | | ExyonQ | NGINX |
-|--|--------|-------|
+| --- | --- | --- |
 | RPS (window) | 5603 | 7104 |
 | user µs/req | **10.6** | 16.4 |
 | system µs/req | **617.3** | 147.1 |
@@ -55,7 +55,7 @@ Do not treat empty bpf maps as “zero sendfile”. Re-run with sendfile-only TP
 Captured top-symbol mass (parser of `--percent-limit 0.4` report):
 
 | Category | ExyonQ | NGINX |
-|----------|--------|-------|
+| --- | --- | --- |
 | SPINLOCK | **13.9%** | 13.7% |
 | MEMCG (`page_counter*`) | **4.5%** | 3.0% |
 | TCP_SKB | 2.3% | **11.7%** |

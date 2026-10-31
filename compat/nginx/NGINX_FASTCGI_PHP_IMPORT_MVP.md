@@ -41,7 +41,7 @@ accepted server blocks.
 Inside each `server`:
 
 | Directive | Rule |
-|-----------|------|
+| --- | --- |
 | `listen` | Required. Single form mappable to `[[server]].listen` (port, `*:port`, `0.0.0.0:port`, `127.0.0.1:port`, IPv4/IPv6 literals). Not `localhost`. |
 | `server_name` | Optional. Literal names only. |
 | `root` | Required. Absolute filesystem path → `fcgi_pool.document_root`. |

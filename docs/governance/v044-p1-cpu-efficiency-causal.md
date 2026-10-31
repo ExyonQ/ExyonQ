@@ -21,7 +21,7 @@ PUBLIC_BENCHMARK_CLAIMS = FORBIDDEN
 ## Headline (reporting capture — authoritative efficiency)
 
 | | ExyonQ | NGINX | OLS |
-|--|--------|-------|-----|
+| --- | --- | --- | --- |
 | RPS | 163858.57 | 148585.55 | 145136.51 |
 | CPU avg % | 413.08 | 280.54 | 189.66 |
 | Req / CPU-core | 39667.51 | 52964.12 | 76524.58 |
@@ -58,7 +58,7 @@ PRODUCT_OPTIMIZATION_AUTHORIZED = NO   # stop for owner
 Cgroup deltas under load (`supplemental/cgroup_user_sys.json`):
 
 | | user µs/req | system µs/req | total µs/req |
-|--|-------------|---------------|--------------|
+| --- | --- | --- | --- |
 | ExyonQ | **8.997** | 17.471 | 26.468 |
 | NGINX | **3.652** | 19.680 | 23.332 |
 | Δ | **+5.345** | **−2.209** | +3.136 |
@@ -76,7 +76,7 @@ OLS `openat ≈ 0` / `close ≈ 0` — keeps the static FD open. ExyonQ (and NGI
 ## Syscall geometry (per successful request)
 
 | syscall | ExyonQ | NGINX | OLS |
-|---------|--------|-------|-----|
+| --- | --- | --- | --- |
 | sendfile | ~1.00 | ~1.00 | (writev body) |
 | open / openat2 | openat2 ~1.00 | open ~1.00 | ~0 |
 | statx / fstat | statx ~1.00 | fstat ~1.00 | ~0 |
@@ -99,7 +99,7 @@ Ctx-switches/migrations: ExyonQ **not** higher than rivals → scheduler topolog
 ## Flame — top userspace product symbols (self %)
 
 | Symbol | self% |
-|--------|------:|
+| --- | ---: |
 | `epoll_sendfile_eligible` | 1.74 |
 | `reload::read_state` | 1.57 |
 | `epoll_session::runtime` (Mutex+Arc clone) | 1.35 |

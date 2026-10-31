@@ -14,7 +14,7 @@ NOTION_RECONCILIATION_REQUIRED = YES
 ## Ledger update (cumulative frontier)
 
 | Phase | Disposition | Notes |
-|-------|-------------|-------|
+| --- | --- | --- |
 | CFD-A foundations | closed | separate-process geometry |
 | CFH2-B Phase2 H1 | YELLOW | single-conn not comparable |
 | PCR-B multi-conn | YELLOW OWNER_REVIEW | RPS/P95/P99 strong; CPU rivals NOT_MEASURED; RSS dataplane-only |

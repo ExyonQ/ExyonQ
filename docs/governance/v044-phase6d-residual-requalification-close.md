@@ -22,7 +22,7 @@ This WIP is **not** a full P6D campaign replay, not FastCGI optimization, not Wo
 ## Historical terminals (preserved)
 
 | Case | Status |
-|------|--------|
+| --- | --- |
 | P6D-C | `COMPLETE_WITH_PRODUCT_REPAIR_REQUIRED` — PRESERVED |
 | P6DR-B | `P6D_L1_001_REPAIR_CLOSED_WITH_NONBLOCKING_QUALIFICATIONS` — PRESERVED |
 
@@ -46,7 +46,7 @@ Isolated clean Method B was not required for **qualified** close; Method B would
 hard under ambient ownership and would not include untracked CFD without copy.
 
 | Gate | Lab (ambient dirty) | Netcup `/root/exyonq-p6d-fcgi` | Classification |
-|------|---------------------|-------------------------------|----------------|
+| --- | --- | --- | --- |
 | CFD package fmt/check/clippy/test | PASS | N/A (binary identity) | Repair-surface attributable |
 | `cargo fmt --check` workspace | PASS | — | Ambient Method A_PARTIAL |
 | `cargo check --workspace --all-targets` | PASS | FAIL exit 101 (`sendfile_fsm` private) | Netcup FAIL = PRE_EXISTING; REPAIR_CAUSED=NO |
@@ -74,7 +74,7 @@ SOURCE_PROVENANCE = PASS_BOUNDED
 ## Materiality of residual `NOT_MEASURED` runtime fields
 
 | Field | REQUIRED_FOR_P6D_CLOSE | Classification | Value |
-|-------|------------------------|----------------|-------|
+| --- | --- | --- | --- |
 | DIRTY_CONNECTION_REUSE | NO | ALREADY_PROVEN_P6C + NONBLOCKING PHP-FPM delayed-trailing | NOT_MEASURED |
 | DUPLICATE_PHP_EXECUTION | NO | NONBLOCKING_CARRY_FORWARD | NOT_MEASURED |
 | GENERATION_INVALID_REUSE | NO | ALREADY_PROVEN_P6C + NONBLOCKING stress counter | NOT_MEASURED |
@@ -90,7 +90,7 @@ BINARY = 3eb7a478…
 ```
 
 | Claim | REUSE_VALIDITY |
-|-------|----------------|
+| --- | --- |
 | S8 TTL eviction + KEEP_CONN 500/1 | VALID |
 | S9 churn/contam/FD (BOUNDED occupancy) | VALID (BOUNDED) |
 | FD / RSS / THREAD stability | VALID |
@@ -127,7 +127,7 @@ CASE = P6DRC-B
 ## Audits
 
 | Audit | Verdict |
-|-------|---------|
+| --- | --- |
 | Architecture (Vertex) | PASS |
 | Security | PASS_WITH_NONBLOCKING |
 | GRC | PASS (after seal artifacts) |

@@ -13,7 +13,7 @@ NOTION_RECONCILIATION_REQUIRED = YES
 ## Ledger update
 
 | Phase | Disposition | Notes |
-|-------|-------------|-------|
+| --- | --- | --- |
 | CFD-A foundations | closed | separate-process geometry |
 | CFH2-B Phase2 H1 | YELLOW | single-conn not comparable |
 | PCR-B multi-conn | YELLOW OWNER_REVIEW | RPS+25.7% vs OLS; CPU rivals NOT_MEASURED (closed by CM-B) |

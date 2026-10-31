@@ -18,7 +18,7 @@ When the pool has no idle connection and cannot open another under
 ## Caps
 
 | Cap | Role |
-|-----|------|
+| --- | --- |
 | `max_concurrency` | Concurrent in-flight FastCGI requests admitted by the pool |
 | `max_connections` | Open backend sockets retained/opened by the pool (defaults with concurrency when unset) |
 | `checkout_timeout_ms` | Bounded waiter budget before `PoolBusy` |

@@ -42,7 +42,7 @@ SEALED_TERMINAL_P6G_A = IMMUTABLE
 ## Environment
 
 | Component | Value |
-|-----------|-------|
+| --- | --- |
 | Host | netcup-bench (x86_64) |
 | Kernel | 6.8.0-134-generic |
 | Rust | 1.97.1 |
@@ -63,7 +63,7 @@ FCGI_MAX_CONN = 1_ONLY
 ## Invalid runs (disclosed)
 
 | RUN_ID | Disclosure |
-|--------|------------|
+| --- | --- |
 | 20260831T215544Z | INVALID_HARNESS_ROUTE_USE_DUPLICATE |
 | 20260831T215703Z | INVALID_ENV_DB_NOT_APPLIED |
 | 20260831T215743Z | INVALID_FPM_NO_INPUT_FILE_TMP_PERMS |

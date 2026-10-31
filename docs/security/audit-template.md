@@ -1,7 +1,7 @@
 # ExyonQ security audit — vX.Y.Z
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | X.Y.Z |
 | **Commit** | `<full sha>` |
 | **Date** | YYYY-MM-DD |
@@ -14,7 +14,7 @@ One paragraph: overall posture, blockers, waivers count.
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | pass / fail | |
 | Security (`security.yml`) | pass / fail | cargo audit, deny, security tests |
 | Nightly fuzz | pass / fail / skipped | last run date |
@@ -45,13 +45,13 @@ Use format from [`review-checklist.md`](review-checklist.md). Write `None.` when
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | | | |
 
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | | | | | |
 
 ## Surfaces reviewed

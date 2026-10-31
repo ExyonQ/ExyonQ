@@ -14,7 +14,7 @@ aborts startup/reload; the previous generation remains active.
 ## `[waf]` root
 
 | Field | Type | Default | Allowed | Runtime effect |
-|-------|------|---------|---------|----------------|
+| --- | --- | --- | --- | --- |
 | `enabled` | bool | `true` | bool | `false` forces detectors off / no-op compile path |
 | `mode` | string | `"monitor"` | `monitor` \| `block` \| `disabled` | Signature enforcement mode (see PRODUCT.md) |
 | `engine` | string | `"native"` | `native` only | Other values rejected |
@@ -25,7 +25,7 @@ aborts startup/reload; the previous generation remains active.
 ### `on_inspection_limit`
 
 | Value | Effect |
-|-------|--------|
+| --- | --- |
 | `allow_uninspected` | Continue without treating truncation as Block |
 | `block` | Emit `EXY-LIMIT-BODY-001` as Block when enforce applies |
 | `log_and_allow` | Emit limit evidence / Log; request may proceed |
@@ -46,7 +46,7 @@ burst = 20
 ```
 
 | Field | Type | Default | Validation | Runtime effect |
-|-------|------|---------|------------|----------------|
+| --- | --- | --- | --- | --- |
 | `mode` | string | `"off"` | `off` \| `rate_limit` \| `challenge` | Abuse gate mode |
 | `requests_per_second` | u32 | `10` | `>= 1` when mode ≠ `off` | Token bucket refill |
 | `burst` | u32 | `20` | `>= 1` when mode ≠ `off` | Token bucket capacity |
@@ -63,7 +63,7 @@ Rate-limit response: HTTP **429** with **`Retry-After`** from
 Repeatable. Duplicate `id` → config reject.
 
 | Field | Type | Default | Notes |
-|-------|------|---------|-------|
+| --- | --- | --- | --- |
 | `id` | string | required | Non-empty; unique across rulesets |
 | `enabled` | bool | `true` | Disabled ruleset rules are skipped |
 | `builtins` | table (optional) | — | Optional detector toggles (see rules.md) |
@@ -75,7 +75,7 @@ When WAF is enabled and no ruleset supplies `builtins`, the engine uses the
 Custom rule fields:
 
 | Field | Type | Validation |
-|-------|------|------------|
+| --- | --- | --- |
 | `id` | string | Non-empty; unique across all rulesets |
 | `enabled` | bool | default `true` |
 | `pattern` | string | Non-empty regex |
@@ -88,7 +88,7 @@ Custom rule fields:
 Repeatable. Scoped signature suppression only.
 
 | Field | Type | Default | Notes |
-|-------|------|---------|-------|
+| --- | --- | --- | --- |
 | `host` | string? | none | Exact host match when set |
 | `path_prefix` | string? | none | Exact path or `prefix + "/" + …` (not `/api` vs `/api2`) |
 | `method` | string? | none | Method match when set |
@@ -127,7 +127,7 @@ rule_ids = ["EXY-XSS-1001"]
 When set (non-empty), env overrides IR at the composition root:
 
 | Env | Effect |
-|-----|--------|
+| --- | --- |
 | `EXYONQ_WAF_MODE` | `monitor` \| `block` \| `disabled` |
 | `EXYONQ_WAF_ENFORCE` | Host reject on signature Block (`1`/`true`/…); ignored unless mode is `block` |
 | `EXYONQ_WAF_ABUSE` | `off` \| `rate_limit` \| `challenge` (**unknown → fail closed**) |

@@ -1,7 +1,7 @@
 # ExyonQ security audit — v0.4.10
 
 | Field | Value |
-|-------|-------|
+| --- | --- |
 | **Version** | 0.4.10 |
 | **Commit** | `822055caa362730ab0e4bc227ee72a0bb90fc1ef` |
 | **Date** | 2026-10-11 |
@@ -18,7 +18,7 @@ Nightly fuzz, Miri, and an official benchmark were not run for this cut.
 ## Release gates
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | CI (`ci.yml`) | not run on this commit | Tag workflow may run after publish |
 | Security (`security.yml`) | inherited fail | `cargo audit` on v0.4.8/v0.4.9 reported RUSTSEC-2026-0325, RUSTSEC-2026-0326, and RUSTSEC-2026-0327 against wasmtime 49.0.1. The pin is unchanged |
 | Nightly fuzz | skipped | Not run for this cut |
@@ -47,13 +47,13 @@ None.
 ## Findings (closed this release)
 
 | ID | Severity | Resolution |
-|----|----------|------------|
+| --- | --- | --- |
 | (none new) | — | Static PHP/dotfile deny and 403 on epoll path were closed in 0.4.9 and remain in this cut |
 
 ## Waivers
 
 | ID | Severity | Reason | Mitigation | Expires |
-|----|----------|--------|------------|---------|
+| --- | --- | --- | --- | --- |
 | | | | | |
 
 ## Surfaces reviewed

@@ -204,12 +204,15 @@ async fn echo_backend_handle(
 ) -> tokio::task::JoinHandle<()> {
     let listener = TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
     tokio::spawn(async move {
+        // JoinSet: aborting this task must also kill accepted connections —
+        // otherwise a pooled keepalive conn can keep serving a "dead" backend.
+        let mut conns = tokio::task::JoinSet::new();
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 return;
             };
             let hits = hits.clone();
-            tokio::spawn(async move {
+            conns.spawn(async move {
                 let mut buf = vec![0u8; 8192];
                 if stream.read(&mut buf).await.unwrap_or(0) == 0 {
                     return;

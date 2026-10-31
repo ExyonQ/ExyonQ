@@ -56,7 +56,7 @@ Literals + `$host` + `$uri` only (`$uri` = path only, no query).
 ### 6. Migrators
 
 | Source | Mapping |
-|--------|---------|
+| --- | --- |
 | nginx `add_header Name Value;` | `always=false` |
 | nginx `add_header Name Value always;` | `always=true` |
 | Apache `Header set Name Value` | `always=true` |

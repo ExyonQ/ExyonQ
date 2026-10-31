@@ -9,7 +9,7 @@ GRC_P1_STARTED = NO
 Levels: `POLICY_ONLY` · `MANUAL` · `AUTOMATED_LOCAL` · `AUTOMATED_CI` · `RELEASE_GATE`
 
 | Control | Policy | Enforcement | Level |
-|---------|--------|-------------|-------|
+| --- | --- | --- | --- |
 | docs/security SoT tracked | SECURITY.md + docs/security/README | `.gitignore` exceptions + `git ls-files` + pre-R5 gate | AUTOMATED_LOCAL + RELEASE_GATE |
 | docs/governance SoT tracked | docs/governance/README | `.gitignore` exceptions + pre-R5 gate | AUTOMATED_LOCAL + RELEASE_GATE |
 | Release audit executable | docs/security/audit-template + checklist | `scripts/verify-release-audit.sh` (+ `release.yml` on tag) | AUTOMATED_LOCAL + RELEASE_GATE |

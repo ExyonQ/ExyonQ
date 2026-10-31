@@ -69,7 +69,7 @@ validated fail-closed:
 Supported suites are exactly the rustls `ring` AEAD set:
 
 | TLS 1.3 | TLS 1.2 |
-|---|---|
+| --- | --- |
 | `TLS13_AES_256_GCM_SHA384` | `TLS_ECDHE_{ECDSA,RSA}_WITH_AES_256_GCM_SHA384` |
 | `TLS13_AES_128_GCM_SHA256` | `TLS_ECDHE_{ECDSA,RSA}_WITH_AES_128_GCM_SHA256` |
 | `TLS13_CHACHA20_POLY1305_SHA256` | `TLS_ECDHE_{ECDSA,RSA}_WITH_CHACHA20_POLY1305_SHA256` |
@@ -155,7 +155,7 @@ dns_propagation_secs = 30
 The hook is run with `sh -c` and these variables:
 
 | Variable | Value |
-|---|---|
+| --- | --- |
 | `EXYONQ_ACME_ACTION` | `present` or `cleanup` |
 | `EXYONQ_ACME_DOMAIN` | bare domain (no `*.`); the record owner is `_acme-challenge.$EXYONQ_ACME_DOMAIN` |
 | `EXYONQ_ACME_TOKEN` | challenge token |

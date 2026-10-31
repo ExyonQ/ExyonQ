@@ -29,7 +29,7 @@ large-body cork OFF (MSG_MORE per step).
 ## Arms (same image)
 
 | Arm | Cork (large body) | Chunk |
-|-----|-------------------|-------|
+| --- | --- | --- |
 | A KEEP | ON | 128 KiB |
 | B | OFF (`EXYONQ_LARGE_BODY_TCP_CORK=0`) | 128 KiB |
 | C diagnostic | OFF | uncapped (1 MiB) |
@@ -37,7 +37,7 @@ large-body cork OFF (MSG_MORE per step).
 ## ExyonQ medians
 
 | Arm | P1 RPS | P1 p99 | P2 RPS | P2 p99 | P3 RPS | P3 p99 | P3 core-ms |
-|-----|--------|--------|--------|--------|--------|--------|------------|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | A | 148243 | 1.56 | 85913 | 4.91 | **5996** | 32.04 | 0.424 |
 | B | 149134 | 1.61 | 93170 | 2.60 | 5996 | 33.32 | 0.395 |
 | C | 146958 | 1.53 | 92010 | 3.02 | **6300** | 31.49 | 0.387 |
@@ -45,7 +45,7 @@ large-body cork OFF (MSG_MORE per step).
 ### Δ vs A
 
 | Arm | P1 dRPS/dP99 | P2 dRPS/dP99 | P3 dRPS/dP99/dCMS |
-|-----|--------------|--------------|-------------------|
+| --- | --- | --- | --- |
 | B | +0.6% / +3.2% | +8.5% / −47% | **−0.0%** / +4.0% / −6.8% |
 | C | −0.9% / −1.9% | +7.1% / −38% | **+5.1%** / −1.7% / −8.7% |
 
@@ -61,7 +61,7 @@ C_P2 = PASS
 ### Competitive residual (P3 vs NGINX, same suite)
 
 | Arm | vs NGINX |
-|-----|----------|
+| --- | --- |
 | A | −22.2% |
 | B | −24.7% |
 | C | −24.3% |

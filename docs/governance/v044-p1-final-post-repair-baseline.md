@@ -35,7 +35,7 @@ Ambient dirty worktree was **not** used to build the P1 image.
 ## Historical baselines (preserved — not current truth)
 
 | Epoch | ExyonQ RPS | NGINX RPS | OLS RPS | CPU cost vs NGINX | CPU cost vs OLS |
-|-------|------------|-----------|---------|-------------------|-----------------|
+| --- | --- | --- | --- | --- | --- |
 | Live-3way Root1+Root3 (pre-FD) | ≈150318 | ≈158754 | ≈132839 | **−2.94%** | **+28.56%** |
 | Post-FD-reuse (pre-H1) | ≈180108 | ≈157198 | ≈131326 | **−22.32%** | **+4.02%** |
 
@@ -70,7 +70,7 @@ HOST_INTERFERENCE = OBSERVED
 ## Current docker-stats three-way (authoritative live meter)
 
 | | ExyonQ | NGINX | OLS |
-|--|--|--|--|
+| --- | --- | --- | --- |
 | RPS median | **141937.78** | **162268.07** | **138943.97** |
 | RPS CV | 0.133 | 0.195 | 0.123 |
 | CPU avg % | 163.50 | 222.22 | 146.06 |
@@ -97,7 +97,7 @@ OLS    = [159043.40, 117083.25, 129625.01, 138943.97, 153578.93]
 Single 20s warmup + 30s measure per server after the series:
 
 | | total µs/req | user µs/req | system µs/req |
-|--|--|--|--|
+| --- | --- | --- | --- |
 | ExyonQ | 32.619 | 6.661 | 25.959 |
 | NGINX | 39.275 | 6.998 | 32.276 |
 | OLS | 30.996 | 9.339 | 21.657 |

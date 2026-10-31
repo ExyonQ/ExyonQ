@@ -346,7 +346,7 @@ fn openat2_confined(root: &Path, rel: &Path) -> Result<Option<File>, StaticErr> 
     let rel_bytes = rel.as_os_str().as_bytes();
     let rel_c = std::ffi::CString::new(rel_bytes).map_err(|_| StaticErr::Forbidden)?;
     let flags = (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK) as u64;
-    let resolve = (libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS) as u64;
+    let resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS;
     match exyonq_linux_ffi::openat2_beneath(root_file.as_raw_fd(), &rel_c, flags, resolve) {
         Ok(file) => Ok(Some(file)),
         Err(exyonq_linux_ffi::Openat2Error::Unavailable) => Ok(None),

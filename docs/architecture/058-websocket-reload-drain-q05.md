@@ -12,7 +12,7 @@ QUEJAS_NGINX §2.4 / QUEJAS_OLS §2.3: operators fear reload/drain cutting Home 
 ## Guarantees (product)
 
 | Event | Live H1 WebSocket tunnels | New WebSocket upgrades | New HTTP (non-upgrade) |
-|-------|---------------------------|------------------------|-------------------------|
+| --- | --- | --- | --- |
 | **Generation reload** (PREPARE→COMMIT) | **Survive** — tunnel tasks keep their accepted upstream; no forced close | Use **new** generation routing | Use new generation |
 | **Drain** (`exyonqctl drain`) | **Survive** until client/upstream close; counted via Cap031 hold | **Rejected** (typically 503 + draining) | **Rejected** (503 EXY-RT-0006 path) |
 | **Shutdown** | Best-effort; not a zero-loss promise | Rejected | Rejected |

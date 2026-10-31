@@ -11,7 +11,7 @@ PROTOTYPE_COPY = FORBIDDEN
 ## Comparison (before product mutation)
 
 | ID | Option | Verdict for SDP-P1 |
-|----|--------|--------------------|
+| --- | --- | --- |
 | **A** | mio + httparse hardened production shell (new crate) | **SELECTED** — matches SD-B B; EP-C geometry (ADR-021 C) without pasting 925 LOC |
 | B | Sharded current-thread Tokio | REJECT for value gate — EP-C falsifier weaker than mio TPC |
 | C | Hyper low-level H1 inside shard | REJECT — reintroduces Hyper geometry tax |
@@ -39,7 +39,7 @@ NET_COMPLEXITY > 0 — justified by EP-C + P4 deficit; ceiling = no Cap067/modul
 ## Dependencies (owner §48)
 
 | Crate | Spec | License | Role |
-|-------|------|---------|------|
+| --- | --- | --- | --- |
 | mio | 1.x (lock ~1.2) | MIT | readiness |
 | httparse | 1.x (lock 1.10.1) | MIT/Apache-2.0 | H1 headers |
 | socket2 | 0.6 (match platform-linux) | MIT/Apache-2.0 | REUSEPORT |

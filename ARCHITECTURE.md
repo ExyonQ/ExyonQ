@@ -5,7 +5,7 @@ ExyonQ is a modular reverse proxy. This clean publication tree contains the comp
 ## Layout
 
 | Path | Role |
-|------|------|
+| --- | --- |
 | `core/` | Data-plane kernel and HTTP runtime |
 | `crates/` | Modules (static, proxy, TLS, HTTP/3, FastCGI, …) and platform |
 | `cli/` | `exyonq`, `exyonqctl`, compat CLI |

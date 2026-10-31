@@ -16,7 +16,7 @@ Performance report: [`../performance/v044-pxdp-root-cause-p4-deficit-review.md`]
 ## Authority chain
 
 | Step | Verdict |
-|------|---------|
+| --- | --- |
 | P5 admission (P5-A) | CLOSED_QUALIFIED |
 | Performance reality check | **PR-C** — PXDP did not materially fix P4 deficit |
 | Root cause review | **RC-B** — multiple material roots proven |

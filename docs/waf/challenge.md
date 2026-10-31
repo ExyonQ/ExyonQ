@@ -13,7 +13,7 @@ are **obsolete**.
 ## Protocol summary
 
 | Field | Implementation |
-|-------|----------------|
+| --- | --- |
 | Protocol | HMAC-SHA256 authenticated challenge + browser PoW + grant cookie |
 | Crypto crates | `hmac` 0.13, `sha2` 0.11 |
 | Key | 32 bytes from OsRng, or `EXYONQ_WAF_CHALLENGE_KEY_FILE` (exactly 32 raw bytes) |

@@ -16,7 +16,7 @@ Cap033 ranks routes by host (exact > wildcard > hostless) then longest directory
 Exactly **one** of:
 
 | Kind | Fields | Semantics |
-|------|--------|-----------|
+| --- | --- | --- |
 | Prefix | non-empty `path` starting with `/` | Cap033 directory-prefix (unchanged) |
 | Suffix | non-empty `suffix` (no `/` required); `path` empty | literal `path.ends_with(suffix)` |
 | Regex | non-empty `regex`; `path` empty | Rust `regex` crate, case-sensitive (`~` style) |
@@ -44,7 +44,7 @@ ExyonQ does **not** claim nginx `^~` or “first matching regex in file order”
 
 ### CFD
 
-`exyonq-cfd-gen` `RouteTable` remains **prefix-only Cap033** in this slice. Documented deferral: CFD is not the product HTTP router for classic `exyonq serve`. Residual SoT: [`F1_RESIDUALS`](../../ROADMAP%20EXYONQ/F1_RESIDUALS.md) `F1-R01`/`F1-R02`.
+`exyonq-cfd-gen` `RouteTable` remains **prefix-only Cap033** in this slice. Documented deferral: CFD is not the product HTTP router for classic `exyonq serve`. Residual SoT: `F1_RESIDUALS` (local lab path, not published) `F1-R01`/`F1-R02`.
 
 ## Consequences
 

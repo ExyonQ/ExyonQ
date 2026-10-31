@@ -16,7 +16,7 @@ PHASE_8_CLOSED = YES
 ## Integrated chain
 
 | Terminal | Meaning |
-|----------|---------|
+| --- | --- |
 | **P8R-B** | FIFO defect repaired (`O_NONBLOCK` + classification) |
 | **P8R-BR** | Dual-Linux runtime re-oracle |
 | **P8TECH-D** | Clippy `--all-features` + static/FCGI oracles advanced |

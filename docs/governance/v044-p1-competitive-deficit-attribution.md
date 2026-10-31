@@ -44,7 +44,7 @@ This WIP does **not** reopen Root1–Root3, FD-reuse, or H1 miss hang.
 ### EXISTING_EVIDENCE_USABLE
 
 | Source | Covers |
-|--------|--------|
+| --- | --- |
 | Seal three-way `threeway_summary.json` | RPS medians + reps + CV; docker-stats CPU%; core-ms/req; P50/P90/P95/P99; RSS avg/peak (docker MemUsage) |
 | Seal cgroup companion | user/system/total µs/req (single window) |
 | Cap067 FD/miss sanity on seal | FD-reuse still hit; not reopened |
@@ -54,7 +54,7 @@ This WIP does **not** reopen Root1–Root3, FD-reuse, or H1 miss hang.
 ### MISSING_REQUIRED_EVIDENCE (before this WIP)
 
 | Gap | Action taken |
-|-----|----------------|
+| --- | --- |
 | smaps / PSS / private vs shared | Collected on Netcup against seal binary (attribution evidence) |
 | Thread topology under load | Collected (10 threads: 8 tokio-rt-worker + main + inotify) |
 | FD count | Collected (~130 under load) |
@@ -65,7 +65,7 @@ This WIP does **not** reopen Root1–Root3, FD-reuse, or H1 miss hang.
 ## Seal scoreboard deficits (authoritative competitive numbers)
 
 | Metric | ExyonQ | NGINX | OLS | ExyonQ deficit |
-|--------|--------|-------|-----|----------------|
+| --- | --- | --- | --- | --- |
 | RPS | 141937.78 | 162268.07 | 138943.97 | vs NGINX **−12.53%**; vs OLS **+2.15%** |
 | core-ms/req | 0.011519 | 0.013694 | 0.010512 | vs NGINX **−15.89%** (win); vs OLS **+9.58%** |
 | RSS avg MiB (docker) | 18.519 | 8.480 | 16.388 | vs NGINX **+118.4%**; vs OLS **+13.0%** |
@@ -87,7 +87,7 @@ RPS direction vs NGINX survives high CV (ExyonQ median below NGINX; overlapping 
 Seal aggregate CPU% while serving:
 
 | | CPU avg % | RPS | Interpretation |
-|--|-----------|-----|----------------|
+| --- | --- | --- | --- |
 | ExyonQ | 163.5 | 141938 | Fewer cycles burned, fewer requests completed |
 | NGINX | 222.2 | 162268 | Higher utilization, higher throughput |
 | OLS | 146.1 | 138944 | Lowest CPU%, similar RPS to ExyonQ |
@@ -108,7 +108,7 @@ Attribution capture: 8 `tokio-rt-worker` threads present; historically Cap067 ke
 Summing raw VmRSS across NGINX/OLS workers **double-counts shared libraries**. Use **PSS**:
 
 | | sum Rss (misleading) | sum Pss (fair) | Private_Dirty |
-|--|----------------------|----------------|---------------|
+| --- | --- | --- | --- |
 | ExyonQ (1 proc) | 21.9 MiB | **20.2 MiB** | 10.3 MiB |
 | NGINX (master+8 workers) | 31.1 MiB | **10.7 MiB** | 5.1 MiB |
 | OLS (main+workers) | 59.6 MiB | **15.1 MiB** | 8.3 MiB |
@@ -167,7 +167,7 @@ FD_CACHE_RSS_SHARE_ESTIMATE = NOT_MATERIAL
 Seal cgroup companion (not obsolete 4.35 µs user residual):
 
 | | user µs/req | system µs/req | total |
-|--|-------------|---------------|-------|
+| --- | --- | --- | --- |
 | ExyonQ | **6.661** | **25.959** | 32.619 |
 | OLS | 9.339 | 21.657 | 30.996 |
 | Gap (ExyonQ−OLS) | **−2.68** (ExyonQ better) | **+4.30** | +1.62 |
@@ -183,7 +183,7 @@ INSTRUCTIONS_PER_REQ_CURRENT = NOT_MEASURED
 ## Shared roots map (8 deficits → few roots)
 
 | Observed deficit | Shared root | Confidence |
-|------------------|-------------|------------|
+| --- | --- | --- |
 | RPS vs NGINX | R1 underutilization / parallelism ceiling | STRONGLY_SUPPORTED |
 | P50/P95/P99 vs NGINX | R1 (queueing from limited parallel capacity) | STRONGLY_SUPPORTED |
 | P99 vs OLS (small) | R1 partial + variance; may be **NOT_CAUSALLY_ESTABLISHED** alone | BOUNDED |
@@ -195,7 +195,7 @@ INSTRUCTIONS_PER_REQ_CURRENT = NOT_MEASURED
 ## Ranked ledger
 
 | ROOT_ID | METRIC(S) | EVIDENCE | CONF | CURRENT_COST | EXPECTED_RECOVERABLE_GAIN | USER_VALUE | COMPLEXITY | CORR/SEC RISK | RECOMMENDATION |
-|---------|-----------|----------|------|--------------|---------------------------|------------|------------|---------------|----------------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | R1_PARALLELISM_UNDERUTIL | RPS, P50, P95, P99 vs NGINX | Seal CPU%≪NGINX while RPS↓; 4 Cap067 workers vs 8 rival workers; prior worker A/B inconclusive | STRONGLY_SUPPORTED (class) / HYPOTHESIS (fix) | −12% RPS class; +23–32% latency class | **UNBOUNDED** without fresh A/B | High if unlocks multi-metric | Med–High | Med (topology) | **NO product yet — measurement A/B first** |
 | R2_PROCESS_IMAGE_RSS | RSS vs NGINX/OLS | PSS + Private_Clean≈binary; heap small; FD cache not primary | STRONGLY_SUPPORTED | +~10 MiB PSS vs NGINX | Partial (strip/LTO/dep cut) — **unlikely to reach NGINX 8.5 MiB** | Medium alone; weak migration case | Med–High | Low–Med | **NO product — insufficient migration value alone** |
 | R3_OLS_SYSTEM_CPU | CPU vs OLS | cgroup system +4.3 µs/req | STRONGLY_SUPPORTED | +9.6% core-ms | Unknown without syscall/perf on current binary | Low–Med | Med | Low | **NO product — need post-FD perf-stat first** |

@@ -259,6 +259,7 @@ pub fn insert(
 ///
 /// `source_file_path` is the Cap004 source path (for `fstatat` revalidation);
 /// `source_identity` is the source identity that produced the coded object.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_coded(
     generation: u64,
     site_slot: u32,
@@ -281,6 +282,7 @@ pub fn insert_coded(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_with_coding(
     generation: u64,
     site_slot: u32,
@@ -375,7 +377,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root_path = dir.path().join("root");
         fs::create_dir_all(&root_path).expect("mkdir");
-        fs::write(root_path.join("a.bin"), vec![0u8; 128]).expect("write");
+        fs::write(
+            root_path.join("a.bin"),
+            vec![0u8; crate::sendfile::SENDFILE_MIN_BYTES],
+        )
+        .expect("write");
 
         let root = preload_root(&root_path);
         let rt = Arc::new(StaticRuntime::new());
@@ -406,7 +412,7 @@ mod tests {
         let root_path = dir.path().join("root");
         fs::create_dir_all(&root_path).expect("mkdir");
         let path = root_path.join("a.bin");
-        fs::write(&path, b"old-content").expect("write");
+        fs::write(&path, vec![b'x'; crate::sendfile::SENDFILE_MIN_BYTES]).expect("write");
 
         let root = preload_root(&root_path);
         let rt = Arc::new(StaticRuntime::new());
@@ -420,7 +426,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(20));
         let tmp = root_path.join("a.bin.tmp");
-        fs::write(&tmp, b"new-content!!").expect("tmp");
+        fs::write(&tmp, vec![b'y'; crate::sendfile::SENDFILE_MIN_BYTES]).expect("tmp");
         fs::rename(&tmp, &path).expect("rename");
 
         let h2 = crate::epoll_session::match_sendfile_asset(0, &head).expect("match2");
@@ -446,7 +452,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root_path = dir.path().join("root");
         fs::create_dir_all(&root_path).expect("mkdir");
-        fs::write(root_path.join("a.bin"), b"v1").expect("write");
+        fs::write(
+            root_path.join("a.bin"),
+            vec![0u8; crate::sendfile::SENDFILE_MIN_BYTES],
+        )
+        .expect("write");
 
         let root = preload_root(&root_path);
         let rt = Arc::new(StaticRuntime::new());

@@ -20,14 +20,14 @@ Offline only in `exyonq-compat-apache` (+ `exyonq-compat` CLI path entry). No ru
 ### API
 
 | Entry | Includes |
-|-------|----------|
+| --- | --- |
 | `migrate` / `migrate_with_report(label, &str)` | **No disk expand.** Encountering `Include`/`IncludeOptional` → `REJECTED_UNSUPPORTED` with `EXY-AP-INCLUDE-0001` |
 | `migrate_path` / `migrate_path_with_report(&Path)` | Expand relative to including file; fail-closed |
 
 ### Semantics
 
 | Directive | Missing / empty glob | Found |
-|-----------|----------------------|-------|
+| --- | --- | --- |
 | `Include` | Reject `EXY-AP-INCLUDE-0002` | Inline-parse into same `ParseState` |
 | `IncludeOptional` | Compat note (not fatal) | Same as Include |
 
@@ -39,7 +39,7 @@ Offline only in `exyonq-compat-apache` (+ `exyonq-compat` CLI path entry). No ru
 ### Codes
 
 | Code | Meaning |
-|------|---------|
+| --- | --- |
 | `EXY-AP-INCLUDE-0001` | Include seen without path-based migrate |
 | `EXY-AP-INCLUDE-0002` | Required Include matched no files / not found |
 | `EXY-AP-INCLUDE-0003` | Include cycle |

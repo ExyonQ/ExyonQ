@@ -30,7 +30,7 @@ CAN_A_SPECIALIZED_RUST_EVENT_LOOP_PROXY_EXECUTION_MODEL_MATERIALLY_OUTPERFORM
 ## ADR-021 selection
 
 | Option | Verdict |
-|--------|---------|
+| --- | --- |
 | A mio single-loop | Insufficient alone for 8-CPU matrix |
 | **C TPC + mio** | **SELECTED** |
 | B Tokio current-thread shards | Weaker falsifier of Hyper/Tokio class |
@@ -51,7 +51,7 @@ LOC = **925** (≤1000 target). Deps: `mio`, `httparse`, `socket2`.
 ## Execution geometry
 
 | Model | OS threads | Tasks/req | Channels/req | Cross-shard handoffs | Client owner | Upstream owner |
-|-------|------------|-----------|--------------|----------------------|--------------|----------------|
+| --- | --- | --- | --- | --- | --- | --- |
 | ExyonQ PXDP (w4) | ~6 (Tokio+notify) | ≥1 async | present in product path | work-stealing possible | Tokio task / Hyper | Hyper client |
 | Hyper/Tokio control (w4) | ~5 | ≥1 spawn/conn | Hyper internal | work-stealing | Tokio task | Hyper pool |
 | **Prototype (shards=4)** | **5** (4 shards + main wait) | **0** | **0** | **0** | **shard loop** | **same shard** |
@@ -75,7 +75,7 @@ specialized mio TPC proxy dataplane (H1 hot path only)
 ```
 
 | Input | Feasibility |
-|-------|-------------|
+| --- | --- |
 | Routing decision | Snapshot / precompiled plan into shard |
 | WAF decision | Admit-time verdict before upstream write |
 | Generation | Arc/RCU publish; no hot mutex |
@@ -100,7 +100,7 @@ DOC = docs/architecture/v044-specialized-proxy-dataplane-contract-integration-de
 ## Portability
 
 | Platform | Strategy |
-|----------|----------|
+| --- | --- |
 | Linux | epoll via mio (this evidence) |
 | macOS | kqueue via mio (local iteration only) |
 | Windows | IOCP via mio later — not in this WIP |

@@ -26,7 +26,7 @@ NATIVE_STATIC = CFD opens and serves the filesystem object itself
 ## Options considered
 
 | ID | Option | Latency | CPU | Mem | Complexity | Security | Reuse | Ownership | Isolation | Migration | Portability | Verdict |
-|----|--------|---------|-----|-----|------------|----------|-------|-----------|-----------|-----------|-------------|---------|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | I | NO_NEW_PATTERN | — | — | — | low | n/a | n/a | broken | n/a | no | n/a | **REJECT** — no CFD handler opens files |
 | A | `BackendKind::Static` | low | low | low | med | Cap004-class | Cap067 patterns | exclusive | high | yes | policy+PlatformIo | **ACCEPT** |
 | B | `HandlerKind`/`RouteAction` rename | same | same | same | churn | same | same | same | same | yes | same | REJECT rename-only |

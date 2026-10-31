@@ -36,7 +36,7 @@ useful but must not proceed as product path until **V044_PROXY_EXECUTION_DATA_PL
 ## State at hold
 
 | Item | Status |
-|------|--------|
+| --- | --- |
 | Experiment code | EXISTS in isolated worktree only |
 | Netcup A/B | NOT_COMPLETED (build aborted; strategic hold) |
 | Terminal CASE BP-A..E | NOT_EMITTED |

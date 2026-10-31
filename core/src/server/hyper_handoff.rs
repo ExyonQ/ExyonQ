@@ -118,6 +118,7 @@ fn handoff_worker_count_default() -> usize {
 }
 
 impl HandoffBridge {
+    #[allow(clippy::result_large_err)] // Err hands the handoff back to the caller on queue-full
     fn try_enqueue(&self, handoff: HyperHandoff) -> Result<(), HyperHandoff> {
         let HyperHandoff {
             stream,

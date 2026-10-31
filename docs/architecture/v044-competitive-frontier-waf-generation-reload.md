@@ -18,7 +18,7 @@ Can ExyonQ add **real** WAF + generation/reload on the competitive frontier data
 ## Freezes (held)
 
 | Freeze | Status |
-|--------|--------|
+| --- | --- |
 | Separate-process `exyonq-dataplane` | held |
 | mio/std threads; Tokio/Hyper in dataplane = 0 | held |
 | No per-request control RPC | held |

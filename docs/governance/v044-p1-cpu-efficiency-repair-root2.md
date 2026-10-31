@@ -59,7 +59,7 @@ SENDFILE_RUNTIME_EXECUTED = YES (~145k sendfile in ~8s strace sample under load)
 ```
 
 | Metric | BEFORE Root2 (Root1) | AFTER Root2 | Δ |
-|--------|----------------------|-------------|---|
+| --- | --- | --- | --- |
 | core-ms/req | 0.01976 | 0.019694 | **−0.335%** |
 | req/core | 50618.99 | 50777.46 | +0.31% |
 | CPU avg % | 294.02 | 292.92 | −0.37% |

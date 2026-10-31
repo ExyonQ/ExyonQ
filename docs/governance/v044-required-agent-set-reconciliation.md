@@ -13,7 +13,7 @@ CASE = AGENTSET-B
 `V044_SAFE_H1_UPSTREAM_REUSE_RESTORATION` correctly refused silent substitution when these mandatory agents were absent:
 
 | Required | Status before this WIP |
-|----------|------------------------|
+| --- | --- |
 | `exyonq-orchestrator` | present |
 | `exyonq-grc-engineer` | present |
 | `exyonq-logic-auditor` | present |
@@ -34,7 +34,7 @@ Exact paths:
 Each has a **distinct charter** (not a renamed clone):
 
 | Agent | Authority | Explicit non-overlap |
-|-------|-----------|----------------------|
+| --- | --- | --- |
 | Vertex architect | Execution-path architecture + ADR-021 gate + dataplane invariants | ≠ architecture-contract; ≠ tech-lead |
 | Security engineer | Reachable-path security ACCEPT/REJECT; dual-boundary reuse; adversarial evidence | ≠ security (invariants); ≠ security-compiler (merge gate) |
 | Research engineer | Evidence grades, archaeology, CLAIM≤EVIDENCE | ≠ performance-validation; ≠ GRC |
@@ -69,7 +69,7 @@ ANTI_KOBAYASHI = REQUIRED
 ## Validation (this WIP)
 
 | Gate | Result | Notes |
-|------|--------|-------|
+| --- | --- | --- |
 | Orchestrator agent-set acceptance | PASS | Six mandatory names resolve; no silent substitution |
 | GRC agent-set review | PASS | Nonblocking: 106/107 maps still deferred for broad auto-invoke |
 | Logic auditor agent-set audit | PASS_WITH_FINDINGS | P1 OWNER_REVIEW supersession **CLOSED**; residual nonblocking: research BLOCKED-only taxonomy; GRC/logic charters lack mirrored SoD lines |

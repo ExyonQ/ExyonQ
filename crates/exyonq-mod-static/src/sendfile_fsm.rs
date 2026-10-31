@@ -32,9 +32,6 @@ pub const EPOLLIN: u32 = 0x001;
 pub const EPOLLOUT: u32 = 0x004;
 pub const EPOLLRDHUP: u32 = 0x2000;
 pub const EPOLLET: u32 = 1 << 31;
-pub const EPOLL_CTL_ADD: i32 = 1;
-pub const EPOLL_CTL_DEL: i32 = 2;
-pub const EPOLL_CTL_MOD: i32 = 3;
 
 /// Bench response headers fit in wire templates; stack buffer avoids heap in FSM.
 /// Cap019: 206/416 header blocks need more than the historical 128-byte bench ceiling.
@@ -132,10 +129,12 @@ pub struct SendingState {
     /// Cap061/Cap067: real terminal status for access logging (never invent 200).
     pub access_status: u16,
     /// Declared body bytes for this response (0 for HEAD/304/416).
+    #[allow(dead_code)]
     pub access_body_len: usize,
 }
 
 impl SendingState {
+    #[cfg(test)]
     pub fn new_get(asset: Arc<SendfileAsset>) -> io::Result<Self> {
         let body_len = asset.body_len;
         Ok(Self {
@@ -165,6 +164,7 @@ impl SendingState {
         })
     }
 
+    #[cfg(test)]
     pub fn new_head_only(asset: Arc<SendfileAsset>) -> io::Result<Self> {
         Ok(Self {
             header: ResponseHeaderBuf::from_header_bytes(asset.header.as_ref())?,

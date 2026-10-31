@@ -14,7 +14,7 @@ Nginx `proxy_set_header X-Real-IP $remote_addr`, simple `map`, and header-gated 
 ### Variable allowlist (exactly four built-ins)
 
 | Var | Meaning |
-|-----|---------|
+| --- | --- |
 | `$host` | Normalized request host (port stripped) |
 | `$remote_addr` | Peer socket IP only (no `real_ip` / XFF trust) |
 | `$request_uri` | Path + optional `?query` |
@@ -69,7 +69,7 @@ Match (path XOR + host AND + header AND) → rewrite/rematch → fallback/error_
 
 ## Residuals (fail-closed)
 
-SoT: [`ROADMAP EXYONQ/F1_RESIDUALS.md`](../../ROADMAP%20EXYONQ/F1_RESIDUALS.md) — `F1-R15`…`F1-R21` (`if`, `set`, `geo`, regex `map`, `$http_*`, `real_ip`, route-scoped `add_header`, multi-header OR).
+SoT: `ROADMAP EXYONQ/F1_RESIDUALS.md` (local lab path, not published) — `F1-R15`…`F1-R21` (`if`, `set`, `geo`, regex `map`, `$http_*`, `real_ip`, route-scoped `add_header`, multi-header OR).
 
 ## Consequences
 

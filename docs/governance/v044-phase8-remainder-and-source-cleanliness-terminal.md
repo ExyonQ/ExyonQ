@@ -30,7 +30,7 @@ Clean dual-Linux native builds reproduce historical P8R-BR binaries exactly.
 ## Gates
 
 | Gate | Result |
-|------|--------|
+| --- | --- |
 | fmt --check | PASS |
 | check --workspace --all-targets --locked | PASS |
 | clippy --workspace --all-targets --all-features --locked -D warnings | FAIL (preexisting on entry HEAD control) |

@@ -7,7 +7,7 @@
 ## Owner-frozen architecture
 
 | Decision | Value |
-|----------|-------|
+| --- | --- |
 | Process model | `HYBRID` — Tokio control/product + separate OS process for competitive H1 |
 | Dataplane isolation | `SEPARATE_PROCESS` |
 | Competitive H1 accept owner | Dataplane process only |
@@ -31,7 +31,7 @@
 ## Crates
 
 | Crate | Role |
-|-------|------|
+| --- | --- |
 | `exyonq-cfd-gen` | Immutable generation encode/decode, CRC32, atomic tmp→rename publish |
 | `exyonq-cfd-control` | Launch/lifecycle, listen-collision check, parallelism budget |
 | `exyonq-cfd-dataplane` | mio shard loops, exclusive listen (SO_REUSEPORT among DP shards only) |

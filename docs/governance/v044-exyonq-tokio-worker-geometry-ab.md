@@ -20,7 +20,7 @@ Parent MC-B showed minimal Hyper/Tokio control worker-count response; this WIP m
 From `core/src/server/runtime_parallelism.rs`:
 
 | Knob | Override | Default when unset |
-|------|----------|-------------------|
+| --- | --- | --- |
 | Tokio workers | `EXYONQ_WORKER_THREADS` | `available_parallelism().clamp(1,16)` |
 | Accept workers | `EXYONQ_ACCEPT_WORKERS` | same default |
 | Cap067 epoll pool | `EXYONQ_EPOLL_POOL_THREADS` | follows accept |
@@ -32,7 +32,7 @@ From `core/src/server/runtime_parallelism.rs`:
 ## Decision cases
 
 | Case | Meaning |
-|------|---------|
+| --- | --- |
 | WG-A | ≥7% RPS vs fresh w16 + ≥20% ctx reduction + correctness |
 | WG-B | 3–7% RPS or strong scheduler move without full economic gate |
 | WG-C | Not material |

@@ -6,7 +6,7 @@
 ## Declared sources
 
 | Source | Crate / CLI | Maturity |
-|--------|-------------|----------|
+| --- | --- | --- |
 | NGINX | `exyonq-compat-nginx` / `exyonq-compat migrate --from nginx` | Tier1/2 + static/proxy/fastcgi MVPs |
 | Apache httpd | `exyonq-compat-apache` / `exyonq-compat migrate --from apache` | **Equivalent map** (static + redirect + TLS + proxy + PHP-FPM) |
 
