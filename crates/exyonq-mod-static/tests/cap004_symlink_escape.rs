@@ -15,7 +15,9 @@
  */
 //! Cap004: outside-root symlink must not enter preload cache or resolve live.
 
-use exyonq_mod_static::{resolve_path, PreloadLimits, StaticError, StaticRoot};
+use exyonq_mod_static::{
+    resolve_path, DirRedirectPolicy, PreloadLimits, StaticError, StaticRoot, StaticRootRouteOpts,
+};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -37,6 +39,14 @@ fn preload_skips_symlink_escape_and_live_resolve_rejects() {
         "/assets",
         Some("index.html"),
         PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            exact: false,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
     )
     .expect("root");
     service.preload_tree().expect("preload");
@@ -91,6 +101,14 @@ fn route_table_symlink_escape_not_preloaded() {
         "/assets",
         Some("index.html"),
         PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            exact: false,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
     )
     .expect("root");
     service.preload_tree().expect("preload");
@@ -123,6 +141,14 @@ fn sixty_four_k_symlink_escape_not_served_from_cache() {
         "/assets",
         Some("index.html"),
         PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            exact: false,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
     )
     .expect("root");
     service.preload_tree().expect("preload");

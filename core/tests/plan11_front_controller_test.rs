@@ -160,6 +160,8 @@ document_root = "{}"
     let _fcgi_guard = install_fcgi_runtime_for_tests(executor, pool_capacities);
     FcgiHarness {
         ctx: ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -413,6 +415,8 @@ document_root = "{}"
     // Cap048: install External after publish so bind_compiled cannot replace NoCall.
     let _fcgi_guard = install_fcgi_runtime_for_tests(Arc::new(NoCall), vec![(0, 1)]);
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -512,6 +516,8 @@ document_root = "{}"
     ))
     .expect("register global fcgi for multi-thread test");
     let harness_ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -525,6 +531,8 @@ document_root = "{}"
         .body(())
         .expect("req");
     let ctx_a = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: Arc::clone(&harness_ctx.state),
         proxy_client: harness_ctx.proxy_client.clone(),
         x_forwarded_for: harness_ctx.x_forwarded_for.clone(),
@@ -652,6 +660,8 @@ document_root = "{}"
     let _fcgi_guard =
         install_fcgi_runtime_for_tests(Arc::new(CaptureRequestExecutor), vec![(0, 8), (1, 8)]);
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: Arc::clone(&state),
         proxy_client: proxy_client.clone(),
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -667,6 +677,8 @@ document_root = "{}"
         .expect("req");
     let _ = serve_http3_request(
         ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state: Arc::clone(&ctx.state),
             proxy_client: ctx.proxy_client.clone(),
             x_forwarded_for: ctx.x_forwarded_for.clone(),
@@ -686,6 +698,8 @@ document_root = "{}"
         .expect("req");
     let _ = serve_http3_request(
         ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state: ctx.state,
             proxy_client: ctx.proxy_client,
             x_forwarded_for: ctx.x_forwarded_for,

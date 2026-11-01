@@ -149,6 +149,8 @@ fn fire(
         let proxy_client = ctx.proxy_client.clone();
         let xff = ctx.x_forwarded_for.clone();
         let ops = Arc::clone(&ctx.ops);
+        let scheme = ctx.scheme;
+        let local_port = ctx.local_port;
         let method = method.clone();
         let host = host.map(str::to_string);
         let headers = request_headers.to_vec();
@@ -184,6 +186,8 @@ fn fire(
             };
             let mirror_ctx = ConnectionContext {
                 state,
+                scheme,
+                local_port,
                 proxy_client,
                 x_forwarded_for: xff,
                 ops,

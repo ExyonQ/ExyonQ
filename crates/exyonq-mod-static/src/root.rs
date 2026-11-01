@@ -72,18 +72,118 @@ pub struct StaticRoot {
     canonical_root: PathBuf,
     /// Held directory fd for Cap004 openat2(RESOLVE_BENEATH) opens (Linux).
     #[cfg(target_os = "linux")]
-    root_dir: File,
+    /// `None` for file roots (NGINX `alias` to a file under `location =`):
+    /// those are Hyper-only — the wire/sendfile layer never sees them.
+    root_dir: Option<File>,
+    /// NGINX `alias /path/file` in `location =`: canonical_root IS the file.
+    file_root: bool,
     route_prefix: String,
     /// IR `match.host`. `None` matches any request Host.
     route_host: Option<String>,
+    #[cfg(target_os = "linux")]
+    listen_port: Option<u16>,
+    /// EXY-03: `true` = NGINX `root` semantics — `root + full URI`.
+    /// `false` = alias — `root + (URI − route_prefix)`.
+    join_uri: bool,
+    /// EXY-03: `true` = NGINX literal-prefix matching — `route_prefix` claims
+    /// any URI starting with it verbatim (no segment boundary).
+    literal: bool,
+    /// EXY-03: `true` = `301` to `URI/` when a directory is requested without
+    /// a trailing slash (NGINX-style).
+    dir_redirect: bool,
+    /// EXY-03: `true` = the prefix claims only `URI == route_prefix` verbatim
+    /// (NGINX `location =`). Takes precedence over `literal`.
+    exact: bool,
+    /// EXY-03 redirect `Location` shaping (NGINX `absolute_redirect` /
+    /// `port_in_redirect` / `server_name_in_redirect`).
+    redirect_policy: DirRedirectPolicy,
     index: Option<String>,
     preload_limits: PreloadLimits,
     cache: Arc<HashMap<String, CachedEntry>>,
 }
 
+/// EXY-03: how a directory `301` builds `Location` (NGINX parity).
+#[derive(Debug, Clone)]
+pub struct DirRedirectPolicy {
+    /// `true` (NGINX `absolute_redirect on`) = absolute `Location`
+    /// `scheme://authority/path/`; `false` = relative `path/`.
+    pub absolute: bool,
+    /// `true` (NGINX `port_in_redirect on`) = emit the listener port unless it
+    /// is the scheme default; `false` = never emit a port.
+    pub include_port: bool,
+    /// NGINX `server_name_in_redirect on` — fixed host replacing the request
+    /// authority host part in `Location`.
+    pub fixed_host: Option<String>,
+}
+
+impl Default for DirRedirectPolicy {
+    fn default() -> Self {
+        Self {
+            absolute: true,
+            include_port: true,
+            fixed_host: None,
+        }
+    }
+}
+
+/// EXY-03: host part of an HTTP authority (`host[:port]`, userinfo ignored).
+fn authority_host_part(authority: &str) -> &str {
+    let after_user = authority.rsplit('@').next().unwrap_or(authority);
+    match after_user.split_once(':') {
+        Some((host, _)) => host,
+        None => after_user,
+    }
+}
+
+/// EXY-03: default port for a scheme (NGINX `port_in_redirect` omits it).
+fn scheme_default_port(scheme: &str) -> u16 {
+    if scheme == "https" {
+        443
+    } else {
+        80
+    }
+}
+
+/// EXY-03: per-route matching + redirect options (NGINX-imported semantics).
+/// `Default` = native ExyonQ behaviour (segment-boundary prefix, no redirect).
+#[derive(Debug, Clone, Default)]
+pub struct StaticRootRouteOpts {
+    pub join_uri: bool,
+    pub literal: bool,
+    pub exact: bool,
+    pub dir_redirect: bool,
+    pub redirect_policy: DirRedirectPolicy,
+    /// EXY-03: NGINX listener scope — `Some` slots never serve on the wire path.
+    pub listen_port: Option<u16>,
+}
+
 impl StaticRoot {
     pub fn new(root: &Path, route_prefix: &str, index: Option<&str>) -> Result<Self, StaticError> {
-        Self::new_with_preload_limits(root, route_prefix, index, PreloadLimits::DEFAULT)
+        Self::new_with_preload_limits(
+            root,
+            route_prefix,
+            index,
+            PreloadLimits::DEFAULT,
+            StaticRootRouteOpts::default(),
+        )
+    }
+
+    /// EXY-03: alias for NGINX-`root` mode (`root + full URI`).
+    pub fn new_join_uri(
+        root: &Path,
+        route_prefix: &str,
+        index: Option<&str>,
+    ) -> Result<Self, StaticError> {
+        Self::new_with_preload_limits(
+            root,
+            route_prefix,
+            index,
+            PreloadLimits::DEFAULT,
+            StaticRootRouteOpts {
+                join_uri: true,
+                ..Default::default()
+            },
+        )
     }
 
     pub fn new_with_preload_limits(
@@ -91,20 +191,101 @@ impl StaticRoot {
         route_prefix: &str,
         index: Option<&str>,
         preload_limits: PreloadLimits,
+        opts: StaticRootRouteOpts,
     ) -> Result<Self, StaticError> {
         let canonical_root = root.canonicalize()?;
+        // NGINX `alias` to a regular file (`location = /x { alias file; }`):
+        // the root is the file itself — no dirfd, no tree walk, wire-invisible.
+        let file_root = canonical_root.is_file();
         #[cfg(target_os = "linux")]
-        let root_dir = open_root_dirfd(&canonical_root)?;
+        let root_dir = if file_root {
+            None
+        } else {
+            Some(open_root_dirfd(&canonical_root)?)
+        };
         Ok(Self {
             canonical_root,
             #[cfg(target_os = "linux")]
             root_dir,
             route_prefix: route_prefix.to_string(),
             route_host: None,
+            file_root,
+            #[cfg(target_os = "linux")]
+            listen_port: opts.listen_port,
+            join_uri: opts.join_uri,
+            literal: opts.literal,
+            dir_redirect: opts.dir_redirect,
+            exact: opts.exact,
+            redirect_policy: opts.redirect_policy,
             index: index.map(str::to_string),
             preload_limits,
             cache: Arc::new(HashMap::new()),
         })
+    }
+
+    /// Request-path → root-relative path under the active mapping mode.
+    fn relative_for(&self, request_path: &str) -> Option<String> {
+        if self.join_uri {
+            // NGINX `root`: file = root + full request URI.
+            Some(request_path.trim_start_matches('/').to_string())
+        } else if self.exact || self.literal {
+            // NGINX `alias`: replace the matched prefix verbatim — under
+            // `location =` the whole URI is consumed, under literal prefix the
+            // verbatim remainder joins (`/assets-extra` → `-extra`).
+            let prefix = self.route_prefix.trim_end_matches('/');
+            let prefix = if prefix.is_empty() { "/" } else { prefix };
+            request_path
+                .strip_prefix(prefix)
+                .map(|rest| rest.trim_start_matches('/').to_string())
+        } else {
+            strip_route_prefix(&self.route_prefix, request_path)
+        }
+    }
+
+    /// EXY-03: NGINX-style directory redirect. When `dir_redirect` is on and
+    /// the request resolves to a directory while lacking a trailing `/`,
+    /// returns the `Location` target. NGINX `absolute_redirect` default emits
+    /// an absolute URI `scheme://host:port/path/`; when no authority source
+    /// exists we fall back to the relative `path/` form.
+    pub fn dir_redirect_location(
+        &self,
+        request_path: &str,
+        host: Option<&str>,
+        scheme: &str,
+        request_query: Option<&str>,
+        local_port: Option<u16>,
+    ) -> Option<String> {
+        if !self.dir_redirect || request_path.ends_with('/') {
+            return None;
+        }
+        let relative = self.relative_for(request_path)?;
+        let candidate = self
+            .canonical_root
+            .join(relative_as_safe_path(&relative).ok()?);
+        if !candidate.is_dir() {
+            return None;
+        }
+        let suffix = request_query.map_or_else(String::new, |q| format!("?{q}"));
+        if !self.redirect_policy.absolute {
+            // NGINX `absolute_redirect off`: path-only Location.
+            return Some(format!("{request_path}/{suffix}"));
+        }
+        let Some(host_part) = self
+            .redirect_policy
+            .fixed_host
+            .as_deref()
+            .or_else(|| host.map(authority_host_part))
+        else {
+            // Absolute requested but no authority source: relative fallback.
+            return Some(format!("{request_path}/{suffix}"));
+        };
+        let port = match (self.redirect_policy.include_port, local_port) {
+            (true, Some(p)) if p != scheme_default_port(scheme) => format!(":{p}"),
+            _ => String::new(),
+        };
+        Some(format!(
+            "{scheme}://{host_part}{port}{request_path}/{suffix}"
+        ))
     }
 
     pub fn preload_limits(&self) -> PreloadLimits {
@@ -122,11 +303,19 @@ impl StaticRoot {
     }
 
     /// Directory fd for `canonical_root` (Linux Cap004 openat2 containment).
+    /// `None` for file roots — they never reach the wire/sendfile layer.
     #[cfg(target_os = "linux")]
     #[inline]
-    pub fn root_dir_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+    pub fn root_dir_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
         use std::os::fd::AsFd;
-        self.root_dir.as_fd()
+        self.root_dir.as_ref().map(|f| f.as_fd())
+    }
+
+    /// `true` when `canonical_root` is a regular file (NGINX `alias` file
+    /// under `location =`) — Hyper-only; wire/sendfile must not see it.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn file_root(&self) -> bool {
+        self.file_root
     }
 
     pub fn resolve_path_sync(&self, request_path: &str) -> Result<PathBuf, StaticError> {
@@ -187,7 +376,7 @@ impl StaticRoot {
         &self,
         request_path: &str,
     ) -> Result<hyper::Response<BoxBody>, StaticError> {
-        if let Some(relative) = strip_route_prefix(&self.route_prefix, request_path) {
+        if let Some(relative) = self.relative_for(request_path) {
             let _ = relative_as_safe_path(&relative)?;
         } else {
             return Err(StaticError::NotFound);
@@ -204,7 +393,7 @@ impl StaticRoot {
         &self,
         request_path: &str,
     ) -> Result<hyper::Response<BoxBody>, StaticError> {
-        if let Some(relative) = strip_route_prefix(&self.route_prefix, request_path) {
+        if let Some(relative) = self.relative_for(request_path) {
             let _ = relative_as_safe_path(&relative)?;
         } else {
             return Err(StaticError::NotFound);
@@ -221,9 +410,13 @@ impl StaticRoot {
             return Some(entry);
         }
         let index_name = self.index.as_deref().unwrap_or("index.html");
-        for candidate in
-            index_lookup_candidates(self.route_prefix.as_str(), request_path, index_name)
-        {
+        // Under join_uri the effective lookup prefix is `/` (full-URI keys).
+        let lookup_prefix = if self.join_uri {
+            "/"
+        } else {
+            self.route_prefix.as_str()
+        };
+        for candidate in index_lookup_candidates(lookup_prefix, request_path, index_name) {
             if let Some(entry) = self.cache.get(&candidate) {
                 return Some(entry);
             }
@@ -237,6 +430,11 @@ impl StaticRoot {
     /// Selection order is deterministic UTF-8 path order. Oversized / budget-skipped files
     /// remain available via on-demand resolve (not 404).
     pub fn preload_tree(&mut self) -> Result<(), StaticError> {
+        // File roots (`alias` to a file): nothing to walk — the single file is
+        // served through the live resolve path.
+        if self.file_root {
+            return Ok(());
+        }
         let limits = self.preload_limits;
         if limits.is_disabled() {
             tracing::info!(
@@ -440,7 +638,9 @@ impl StaticRoot {
                 continue;
             }
             let rel = relative.join(entry.file_name());
-            let request_path = if rel.as_os_str().is_empty() {
+            let request_path = if self.join_uri {
+                format!("/{}", rel.to_string_lossy())
+            } else if rel.as_os_str().is_empty() {
                 self.route_prefix.clone()
             } else {
                 format!(
@@ -458,13 +658,19 @@ impl StaticRoot {
     }
 
     fn resolve_path_uncached(&self, request_path: &str) -> Result<PathBuf, StaticError> {
-        let relative = match strip_route_prefix(&self.route_prefix, request_path) {
+        let relative = match self.relative_for(request_path) {
             Some(value) => value,
             None => return Err(StaticError::NotFound),
         };
         let relative_path = relative_as_safe_path(&relative)?;
 
-        let mut candidate = self.canonical_root.join(relative_path);
+        // Empty remainder (exact `location =` file alias): `join("")` would
+        // append a trailing separator and ENOTDIR on regular-file roots.
+        let mut candidate = if relative_path.as_os_str().is_empty() {
+            self.canonical_root.clone()
+        } else {
+            self.canonical_root.join(relative_path)
+        };
         // Index directory: follow in-root dir symlinks (historical semantics), then
         // canonicalize + root prefix. Regular-file confirmation is deferred to open.
         match std::fs::metadata(&candidate) {
@@ -501,6 +707,16 @@ impl StaticRoot {
     }
 
     #[cfg(target_os = "linux")]
+    pub(crate) fn literal_prefix(&self) -> bool {
+        self.literal
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn exact_match(&self) -> bool {
+        self.exact
+    }
+
+    #[cfg(target_os = "linux")]
     pub(crate) fn route_prefix(&self) -> &str {
         &self.route_prefix
     }
@@ -508,6 +724,11 @@ impl StaticRoot {
     #[cfg(target_os = "linux")]
     pub(crate) fn route_host(&self) -> Option<&str> {
         self.route_host.as_deref()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn listen_port(&self) -> Option<u16> {
+        self.listen_port
     }
 }
 
@@ -569,4 +790,192 @@ fn index_lookup_candidates(
         out.push(format!("{dir}/{index_name}"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir_root(
+        dir_redirect: bool,
+        literal: bool,
+        join_uri: bool,
+    ) -> (tempfile::TempDir, StaticRoot) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("mkdir");
+        let root = StaticRoot::new_with_preload_limits(
+            dir.path(),
+            "/assets",
+            Some("index.html"),
+            PreloadLimits::DEFAULT,
+            StaticRootRouteOpts {
+                join_uri,
+                literal,
+                exact: false,
+                dir_redirect,
+                redirect_policy: DirRedirectPolicy::default(),
+                listen_port: None,
+            },
+        )
+        .expect("root");
+        (dir, root)
+    }
+
+    #[test]
+    fn dir_redirect_absolute_location_scheme_authority_query() {
+        let (_t, root) = dir_root(true, false, false);
+        assert_eq!(
+            root.dir_redirect_location(
+                "/assets",
+                Some("ex.example:8443"),
+                "https",
+                Some("a=1&b=2"),
+                Some(8443),
+            )
+            .as_deref(),
+            Some("https://ex.example:8443/assets/?a=1&b=2")
+        );
+        assert_eq!(
+            root.dir_redirect_location("/assets", Some("ex.example"), "http", None, None)
+                .as_deref(),
+            Some("http://ex.example/assets/")
+        );
+    }
+
+    #[test]
+    fn dir_redirect_no_host_falls_back_to_relative() {
+        let (_t, root) = dir_root(true, false, false);
+        assert_eq!(
+            root.dir_redirect_location("/assets", None, "http", None, None)
+                .as_deref(),
+            Some("/assets/")
+        );
+    }
+
+    #[test]
+    fn dir_redirect_off_or_slash_or_file_is_none() {
+        let (t_off, off) = dir_root(false, false, false);
+        assert_eq!(
+            off.dir_redirect_location("/assets", Some("h"), "http", None, None),
+            None
+        );
+        std::fs::create_dir_all(t_off.path().join("f")).expect("mkdir");
+        std::fs::write(t_off.path().join("f/x"), b"x").expect("write");
+        let (_t, on) = dir_root(true, false, false);
+        assert_eq!(
+            on.dir_redirect_location("/assets/", Some("h"), "http", None, None),
+            None
+        );
+        assert_eq!(
+            on.dir_redirect_location("/assets/miss", Some("h"), "http", None, None),
+            None
+        );
+    }
+
+    fn dir_root_policy(policy: DirRedirectPolicy) -> (tempfile::TempDir, StaticRoot) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("mkdir");
+        let root = StaticRoot::new_with_preload_limits(
+            dir.path(),
+            "/assets",
+            Some("index.html"),
+            PreloadLimits::DEFAULT,
+            StaticRootRouteOpts {
+                dir_redirect: true,
+                redirect_policy: policy,
+                listen_port: None,
+                ..Default::default()
+            },
+        )
+        .expect("root");
+        (dir, root)
+    }
+
+    #[test]
+    fn dir_redirect_absolute_off_emits_relative() {
+        // NGINX `absolute_redirect off`: Location is path-only, query kept.
+        let (_t, root) = dir_root_policy(DirRedirectPolicy {
+            absolute: false,
+            ..Default::default()
+        });
+        assert_eq!(
+            root.dir_redirect_location(
+                "/assets",
+                Some("h.example:8080"),
+                "http",
+                Some("q=1"),
+                Some(8080),
+            )
+            .as_deref(),
+            Some("/assets/?q=1")
+        );
+    }
+
+    #[test]
+    fn dir_redirect_port_in_redirect_off_omits_port() {
+        // NGINX `port_in_redirect off`: authority without any port.
+        let (_t, root) = dir_root_policy(DirRedirectPolicy {
+            include_port: false,
+            ..Default::default()
+        });
+        assert_eq!(
+            root.dir_redirect_location(
+                "/assets",
+                Some("h.example:9999"),
+                "http",
+                None,
+                Some(8081),
+            )
+            .as_deref(),
+            Some("http://h.example/assets/")
+        );
+    }
+
+    #[test]
+    fn dir_redirect_server_name_in_redirect_overrides_host() {
+        // NGINX `server_name_in_redirect on`: configured name replaces Host.
+        let (_t, root) = dir_root_policy(DirRedirectPolicy {
+            fixed_host: Some("nameinred.example".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            root.dir_redirect_location(
+                "/assets",
+                Some("client.example:8080"),
+                "http",
+                None,
+                Some(8083),
+            )
+            .as_deref(),
+            Some("http://nameinred.example:8083/assets/")
+        );
+    }
+
+    #[test]
+    fn dir_redirect_listener_port_used_and_default_omitted() {
+        let (_t, root) = dir_root_policy(DirRedirectPolicy::default());
+        // Non-default listener port is emitted (listener, not client port).
+        assert_eq!(
+            root.dir_redirect_location(
+                "/assets",
+                Some("h.example:5555"),
+                "http",
+                None,
+                Some(8080),
+            )
+            .as_deref(),
+            Some("http://h.example:8080/assets/")
+        );
+        // Scheme-default port is omitted.
+        assert_eq!(
+            root.dir_redirect_location("/assets", Some("h.example"), "http", None, Some(80))
+                .as_deref(),
+            Some("http://h.example/assets/")
+        );
+        assert_eq!(
+            root.dir_redirect_location("/assets", Some("h.example"), "https", None, Some(443),)
+                .as_deref(),
+            Some("https://h.example/assets/")
+        );
+    }
 }

@@ -17,8 +17,8 @@
 
 use crate::hyper_client::{get_empty_body_client, ProxyClient};
 use crate::hyper_forward::{bad_gateway, bad_request, gateway_timeout, ProxyHyperMetrics};
-use crate::request_headers_safe_for_proxy;
 use crate::upstream_target::UpstreamTarget;
+use crate::{merge_cookie_header_map, request_headers_safe_for_proxy};
 use http_body_util::{combinators::BoxBody, BodyExt, Empty};
 use hyper::body::Incoming;
 use hyper::header::{
@@ -125,7 +125,10 @@ pub async fn forward_websocket(
     let mut upstream_builder = Request::builder()
         .method(req.method())
         .uri(upstream.uri_for(&path_and_query));
-    let forward_headers = ws_forward_headers(req.headers());
+    // EXY-11: fold repeated `Cookie` lines before forwarding (RFC 6265 §5.4).
+    let mut client_headers = req.headers().clone();
+    merge_cookie_header_map(&mut client_headers);
+    let forward_headers = ws_forward_headers(&client_headers);
     for (name, value) in forward_headers.iter() {
         upstream_builder = upstream_builder.header(name, value);
     }

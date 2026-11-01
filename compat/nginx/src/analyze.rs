@@ -720,6 +720,9 @@ fn classify_server_directive(
             );
         }
         "server_name" => classify_server_name_directive(directive, report),
+        // EXY-03: redirect shaping — consumed by map_ir::redirect_policy_for
+        // (location scope overrides server scope, NGINX merge semantics).
+        "absolute_redirect" | "port_in_redirect" | "server_name_in_redirect" => {}
         // NG-17: mapped (and reported) by map_ir; inheritance handled there.
         "add_header" | "expires" => {}
         // NG-18 / ADR-064: parsed by parse_server; status reported there.

@@ -321,11 +321,15 @@ mod epoll_contract_tests {
     fn test_entry(ops: Arc<LifecycleState>) -> (PlatformConnectionEntry, Runtime) {
         use std::sync::Once;
         static HOOKS: Once = Once::new();
-        HOOKS.call_once(|| {
-            exyonq_mod_static::install_kernel_hooks(Arc::new(
-                exyonq_mod_static::StaticRuntime::new(),
-            ));
-            exyonq_mod_proxy::install_kernel_hooks(Arc::new(exyonq_mod_proxy::ProxyRuntime::new()));
+        crate::kernel::test_hooks::with_wire_hooks_gate(|| {
+            HOOKS.call_once(|| {
+                exyonq_mod_static::install_kernel_hooks(Arc::new(
+                    exyonq_mod_static::StaticRuntime::new(),
+                ));
+                exyonq_mod_proxy::install_kernel_hooks(Arc::new(
+                    exyonq_mod_proxy::ProxyRuntime::new(),
+                ));
+            });
         });
         let rt = Runtime::new().expect("rt");
         let raw = include_str!("../../../tests/fixtures/minimal.toml");

@@ -16,7 +16,9 @@
 //! `ProxyDispatchService` runtime — Hyper upstream execution (KD3.2) + P2B WRR.
 
 use crate::dns_refresh::{DnsClusterSpec, DnsPeer, DnsRefreshSupervisor};
-use crate::headers::{request_headers_safe_for_proxy, strip_hop_by_hop_headers};
+use crate::headers::{
+    insert_or_merge_cookie, request_headers_safe_for_proxy, strip_hop_by_hop_headers,
+};
 use crate::health::{peer_key_from_http_uri, HealthSupervisor};
 use crate::hyper_client::{build_incoming_client, post_body_client, ProxyClient};
 use crate::hyper_forward::{
@@ -815,7 +817,8 @@ impl ProxyRuntime {
                 hyper::header::HeaderName::from_bytes(name.as_bytes()),
                 HeaderValue::from_str(value),
             ) {
-                header_map.insert(n, v);
+                // EXY-11: merge repeated `Cookie` lines ("; "); other fields last-wins.
+                insert_or_merge_cookie(&mut header_map, n, v);
             }
         }
         if !request_headers_safe_for_proxy(&header_map) {

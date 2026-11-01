@@ -304,6 +304,18 @@ pub fn forbidden_status_wire(client_close: bool) -> Bytes {
     ))
 }
 
+/// EXY-03: 301 with `Location` — NGINX-style directory redirect on the wire
+/// path so imported routes keep sendfile eligibility.
+#[cfg(target_os = "linux")]
+pub fn dir_redirect_wire(location: &str, client_close: bool, head_only: bool) -> Bytes {
+    let conn = if client_close { "close" } else { "keep-alive" };
+    let body = if head_only { "" } else { "moved" };
+    Bytes::from(format!(
+        "HTTP/1.1 301 Moved Permanently\r\nServer: exyonq\r\nLocation: {location}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: {conn}\r\n\r\n{body}",
+        body.len()
+    ))
+}
+
 /// HEAD variant: same Content-Length as GET forbid, zero body bytes on the wire.
 pub fn forbidden_status_head_wire(client_close: bool) -> Bytes {
     let conn = if client_close { "close" } else { "keep-alive" };

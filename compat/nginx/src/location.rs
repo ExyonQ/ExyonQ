@@ -200,7 +200,7 @@ fn location_message(kind: LocationKind, pattern: &str) -> String {
     match kind {
         LocationKind::Prefix => format!("prefix location `{pattern}` accepted"),
         LocationKind::Exact => {
-            format!("exact location `{pattern}` parsed; IR has no exact/prefix distinction")
+            format!("exact location `{pattern}` parsed → match.exact (EXY-03)")
         }
         LocationKind::PreferentialPrefix => {
             format!("preferential prefix `^~ {pattern}` parsed; ExyonQ does not model ^~ priority")
@@ -220,7 +220,8 @@ fn location_message(kind: LocationKind, pattern: &str) -> String {
 fn mapping_hint(kind: LocationKind, pattern: &str) -> Option<String> {
     match kind {
         LocationKind::Prefix => Some(format!("route match.path={pattern}")),
-        LocationKind::Exact | LocationKind::PreferentialPrefix => {
+        LocationKind::Exact => Some(format!("route match.path={pattern} match.exact=true")),
+        LocationKind::PreferentialPrefix => {
             Some(format!("route match.path={pattern} (literal only)"))
         }
         LocationKind::RegexCaseSensitive => Some(format!("route match.regex={pattern}")),
@@ -469,9 +470,20 @@ pub fn route_path(location: &ParsedLocation) -> String {
 pub fn route_match_from_location(location: &ParsedLocation) -> exyonq_config_ir::RouteMatch {
     use exyonq_config_ir::RouteMatch;
     match location.kind {
-        LocationKind::Prefix | LocationKind::Exact | LocationKind::PreferentialPrefix => {
-            RouteMatch::prefix(route_path(location))
+        LocationKind::Prefix | LocationKind::PreferentialPrefix => {
+            // NGINX prefix matching is a literal string prefix — carry that
+            // semantics explicitly instead of silently narrowing to ExyonQ's
+            // segment boundary.
+            RouteMatch {
+                literal: true,
+                ..RouteMatch::prefix(route_path(location))
+            }
         }
+        LocationKind::Exact => RouteMatch {
+            // NGINX `location =`: whole-URI equality, not a prefix claim.
+            exact: true,
+            ..RouteMatch::prefix(route_path(location))
+        },
         LocationKind::RegexCaseSensitive => match_from_regex_pattern(&location.raw_pattern, false),
         LocationKind::RegexCaseInsensitive => match_from_regex_pattern(&location.raw_pattern, true),
         LocationKind::Named => RouteMatch::prefix("/"),

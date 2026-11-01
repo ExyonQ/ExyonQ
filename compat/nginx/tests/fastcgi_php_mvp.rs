@@ -296,3 +296,58 @@ server {
     );
     assert!(out.config.trim().is_empty());
 }
+
+#[test]
+fn try_files_php_fallback_maps_front_controller() {
+    // generic profile (FastcgiPhpMvp hard-rejects `try_files` by design)
+    // EXY-10: canonical `try_files $uri $uri/ /index.php?$args` inside a
+    // fastcgi location maps to `route.front_controller` (dir-index + fc).
+    let src = r#"
+server {
+    listen 127.0.0.1:18081;
+    server_name wp.local;
+    root /var/www/html;
+    index index.php;
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+}
+"#;
+    let out = migrate_source("fcgi-tf.conf", src, &MigrateOptions::default()).expect("migrate");
+    let cfg = exyonq_config_ir::AppConfig::parse_str(&out.config).expect("parse");
+    let route = cfg
+        .routes
+        .iter()
+        .find(|r| r.fastcgi.is_some())
+        .expect("fastcgi route");
+    assert_eq!(route.front_controller.as_deref(), Some("index.php"));
+}
+
+#[test]
+fn try_files_without_uri_dir_does_not_map_front_controller() {
+    // MF-1: `try_files $uri /index.php` (no `$uri/`) never consults the
+    // directory index in NGINX, while our fallback does — must NOT map.
+    let src = r#"
+server {
+    listen 127.0.0.1:18082;
+    server_name wp2.local;
+    root /var/www/html;
+    location / {
+        try_files $uri /index.php?$args;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+}
+"#;
+    let out =
+        migrate_source("fcgi-tf-nouri.conf", src, &MigrateOptions::default()).expect("migrate");
+    let cfg = exyonq_config_ir::AppConfig::parse_str(&out.config).expect("parse");
+    for route in &cfg.routes {
+        assert_eq!(
+            route.front_controller, None,
+            "$uri-only try_files must not map front_controller"
+        );
+    }
+}

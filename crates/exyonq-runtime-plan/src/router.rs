@@ -113,8 +113,30 @@ impl RouteIndex {
         host: Option<&str>,
         request_headers: &[(String, String)],
     ) -> Option<(usize, &RouteConfig)> {
+        self.match_route_index_with_host_port_and_headers(path, host, None, request_headers)
+    }
+
+    /// EXY-03: like `match_route_index_with_host_and_headers` but honors
+    /// `match.listen_port` scoping (NGINX `listen` → server → routes).
+    /// EXY-03: `match_route_index_with_host` honoring `match.listen_port`.
+    pub fn match_route_index_with_host_port(
+        &self,
+        path: &str,
+        host: Option<&str>,
+        local_port: Option<u16>,
+    ) -> Option<(usize, &RouteConfig)> {
+        self.match_route_index_with_host_port_and_headers(path, host, local_port, &[])
+    }
+
+    pub fn match_route_index_with_host_port_and_headers(
+        &self,
+        path: &str,
+        host: Option<&str>,
+        local_port: Option<u16>,
+        request_headers: &[(String, String)],
+    ) -> Option<(usize, &RouteConfig)> {
         let path = normalize_path(path);
-        self.best_match(&path, host, request_headers)
+        self.best_match(&path, host, request_headers, local_port)
     }
 
     pub fn match_route_with_host(&self, path: &str, host: Option<&str>) -> Option<&RouteConfig> {
@@ -127,18 +149,23 @@ impl RouteIndex {
         path: &str,
         host: Option<&str>,
         request_headers: &[(String, String)],
+        local_port: Option<u16>,
     ) -> Option<(usize, &RouteConfig)> {
         self.routes
             .iter()
             .zip(self.matchers.iter())
             .enumerate()
             .filter(|(_, (route, matcher))| {
-                host_matches_route(route, host)
+                port_matches_route(route, local_port)
+                    && host_matches_route(route, host)
                     && path_matches(path, route, matcher)
                     && exyonq_config_ir::match_header_satisfied(&route.r#match, request_headers)
             })
             .max_by_key(|(idx, (route, _))| {
                 (
+                    // NGINX: listen selects the server first — a port-scoped
+                    // route that matched outranks an unscoped one.
+                    route.r#match.listen_port.is_some() as u8,
                     host_match_rank(route.r#match.host.as_deref()),
                     route.r#match.kind_rank(),
                     route.r#match.pattern_len(),
@@ -154,9 +181,28 @@ impl RouteIndex {
     }
 }
 
+/// EXY-03: `match.listen_port` — `None` (unset) matches every listener.
+fn port_matches_route(route: &RouteConfig, local_port: Option<u16>) -> bool {
+    match route.r#match.listen_port {
+        None => true,
+        Some(p) => local_port == Some(p),
+    }
+}
+
 fn path_matches(path: &str, route: &RouteConfig, matcher: &CompiledMatcher) -> bool {
     match matcher {
-        CompiledMatcher::Prefix => path_under_route_prefix(path, &route.r#match.path),
+        CompiledMatcher::Prefix => {
+            if route.r#match.exact {
+                // NGINX `location =`: whole-URI equality, no prefix claim.
+                !route.r#match.path.is_empty() && path == route.r#match.path
+            } else if route.r#match.literal {
+                // NGINX literal prefix: pattern verbatim, no boundary and no
+                // `/` trim — `/assets/` does not match `/assets`.
+                !route.r#match.path.is_empty() && path.starts_with(&route.r#match.path)
+            } else {
+                path_under_route_prefix(path, &route.r#match.path)
+            }
+        }
         CompiledMatcher::Suffix => {
             let suffix = route.r#match.suffix.as_deref().unwrap_or("");
             !suffix.is_empty() && path.ends_with(suffix)
@@ -274,15 +320,22 @@ mod tests {
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         }
     }
 
@@ -512,5 +565,36 @@ mod tests {
         ];
         let index = RouteIndex::new(routes);
         assert_eq!(index.match_route("/p.html").unwrap().name, "a");
+    }
+    #[test]
+    fn literal_prefix_matches_extensions_boundary_does_not() {
+        // EXY-03: imported NGINX `location /assets` matches `/assets-extra`
+        // (literal string prefix); native routes keep segment-boundary
+        // matching. With a shared docroot both modes must stay distinct.
+        let mut literal_route = route("literal", "/assets");
+        literal_route.r#match.literal = true;
+        let routes = vec![route("root", "/"), literal_route];
+        let index = RouteIndex::new(routes);
+        assert_eq!(index.match_route("/assets-extra").unwrap().name, "literal");
+        assert_eq!(index.match_route("/assets/x").unwrap().name, "literal");
+
+        let routes = vec![route("root", "/"), route("boundary", "/assets")];
+        let index = RouteIndex::new(routes);
+        assert_eq!(index.match_route("/assets-extra").unwrap().name, "root");
+        assert_eq!(index.match_route("/assets/x").unwrap().name, "boundary");
+    }
+
+    #[test]
+    fn literal_prefix_keeps_longest_match_wins() {
+        // NGINX longest-prefix ranking is unchanged under literal matching:
+        // `/assets/extra` beats `/assets` even when both literally match.
+        let mut a = route("short", "/assets");
+        let mut b = route("long", "/assets/extra");
+        a.r#match.literal = true;
+        b.r#match.literal = true;
+        let routes = vec![route("root", "/"), a, b];
+        let index = RouteIndex::new(routes);
+        assert_eq!(index.match_route("/assets/extra/x").unwrap().name, "long");
+        assert_eq!(index.match_route("/assets/other/x").unwrap().name, "short");
     }
 }

@@ -1120,6 +1120,7 @@ dependencies = [
  "exyonq-cfd-gen",
  "exyonq-fastcgi-wire",
  "exyonq-linux-ffi",
+ "exyonq-mime",
  "exyonq-waf",
  "exyonq-waf-api",
  "libc",
@@ -1441,6 +1442,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "exyonq-mime"
+version = "0.9.0"
+
+[[package]]
 name = "exyonq-mod-fastcgi"
 version = "0.9.0"
 dependencies = [
@@ -1525,6 +1530,7 @@ dependencies = [
  "brotli",
  "bytes",
  "exyonq-cache",
+ "exyonq-mime",
  "exyonq-module-api",
  "flate2",
  "http",

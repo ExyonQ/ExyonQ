@@ -124,6 +124,8 @@ timeout_ms = 5000
         .await
         .expect("state");
     let ctx = Arc::new(ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
@@ -231,6 +233,8 @@ timeout_ms = 5000
         .await
         .expect("state");
     let ctx = Arc::new(ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),

@@ -109,27 +109,9 @@ pub fn method_allowed(method: &str) -> Result<(), StaticErr> {
     }
 }
 
+/// Delegates to the canonical table in `exyonq-mime` (EXY-02/EXY-09).
 pub fn content_type_for(path: &Path) -> &'static str {
-    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-        return "application/octet-stream";
-    };
-    match ext.to_ascii_lowercase().as_str() {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "js" => "application/javascript",
-        "json" => "application/json",
-        "txt" => "text/plain; charset=utf-8",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "svg" => "image/svg+xml",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "wasm" => "application/wasm",
-        "xml" => "application/xml",
-        "pdf" => "application/pdf",
-        _ => "application/octet-stream",
-    }
+    exyonq_mime::content_type_for_path(path)
 }
 
 #[cfg_attr(target_os = "linux", allow(dead_code))]

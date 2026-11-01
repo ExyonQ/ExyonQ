@@ -269,10 +269,9 @@ impl CompressionModule {
                     Self::apply_not_acceptable(obs, is_head);
                     Ok(())
                 }
-                NegotiateOutcome::Identity | NegotiateOutcome::Encode(_) => {
-                    Self::ensure_vary_accept_encoding(obs.headers_mut());
-                    Ok(())
-                }
+                // No Vary: the representation never differs by Accept-Encoding,
+                // so emitting it would only split intermediary caches (EXY-04).
+                NegotiateOutcome::Identity | NegotiateOutcome::Encode(_) => Ok(()),
             };
         }
 

@@ -68,6 +68,11 @@ macro_rules! budget_exceeded_marker_response {
 
 pub struct ConnectionContext {
     pub state: Arc<ServerState>,
+    /// Connection-level scheme as seen by the accepting listener (`http`/`https`).
+    pub scheme: &'static str,
+    /// Port the connection was accepted on (listener port) — NGINX
+    /// `port_in_redirect` semantics. `None` when unknown.
+    pub local_port: Option<u16>,
     pub proxy_client: ProxyClient,
     pub x_forwarded_for: HeaderValue,
     pub ops: Arc<crate::lifecycle::LifecycleState>,
@@ -121,6 +126,8 @@ impl Clone for ConnectionContext {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
+            scheme: self.scheme,
+            local_port: self.local_port,
             proxy_client: self.proxy_client.clone(),
             x_forwarded_for: self.x_forwarded_for.clone(),
             ops: Arc::clone(&self.ops),
@@ -179,21 +186,23 @@ pub async fn serve_http3_request<B: Http3RequestBody>(
     let state = Arc::clone(&ctx.state);
     let (parts, body) = req.into_parts();
     let req = Request::from_parts(parts, body.into_http3_bytes());
+    let local_port = ctx.local_port;
     let response = serve_http3_request_bytes(ctx, req).await;
     let mut response: Response<FinalBoxBody> = response.map(|body| {
         body.map_err(|err| -> exyonq_module_api::BoxError { Box::new(err) })
             .boxed()
     });
-    apply_route_response_headers(&state, &path, host.as_deref(), &mut response);
+    apply_route_response_headers(&state, &path, host.as_deref(), local_port, &mut response);
     maybe_gunzip_response(
         &state,
         &path,
         host.as_deref(),
+        local_port,
         accept_encoding.as_deref(),
         &method,
         &mut response,
     );
-    maybe_sub_filter_response(&state, &path, host.as_deref(), &mut response);
+    maybe_sub_filter_response(&state, &path, host.as_deref(), local_port, &mut response);
     crate::waf_body::maybe_wrap_response(
         Arc::clone(&state.waf),
         method.as_str(),
@@ -213,6 +222,7 @@ async fn serve_http3_request_bytes(
     ctx: ConnectionContext,
     req: Request<bytes::Bytes>,
 ) -> HandlerResponse {
+    let local_port = ctx.local_port;
     // Cap061/S2: one admission snapshot — no mid-request flag re-read (LA-S2-001/002).
     let access_needed = crate::observability::access_event_required();
     let otel_needed = crate::observability::otel_spans_enabled();
@@ -319,6 +329,8 @@ async fn serve_http3_request_bytes(
         }
         let response = dispatch_core(
             &ctx.state,
+            ctx.scheme,
+            ctx.local_port,
             &ctx.proxy_client,
             &parts.method,
             &parts.uri,
@@ -354,6 +366,7 @@ async fn serve_http3_request_bytes(
         &state,
         &request_path,
         request_host.as_deref(),
+        local_port,
         &mut response,
     );
     let _ = (accept_encoding, method);
@@ -414,6 +427,8 @@ async fn serve_http3_with_modules(
         let host = request_host_from_parts(&uri, &parts.headers);
         let mut response = dispatch_core(
             &ctx.state,
+            ctx.scheme,
+            ctx.local_port,
             &ctx.proxy_client,
             &method,
             &uri,
@@ -425,7 +440,13 @@ async fn serve_http3_with_modules(
             &ctx.ops,
         )
         .await;
-        attach_route_labels(&ctx.state, uri.path(), host.as_deref(), &mut response);
+        attach_route_labels(
+            &ctx.state,
+            uri.path(),
+            host.as_deref(),
+            ctx.local_port,
+            &mut response,
+        );
         response
     })
     .await
@@ -457,21 +478,23 @@ pub async fn serve_connection(
     let waf_request_headers = mirror_headers.clone();
     let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
     let state = Arc::clone(&ctx.state);
+    let local_port = ctx.local_port;
     let response = serve_connection_inner(ctx, req).await?;
     let mut response: Response<FinalBoxBody> = response.map(|body| {
         body.map_err(|err| -> exyonq_module_api::BoxError { Box::new(err) })
             .boxed()
     });
-    apply_route_response_headers(&state, &path, host.as_deref(), &mut response);
+    apply_route_response_headers(&state, &path, host.as_deref(), local_port, &mut response);
     maybe_gunzip_response(
         &state,
         &path,
         host.as_deref(),
+        local_port,
         accept_encoding.as_deref(),
         &method,
         &mut response,
     );
-    maybe_sub_filter_response(&state, &path, host.as_deref(), &mut response);
+    maybe_sub_filter_response(&state, &path, host.as_deref(), local_port, &mut response);
     crate::waf_body::maybe_wrap_response(
         Arc::clone(&state.waf),
         method.as_str(),
@@ -491,6 +514,7 @@ async fn serve_connection_inner(
     ctx: ConnectionContext,
     req: Request<Incoming>,
 ) -> Result<Response<BoxBody>, Infallible> {
+    let local_port = ctx.local_port;
     // Cap061/S2: one admission snapshot — no mid-request flag re-read (LA-S2-001/002).
     let access_needed = crate::observability::access_event_required();
     let otel_needed = crate::observability::otel_spans_enabled();
@@ -608,7 +632,7 @@ async fn serve_connection_inner(
                 let route_forces_dispatch = ctx
                     .state
                     .route_index
-                    .match_route_index_with_host(path, host.as_deref())
+                    .match_route_index_with_host_port(path, host.as_deref(), ctx.local_port)
                     .is_some_and(|(idx, _)| ctx.state.route_requires_full_dispatch(idx));
                 let static_ok =
                     !route_forces_dispatch && !ctx.state.wire_incompatible_features_active();
@@ -655,6 +679,10 @@ async fn serve_connection_inner(
                             path,
                             static_dispatch_range_headers(req.headers()),
                             None,
+                            ctx.scheme,
+                            req.uri().query(),
+                            request_authority(req.uri(), req.headers()).as_deref(),
+                            ctx.local_port,
                         )
                         .await;
                         return finish_hyper(
@@ -729,7 +757,16 @@ async fn serve_connection_inner(
             response
         } else {
             let req = inject_client_ip(req, &client_ip);
-            match handle_request(ctx.state, req, Some(&xff), Arc::clone(&ctx.ops)).await {
+            match handle_request(
+                ctx.state,
+                ctx.scheme,
+                ctx.local_port,
+                req,
+                Some(&xff),
+                Arc::clone(&ctx.ops),
+            )
+            .await
+            {
                 Ok(response) => response,
                 Err(response) => response,
             }
@@ -755,6 +792,7 @@ async fn serve_connection_inner(
         &state,
         &request_path,
         request_host_value.as_deref(),
+        local_port,
         &mut result,
     );
     Ok(result)
@@ -861,7 +899,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
             let route_forces_dispatch = ctx
                 .state
                 .route_index
-                .match_route_index_with_host(path, host.as_deref())
+                .match_route_index_with_host_port(path, host.as_deref(), ctx.local_port)
                 .is_some_and(|(idx, _)| ctx.state.route_requires_full_dispatch(idx));
             let static_ok =
                 !route_forces_dispatch && !ctx.state.wire_incompatible_features_active();
@@ -889,9 +927,19 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
                         path,
                         static_dispatch_range_headers_from_pairs(&headers),
                         None,
+                        ctx.scheme,
+                        req.uri().query(),
+                        request_authority(req.uri(), req.headers()).as_deref(),
+                        ctx.local_port,
                     )
                     .await;
-                    attach_route_labels(&ctx.state, path, host.as_deref(), &mut response);
+                    attach_route_labels(
+                        &ctx.state,
+                        path,
+                        host.as_deref(),
+                        ctx.local_port,
+                        &mut response,
+                    );
                     return response;
                 }
             }
@@ -900,15 +948,31 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
 
     let path = req.uri().path().to_string();
     let host = request_host(&req);
-    let mut response =
-        handle_core_request(&ctx.state, &ctx.proxy_client, req, Some(&xff), &ctx.ops).await;
-    attach_route_labels(&ctx.state, &path, host.as_deref(), &mut response);
+    let mut response = handle_core_request(
+        &ctx.state,
+        ctx.scheme,
+        ctx.local_port,
+        &ctx.proxy_client,
+        req,
+        Some(&xff),
+        &ctx.ops,
+    )
+    .await;
+    attach_route_labels(
+        &ctx.state,
+        &path,
+        host.as_deref(),
+        ctx.local_port,
+        &mut response,
+    );
     response
 }
 
 #[allow(clippy::result_large_err)] // Err is a ready-to-send response, not an error
 async fn handle_request_inner(
     state: Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
     ops: Arc<crate::lifecycle::LifecycleState>,
@@ -941,7 +1005,8 @@ async fn handle_request_inner(
         || state.compression_configured()
         || state.gunzip_configured()
     {
-        return handle_request_with_modules(state, req, x_forwarded_for, ops).await;
+        return handle_request_with_modules(state, scheme, local_port, req, x_forwarded_for, ops)
+            .await;
     }
 
     if state.wire_cheap_modules_active() {
@@ -957,12 +1022,21 @@ async fn handle_request_inner(
         }
         let response_path = req.uri().path().to_string();
         let response_host = request_host(&req);
-        let mut response =
-            handle_core_request(&state, &state.proxy_client, req, x_forwarded_for, &ops).await;
+        let mut response = handle_core_request(
+            &state,
+            scheme,
+            local_port,
+            &state.proxy_client,
+            req,
+            x_forwarded_for,
+            &ops,
+        )
+        .await;
         apply_route_response_headers(
             &state,
             &response_path,
             response_host.as_deref(),
+            local_port,
             &mut response,
         );
         exyonq_module_api::wire_record_response(response.status().as_u16());
@@ -971,12 +1045,21 @@ async fn handle_request_inner(
 
     let response_path = req.uri().path().to_string();
     let response_host = request_host(&req);
-    let mut response =
-        handle_core_request(&state, &state.proxy_client, req, x_forwarded_for, &ops).await;
+    let mut response = handle_core_request(
+        &state,
+        scheme,
+        local_port,
+        &state.proxy_client,
+        req,
+        x_forwarded_for,
+        &ops,
+    )
+    .await;
     apply_route_response_headers(
         &state,
         &response_path,
         response_host.as_deref(),
+        local_port,
         &mut response,
     );
     Ok(response)
@@ -985,6 +1068,8 @@ async fn handle_request_inner(
 #[allow(clippy::result_large_err)] // Err is a ready-to-send response, not an error
 async fn handle_request(
     state: Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
     ops: Arc<crate::lifecycle::LifecycleState>,
@@ -997,12 +1082,13 @@ async fn handle_request(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     let method = req.method().clone();
-    let mut result = handle_request_inner(state.clone(), req, x_forwarded_for, ops).await;
+    let mut result =
+        handle_request_inner(state.clone(), scheme, local_port, req, x_forwarded_for, ops).await;
     let response = match &mut result {
         Ok(response) => response,
         Err(response) => response,
     };
-    apply_route_response_headers(&state, &path, host.as_deref(), response);
+    apply_route_response_headers(&state, &path, host.as_deref(), local_port, response);
     let _ = (accept_encoding, method);
     result
 }
@@ -1012,6 +1098,8 @@ async fn handle_request(
 #[allow(clippy::result_large_err)]
 async fn handle_request_with_modules(
     state: Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
     ops: Arc<crate::lifecycle::LifecycleState>,
@@ -1028,9 +1116,17 @@ async fn handle_request_with_modules(
             // Q-15: labels must exist before `on_response` runs in the pipeline.
             let path = req.uri().path().to_string();
             let host = request_host(&req);
-            let mut response =
-                handle_core_request(&state, &proxy_client, req, xff.as_ref(), &ops).await;
-            attach_route_labels(&state, &path, host.as_deref(), &mut response);
+            let mut response = handle_core_request(
+                &state,
+                scheme,
+                local_port,
+                &proxy_client,
+                req,
+                xff.as_ref(),
+                &ops,
+            )
+            .await;
+            attach_route_labels(&state, &path, host.as_deref(), local_port, &mut response);
             response
         }
     })
@@ -1044,9 +1140,13 @@ fn apply_route_response_headers<B>(
     state: &ServerState,
     path: &str,
     host: Option<&str>,
+    local_port: Option<u16>,
     response: &mut Response<B>,
 ) {
-    let Some((route_idx, route)) = state.route_index.match_route_index_with_host(path, host) else {
+    let Some((route_idx, route)) = state
+        .route_index
+        .match_route_index_with_host_port(path, host, local_port)
+    else {
         tracing::trace!(%path, ?host, "apply_route_response_headers: no route match");
         return;
     };
@@ -1095,11 +1195,15 @@ fn maybe_gunzip_response(
     state: &ServerState,
     path: &str,
     host: Option<&str>,
+    local_port: Option<u16>,
     accept_encoding: Option<&str>,
     method: &Method,
     response: &mut Response<FinalBoxBody>,
 ) {
-    let (enabled, buffer_bytes) = match state.route_index.match_route_index_with_host(path, host) {
+    let (enabled, buffer_bytes) = match state
+        .route_index
+        .match_route_index_with_host_port(path, host, local_port)
+    {
         Some((_, route)) => (
             route.gunzip.unwrap_or(state.config.modules.gunzip.enabled),
             state.config.modules.gunzip.buffer_bytes,
@@ -1127,9 +1231,13 @@ fn maybe_sub_filter_response(
     state: &ServerState,
     path: &str,
     host: Option<&str>,
+    local_port: Option<u16>,
     response: &mut Response<FinalBoxBody>,
 ) {
-    let Some((_, route)) = state.route_index.match_route_index_with_host(path, host) else {
+    let Some((_, route)) = state
+        .route_index
+        .match_route_index_with_host_port(path, host, local_port)
+    else {
         return;
     };
     crate::sub_filter::maybe_sub_filter(&state.config.modules.sub_filter, &route.name, response);
@@ -1141,15 +1249,21 @@ fn attach_route_labels<B>(
     state: &ServerState,
     path: &str,
     host: Option<&str>,
+    local_port: Option<u16>,
     response: &mut Response<B>,
 ) {
-    if let Some((_, route)) = state.route_index.match_route_index_with_host(path, host) {
+    if let Some((_, route)) = state
+        .route_index
+        .match_route_index_with_host_port(path, host, local_port)
+    {
         insert_route_labels(route, response);
     }
 }
 
 async fn handle_core_request(
     state: &Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
     proxy_client: &ProxyClient,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
@@ -1167,7 +1281,16 @@ async fn handle_core_request(
             .collect(),
     );
     let client_ip = client_ip_from_xff(x_forwarded_for);
-    let response = handle_core_request_inner(state, proxy_client, req, x_forwarded_for, ops).await;
+    let response = handle_core_request_inner(
+        state,
+        scheme,
+        local_port,
+        proxy_client,
+        req,
+        x_forwarded_for,
+        ops,
+    )
+    .await;
     waf_response_gate(
         state,
         &method,
@@ -1183,22 +1306,44 @@ async fn handle_core_request(
 
 async fn handle_core_request_inner(
     state: &Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
     proxy_client: &ProxyClient,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
     ops: &Arc<crate::lifecycle::LifecycleState>,
 ) -> Response<BoxBody> {
     if is_websocket_upgrade(req.headers()) {
-        return handle_core_request_with_body(state, proxy_client, req, x_forwarded_for, ops).await;
+        return handle_core_request_with_body(
+            state,
+            scheme,
+            local_port,
+            proxy_client,
+            req,
+            x_forwarded_for,
+            ops,
+        )
+        .await;
     }
 
     if *req.method() != Method::GET && *req.method() != Method::HEAD {
-        return handle_core_request_with_body(state, proxy_client, req, x_forwarded_for, ops).await;
+        return handle_core_request_with_body(
+            state,
+            scheme,
+            local_port,
+            proxy_client,
+            req,
+            x_forwarded_for,
+            ops,
+        )
+        .await;
     }
 
     let request_headers = header_pairs_from_map(req.headers());
     dispatch_core(
         state,
+        scheme,
+        local_port,
         proxy_client,
         req.method(),
         req.uri(),
@@ -1214,6 +1359,8 @@ async fn handle_core_request_inner(
 
 async fn handle_core_request_with_body(
     state: &Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
     proxy_client: &ProxyClient,
     req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
@@ -1275,9 +1422,10 @@ async fn handle_core_request_with_body(
     // WebSocket upgrade stays on the direct proxy path (Cap031). Cap035 rewrite rematch
     // for non-GET methods is unified through dispatch_core below.
     if is_websocket_upgrade(req.headers()) {
-        let Some((route_idx, _)) = state
-            .route_index
-            .match_route_index_with_host(&path, host.as_deref())
+        let Some((route_idx, _)) =
+            state
+                .route_index
+                .match_route_index_with_host_port(&path, host.as_deref(), local_port)
         else {
             return text_response(StatusCode::NOT_FOUND, "not found");
         };
@@ -1312,7 +1460,7 @@ async fn handle_core_request_with_body(
 
     let is_proxy_route = state
         .route_index
-        .match_route_index_with_host(&path, host.as_deref())
+        .match_route_index_with_host_port(&path, host.as_deref(), local_port)
         .is_some_and(|(route_idx, _)| state.snapshot.proxy_cluster_for_route(route_idx).is_some());
     let body_limit = if is_proxy_route {
         PROXY_MAX_REQUEST_BODY_BYTES
@@ -1349,6 +1497,8 @@ async fn handle_core_request_with_body(
 
     dispatch_core(
         state,
+        scheme,
+        local_port,
         proxy_client,
         &method,
         &uri,
@@ -1368,6 +1518,8 @@ async fn handle_core_request_with_body(
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_core(
     state: &Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
     proxy_client: &ProxyClient,
     method: &Method,
     uri: &hyper::Uri,
@@ -1428,7 +1580,7 @@ async fn dispatch_core(
         // served straight from disk.
         let route_forces_dispatch = state
             .route_index
-            .match_route_index_with_host(path, host.as_deref())
+            .match_route_index_with_host_port(path, host.as_deref(), local_port)
             .is_some_and(|(idx, _)| state.route_requires_full_dispatch(idx));
         if !route_forces_dispatch && !state.wire_incompatible_features_active() {
             if let Some(reject) = waf_header_gate(
@@ -1450,15 +1602,20 @@ async fn dispatch_core(
                     path,
                     static_dispatch_range_headers_from_pairs(request_headers),
                     materialization_budget_bytes,
+                    scheme,
+                    uri.query(),
+                    uri.authority().map(|a| a.as_str()).or(host.as_deref()),
+                    local_port,
                 )
                 .await;
             }
         }
     }
 
-    let Some((route_idx, route)) = state
-        .route_index
-        .match_route_index_with_host(path, host.as_deref())
+    let Some((route_idx, route)) =
+        state
+            .route_index
+            .match_route_index_with_host_port(path, host.as_deref(), local_port)
     else {
         return text_response(StatusCode::NOT_FOUND, "not found");
     };
@@ -1516,6 +1673,8 @@ async fn dispatch_core(
     // auth/WAF/zone gates above were about to reject (amplified denied load).
     let mirror_ctx = ConnectionContext {
         state: Arc::clone(state),
+        scheme,
+        local_port,
         proxy_client: proxy_client.clone(),
         x_forwarded_for: x_forwarded_for
             .cloned()
@@ -1585,7 +1744,7 @@ async fn dispatch_core(
             path = rewritten.to_string();
             let Some((rematch_idx, rematch_route)) = state
                 .route_index
-                .match_route_index_with_host(path.as_str(), host.as_deref())
+                .match_route_index_with_host_port(path.as_str(), host.as_deref(), local_port)
             else {
                 return text_response(StatusCode::NOT_FOUND, "not found");
             };
@@ -1649,6 +1808,10 @@ async fn dispatch_core(
                     path,
                     request_headers,
                     materialization_budget_bytes,
+                    scheme,
+                    uri.query(),
+                    uri.authority().map(|a| a.as_str()).or(host.as_deref()),
+                    local_port,
                     ctx,
                 )
                 .await
@@ -1657,6 +1820,8 @@ async fn dispatch_core(
         return fpc_bypassed!(
             static_dispatch_maybe_cached(
                 state,
+                scheme,
+                local_port,
                 route_idx,
                 method,
                 &uri,
@@ -1881,6 +2046,27 @@ async fn execute_fastcgi_backend(
             }
 
             let uri_path = http.script_path.unwrap_or_else(|| http.uri.path());
+            // EXY-03: NGINX `alias` + `fastcgi_pass` — resolve the script under
+            // the route's alias root at `URI − match.path` (verbatim
+            // remainder); `SCRIPT_NAME` stays the full request URI.
+            let route = &state.config.routes[route_idx];
+            let alias_uri_path;
+            let (script_root, script_name_uri, uri_path) = match &route.fastcgi_script_root {
+                Some(root) => {
+                    let rem = if route.r#match.exact {
+                        Some("")
+                    } else {
+                        uri_path.strip_prefix(route.r#match.path.as_str())
+                    };
+                    alias_uri_path = format!("/{}", rem.unwrap_or("").trim_start_matches('/'));
+                    (
+                        Some(root.as_path()),
+                        Some(http.uri.path()),
+                        alias_uri_path.as_str(),
+                    )
+                }
+                None => (None, None, uri_path),
+            };
             let query_string = http.uri.query().unwrap_or("");
             let request_uri = http
                 .uri
@@ -1896,9 +2082,13 @@ async fn execute_fastcgi_backend(
 
             let pool_document_root = state.snapshot.fcgi_pool_document_root(*pool_id);
 
+            let front_controller = state.config.routes[route_idx].front_controller.as_deref();
             let dispatch_request = match execute_backend::build_fcgi_dispatch_request(
                 *pool_id,
                 pool_document_root,
+                script_root,
+                script_name_uri,
+                front_controller,
                 http.method.as_str(),
                 uri_path,
                 query_string,
@@ -1909,18 +2099,33 @@ async fn execute_fastcgi_backend(
                 default_port,
             ) {
                 Ok(request) => request,
-                Err(_) => {
-                    return Some(execute_backend::ExecuteBackendOutcome {
-                        status: 502,
-                        headers: Vec::new(),
-                        body: b"bad gateway".to_vec(),
-                    });
+                Err(outcome) => {
+                    return Some(fcgi_resolution_error_outcome(outcome));
                 }
             };
 
             execute_backend::execute_backend(backend, Some(dispatch_request), None, None).await
         }
         _ => None,
+    }
+}
+
+/// EXY-10: map a FastCGI script-resolution failure to its real status — a
+/// missing script is a client-visible 404 (403 for traversal), not an upstream
+/// fault. 502 stays for actual probe/transport errors only.
+fn fcgi_resolution_error_outcome(
+    outcome: exyonq_module_api::fcgi_script_resolver::FastcgiScriptResolutionOutcome,
+) -> execute_backend::ExecuteBackendOutcome {
+    use exyonq_module_api::fcgi_script_resolver::FastcgiScriptResolutionOutcome as R;
+    let (status, body) = match outcome {
+        R::NotFound => (404, b"not found".as_slice()),
+        R::Forbidden | R::InvalidPath => (403, b"forbidden".as_slice()),
+        _ => (502, b"bad gateway".as_slice()),
+    };
+    execute_backend::ExecuteBackendOutcome {
+        status,
+        headers: Vec::new(),
+        body: body.to_vec(),
     }
 }
 
@@ -2089,11 +2294,7 @@ async fn fastcgi_dispatch_maybe_cached(
         return Some(response);
     }
 
-    let scheme = if state.config.primary_server().tls.is_some() {
-        "https"
-    } else {
-        "http"
-    };
+    let scheme = conn_scheme(state);
     let key = build_storage_cache_key(CacheKeyParts {
         range: String::new(),
         site_id: 0,
@@ -2126,6 +2327,12 @@ async fn fastcgi_dispatch_maybe_cached(
     let method_owned = method.clone();
     let script_path_owned = script_path.map(str::to_string);
     let remote_addr_owned = remote_addr.to_string();
+    // EXY-03: NGINX `alias` + `fastcgi_pass` — route script root/remainder
+    // resolution, cloned into the cache fill closure below.
+    let fcgi_script_root_owned = state.config.routes[route_idx].fastcgi_script_root.clone();
+    let front_controller_owned = state.config.routes[route_idx].front_controller.clone();
+    let route_match_path_owned = state.config.routes[route_idx].r#match.path.clone();
+    let route_match_exact_owned = state.config.routes[route_idx].r#match.exact;
 
     Some({
         let (mut response, outcome) = serve_fastcgi_with_cache(
@@ -2145,8 +2352,30 @@ async fn fastcgi_dispatch_maybe_cached(
                 let remote_addr = remote_addr_owned.clone();
                 let req_headers = request_headers.clone();
                 let fcgi_backend = fcgi_backend;
+                let fcgi_script_root = fcgi_script_root_owned.clone();
+                let front_controller = front_controller_owned.clone();
+                let route_match_path = route_match_path_owned.clone();
+                let route_match_exact = route_match_exact_owned;
                 async move {
-                    let uri_path = script_path.as_deref().unwrap_or_else(|| uri.path());
+                    let uri_path_raw = script_path.as_deref().unwrap_or_else(|| uri.path());
+                    let alias_uri_path;
+                    let (script_root, script_name_uri, uri_path) = match &fcgi_script_root {
+                        Some(root) => {
+                            let rem = if route_match_exact {
+                                Some("")
+                            } else {
+                                uri_path_raw.strip_prefix(route_match_path.as_str())
+                            };
+                            alias_uri_path =
+                                format!("/{}", rem.unwrap_or("").trim_start_matches('/'));
+                            (
+                                Some(root.as_path()),
+                                Some(uri.path()),
+                                alias_uri_path.as_str(),
+                            )
+                        }
+                        None => (None, None, uri_path_raw),
+                    };
                     let query_string = uri.query().unwrap_or("");
                     let request_uri = uri
                         .path_and_query()
@@ -2155,6 +2384,9 @@ async fn fastcgi_dispatch_maybe_cached(
                     let dispatch_request = match execute_backend::build_fcgi_dispatch_request(
                         pool_id,
                         pool_document_root.as_ref(),
+                        script_root,
+                        script_name_uri,
+                        front_controller.as_deref(),
                         method.as_str(),
                         uri_path,
                         query_string,
@@ -2165,12 +2397,8 @@ async fn fastcgi_dispatch_maybe_cached(
                         default_port,
                     ) {
                         Ok(request) => request,
-                        Err(_) => {
-                            let bad = execute_backend::ExecuteBackendOutcome {
-                                status: 502,
-                                headers: Vec::new(),
-                                body: b"bad gateway".to_vec(),
-                            };
+                        Err(outcome) => {
+                            let bad = fcgi_resolution_error_outcome(outcome);
                             return prepare_fcgi_cache_load(
                                 bad.status,
                                 bad.headers,
@@ -2407,24 +2635,52 @@ fn apply_route_cache_headers_pairs(
     }
 }
 
+/// Connection scheme for absolute redirect targets (`https` when the primary server terminates TLS).
+fn conn_scheme(state: &ServerState) -> &'static str {
+    if state.config.primary_server().tls.is_some() {
+        "https"
+    } else {
+        "http"
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn static_dispatch_via_service(
     method: &Method,
     root_slot: u32,
     request_path: &str,
     request_headers: Vec<(String, String)>,
     materialization_budget_bytes: Option<u64>,
+    scheme: &'static str,
+    request_query: Option<&str>,
+    host: Option<&str>,
+    local_port: Option<u16>,
 ) -> Response<BoxBody> {
     let Some(static_method) = static_method_from_hyper(method) else {
         return static_method_not_allowed();
     };
+    let mut request_headers = request_headers;
+    // h2 carries authority in `:authority`/URI, not a `host` header — inject the
+    // resolved host so absolute redirect targets can be built.
+    if let Some(h) = host {
+        if !request_headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("host"))
+        {
+            request_headers.push(("host".to_string(), h.to_string()));
+        }
+    }
     // P14C-C-A: take ownership — callers that already own a Vec avoid a second to_vec.
-    let request = build_static_dispatch_request_from_str_with_budget(
+    let mut request = build_static_dispatch_request_from_str_with_budget(
         root_slot,
         static_method,
         request_path,
         request_headers,
         materialization_budget_bytes,
     );
+    request.scheme = scheme;
+    request.local_port = local_port;
+    request.request_query = request_query.map(str::to_string);
     let outcome =
         execute_backend::execute_backend(&Backend::Static { root_slot }, None, Some(request), None)
             .await;
@@ -2440,12 +2696,17 @@ fn static_response_from_outcome(outcome: ExecuteBackendOutcome) -> Response<BoxB
     fcgi_response_from_outcome(outcome)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn static_load_for_cache_via_service(
     method: &Method,
     root_slot: u32,
     request_path: &str,
     request_headers: &[(String, String)],
     materialization_budget_bytes: Option<u64>,
+    scheme: &'static str,
+    request_query: Option<&str>,
+    host: Option<&str>,
+    local_port: Option<u16>,
 ) -> StaticCacheLoad {
     let Some(client_method) = static_method_from_hyper(method) else {
         return StaticCacheLoad {
@@ -2459,13 +2720,26 @@ async fn static_load_for_cache_via_service(
         };
     };
     let storage_method = crate::execute_backend::static_cache_storage_method(client_method);
-    let request = build_static_dispatch_request_from_str_with_budget(
+    let mut request_headers = request_headers.to_vec();
+    // Same h2 `:authority` gap as static_dispatch_via_service — inject resolved host.
+    if let Some(h) = host {
+        if !request_headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("host"))
+        {
+            request_headers.push(("host".to_string(), h.to_string()));
+        }
+    }
+    let mut request = build_static_dispatch_request_from_str_with_budget(
         root_slot,
         storage_method,
         request_path,
-        request_headers.to_vec(),
+        request_headers,
         materialization_budget_bytes,
     );
+    request.scheme = scheme;
+    request.local_port = local_port;
+    request.request_query = request_query.map(str::to_string);
     let Some(load) = execute_backend::load_static_for_cache(request).await else {
         return StaticCacheLoad {
             status: StatusCode::NOT_IMPLEMENTED.as_u16(),
@@ -2484,6 +2758,7 @@ async fn static_load_for_cache_via_service(
 }
 
 /// WC2C: static MISS path — execute origin once, assess, bounded insert, return origin unchanged.
+#[allow(clippy::too_many_arguments)]
 async fn static_dispatch_fpc_fill(
     state: &ServerState,
     method: &Method,
@@ -2491,6 +2766,10 @@ async fn static_dispatch_fpc_fill(
     request_path: &str,
     request_headers: &[(String, String)],
     materialization_budget_bytes: Option<u64>,
+    scheme: &'static str,
+    request_query: Option<&str>,
+    host: Option<&str>,
+    local_port: Option<u16>,
     ctx: crate::fpc_lookup::FpcMissContext,
 ) -> Response<BoxBody> {
     // HEAD must not populate (or overwrite) a GET representation.
@@ -2501,6 +2780,10 @@ async fn static_dispatch_fpc_fill(
             request_path,
             request_headers.to_vec(),
             materialization_budget_bytes,
+            scheme,
+            request_query,
+            host,
+            local_port,
         )
         .await;
         apply_route_cache_headers(state, ctx.route_idx, &mut resp);
@@ -2514,6 +2797,10 @@ async fn static_dispatch_fpc_fill(
         request_path,
         request_headers,
         materialization_budget_bytes,
+        scheme,
+        request_query,
+        host,
+        local_port,
     )
     .await;
 
@@ -2593,6 +2880,8 @@ async fn static_dispatch_fpc_fill(
 #[allow(clippy::too_many_arguments)]
 async fn static_dispatch_maybe_cached(
     state: &ServerState,
+    scheme: &'static str,
+    local_port: Option<u16>,
     route_idx: usize,
     method: &Method,
     uri: &hyper::Uri,
@@ -2609,6 +2898,10 @@ async fn static_dispatch_maybe_cached(
             request_path,
             request_headers.to_vec(),
             materialization_budget_bytes,
+            scheme,
+            uri.query(),
+            uri.authority().map(|a| a.as_str()).or(host),
+            local_port,
         )
         .await;
         apply_route_cache_headers(state, route_idx, &mut response);
@@ -2622,17 +2915,17 @@ async fn static_dispatch_maybe_cached(
             request_path,
             request_headers.to_vec(),
             materialization_budget_bytes,
+            scheme,
+            uri.query(),
+            uri.authority().map(|a| a.as_str()).or(host),
+            local_port,
         )
         .await;
         apply_route_cache_headers(state, route_idx, &mut response);
         return response;
     }
 
-    let scheme = if state.config.primary_server().tls.is_some() {
-        "https"
-    } else {
-        "http"
-    };
+    let scheme = conn_scheme(state);
     let key = build_storage_cache_key(CacheKeyParts {
         range: String::new(),
         site_id: 0,
@@ -2653,6 +2946,7 @@ async fn static_dispatch_maybe_cached(
     let req_headers = request_headers.to_vec();
     let method_owned = method.clone();
     let path_owned = request_path.to_string();
+    let query_owned = uri.query().map(str::to_string);
     let mut response = serve_static_with_cache(
         global_response_cache(),
         global_singleflight(),
@@ -2665,6 +2959,7 @@ async fn static_dispatch_maybe_cached(
             let method = method_owned.clone();
             let path = path_owned.clone();
             let headers = req_headers.clone();
+            let query = query_owned.clone();
             async move {
                 static_load_for_cache_via_service(
                     &method,
@@ -2672,6 +2967,10 @@ async fn static_dispatch_maybe_cached(
                     &path,
                     &headers,
                     materialization_budget_bytes,
+                    scheme,
+                    query.as_deref(),
+                    host,
+                    local_port,
                 )
                 .await
             }
@@ -2737,11 +3036,7 @@ async fn proxy_dispatch_maybe_cached(
         .await;
     }
 
-    let scheme = if state.config.primary_server().tls.is_some() {
-        "https"
-    } else {
-        "http"
-    };
+    let scheme = conn_scheme(state);
     let key = build_storage_cache_key(CacheKeyParts {
         range: String::new(),
         site_id: 0,
@@ -3000,11 +3295,7 @@ fn slice_segment_key(
     host: Option<&str>,
     range: String,
 ) -> exyonq_cache::CacheKey {
-    let scheme = if state.config.primary_server().tls.is_some() {
-        "https"
-    } else {
-        "http"
-    };
+    let scheme = conn_scheme(state);
     build_storage_cache_key(CacheKeyParts {
         site_id: 0,
         namespace: 0,
@@ -3333,11 +3624,7 @@ async fn proxy_contract_target(
     let Some(Backend::Proxy { cluster_id }) = state.snapshot.resolve_backend(route_idx) else {
         return bad_gateway();
     };
-    let scheme = if state.config.primary_server().tls.is_some() {
-        "https"
-    } else {
-        "http"
-    };
+    let scheme = conn_scheme(state);
     let remote_addr = x_forwarded_for
         .and_then(|value| value.to_str().ok())
         .unwrap_or("127.0.0.1");
@@ -3451,11 +3738,7 @@ async fn proxy_route_target(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("127.0.0.1")
         .to_string();
-    let scheme = if state.config.primary_server().tls.is_some() {
-        "https"
-    } else {
-        "http"
-    };
+    let scheme = conn_scheme(state);
     let method = match *req.method() {
         Method::GET => ProxyMethod::Get,
         Method::HEAD => ProxyMethod::Head,
@@ -3562,6 +3845,18 @@ fn redirect_response(redirect: &RedirectConfig) -> Response<BoxBody> {
 
 fn request_host(req: &Request<Incoming>) -> Option<String> {
     request_host_from_parts(req.uri(), req.headers())
+}
+
+/// Full request authority (`host[:port]`) for absolute redirect targets —
+/// h2 `:authority` and absolute-form URIs resolve via `uri.authority()`;
+/// origin-form h1 falls back to the raw `Host` header (port preserved).
+fn request_authority(uri: &hyper::Uri, headers: &hyper::HeaderMap) -> Option<String> {
+    uri.authority().map(|a| a.as_str().to_string()).or_else(|| {
+        headers
+            .get(hyper::header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    })
 }
 
 fn request_host_from_parts(uri: &hyper::Uri, headers: &hyper::HeaderMap) -> Option<String> {
@@ -3892,8 +4187,11 @@ mod tests {
                 host: None,
                 suffix: None,
                 regex: None,
+                exact: false,
+                listen_port: None,
                 header: None,
                 header_value: None,
+                literal: false,
             },
             upstream: None,
             root: None,
@@ -3901,15 +4199,22 @@ mod tests {
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         }
     }
 
@@ -3917,7 +4222,7 @@ mod tests {
         crate::lifecycle::LifecycleState::new()
     }
 
-    async fn state_for(
+    async fn state_for_inner(
         config: AppConfig,
     ) -> (
         Arc<ServerState>,
@@ -3938,6 +4243,26 @@ mod tests {
             .await
             .expect("server state");
         (state, static_guard, proxy_guard)
+    }
+
+    async fn state_for(
+        config: AppConfig,
+    ) -> (
+        Arc<ServerState>,
+        (
+            execute_backend::StaticDispatchTestGuard,
+            tokio::sync::MutexGuard<'static, ()>,
+        ),
+        execute_backend::ProxyDispatchTestGuard,
+    ) {
+        // Hold the shared gate for the whole test: this installs a real pinned
+        // static runtime that must not be swapped out mid-flight by another
+        // test's kernel-hook install. Tests needing several states must hoist
+        // the gate once and call `state_for_inner` — the tokio mutex is not
+        // re-entrant, a second `state_for` would self-deadlock.
+        let gate = crate::kernel::test_hooks::wire_hooks_gate().await;
+        let (state, static_guard, proxy_guard) = state_for_inner(config).await;
+        (state, (static_guard, gate), proxy_guard)
     }
 
     #[tokio::test]
@@ -3975,6 +4300,8 @@ mod tests {
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/assets/page.html"),
@@ -4024,6 +4351,8 @@ mod tests {
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::HEAD,
             &Uri::from_static("/assets/page.html"),
@@ -4077,6 +4406,8 @@ mod tests {
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/old"),
@@ -4171,6 +4502,8 @@ mod tests {
         assert!(state.snapshot.proxy_cluster_for_route(0).is_some());
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/api/users"),
@@ -4191,6 +4524,8 @@ mod tests {
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::HEAD,
             &Uri::from_static("/api/users"),
@@ -4271,6 +4606,8 @@ mod tests {
         assert!(state.snapshot.static_slot_for_route_backend(0).is_some());
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/assets/page.html"),
@@ -4361,6 +4698,8 @@ mod tests {
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/site/index.html"),
@@ -4414,6 +4753,8 @@ mod tests {
         let path = "/site/index.html";
         let via_fast = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static(path),
@@ -4433,8 +4774,18 @@ mod tests {
             .snapshot
             .static_slot_for_route_backend(route_idx)
             .expect("site Backend::Static slot");
-        let via_backend_table =
-            static_dispatch_via_service(&Method::GET, 0, path, Vec::new(), None).await;
+        let via_backend_table = static_dispatch_via_service(
+            &Method::GET,
+            0,
+            path,
+            Vec::new(),
+            None,
+            "http",
+            None,
+            None,
+            None,
+        )
+        .await;
         assert_eq!(state.site_static_slot, Some(0));
         assert_eq!(via_canonical.route_name, "site");
         assert_eq!(via_fast.status(), via_backend_table.status());
@@ -4499,6 +4850,8 @@ mod tests {
         let before = crate::mirror::mirror_started_for_tests();
         let denied = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/site/index.html"),
@@ -4527,6 +4880,8 @@ mod tests {
         );
         let allowed = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/site/index.html"),
@@ -4594,6 +4949,8 @@ mod tests {
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let denied = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/site/index.html"),
@@ -4659,12 +5016,23 @@ mod tests {
             exyonq_config_ir::SliceRouteConfig { size: 4096 },
         );
         let names = [
-            "site", "auth", "limited", "filtered", "mirrored", "sliced", "plain",
+            "site", "auth", "limited", "filtered", "mirrored", "sliced", "cached", "plain",
         ];
         let mut routes: Vec<RouteConfig> =
             names.iter().map(|n| route(n, &format!("/{n}"))).collect();
         // "site" needs the response_headers binding — rebuild it in place.
         routes[0] = site;
+        // EXY-01/EXY-05: route with only cache_headers must not bypass
+        // Cache-Control materialization via the wire path.
+        let mut by_mime = std::collections::BTreeMap::new();
+        by_mime.insert(
+            "image/avif".to_string(),
+            exyonq_config_ir::MimeCacheHeader {
+                max_age: 31536000,
+                immutable: true,
+            },
+        );
+        routes[6].cache_headers = Some(exyonq_config_ir::CacheHeadersConfig { by_mime });
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
@@ -4697,7 +5065,8 @@ mod tests {
             (3, true),      // sub_filter
             (4, true),      // mirror
             (5, true),      // slice
-            (6, false),     // plain route stays wire-eligible
+            (6, true),      // cache_headers (EXY-01/EXY-05)
+            (7, false),     // plain route stays wire-eligible
         ] {
             assert_eq!(
                 state.route_requires_full_dispatch(idx),
@@ -4706,6 +5075,208 @@ mod tests {
                 names[idx]
             );
         }
+    }
+
+    /// AUDIT-D1/D2 (re-round): the keep-alive gate must normalize `Host:` the
+    /// same way admission does — `h:443` on the wire must resolve the host-bound
+    /// route, not collapse to `None` and let `None == None` tokens through.
+    #[tokio::test]
+    async fn keepalive_route_gate_strips_host_port() {
+        let mut clean = route("clean", "/clean");
+        clean.r#match.host = Some("app.test".into());
+        let mut dirty = route("dirty", "/dirty");
+        dirty.r#match.host = Some("secure.test".into());
+        let mut modules = exyonq_config_ir::ModulesConfig::default();
+        modules.auth.routes.insert(
+            "dirty".into(),
+            exyonq_config_ir::AuthRouteConfig {
+                realm: "r".into(),
+                user_file: "/dev/null".into(),
+            },
+        );
+        let names = ["clean", "dirty"];
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: names.iter().map(|n| n.to_string()).collect(),
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![clean, dirty],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules,
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        let gate = crate::server::wire_dispatch::build_keepalive_route_gate(&state);
+        // Clean host-bound route resolves identically with or without a port.
+        let plain = gate("/clean/x", Some("app.test"));
+        let ported = gate("/clean/x", Some("app.test:8443"));
+        assert_eq!(plain, ported, "port must not change gate resolution");
+        assert!(
+            ported.is_some(),
+            "clean host-bound route stays wire-eligible"
+        );
+        // Dirty host-bound route resolves to None (full dispatch) on both forms —
+        // before the fix `secure.test:443` also resolved but to the WRONG slot.
+        assert_eq!(gate("/dirty/x", Some("secure.test")), None);
+        assert_eq!(gate("/dirty/x", Some("secure.test:443")), None);
+    }
+
+    /// EXY-03 E2E: `root_mode` picks the mapping. Same docroot, two routes —
+    /// alias resolves `root + (URI − prefix)`, nginx resolves `root + URI`.
+    /// Distinct file bytes prove *which* file was served, not just a 200.
+    #[tokio::test]
+    async fn root_mode_selects_alias_vs_nginx_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), b"ALIAS-FILE").unwrap();
+        std::fs::create_dir(dir.path().join("n")).unwrap();
+        std::fs::write(dir.path().join("n/f.txt"), b"NGINX-FILE").unwrap();
+
+        let mut alias = route("alias", "/a");
+        alias.root = Some(dir.path().to_path_buf());
+        let mut nginx = route("nginx", "/n");
+        nginx.root = Some(dir.path().to_path_buf());
+        nginx.root_mode = exyonq_config_ir::RootMode::FullUri;
+
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["alias".into(), "nginx".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![alias, nginx],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules: Default::default(),
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+
+        async fn get(state: &Arc<ServerState>, uri: &'static str) -> (StatusCode, Vec<u8>) {
+            let resp = dispatch_core(
+                state,
+                "http",
+                None,
+                &state.proxy_client,
+                &Method::GET,
+                &Uri::from_static(uri),
+                None,
+                None,
+                &[],
+                None,
+                None,
+                &test_ops(),
+            )
+            .await;
+            let status = resp.status();
+            let body = resp
+                .into_body()
+                .collect()
+                .await
+                .map(|c| c.to_bytes().to_vec())
+                .unwrap_or_default();
+            (status, body)
+        }
+
+        // alias: /a/f.txt → root + "f.txt" = dir/f.txt
+        let (s, b) = get(&state, "/a/f.txt").await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(b, b"ALIAS-FILE");
+
+        // nginx: /n/f.txt → root + "n/f.txt" = dir/n/f.txt
+        let (s, b) = get(&state, "/n/f.txt").await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(b, b"NGINX-FILE");
+
+        // Same physical file reached the OTHER way — proves the mapping
+        // differs, not the file: alias /a/n/f.txt → dir/n/f.txt.
+        let (s, b) = get(&state, "/a/n/f.txt").await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(b, b"NGINX-FILE");
+
+        // nginx /n/../f.txt → relative "../f.txt" → traversal rejected.
+        let (s, _) = get(&state, "/n/../f.txt").await;
+        assert_ne!(s, StatusCode::OK);
+
+        // missing file → not OK (404 path).
+        let (s, _) = get(&state, "/n/missing.txt").await;
+        assert_ne!(s, StatusCode::OK);
+    }
+
+    /// AUDIT-D2/D7 (re-round): a host-bound dirty route whose path is an
+    /// ancestor of a static slot's prefix outranks the hostless slot route by
+    /// host-match — the overlap check must see it or epoll sendfile serves
+    /// file bytes without auth.
+    #[tokio::test]
+    async fn static_overlap_flags_host_bound_dirty_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.css"), b"x").unwrap();
+        let mut slot = route("slot", "/a/b");
+        slot.root = Some(dir.path().to_path_buf());
+        let mut ancestor = route("protected", "/a");
+        ancestor.r#match.host = Some("protected.test".into());
+        let mut modules = exyonq_config_ir::ModulesConfig::default();
+        modules.auth.routes.insert(
+            "protected".into(),
+            exyonq_config_ir::AuthRouteConfig {
+                realm: "r".into(),
+                user_file: "/dev/null".into(),
+            },
+        );
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["slot".into(), "protected".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![slot, ancestor],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules,
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        assert!(
+            crate::server::wire_dispatch::static_wire_route_overlap(&state),
+            "host-bound dirty ancestor must count as overlap"
+        );
     }
 
     /// AUDIT-D1/D2: the wire admission gate composes both predicates — a wire
@@ -4793,6 +5364,8 @@ mod tests {
         let (state, _static_guard, _proxy_guard) = state_for(plan08_fcgi_config()).await;
         let response = dispatch_core(
             &state,
+            "http",
+            None,
             &state.proxy_client,
             &Method::GET,
             &Uri::from_static("/index.php"),

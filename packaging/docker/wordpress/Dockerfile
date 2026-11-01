@@ -1,20 +1,21 @@
-# ExyonQ 0.7.0 and current WordPress, SQLite, one container.
-# The HTTP server is the static binary from the official image. PHP-FPM runs on
-# Wolfi (Chainguard) — minimal CVE surface (Docker Sponsored OSS gate:
-# Scout 0 critical / 0 high / 0 medium). Build the official image first:
-#   docker build -f packaging/docker/Dockerfile -t exyonq:0.7.0 .
-#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.7.0 .
+# ExyonQ 0.9.0 and current WordPress, SQLite, one container.
+# The HTTP server is the static binary from the official image. PHP-FPM 8.5.12+
+# runs on the official php-fpm Debian base (glibc bookworm — the same libc the
+# ExyonQ release binary links against). Build the official image first:
+#   docker build -f packaging/docker/Dockerfile -t exyonq:0.9.0 .
+#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.9.0 .
 
-ARG EXYONQ_IMAGE=exyonq:0.7.0
-ARG EXYONQ_VERSION=0.7.0
+ARG EXYONQ_IMAGE=exyonq:0.9.0
+ARG EXYONQ_VERSION=0.9.0
 ARG EXYONQ_GIT_REVISION=unknown
 
 FROM ${EXYONQ_IMAGE} AS exyonqbin
 
 # WordPress payload is fetched in a builder stage so the runtime image carries
-# no downloader (curl/unzip) and no apk write to the final layer besides PHP.
-FROM cgr.dev/chainguard/wolfi-base:latest AS fetcher
-RUN apk add --no-cache curl unzip
+# no downloader (curl/unzip).
+FROM debian:bookworm-slim AS fetcher
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://wordpress.org/latest.tar.gz | tar -xz -C /tmp \
     && curl -fsSL -o /tmp/sqlite.zip https://downloads.wordpress.org/plugin/sqlite-database-integration.latest-stable.zip \
     && mkdir -p /staging/wp-content/plugins /staging/wp-content/database \
@@ -27,26 +28,35 @@ COPY packaging/docker/wordpress/wordpress.htaccess /staging/.htaccess
 RUN rm -rf /staging/wp-content/mu-plugins/exyonq-cache/tests \
     && find /staging -name .htaccess ! -path /staging/.htaccess -delete
 
-FROM cgr.dev/chainguard/wolfi-base:latest
+# php:8.5.12-fpm-bookworm ships PHP-FPM 8.5.12 with most WordPress extensions
+# already compiled in (curl, mbstring, iconv, pdo, pdo_sqlite, xml, phar, ctype,
+# dom, fileinfo, sodium, opcache, openssl). Only intl/exif/gd/zip are built here;
+# build deps are purged, keeping only the runtime libraries.
+FROM php:8.5.12-fpm-bookworm
 ARG EXYONQ_VERSION
 ARG EXYONQ_GIT_REVISION
-# PHP-FPM + the modules WordPress and the SQLite integration plugin need.
-# session/tokenizer/zlib are already in the php-8.4 base package.
-RUN apk add --no-cache \
+RUN set -eux; \
+    php -v | grep -qE '^PHP 8\.5\.(1[2-9]|[2-9][0-9])' \
+        || { echo 'ERROR: PHP >= 8.5.12 required in this image' >&2; exit 1; }; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         ca-certificates \
-        php-8.4 php-8.4-fpm \
-        php-8.4-curl php-8.4-mbstring php-8.4-iconv php-8.4-pdo php-8.4-pdo_sqlite \
-        php-8.4-xml php-8.4-phar php-8.4-ctype php-8.4-dom php-8.4-fileinfo \
-        php-8.4-intl php-8.4-exif php-8.4-gd php-8.4-zip php-8.4-sodium php-8.4-opcache \
-        php-8.4-openssl \
-    && adduser -D -u 33 www-data \
-    && sed -i 's|^listen = .*|listen = /run/php/php-fpm.sock|' /etc/php/php-fpm.d/www.conf \
-    && sed -i 's|^listen = .*|listen = /run/php/php-fpm.sock|' /etc/php/php-fpm.d/zz-apko.conf \
-    && sed -i 's|^user = .*|user = www-data|' /etc/php/php-fpm.d/www.conf \
-    && sed -i 's|^group = .*|group = www-data|' /etc/php/php-fpm.d/www.conf \
-    && printf '\nlisten.owner = www-data\nlisten.group = www-data\nlisten.mode = 0660\nclear_env = no\n' >> /etc/php/php-fpm.d/www.conf \
-    && printf 'expose_php = Off\n' >> /etc/php/php.ini \
-    && mkdir -p /run/php
+        libicu-dev libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
+        libicu72 libzip4 libpng16-16 libjpeg62-turbo libfreetype6; \
+    docker-php-ext-configure gd --with-freetype --with-jpeg; \
+    docker-php-ext-install -j"$(nproc)" intl exif gd zip; \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
+        libicu-dev libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    rm -f /usr/local/etc/php-fpm.d/docker.conf /usr/local/etc/php-fpm.d/zz-docker.conf; \
+    sed -i 's|^;\?listen = .*|listen = /run/php/php-fpm.sock|' /usr/local/etc/php-fpm.d/www.conf; \
+    grep -q '^listen = ' /usr/local/etc/php-fpm.d/www.conf \
+        || printf 'listen = /run/php/php-fpm.sock\n' >> /usr/local/etc/php-fpm.d/www.conf; \
+    sed -i 's|^user = .*|user = www-data|' /usr/local/etc/php-fpm.d/www.conf; \
+    sed -i 's|^group = .*|group = www-data|' /usr/local/etc/php-fpm.d/www.conf; \
+    printf '\nlisten.owner = www-data\nlisten.group = www-data\nlisten.mode = 0660\nclear_env = no\n' >> /usr/local/etc/php-fpm.d/www.conf; \
+    printf 'expose_php = Off\n' > /usr/local/etc/php/conf.d/exyonq.ini; \
+    mkdir -p /run/php
 COPY --from=exyonqbin /usr/local/bin/exyonq /usr/local/bin/exyonq
 COPY packaging/release/conf/wordpress.toml /etc/exyonq/wordpress.toml
 COPY packaging/docker/wordpress/entrypoint.sh /usr/local/bin/exyonq-wordpress-entrypoint

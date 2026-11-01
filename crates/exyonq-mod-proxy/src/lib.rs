@@ -67,7 +67,8 @@ pub use dns_refresh::{append_dns_prometheus, DnsPeer, DnsRefreshSupervisor};
 pub use errors::ProxyConfigError;
 pub use forward::ForwardingHeaders;
 pub use headers::{
-    connection_nominated_header_names, is_hop_by_hop_header, parse_response_content_length,
+    connection_nominated_header_names, insert_or_merge_cookie, is_hop_by_hop_header,
+    merge_cookie_header_map, merge_cookie_pairs, parse_response_content_length,
     request_headers_safe_for_proxy, strip_hop_by_hop_headers, ContentLengthParse,
     FIXED_HOP_BY_HOP_HEADERS, REQUEST_UPSTREAM_STRIP_HEADERS, RESPONSE_HOP_BY_HOP_HEADERS,
 };

@@ -497,6 +497,14 @@ pub fn compile_runtime_plan_from_ir(
                 index_file: route.index.clone(),
                 route_name: route.name.clone(),
                 route_host: route.r#match.host.clone(),
+                join_uri: matches!(route.root_mode, exyonq_config_ir::RootMode::FullUri),
+                literal: route.r#match.literal,
+                dir_redirect: route.dir_redirect,
+                exact: route.r#match.exact,
+                dir_redirect_absolute: route.dir_redirect_absolute,
+                dir_redirect_port: route.dir_redirect_port,
+                dir_redirect_host: route.dir_redirect_host.clone(),
+                listen_port: route.r#match.listen_port,
                 preload_max_file_bytes: config.static_section.preload.max_file_bytes,
                 preload_max_total_bytes: config.static_section.preload.max_total_bytes,
                 preload_max_entries: config.static_section.preload.max_entries,
@@ -509,7 +517,7 @@ pub fn compile_runtime_plan_from_ir(
     {
         use crate::router::normalize_route_host;
         use std::collections::HashMap;
-        let mut seen: HashMap<(String, String, String), String> = HashMap::new();
+        let mut seen: HashMap<(String, String, String, Option<u16>), String> = HashMap::new();
         for route in &config.routes {
             let host_key = route
                 .r#match
@@ -523,7 +531,9 @@ pub fn compile_runtime_plan_from_ir(
                 .map(|k| format!("{k:?}"))
                 .unwrap_or_else(|| "invalid".into());
             let pattern = route.r#match.pattern_key().unwrap_or("").to_string();
-            let key = (host_key, kind, pattern);
+            // EXY-03: listener scope is part of route identity — NGINX serves
+            // per-server identical paths (e.g. `/` roots) on distinct ports.
+            let key = (host_key, kind, pattern, route.r#match.listen_port);
             if let Some(prev) = seen.insert(key, route.name.clone()) {
                 anyhow::bail!(
                     "duplicate route match identity host={:?} pattern={:?} (routes {prev} and {})",
@@ -868,15 +878,22 @@ mod tests {
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         }
     }
 
