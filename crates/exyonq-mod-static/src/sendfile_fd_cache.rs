@@ -186,7 +186,10 @@ fn try_hit_with_coding(
             MISSES.fetch_add(1, Ordering::Relaxed);
             return None;
         }
-        let stat = identity_from_c_str(cache.entries[idx].rel.as_c_str(), root.root_dir_fd());
+        let stat = identity_from_c_str(
+            cache.entries[idx].rel.as_c_str(),
+            root.root_dir_fd().expect("dir roots carry a dirfd"),
+        );
         let now = match stat {
             Ok(id) => id,
             Err(_) => {
@@ -356,9 +359,21 @@ mod tests {
     }
 
     fn preload_root(root: &Path) -> StaticRoot {
-        let mut service =
-            StaticRoot::new_with_preload_limits(root, "/site", None, PreloadLimits::DEFAULT)
-                .expect("root");
+        let mut service = StaticRoot::new_with_preload_limits(
+            root,
+            "/site",
+            None,
+            PreloadLimits::DEFAULT,
+            crate::root::StaticRootRouteOpts {
+                join_uri: false,
+                literal: false,
+                exact: false,
+                dir_redirect: false,
+                redirect_policy: crate::root::DirRedirectPolicy::default(),
+                listen_port: None,
+            },
+        )
+        .expect("root");
         service.preload_tree().expect("preload");
         service
     }
@@ -389,9 +404,9 @@ mod tests {
         crate::epoll_session::pin_runtime(Arc::clone(&rt));
 
         let head = head_get("/site/a.bin");
-        let h1 = crate::epoll_session::match_sendfile_asset(0, &head).expect("match1");
+        let h1 = crate::epoll_session::match_sendfile_asset(0, &head, None).expect("match1");
         let a1 = rt.take_sendfile_handle(h1).expect("take1");
-        let h2 = crate::epoll_session::match_sendfile_asset(0, &head).expect("match2");
+        let h2 = crate::epoll_session::match_sendfile_asset(0, &head, None).expect("match2");
         let a2 = rt.take_sendfile_handle(h2).expect("take2");
 
         assert!(
@@ -420,7 +435,7 @@ mod tests {
         crate::epoll_session::pin_runtime(Arc::clone(&rt));
 
         let head = head_get("/site/a.bin");
-        let h1 = crate::epoll_session::match_sendfile_asset(0, &head).expect("match1");
+        let h1 = crate::epoll_session::match_sendfile_asset(0, &head, None).expect("match1");
         let a1 = rt.take_sendfile_handle(h1).expect("take1");
         let etag1 = a1.validators.etag.clone();
 
@@ -429,7 +444,7 @@ mod tests {
         fs::write(&tmp, vec![b'y'; crate::sendfile::SENDFILE_MIN_BYTES]).expect("tmp");
         fs::rename(&tmp, &path).expect("rename");
 
-        let h2 = crate::epoll_session::match_sendfile_asset(0, &head).expect("match2");
+        let h2 = crate::epoll_session::match_sendfile_asset(0, &head, None).expect("match2");
         let a2 = rt.take_sendfile_handle(h2).expect("take2");
         assert!(
             !Arc::ptr_eq(&a1.file, &a2.file),
@@ -464,14 +479,14 @@ mod tests {
         crate::epoll_session::pin_runtime(Arc::clone(&rt));
 
         let head = head_get("/site/a.bin");
-        let h1 = crate::epoll_session::match_sendfile_asset(0, &head).expect("m1");
+        let h1 = crate::epoll_session::match_sendfile_asset(0, &head, None).expect("m1");
         let _ = rt.take_sendfile_handle(h1).expect("t1");
         let hits_before = hits();
 
         let root2 = preload_root(&root_path);
         rt.bind_roots(2, Box::new([Arc::new(root2)]));
 
-        let h2 = crate::epoll_session::match_sendfile_asset(0, &head).expect("m2");
+        let h2 = crate::epoll_session::match_sendfile_asset(0, &head, None).expect("m2");
         let _ = rt.take_sendfile_handle(h2).expect("t2");
         assert_eq!(
             hits(),
@@ -494,7 +509,7 @@ mod tests {
         let file_path = service.resolved_file_path("/site/a.bin").expect("path");
         let open_root = OpenUnderRoot {
             canonical_root: service.canonical_root(),
-            root_dir_fd: service.root_dir_fd(),
+            root_dir_fd: service.root_dir_fd().expect("dir roots carry a dirfd"),
         };
         let asset = SendfileAsset::open_under_root_prepared(&file_path, Some(open_root), 0, None)
             .expect("open A");
@@ -542,7 +557,7 @@ mod tests {
         let file_path = root.resolved_file_path("/site/a.txt").expect("path");
         let open_root = OpenUnderRoot {
             canonical_root: root.canonical_root(),
-            root_dir_fd: root.root_dir_fd(),
+            root_dir_fd: root.root_dir_fd().expect("dir roots carry a dirfd"),
         };
         let source_id = identity_under_root(&file_path, open_root).expect("src id");
         let cfg = crate::encoding_cache::EncodingCacheConfig {
@@ -551,7 +566,7 @@ mod tests {
             level: 6,
             ..crate::encoding_cache::EncodingCacheConfig::default()
         };
-        let coded_path = crate::encoding_cache::ensure_coded_object(
+        let coded_path = crate::encoding_cache::ensure_coded_object_for_test(
             &cfg,
             &source_id,
             crate::encoding_cache::CacheCoding::Gzip,
@@ -622,7 +637,7 @@ mod tests {
         let file_path = root.resolved_file_path("/site/a.txt").expect("path");
         let open_root = OpenUnderRoot {
             canonical_root: root.canonical_root(),
-            root_dir_fd: root.root_dir_fd(),
+            root_dir_fd: root.root_dir_fd().expect("dir roots carry a dirfd"),
         };
         let source_id = identity_under_root(&file_path, open_root).expect("src id");
         let cfg = crate::encoding_cache::EncodingCacheConfig {
@@ -631,7 +646,7 @@ mod tests {
             level: 6,
             ..crate::encoding_cache::EncodingCacheConfig::default()
         };
-        let coded_path = crate::encoding_cache::ensure_coded_object(
+        let coded_path = crate::encoding_cache::ensure_coded_object_for_test(
             &cfg,
             &source_id,
             crate::encoding_cache::CacheCoding::Gzip,

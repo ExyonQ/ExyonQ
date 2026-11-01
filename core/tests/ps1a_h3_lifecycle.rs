@@ -54,6 +54,8 @@ async fn h3_request_dispatch_does_not_increment_lifecycle() {
         .expect("state");
     let shared = exyonq_core::reload::wrap_state(state);
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: exyonq_core::reload::read_state(&shared),
         proxy_client: proxy,
         x_forwarded_for: http::HeaderValue::from_static("127.0.0.1"),
@@ -68,6 +70,8 @@ async fn h3_request_dispatch_does_not_increment_lifecycle() {
     ops.start_drain();
     // Cap040: /health and /live remain answerable after drain (probe-before-drain).
     let ctx_probe = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: exyonq_core::reload::read_state(&shared),
         proxy_client: exyonq_mod_proxy::build_incoming_client(),
         x_forwarded_for: http::HeaderValue::from_static("127.0.0.1"),
@@ -80,6 +84,8 @@ async fn h3_request_dispatch_does_not_increment_lifecycle() {
 
     // Non-probe product path must fail closed with 503 while draining.
     let ctx2 = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: exyonq_core::reload::read_state(&shared),
         proxy_client: exyonq_mod_proxy::build_incoming_client(),
         x_forwarded_for: http::HeaderValue::from_static("127.0.0.1"),
@@ -426,7 +432,12 @@ mod native {
             .await
             .expect("state");
         let shared = exyonq_core::reload::wrap_state(state);
-        let dispatch = Arc::new(CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops)));
+        let dispatch = Arc::new(CoreHttp3Dispatcher::new(
+            shared,
+            proxy,
+            Arc::clone(&ops),
+            None,
+        ));
 
         let tls = ephemeral_tls();
         let listen = ephemeral_udp_addr();

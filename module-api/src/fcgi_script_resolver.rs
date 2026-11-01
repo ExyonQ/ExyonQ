@@ -44,6 +44,18 @@ pub struct FastcgiScriptResolutionRequest {
     pub uri_path: String,
     /// Config-compiled document root (may be missing in compat modes).
     pub pool_document_root: Option<PathBuf>,
+    /// EXY-03: NGINX `alias` + `fastcgi_pass` — route-level script root that
+    /// takes precedence over `pool_document_root`. `uri_path` then carries the
+    /// route-relative remainder (`URI − match.path`).
+    pub script_root: Option<PathBuf>,
+    /// EXY-03: `SCRIPT_NAME` override — the full request URI when `uri_path`
+    /// carries a remainder under `script_root`.
+    pub script_name_uri: Option<String>,
+    /// EXY-10: route `front_controller` name (e.g. `index.php`). When `uri_path`
+    /// resolves to no regular file: an existing directory resolves
+    /// `<dir>/<front_controller>` (index semantics); otherwise the named script
+    /// at the root resolves with `PATH_INFO` = `uri_path` (try_files fallback).
+    pub front_controller: Option<String>,
     /// Current runtime generation (for metrics/debug; not required for correctness).
     pub generation: u64,
     pub purpose: FastcgiScriptResolutionPurpose,

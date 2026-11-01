@@ -314,6 +314,21 @@ pub struct RouteConfig {
     pub rewrite: Option<RewriteConfig>,
     #[serde(default)]
     pub fastcgi: Option<String>,
+    /// EXY-03: NGINX `alias` + `fastcgi_pass`. Filesystem script root for this
+    /// route when the NGINX location used `alias` — resolution joins
+    /// `fastcgi_script_root + (URI − match.path)` instead of
+    /// `pool.document_root + URI`. `SCRIPT_NAME` stays the full request URI.
+    #[serde(default)]
+    pub fastcgi_script_root: Option<PathBuf>,
+    /// EXY-10: front-controller fallback for `fastcgi` routes (NGINX
+    /// `try_files $uri $uri/ /index.php?$args` semantics). When the URI does
+    /// not resolve to a file under the script/document root: a URI that names
+    /// an existing directory resolves `<dir>/<name>` (index semantics);
+    /// anything else resolves `<root>/<name>` with `PATH_INFO` = request URI
+    /// (WordPress pretty permalinks, framework routers). `REQUEST_URI` stays
+    /// the original request. Without it, an unresolved URI is a 404.
+    #[serde(default)]
+    pub front_controller: Option<String>,
     #[serde(default)]
     pub htaccess: HtaccessMode,
     #[serde(default)]
@@ -348,6 +363,48 @@ pub struct RouteConfig {
     /// `[modules.gunzip] enabled`.
     #[serde(default)]
     pub gunzip: Option<bool>,
+    /// How `root` maps a request URI to a file (EXY-03). Default `alias`
+    /// preserves historical native semantics; `nginx` joins the full URI
+    /// under `root` exactly like the NGINX `root` directive.
+    #[serde(default)]
+    pub root_mode: RootMode,
+    /// When the resolved static target is a directory and the request URI has
+    /// no trailing `/`, answer `301` to `URI/` (NGINX-style) instead of
+    /// serving the index directly. Only the NGINX importer sets this; native
+    /// configs keep the direct-index behaviour.
+    #[serde(default)]
+    pub dir_redirect: bool,
+    /// EXY-03: NGINX `absolute_redirect`. `true` (default) emits an absolute
+    /// `Location` (`scheme://authority/path/`); `false` emits the relative
+    /// `path/` form. Only meaningful with `dir_redirect`.
+    #[serde(default = "default_true")]
+    pub dir_redirect_absolute: bool,
+    /// EXY-03: NGINX `port_in_redirect`. `true` (default) emits the listener
+    /// port in `Location` unless it is the scheme default (80/443); `false`
+    /// never emits a port. Only meaningful with `dir_redirect`.
+    #[serde(default = "default_true")]
+    pub dir_redirect_port: bool,
+    /// EXY-03: NGINX `server_name_in_redirect`. When set, this fixed host name
+    /// replaces the request `Host`/`:authority` in the emitted `Location`
+    /// (the importer writes the server's primary `server_name` here).
+    /// Only meaningful with `dir_redirect`.
+    #[serde(default)]
+    pub dir_redirect_host: Option<String>,
+}
+
+/// `route.root` path-mapping mode (EXY-03). Names describe the resolution
+/// semantics, not another product's directive names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RootMode {
+    /// Join the URI *remainder* after the matched `match.path` prefix under
+    /// `root`: `root + (URI − prefix)` — historical ExyonQ; equivalent to
+    /// NGINX `alias`.
+    #[default]
+    Remainder,
+    /// Join the *full* request URI under `root`: `root + URI` — equivalent
+    /// to NGINX `root` / Apache `DocumentRoot`.
+    FullUri,
 }
 
 /// F3-R20: one response-location rewrite rule (`ProxyPassReverse` /
@@ -670,6 +727,25 @@ pub struct RouteMatch {
     /// Exact value when set; if omitted with `header`, require present non-empty.
     #[serde(default)]
     pub header_value: Option<String>,
+    /// NGINX literal-prefix matching for `path` (EXY-03): `path` matches any
+    /// URI starting with the pattern verbatim — `/assets` also matches
+    /// `/assets-extra`. Default `false` keeps native segment-boundary
+    /// matching (`/assets` does not match `/assets-extra`). Only the NGINX
+    /// importer sets this; native configs are unaffected.
+    #[serde(default)]
+    pub literal: bool,
+    /// NGINX `location =` exact matching (EXY-03): `path` matches only when it
+    /// equals the request URI verbatim — `/exact` matches `/exact` only, never
+    /// `/exact/` or `/exactx`. Default `false` keeps native prefix matching.
+    /// Only the NGINX importer sets this.
+    #[serde(default)]
+    pub exact: bool,
+    /// NGINX `listen` port scoping (EXY-03): when set, the route only matches
+    /// requests accepted on that listener port — the importer stamps it from
+    /// the owning `server { listen }` so per-server routes sharing a path do
+    /// not collide. `None` = any listener (native default).
+    #[serde(default)]
+    pub listen_port: Option<u16>,
 }
 
 impl RouteMatch {
@@ -1242,6 +1318,7 @@ impl AppConfig {
             validate_route_match(&route.r#match)?;
             validate_route_cache(route, &cache_policies)?;
             validate_route_cache_headers(route)?;
+            validate_route_root_mode(route)?;
             validate_route_actions(route)?;
             validate_htaccess_overlay(route, &pools_fcgi)?;
             validate_proxy_set_headers(route, &maps)?;
@@ -1506,6 +1583,18 @@ fn validate_route_cache_headers(route: &RouteConfig) -> Result<(), ConfigError> 
                 hdr.max_age
             )));
         }
+    }
+    Ok(())
+}
+
+/// `root_mode` only means something next to `root`; setting it on a route with
+/// no filesystem root is a config error (EXY-03), not a silent no-op.
+fn validate_route_root_mode(route: &RouteConfig) -> Result<(), ConfigError> {
+    if route.root_mode != RootMode::default() && route.root.is_none() {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: root_mode requires `root` to be set",
+            route.name
+        )));
     }
     Ok(())
 }

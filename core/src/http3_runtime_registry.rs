@@ -151,6 +151,8 @@ pub struct CoreHttp3Dispatcher {
     shared: SharedServerState,
     proxy_client: ProxyClient,
     lifecycle: Arc<LifecycleState>,
+    /// QUIC listen port — NGINX `port_in_redirect` source for H3 redirects.
+    local_port: Option<u16>,
 }
 
 impl CoreHttp3Dispatcher {
@@ -158,11 +160,13 @@ impl CoreHttp3Dispatcher {
         shared: SharedServerState,
         proxy_client: ProxyClient,
         lifecycle: Arc<LifecycleState>,
+        local_port: Option<u16>,
     ) -> Self {
         Self {
             shared,
             proxy_client,
             lifecycle,
+            local_port,
         }
     }
 }
@@ -180,6 +184,8 @@ impl Http3DispatchService for CoreHttp3Dispatcher {
         let response = handler::serve_http3_request(
             ConnectionContext {
                 state,
+                scheme: "https",
+                local_port: self.local_port,
                 proxy_client: self.proxy_client.clone(),
                 x_forwarded_for,
                 ops: Arc::clone(&self.lifecycle),
@@ -281,10 +287,12 @@ pub fn spawn_http3_listener(
     proxy_client: ProxyClient,
     lifecycle: Arc<LifecycleState>,
 ) {
+    let local_port = Some(settings.listen.port());
     let dispatch = Arc::new(CoreHttp3Dispatcher::new(
         SharedServerState::clone(&shared),
         proxy_client.clone(),
         Arc::clone(&lifecycle),
+        local_port,
     ));
     let admission = Arc::new(CoreHttp3Lifecycle::new(Arc::clone(&lifecycle)));
     tokio::spawn(async move {
@@ -610,7 +618,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let resp = dispatcher
@@ -651,7 +659,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
         ops.start_drain();
 
         let live = dispatcher
@@ -709,7 +717,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let _ = dispatcher.dispatch(req, "127.0.0.1").await;
@@ -729,7 +737,7 @@ mod tests {
         let capture = Arc::new(CapturingProxy::default());
         let service: Arc<dyn ProxyDispatchService> = capture.clone();
         let _guard = crate::execute_backend::ProxyDispatchTestGuard::install(service);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
 
         let req = Request::builder()
             .method("POST")

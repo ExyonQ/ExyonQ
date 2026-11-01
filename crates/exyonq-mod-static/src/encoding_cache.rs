@@ -463,6 +463,27 @@ pub fn ensure_coded_object(
     Ok(final_path)
 }
 
+/// Test-only `ensure_coded_object` with `ResourceBusy` retry: the process-global
+/// miss budget (`MAX_MISS_INFLIGHT`) is shared with every parallel test hitting
+/// this path, so a legal transient limit must not fail an unrelated test.
+#[cfg(test)]
+pub(crate) fn ensure_coded_object_for_test(
+    cfg: &EncodingCacheConfig,
+    identity: &ValidatorIdentity,
+    coding: CacheCoding,
+    source_plain: &[u8],
+) -> io::Result<PathBuf> {
+    for _ in 0..200 {
+        match ensure_coded_object(cfg, identity, coding, source_plain) {
+            Err(err) if err.kind() == io::ErrorKind::ResourceBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            other => return other,
+        }
+    }
+    ensure_coded_object(cfg, identity, coding, source_plain)
+}
+
 /// Write `bytes` via `.tmp-{pid}-{nanos}` + fsync + rename.
 pub fn atomic_write_file(final_path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = final_path
@@ -736,8 +757,8 @@ mod tests {
             level: 6,
             ..EncodingCacheConfig::default()
         };
-        let p1 = ensure_coded_object(&cfg, &id, CacheCoding::Gzip, &plain).expect("miss");
-        let p2 = ensure_coded_object(&cfg, &id, CacheCoding::Gzip, &plain).expect("hit");
+        let p1 = ensure_coded_object_for_test(&cfg, &id, CacheCoding::Gzip, &plain).expect("miss");
+        let p2 = ensure_coded_object_for_test(&cfg, &id, CacheCoding::Gzip, &plain).expect("hit");
         assert_eq!(p1, p2);
         assert!(p1.is_file());
         let coded = fs::read(&p1).expect("read");
@@ -805,7 +826,7 @@ mod tests {
             level: 6,
             ..EncodingCacheConfig::default()
         };
-        let p1 = ensure_coded_object(&cfg, &id, CacheCoding::Gzip, &plain).expect("miss");
+        let p1 = ensure_coded_object_for_test(&cfg, &id, CacheCoding::Gzip, &plain).expect("miss");
         assert!(p1.is_file());
         // Hit via try_open_cached_coded must not need the source path.
         let validators = StaticValidators {

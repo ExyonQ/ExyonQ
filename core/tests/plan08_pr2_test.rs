@@ -53,6 +53,8 @@ async fn plan08_ctx() -> ConnectionContext {
         .await
         .expect("server state");
     ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -79,6 +81,8 @@ async fn live_fastcgi_get_returns_501_with_metric() {
 async fn live_post_status(ctx: ConnectionContext) -> u16 {
     let (mut client_io, server_io) = duplex(8192);
     let server_ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: Arc::clone(&ctx.state),
         proxy_client: ctx.proxy_client.clone(),
         x_forwarded_for: ctx.x_forwarded_for.clone(),
@@ -88,6 +92,8 @@ async fn live_post_status(ctx: ConnectionContext) -> u16 {
     let server = tokio::spawn(async move {
         let service = hyper::service::service_fn(move |req| {
             let server_ctx = ConnectionContext {
+                scheme: "http",
+                local_port: None,
                 state: Arc::clone(&server_ctx.state),
                 proxy_client: server_ctx.proxy_client.clone(),
                 x_forwarded_for: server_ctx.x_forwarded_for.clone(),

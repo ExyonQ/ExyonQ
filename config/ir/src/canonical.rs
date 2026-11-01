@@ -290,6 +290,12 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
     if let Some(fastcgi) = &route.fastcgi {
         map.insert("fastcgi".into(), serde_json::Value::String(fastcgi.clone()));
     }
+    if let Some(fc) = &route.front_controller {
+        map.insert(
+            "front_controller".into(),
+            serde_json::Value::String(fc.clone()),
+        );
+    }
     if route.htaccess == crate::HtaccessMode::Overlay {
         map.insert(
             "htaccess".into(),

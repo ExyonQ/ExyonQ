@@ -22,6 +22,7 @@ tokio.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
 exyonq-cache = { workspace = true }
+exyonq-mime = { path = "../exyonq-mime" }
 exyonq-module-api = { path = "../../module-api" }
 
 [target.'cfg(target_os = "linux")'.dependencies]

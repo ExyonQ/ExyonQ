@@ -98,6 +98,8 @@ cache = "default"
         .expect("state");
     CachedCtx {
         ctx: Arc::new(ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),

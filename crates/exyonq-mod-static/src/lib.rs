@@ -59,7 +59,7 @@ pub use cache_serve::{
 };
 pub use identity::{FileIdentity, StaticResourceIdentity};
 pub use outcome::materialize_outcome;
-pub use root::{PreloadLimits, StaticRoot};
+pub use root::{DirRedirectPolicy, PreloadLimits, StaticRoot, StaticRootRouteOpts};
 pub use runtime::StaticRuntime;
 pub use static_cache::{
     cache_hits_total as static_cache_hits_total, cache_misses_total as static_cache_misses_total,
@@ -97,7 +97,7 @@ pub fn epoll_match_sendfile_for_tests(
     site_slot: u32,
     head: &[u8],
 ) -> Option<exyonq_module_api::static_dispatch::SendfileHandle> {
-    epoll_session::match_sendfile_asset(site_slot, head)
+    epoll_session::match_sendfile_asset(site_slot, head, None)
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -296,23 +296,9 @@ pub fn relative_as_safe_path(relative: &str) -> Result<PathBuf, StaticError> {
     Ok(safe)
 }
 
+/// Delegates to the canonical table in `exyonq-mime` (EXY-02/EXY-09).
 pub fn content_type_for(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("html") => "text/html; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("js") => "text/javascript; charset=utf-8",
-        Some("json") => "application/json; charset=utf-8",
-        Some("txt") => "text/plain; charset=utf-8",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("svg") => "image/svg+xml",
-        _ => "application/octet-stream",
-    }
+    exyonq_mime::content_type_for_path(path)
 }
 
 pub(crate) fn file_response(body: bytes::Bytes, content_type: &'static str) -> Response<BoxBody> {

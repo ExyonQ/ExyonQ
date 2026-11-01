@@ -15,7 +15,7 @@
  */
 //! Map analyzed NGINX config to ExyonQ IR and render TOML.
 
-use crate::ast::{AnalyzedConfig, LocationKind, ParsedLocation, ParsedServer};
+use crate::ast::{AnalyzedConfig, Directive, LocationKind, ParsedLocation, ParsedServer};
 use crate::location::{is_runtime_mappable, route_match_from_location, route_path};
 use crate::report::{CompatStatus, CompatibilityReport};
 use crate::rewrite::{is_safe_literal_redirect, map_rewrite_to_ir, parse_rewrite};
@@ -128,6 +128,10 @@ pub fn map_to_ir(
         std::collections::BTreeMap::new();
 
     for (server_index, server) in analyzed.servers.iter().enumerate() {
+        // Routes accumulate globally across servers — remember where this
+        // server's span begins so the `/` fallback check below only considers
+        // THIS server's locations (per-server `root`/redirect options differ).
+        let routes_base = routes.len();
         let (listen, proxy_protocol_flag) = map_listen(server, report);
         let server_names = map_server_names(server, report);
         let mut route_names = Vec::new();
@@ -166,6 +170,17 @@ pub fn map_to_ir(
             route_names.push(route.name.clone());
             routes.push(route);
         } else {
+            // EXY-03: `alias` is location-scoped in NGINX; at server level it
+            // cannot be represented — report once, never silently map.
+            if let Some(d) = server.directives.iter().find(|d| d.name == "alias") {
+                report.push(
+                    &d.loc,
+                    "alias",
+                    CompatStatus::Error,
+                    "`alias` is only valid inside a prefix location block",
+                    None,
+                );
+            }
             for (loc_index, location) in server.locations.iter().enumerate() {
                 let route_name = format!("srv{}_loc{}", server_index + 1, loc_index + 1);
                 if let Some(mut route) = map_location(
@@ -251,7 +266,10 @@ pub fn map_to_ir(
                 }
             }
 
-            if route_names.is_empty() {
+            // EXY-03: NGINX serves unmatched URIs from the server `root` even
+            // when locations exist — emit the `/` fallback unless a location
+            // already produced a `/` route.
+            if !routes[routes_base..].iter().any(|r| r.r#match.path == "/") {
                 if let Some(mut route) = server_default_route(server_index, server, report) {
                     route.response_headers = server_headers.clone();
                     route.cache_headers = server_expires.clone();
@@ -614,19 +632,96 @@ fn server_index_files(server: &ParsedServer) -> Option<String> {
         .cloned()
 }
 
-fn location_root(
+/// EXY-03: resolve the effective filesystem root for a location *and* the
+/// mapping mode it requires.
+///
+/// - `alias` → [`RootMode::Remainder`] (`root + (URI − prefix)`) — a direct match
+///   for native `route.root` semantics.
+/// - `root` → [`RootMode::FullUri`] (`root + full URI`) — preserved faithfully
+///   via `route.root_mode = "full-uri"`, never silently re-rooted.
+/// - Server `root` inherited by a location keeps NGINX semantics as well.
+///
+/// Unrepresentable cases (`alias` outside a prefix location, both directives
+/// in one location, `alias` at server level) are reported as `Error` and
+/// produce no route — never silently transformed into other behavior.
+fn location_doc_root(
     location: &ParsedLocation,
     server: &ParsedServer,
     report: &mut CompatibilityReport,
-) -> Option<String> {
-    if let Some(local) = location
+) -> Option<(String, exyonq_config_ir::RootMode)> {
+    use exyonq_config_ir::RootMode;
+
+    let alias = location
+        .directives
+        .iter()
+        .find(|d| d.name == "alias")
+        .and_then(|d| d.args.first());
+    let root = location
         .directives
         .iter()
         .find(|d| d.name == "root")
-        .and_then(|d| d.args.first())
-    {
-        return Some(local.clone());
+        .and_then(|d| d.args.first());
+
+    if alias.is_some() && root.is_some() {
+        report.push(
+            &location.loc,
+            "alias",
+            CompatStatus::Error,
+            "location declares both `root` and `alias`; NGINX also rejects this \
+             (`alias` is duplicate after `root`)",
+            None,
+        );
+        return None;
     }
+
+    if let Some(path) = alias {
+        if matches!(location.kind, LocationKind::Exact) {
+            // EXY-03: `location =` + `alias` — the alias is the verbatim target
+            // (file or dir). match.exact + remainder join serves it for the
+            // single matching URI only.
+            report.push(
+                &location.loc,
+                "alias",
+                CompatStatus::Supported,
+                format!(
+                    "alias `{path}` under `=` location `{}` → verbatim file/dir target",
+                    location.raw_pattern
+                ),
+                Some(format!("route.root={path} (exact alias semantics)")),
+            );
+            return Some((path.clone(), exyonq_config_ir::RootMode::Remainder));
+        }
+        if !matches!(
+            location.kind,
+            LocationKind::Prefix | LocationKind::PreferentialPrefix
+        ) {
+            report.push(
+                &location.loc,
+                "alias",
+                CompatStatus::Error,
+                format!(
+                    "`alias` under a {} location is valid NGINX but not yet \
+                     representable — pending compatibility (EXY-03)",
+                    location.kind.as_str()
+                ),
+                None,
+            );
+            return None;
+        }
+        report.push(
+            &location.loc,
+            "alias",
+            CompatStatus::Supported,
+            format!("alias `{path}` mapped for `{}`", location.raw_pattern),
+            Some(format!("route.root={path} (alias semantics)")),
+        );
+        return Some((path.clone(), RootMode::Remainder));
+    }
+
+    if let Some(path) = root {
+        return Some((path.clone(), RootMode::FullUri));
+    }
+
     if let Some(inherited) = server_root(server) {
         report.summary.inherited_roots += 1;
         report.push(
@@ -634,9 +729,11 @@ fn location_root(
             "root",
             CompatStatus::Supported,
             format!("inherited root `{inherited}` from server block"),
-            Some(format!("route.document_root={inherited} (inherited)")),
+            Some(format!(
+                "route.root={inherited} + root_mode=full-uri (inherited)"
+            )),
         );
-        return Some(inherited);
+        return Some((inherited, RootMode::FullUri));
     }
     None
 }
@@ -695,6 +792,62 @@ fn d_extra_index_warnings(location: &ParsedLocation, report: &mut CompatibilityR
 }
 
 #[allow(clippy::too_many_arguments)]
+/// EXY-03: NGINX redirect-shaping directives (`absolute_redirect`,
+/// `port_in_redirect`, `server_name_in_redirect`). Location scope overrides
+/// server scope; absent → NGINX defaults (on/on/host-echo).
+fn redirect_policy_for(
+    location_directives: Option<&[Directive]>,
+    server: &ParsedServer,
+) -> (bool, bool, Option<String>) {
+    fn flag(directives: &[Directive], name: &str) -> Option<bool> {
+        directives
+            .iter()
+            .rev() // later directive wins within a scope
+            .find(|d| d.name == name)
+            .and_then(|d| d.args.first().map(|a| a == "on"))
+    }
+    let pick = |name: &str| {
+        location_directives
+            .and_then(|ds| flag(ds, name))
+            .or_else(|| flag(&server.directives, name))
+    };
+    let absolute = pick("absolute_redirect").unwrap_or(true);
+    let port = pick("port_in_redirect").unwrap_or(true);
+    let name_in_redirect = pick("server_name_in_redirect").unwrap_or(false);
+    // `server_name_in_redirect on` substitutes the primary literal server_name.
+    let fixed_host = if name_in_redirect {
+        server.directives.iter().find_map(|d| {
+            if d.name != "server_name" {
+                return None;
+            }
+            d.args
+                .iter()
+                .find(|a| !a.is_empty() && **a != "_" && !a.contains('*') && !a.starts_with('~'))
+                .cloned()
+        })
+    } else {
+        None
+    };
+    (absolute, port, fixed_host)
+}
+
+/// EXY-03: the server's `listen` port — NGINX routes are listener-scoped.
+/// `listen` missing → NGINX defaults to `80`.
+fn server_listen_port(server: &ParsedServer) -> Option<u16> {
+    let raw = server
+        .directives
+        .iter()
+        .find(|d| d.name == "listen")
+        .and_then(|d| d.args.first())
+        .and_then(|a| a.split_whitespace().next());
+    let port = match raw {
+        None => Some(80),
+        Some(v) => v.rsplit(':').next().and_then(|p| p.parse().ok()),
+    };
+    port.or(Some(80))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn map_location(
     route_name: &str,
     location: &ParsedLocation,
@@ -710,7 +863,9 @@ fn map_location(
     }
 
     let path = route_path(location);
-    let route_match = route_match_from_location(location);
+    let mut route_match = route_match_from_location(location);
+    route_match.listen_port = server_listen_port(server);
+    let redirect_opts = redirect_policy_for(Some(&location.directives), server);
     if matches!(
         location.kind,
         LocationKind::Exact | LocationKind::PreferentialPrefix
@@ -724,8 +879,15 @@ fn map_location(
                 location.kind.as_str(),
                 location.raw_pattern
             ),
-            Some(format!("route match.path={path}")),
-            Some("Review exact/preferential-prefix semantics vs NGINX".into()),
+            Some(format!(
+                "route match.path={path} match.exact={}",
+                location.kind == LocationKind::Exact
+            )),
+            Some(if location.kind == LocationKind::Exact {
+                "EXY-03: `=` mapped to match.exact — verbatim equality, real".into()
+            } else {
+                "Review preferential-prefix semantics vs NGINX".into()
+            }),
             Some(location.kind.as_str()),
             None,
             None,
@@ -785,15 +947,22 @@ fn map_location(
                         }),
                         rewrite: None,
                         fastcgi: None,
+                        fastcgi_script_root: None,
                         htaccess: Default::default(),
                         cache: None,
                         fallback_rewrite: None,
                         try_uri: None,
                         try_uri_dir: None,
+                        front_controller: None,
                         proxy_set_headers: Vec::new(),
                         cache_headers: None,
                         response_headers: Vec::new(),
                         location_rewrite: Vec::new(),
+                        root_mode: Default::default(),
+                        dir_redirect: false,
+                        dir_redirect_absolute: true,
+                        dir_redirect_port: true,
+                        dir_redirect_host: None,
                     });
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
@@ -808,15 +977,22 @@ fn map_location(
                         redirect: None,
                         rewrite: Some(rw),
                         fastcgi: None,
+                        fastcgi_script_root: None,
                         htaccess: Default::default(),
                         cache: None,
                         fallback_rewrite: None,
                         try_uri: None,
                         try_uri_dir: None,
+                        front_controller: None,
                         proxy_set_headers: Vec::new(),
                         cache_headers: None,
                         response_headers: Vec::new(),
                         location_rewrite: Vec::new(),
+                        root_mode: Default::default(),
+                        dir_redirect: false,
+                        dir_redirect_absolute: true,
+                        dir_redirect_port: true,
+                        dir_redirect_host: None,
                     });
                 }
             }
@@ -853,16 +1029,16 @@ fn map_location(
         }
     }
 
-    let root = location_root(location, server, report);
-    if let Some(root) = root {
+    let doc_root = location_doc_root(location, server, report);
+    if let Some((root, root_mode)) = doc_root {
         let index = location_index(location, server, report);
         if location.directives.iter().any(|d| d.name == "root") {
             report.push(
                 &location.loc,
                 "root",
                 CompatStatus::Supported,
-                format!("static root `{root}` mapped for `{path}`"),
-                Some(format!("route.root={root}")),
+                format!("static root `{root}` mapped for `{path}` (root_mode=full-uri)"),
+                Some(format!("route.root={root} root_mode=full-uri")),
             );
         }
         let (fallback_rewrite, try_uri, try_uri_dir) =
@@ -878,15 +1054,24 @@ fn map_location(
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
             cache: None,
             fallback_rewrite,
             try_uri,
             try_uri_dir,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode,
+            // NGINX answers directory-no-slash with 301 → URI/ for both `root`
+            // and `alias` locations.
+            dir_redirect: true,
+            dir_redirect_absolute: redirect_opts.0,
+            dir_redirect_port: redirect_opts.1,
+            dir_redirect_host: redirect_opts.2.clone(),
         });
     }
 
@@ -1026,15 +1211,22 @@ fn map_proxy(
         redirect: None,
         rewrite: None,
         fastcgi: None,
+        fastcgi_script_root: None,
         htaccess: Default::default(),
         cache: None,
         fallback_rewrite: None,
         try_uri: None,
         try_uri_dir: None,
+        front_controller: None,
         proxy_set_headers,
         cache_headers: None,
         response_headers: Vec::new(),
         location_rewrite,
+        root_mode: Default::default(),
+        dir_redirect: false,
+        dir_redirect_absolute: true,
+        dir_redirect_port: true,
+        dir_redirect_host: None,
     })
 }
 
@@ -1571,8 +1763,65 @@ fn map_fastcgi(
     allow_tcp_fastcgi: bool,
 ) -> Option<RouteConfig> {
     let target = d.args.first()?;
-    let root = location_root(location, server, report);
-    let root_path = root.map(PathBuf::from);
+    let (root_path, script_root) = match location_doc_root(location, server, report) {
+        Some((alias, exyonq_config_ir::RootMode::Remainder)) => {
+            // EXY-03: `alias` + fastcgi_pass — faithful via route script root:
+            // resolution joins alias + (URI − match.path), SCRIPT_NAME keeps
+            // the full request URI ($request_filename semantics).
+            report.push(
+                &location.loc,
+                "alias",
+                CompatStatus::Supported,
+                format!("alias+fastcgi `{alias}` → route fastcgi_script_root (remainder join)"),
+                Some(format!("route fastcgi_script_root={alias}")),
+            );
+            (None, Some(PathBuf::from(alias)))
+        }
+        Some((root, _)) => (Some(PathBuf::from(root)), None),
+        None => (None, None),
+    };
+
+    // EXY-10: `try_files $uri $uri/ /index.php?$args` on a fastcgi location →
+    // route `front_controller` (PHP fallback only; other fallback shapes stay
+    // reported by the generic try_files analysis).
+    // Contract: only the canonical `$uri $uri/ /fallback.php` shape maps —
+    // without the `$uri/` candidate NGINX never consults the directory index,
+    // while our fallback does, so mapping it would misreport parity.
+    let tf_mapping = map_location_try_files(location);
+    let front_controller = tf_mapping
+        .as_ref()
+        .and_then(|(fallback, _, try_uri_dir)| {
+            (*try_uri_dir == Some(true))
+                .then(|| fallback.clone())
+                .flatten()
+        })
+        .filter(|path| path.ends_with(".php"))
+        .map(|path| path.trim_start_matches('/').to_string());
+    // Report fidelity: push only where a route is actually emitted — a refused
+    // `fastcgi_pass` target must not carry a `Supported` claim for a route that
+    // does not exist (audit F-A). And when an admitted `try_files` shape is
+    // present but not mapped to `front_controller`, the generic analysis still
+    // claims `route.fallback_rewrite` — the corrective `Partial` marks that the
+    // emitted FastCGI route has no such fallback (audit F-B).
+    let report_fc = |report: &mut CompatibilityReport| {
+        if let Some(ref fc) = front_controller {
+            report.push(
+                &d.loc,
+                "try_files",
+                CompatStatus::Supported,
+                format!("fastcgi try_files fallback → route front_controller `{fc}`"),
+                Some(format!("route.front_controller={fc}")),
+            );
+        } else if tf_mapping.is_some() {
+            report.push(
+                &d.loc,
+                "try_files",
+                CompatStatus::Partial,
+                "try_files in fastcgi location not mapped to front_controller (requires `$uri/` candidate + `.php` fallback): emitted route resolves files directly, misses return 404",
+                Some("no route fallback emitted".to_string()),
+            );
+        }
+    };
 
     if target.starts_with("unix:") {
         let pool_name = format!("{route_name}_fcgi");
@@ -1621,6 +1870,7 @@ fn map_fastcgi(
                 None,
             );
         }
+        report_fc(report);
         return Some(RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1632,15 +1882,22 @@ fn map_fastcgi(
             redirect: None,
             rewrite: None,
             fastcgi: Some(pool_name),
+            fastcgi_script_root: script_root.clone(),
             htaccess: Default::default(),
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: front_controller.clone(),
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         });
     }
 
@@ -1691,6 +1948,7 @@ fn map_fastcgi(
                     None,
                 );
             }
+            report_fc(report);
             return Some(RouteConfig {
                 gunzip: None,
                 cache_tags: Vec::new(),
@@ -1702,15 +1960,22 @@ fn map_fastcgi(
                 redirect: None,
                 rewrite: None,
                 fastcgi: Some(pool_name),
+                fastcgi_script_root: script_root.clone(),
                 htaccess: Default::default(),
                 cache: None,
                 fallback_rewrite: None,
                 try_uri: None,
                 try_uri_dir: None,
+                front_controller: front_controller.clone(),
                 proxy_set_headers: Vec::new(),
                 cache_headers: None,
                 response_headers: Vec::new(),
                 location_rewrite: Vec::new(),
+                root_mode: Default::default(),
+                dir_redirect: false,
+                dir_redirect_absolute: true,
+                dir_redirect_port: true,
+                dir_redirect_host: None,
             });
         }
         report.push(
@@ -1732,6 +1997,7 @@ fn map_fastcgi(
             &d.loc,
             report,
         )?;
+        report_fc(report);
         return Some(RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1743,15 +2009,22 @@ fn map_fastcgi(
             redirect: None,
             rewrite: None,
             fastcgi: Some(pool_name),
+            fastcgi_script_root: script_root.clone(),
             htaccess: Default::default(),
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: front_controller.clone(),
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         });
     }
 
@@ -1885,15 +2158,22 @@ fn map_return(
                 redirect: Some(RedirectConfig { status, location }),
                 rewrite: None,
                 fastcgi: None,
+                fastcgi_script_root: None,
                 htaccess: Default::default(),
                 cache: None,
                 fallback_rewrite: None,
                 try_uri: None,
                 try_uri_dir: None,
+                front_controller: None,
                 proxy_set_headers: Vec::new(),
                 cache_headers: None,
                 response_headers: Vec::new(),
                 location_rewrite: Vec::new(),
+                root_mode: Default::default(),
+                dir_redirect: false,
+                dir_redirect_absolute: true,
+                dir_redirect_port: true,
+                dir_redirect_host: None,
             })
         }
         404 => {
@@ -1967,12 +2247,13 @@ fn server_default_route(
     report: &mut CompatibilityReport,
 ) -> Option<RouteConfig> {
     let root = server_root(server)?;
+    let redirect_opts = redirect_policy_for(None, server);
     report.push(
         &server.loc,
         "root",
         CompatStatus::Supported,
         format!("server root `{root}` mapped to default `/` route"),
-        Some("route.root".into()),
+        Some("route.root + root_mode=full-uri".into()),
     );
     Some(RouteConfig {
         gunzip: None,
@@ -1981,7 +2262,7 @@ fn server_default_route(
         r#match: RouteMatch {
             path: "/".into(),
             host: None,
-
+            listen_port: server_listen_port(server),
             ..Default::default()
         },
         upstream: None,
@@ -1990,15 +2271,23 @@ fn server_default_route(
         redirect: None,
         rewrite: None,
         fastcgi: None,
+        fastcgi_script_root: None,
         htaccess: Default::default(),
         cache: None,
         fallback_rewrite: None,
         try_uri: None,
         try_uri_dir: None,
+        front_controller: None,
         proxy_set_headers: Vec::new(),
         cache_headers: None,
         response_headers: Vec::new(),
         location_rewrite: Vec::new(),
+        // Server `root` is NGINX docroot semantics (`root + URI`).
+        root_mode: exyonq_config_ir::RootMode::FullUri,
+        dir_redirect: true,
+        dir_redirect_absolute: redirect_opts.0,
+        dir_redirect_port: redirect_opts.1,
+        dir_redirect_host: redirect_opts.2.clone(),
     })
 }
 
@@ -2285,8 +2574,17 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         } else {
             out.push_str(&format!("path = {:?}", route.r#match.path));
         }
+        if route.r#match.literal {
+            out.push_str(", literal = true");
+        }
+        if route.r#match.exact {
+            out.push_str(", exact = true");
+        }
         if let Some(host) = &route.r#match.host {
             out.push_str(&format!(", host = {host:?}"));
+        }
+        if let Some(port) = route.r#match.listen_port {
+            out.push_str(&format!(", listen_port = {port}"));
         }
         if let Some(header) = &route.r#match.header {
             out.push_str(&format!(", header = {header:?}"));
@@ -2300,6 +2598,21 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         }
         if let Some(root) = &route.root {
             out.push_str(&format!("root = {:?}\n", root.display()));
+        }
+        if route.root_mode != exyonq_config_ir::RootMode::Remainder {
+            out.push_str("root_mode = \"full-uri\"\n");
+        }
+        if route.dir_redirect {
+            out.push_str("dir_redirect = true\n");
+            if !route.dir_redirect_absolute {
+                out.push_str("dir_redirect_absolute = false\n");
+            }
+            if !route.dir_redirect_port {
+                out.push_str("dir_redirect_port = false\n");
+            }
+            if let Some(host) = &route.dir_redirect_host {
+                out.push_str(&format!("dir_redirect_host = {host:?}\n"));
+            }
         }
         if let Some(index) = &route.index {
             out.push_str(&format!("index = {index:?}\n"));
@@ -2343,6 +2656,15 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         }
         if let Some(fastcgi) = &route.fastcgi {
             out.push_str(&format!("fastcgi = {fastcgi:?}\n"));
+        }
+        if let Some(script_root) = &route.fastcgi_script_root {
+            out.push_str(&format!(
+                "fastcgi_script_root = {:?}\n",
+                script_root.display()
+            ));
+        }
+        if let Some(fc) = &route.front_controller {
+            out.push_str(&format!("front_controller = {fc:?}\n"));
         }
         if !route.proxy_set_headers.is_empty() {
             out.push_str("proxy_set_headers = [\n");

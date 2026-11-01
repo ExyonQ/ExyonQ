@@ -69,6 +69,8 @@ htaccess = "overlay"
         .expect("state");
     HtaccessRuntimeHarness {
         ctx: ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),

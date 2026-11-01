@@ -107,6 +107,7 @@ pub fn start_sdp(
                     return;
                 };
                 lifecycle::run_with_connection_token(token, async move {
+                    let local_port = stream.local_addr().ok().map(|a| a.port());
                     let Ok(stream) = TokioTcpStream::from_std(stream) else {
                         return;
                     };
@@ -118,6 +119,8 @@ pub fn start_sdp(
                         x_forwarded_for: xff,
                         ops,
                         pinned_generation: reload::active_runtime_generation(),
+                        scheme: "http",
+                        local_port,
                     };
                     if peek.is_empty() {
                         dispatch_tcp_inner(stream, ctx).await;

@@ -25,6 +25,7 @@ members = [
   "wasm/exyonq-wasm-host",
   "crates/exyonq-mod-fastcgi",
   "crates/exyonq-mod-htaccess",
+  "crates/exyonq-mime",
   "crates/exyonq-mod-static",
   "crates/exyonq-mod-proxy",
   "crates/exyonq-proxy-sdp",

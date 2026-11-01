@@ -75,6 +75,10 @@ No new IR fields. No FastCGI runtime / schema changes.
 
 ## Limits
 
+- Segment-boundary matching: an accepted `location /index.php` maps to
+  `match.path`, which requires a path-segment boundary. NGINX literal-prefix
+  extensions (`/index.phpFOO`) are out of scope and resolve against a
+  less-specific route, not the PHP location.
 - Offline only (`exyonq-compat-nginx` + `exyonqctl`). No nginx parse on the serve hot path.
 - Does not change Full TCP FastCGI block policy.
 - Not WordPress product compatibility; a `/index.php` PREFIX may be used to hit a PHP

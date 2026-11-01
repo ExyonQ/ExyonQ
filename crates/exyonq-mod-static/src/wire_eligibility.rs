@@ -223,6 +223,21 @@ pub fn request_path_from_head(head: &[u8]) -> Option<&str> {
     std::str::from_utf8(path).ok()
 }
 
+/// Raw URI query (bytes after `?`, no `?` itself) from the request-target.
+#[cfg(target_os = "linux")]
+pub fn request_query_from_head(head: &[u8]) -> Option<&str> {
+    let line_end = head
+        .iter()
+        .position(|&b| b == b'\r' || b == b'\n')
+        .unwrap_or(head.len());
+    let line = &head[..line_end];
+    let mut parts = line.split(|&b| b == b' ');
+    let _method = parts.next()?;
+    let target = parts.next()?;
+    let q = target.iter().position(|&b| b == b'?')?;
+    std::str::from_utf8(&target[q + 1..]).ok()
+}
+
 #[cfg(test)]
 mod origin_path_tests {
     use super::origin_path_from_request_target;

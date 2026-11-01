@@ -226,6 +226,7 @@ fn spawn_queued_handoff(
     let ops = Arc::clone(ops);
     tokio::spawn(async move {
         lifecycle::run_with_connection_token(token, async move {
+            let local_port = stream.local_addr().ok().map(|a| a.port());
             let Ok(stream) = TokioTcpStream::from_std(stream) else {
                 return;
             };
@@ -237,6 +238,8 @@ fn spawn_queued_handoff(
                 x_forwarded_for: xff,
                 ops,
                 pinned_generation: generation.generation,
+                scheme: "http",
+                local_port,
             };
             if let Some((head, rest)) = prefetched {
                 dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
@@ -265,6 +268,7 @@ fn spawn_hyper_handoff_direct(
     let stream = handoff.stream;
     runtime.spawn(async move {
         lifecycle::run_with_connection_token(token, async move {
+            let local_port = stream.local_addr().ok().map(|a| a.port());
             let Ok(stream) = TokioTcpStream::from_std(stream) else {
                 return;
             };
@@ -276,6 +280,8 @@ fn spawn_hyper_handoff_direct(
                 x_forwarded_for: xff,
                 ops,
                 pinned_generation: generation.generation,
+                scheme: "http",
+                local_port,
             };
             if let Some((head, rest)) = prefetched {
                 dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
@@ -312,6 +318,7 @@ fn drain_stranded_handoffs(
         let proxy_client = proxy_client.clone();
         runtime.spawn(async move {
             lifecycle::run_with_connection_token(token, async move {
+                let local_port = stream.local_addr().ok().map(|a| a.port());
                 let Ok(stream) = TokioTcpStream::from_std(stream) else {
                     return;
                 };
@@ -323,6 +330,8 @@ fn drain_stranded_handoffs(
                     x_forwarded_for: xff,
                     ops,
                     pinned_generation: generation.generation,
+                    scheme: "http",
+                    local_port,
                 };
                 if let Some((head, rest)) = prefetched {
                     dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
@@ -619,13 +628,15 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn install_test_kernel_hooks() {
         static HOOKS: std::sync::Once = std::sync::Once::new();
-        HOOKS.call_once(|| {
-            exyonq_mod_static::install_kernel_hooks(std::sync::Arc::new(
-                exyonq_mod_static::StaticRuntime::new(),
-            ));
-            exyonq_mod_proxy::install_kernel_hooks(std::sync::Arc::new(
-                exyonq_mod_proxy::ProxyRuntime::new(),
-            ));
+        crate::kernel::test_hooks::with_wire_hooks_gate(|| {
+            HOOKS.call_once(|| {
+                exyonq_mod_static::install_kernel_hooks(std::sync::Arc::new(
+                    exyonq_mod_static::StaticRuntime::new(),
+                ));
+                exyonq_mod_proxy::install_kernel_hooks(std::sync::Arc::new(
+                    exyonq_mod_proxy::ProxyRuntime::new(),
+                ));
+            });
         });
     }
 
@@ -695,8 +706,11 @@ mod tests {
     #[test]
     fn ensure_handoff_bridge_rearms_dead_consumers() {
         // Sequential-runtime scenario (the core-suite pattern): the runtime
-        // that installed the bridge dies; an item stranded in the shared queue
+        // that owns the consumers dies; an item stranded in the shared queue
         // must drain once a later executor re-arms consumers on a live runtime.
+        // Private bridge: the process-global HANDOFF_BRIDGE is shared with
+        // every other test that builds an executor, so a global instance
+        // cannot give this test a deterministic dead-consumer window.
         install_test_kernel_hooks();
         let ops = std::sync::Arc::new(LifecycleState::new());
         let rt1 = tokio::runtime::Runtime::new().expect("rt1");
@@ -710,14 +724,21 @@ mod tests {
                     .expect("state"),
             )
         });
-        ensure_handoff_bridge(
+        let bridge = Arc::new(HandoffBridge {
+            queue: Mutex::new(VecDeque::new()),
+            notify: Notify::new(),
+            depth: AtomicUsize::new(0),
+            max_depth: 8,
+        });
+        spawn_consumers(
+            &bridge,
             rt1.handle(),
             SharedServerState::clone(&shared),
             proxy.clone(),
             std::sync::Arc::clone(&ops),
+            handoff_worker_count_default(),
         );
         drop(rt1);
-        let bridge = HANDOFF_BRIDGE.get().expect("bridge installed");
         for _ in 0..100 {
             if !bridge.consumers_alive() {
                 break;
@@ -745,11 +766,13 @@ mod tests {
             ))
             .is_ok());
         let rt2 = tokio::runtime::Runtime::new().expect("rt2");
-        ensure_handoff_bridge(
+        spawn_consumers(
+            &bridge,
             rt2.handle(),
             SharedServerState::clone(&shared),
             proxy.clone(),
             std::sync::Arc::clone(&ops),
+            handoff_worker_count_default(),
         );
         assert!(bridge.consumers_alive());
         client

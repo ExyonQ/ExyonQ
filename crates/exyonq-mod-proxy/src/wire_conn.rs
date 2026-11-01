@@ -1083,9 +1083,12 @@ where
                 .and_then(|h| std::str::from_utf8(h).ok());
             let token = gate(path, host);
             match pinned_route_token {
-                None => pinned_route_token = Some(token),
+                // `None` token = unresolvable or full-dispatch route — fail
+                // closed instead of letting `None == None` pass forever
+                // (audit D1/D2 re-round).
+                None if token.is_some() => pinned_route_token = Some(token),
                 Some(pinned) if pinned == token => {}
-                Some(_) => {
+                _ => {
                     let _ = stream.shutdown().await;
                     return Ok(admission_status);
                 }

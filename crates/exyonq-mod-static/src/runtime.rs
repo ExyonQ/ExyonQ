@@ -121,6 +121,18 @@ impl StaticRuntime {
                 &slot.route_prefix,
                 slot.index_file.as_deref(),
                 limits,
+                crate::root::StaticRootRouteOpts {
+                    join_uri: slot.join_uri,
+                    literal: slot.literal,
+                    exact: slot.exact,
+                    dir_redirect: slot.dir_redirect,
+                    redirect_policy: crate::root::DirRedirectPolicy {
+                        absolute: slot.dir_redirect_absolute,
+                        include_port: slot.dir_redirect_port,
+                        fixed_host: slot.dir_redirect_host.clone(),
+                    },
+                    listen_port: slot.listen_port,
+                },
             ) {
                 Ok(mut root) => {
                     root.set_route_host(slot.route_host.clone());
@@ -181,15 +193,29 @@ impl StaticRuntime {
         let roots = self.roots.read().expect("static roots poisoned");
         let mut best: Option<(u32, usize, u8)> = None;
         for (idx, root) in roots.slots.iter().enumerate() {
-            if !Self::static_host_allows(root.route_host(), request_host) {
+            // EXY-03: `match.listen_port`-scoped (NGINX per-server) routes are
+            // Hyper-only — the wire path cannot scope by listener port here.
+            if root.listen_port().is_some()
+                || root.file_root()
+                || !Self::static_host_allows(root.route_host(), request_host)
+            {
                 continue;
             }
-            let prefix = root.route_prefix().trim_end_matches('/');
-            let matches = if prefix.is_empty() {
-                path.starts_with('/')
+            let matches = if root.exact_match() {
+                // NGINX `location =`: the whole URI must equal the pattern.
+                path == root.route_prefix()
+            } else if root.literal_prefix() {
+                // NGINX literal prefix: verbatim `starts_with`, no boundary.
+                path.starts_with(root.route_prefix())
             } else {
-                path == prefix || path.starts_with(&format!("{prefix}/"))
+                let prefix = root.route_prefix().trim_end_matches('/');
+                if prefix.is_empty() {
+                    path.starts_with('/')
+                } else {
+                    path == prefix || path.starts_with(&format!("{prefix}/"))
+                }
             };
+            let prefix = root.route_prefix().trim_end_matches('/');
             if !matches {
                 continue;
             }
@@ -311,6 +337,25 @@ impl StaticDispatchService for StaticRuntime {
         };
         let request_path = request.request_path.as_ref();
         let budget = request.materialization_budget_bytes;
+
+        // EXY-03: NGINX-style directory redirect (imported routes only).
+        let redirect_host = single_header_value(&request.headers, "host");
+        if let Some(location) = root.dir_redirect_location(
+            request_path,
+            redirect_host,
+            request.scheme,
+            request.request_query.as_deref(),
+            request.local_port,
+        ) {
+            let outcome = StaticDispatchOutcome {
+                status: 301,
+                headers: vec![("location".into(), location)],
+                body: StaticDispatchBody::Empty,
+            };
+            self.note_outcome(&outcome);
+            return outcome;
+        }
+
         let range_raw = range_header_value(&request.headers);
         let inm = single_header_value(&request.headers, "if-none-match");
         let ims = single_header_value(&request.headers, "if-modified-since");

@@ -158,6 +158,8 @@ async fn serve_hyper<S>(
     proxy_client: ProxyClient,
     x_forwarded_for: HeaderValue,
     ops: Arc<LifecycleState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -192,6 +194,8 @@ async fn serve_hyper<S>(
             let mut response = serve_connection(
                 ConnectionContext {
                     state: conn_state,
+                    scheme,
+                    local_port,
                     proxy_client,
                     x_forwarded_for,
                     ops,
@@ -220,6 +224,8 @@ fn wire_dispatch_ctx(
     proxy_client: ProxyClient,
     x_forwarded_for: HeaderValue,
     ops: Arc<LifecycleState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
 ) -> WireDispatchContext {
     let state = reload::read_state(&shared);
     let pinned_generation = state.generation;
@@ -230,6 +236,8 @@ fn wire_dispatch_ctx(
         x_forwarded_for,
         ops,
         pinned_generation,
+        scheme,
+        local_port,
     }
 }
 
@@ -316,6 +324,8 @@ async fn accept_loop(
                             proxy_client,
                             x_forwarded_for,
                             ops_conn.clone(),
+                            "https",
+                            local_addr.map(|a| a.port()),
                         );
                         // Wire-cheap modules (ratelimit/metrics) keep Cap067/wire;
                         // compression (or h2 / drain) still forces Hyper.
@@ -331,6 +341,8 @@ async fn accept_loop(
                                 ctx.proxy_client,
                                 ctx.x_forwarded_for,
                                 ops_conn,
+                                "https",
+                                local_addr.map(|a| a.port()),
                             )
                             .await;
                         }
@@ -341,7 +353,14 @@ async fn accept_loop(
             }
             dispatch_tcp(
                 stream,
-                wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
+                wire_dispatch_ctx(
+                    conn_state,
+                    proxy_client,
+                    x_forwarded_for,
+                    ops_conn,
+                    "http",
+                    local_addr.map(|a| a.port()),
+                ),
             )
             .await;
         });
@@ -429,6 +448,26 @@ async fn read_proxy_header_inner(
 
 /// Run on an explicit listen address (used in tests).
 pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
+    run_on_impl(listen, None, config).await
+}
+
+/// `run_on` over a pre-bound listener (tests only): keeping the socket bound
+/// removes the bind→drop→rebind window where a parallel `bind(:0)` can steal
+/// the port and route the client to a foreign test server.
+#[cfg(test)]
+pub(crate) async fn run_on_with_listener(
+    listen: SocketAddr,
+    listener: TcpListener,
+    config: AppConfig,
+) -> anyhow::Result<()> {
+    run_on_impl(listen, Some(listener), config).await
+}
+
+async fn run_on_impl(
+    listen: SocketAddr,
+    first_listener: Option<TcpListener>,
+    config: AppConfig,
+) -> anyhow::Result<()> {
     let proxy_client = build_incoming_client();
     let mut config = config;
     config = discovery_overlay::apply_env_discovery_overlay(config);
@@ -687,7 +726,12 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         }
     }
 
-    let workers = accept_workers();
+    let workers = if first_listener.is_some() {
+        // Test path: the pre-bound listener is the single accept worker.
+        1
+    } else {
+        accept_workers()
+    };
     let tls_on_listen = shared_tls.snapshot().is_some();
     #[cfg(target_os = "linux")]
     let use_io_uring = io_uring_start::io_uring_env_enabled(tls_on_listen);
@@ -833,9 +877,13 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     }
 
     let mut tasks = Vec::with_capacity(workers);
+    let mut first_listener = first_listener;
     let proxy_protocol_config = config.primary_server().proxy_protocol.clone();
     for _ in 0..workers {
-        let listener = bind_tuned(listen).await?;
+        let listener = match first_listener.take() {
+            Some(l) => l,
+            None => bind_tuned(listen).await?,
+        };
         let state = reload::SharedServerState::clone(&shared);
         let proxy_client = proxy_client.clone();
         let acceptor = Some(shared_tls.clone());

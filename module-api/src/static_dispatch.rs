@@ -55,6 +55,30 @@ pub struct StaticCompiledSlot {
     pub route_name: String,
     /// IR `match.host`. `None` is hostless and matches any Host.
     pub route_host: Option<String>,
+    /// EXY-03: `true` = NGINX `root` semantics — resolve `root + full URI`
+    /// instead of `root + (URI − route_prefix)`. `route_prefix` still governs
+    /// which requests the slot claims.
+    pub join_uri: bool,
+    /// EXY-03: `true` = NGINX literal-prefix matching — the slot claims any
+    /// URI starting with `route_prefix` verbatim (no segment boundary).
+    pub literal: bool,
+    /// EXY-03: `true` = answer `301` to `URI/` when the resolved target is a
+    /// directory requested without a trailing slash (NGINX-style).
+    pub dir_redirect: bool,
+    /// EXY-03: `true` = the slot claims only `URI == route_prefix` verbatim
+    /// (NGINX `location =`). Takes precedence over `literal`.
+    pub exact: bool,
+    /// EXY-03: NGINX `absolute_redirect` — emit absolute `Location`.
+    pub dir_redirect_absolute: bool,
+    /// EXY-03: NGINX `port_in_redirect` — emit the listener port in `Location`
+    /// unless it is the scheme default.
+    pub dir_redirect_port: bool,
+    /// EXY-03: NGINX `server_name_in_redirect` — fixed host substituting the
+    /// request authority in `Location`.
+    pub dir_redirect_host: Option<String>,
+    /// EXY-03: IR `match.listen_port` — NGINX listener scoping. `Some` slots
+    /// are Hyper-only: the wire/epoll fast path never claims them.
+    pub listen_port: Option<u16>,
     /// Tree-preload per-file logical cap (bytes). `0` disables preload.
     pub preload_max_file_bytes: u64,
     /// Tree-preload total logical budget (bytes). `0` disables preload.
@@ -262,6 +286,14 @@ pub struct StaticDispatchRequest {
     pub root_slot: StaticRootSlot,
     pub method: StaticMethod,
     pub request_path: Arc<str>,
+    /// Connection scheme (`"http"` / `"https"`) — used for absolute redirect targets.
+    pub scheme: &'static str,
+    /// Local port the connection was accepted on (listener port) — NGINX
+    /// `port_in_redirect` emits this, not the client-authority port.
+    /// `None` when unknown.
+    pub local_port: Option<u16>,
+    /// Raw URI query (no leading `?`) — preserved into redirect targets like NGINX does.
+    pub request_query: Option<String>,
     pub headers: Vec<(String, String)>,
     /// When `Some`, static must not fully materialize a body larger than this many bytes.
     pub materialization_budget_bytes: Option<u64>,
@@ -310,6 +342,9 @@ mod tests {
             root_slot: 0,
             method: StaticMethod::Get,
             request_path: Arc::clone(&path),
+            scheme: "http",
+            request_query: None,
+            local_port: None,
             headers: Vec::new(),
             materialization_budget_bytes: None,
         };
