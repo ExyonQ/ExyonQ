@@ -62,5 +62,8 @@ timeout_ms = 30000
 
 [modules.metrics]
 enabled = true
-metrics_path = "/metrics"
-health_path = "/health"
+path = "/metrics"
+health_path = "/exyonq-metrics-health"
+# Required because the server listens non-loopback (LA-CAP054-008).
+# Generate a real token, e.g. `openssl rand -hex 32` — do not ship this placeholder.
+scrape_bearer_token = "REPLACE-WITH-RANDOM-TOKEN"
