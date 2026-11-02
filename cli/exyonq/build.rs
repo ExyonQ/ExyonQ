@@ -31,6 +31,10 @@ fn main() {
     };
     println!("cargo:rustc-env=EXYONQ_SOURCE_REVISION={revision}");
 
+    // Empty when HEAD is not an exact tag — honest metadata, no invented value.
+    let tag = git_describe_exact_tag().unwrap_or_default();
+    println!("cargo:rustc-env=EXYONQ_SOURCE_TAG={tag}");
+
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=EXYONQ_TARGET={target}");
 
@@ -44,10 +48,28 @@ fn main() {
 
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/refs/heads");
+    println!("cargo:rerun-if-changed=../../.git/refs/tags");
+    println!("cargo:rerun-if-changed=../../.git/packed-refs");
     println!("cargo:rerun-if-env-changed=EXYONQ_SOURCE_REVISION");
     println!("cargo:rerun-if-env-changed=EXYONQ_ARTIFACT_VERSION");
     println!("cargo:rerun-if-env-changed=EXYONQ_OFFICIAL_RELEASE");
     println!("cargo:rerun-if-env-changed=EXYONQ_REQUIRE_SOURCE_REVISION");
+}
+
+fn git_describe_exact_tag() -> Option<String> {
+    let out = Command::new("git")
+        .args(["describe", "--tags", "--exact-match"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn git_rev_parse_head() -> Option<String> {
