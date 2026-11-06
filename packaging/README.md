@@ -147,10 +147,10 @@ Every image ExyonQ builds uses a Wolfi/Chainguard base. Oracle/reference images
 pulled only by benchmarks (NGINX, ModSecurity/CRS, upstream PHP) are external
 and are not rebuilt by ExyonQ.
 
-| Image | Dockerfile | Base | Status (2026-11-04) |
+| Image | Dockerfile | Base | Status (2026-11-06) |
 | --- | --- | --- | --- |
 | `exyonq` | `packaging/docker/Dockerfile` | `chainguard/rust:latest-dev` (build), `chainguard/glibc-dynamic` (runtime) | built and smoke-tested |
-| `exyonq-wordpress` | `packaging/docker/wordpress/Dockerfile` | `chainguard/wolfi-base` + Wolfi PHP 8.5.12 | built; install/login E2E PASS |
+| `exyonq-wordpress` | `packaging/docker/wordpress/Dockerfile` | `chainguard/wolfi-base` + Wolfi PHP 8.5.12 | built; installer HTTP 200 on arm64 (0.9.1 local); final multiarch E2E pending |
 | `exyonq-bench/server` | `benchmarks/docker/Dockerfile.exyonq` | `chainguard/rust` (build), `chainguard/wolfi-base` (runtime) | built; serves benchmark target |
 | `exyonq-bench/tls` | `benchmarks/docker/Dockerfile.bench-tls` | `chainguard/wolfi-base` | built |
 | `exyonq-bench/runner` | `benchmarks/docker/Dockerfile.bench-runner` | `chainguard/rust` (build), `chainguard/wolfi-base` (runtime) | built; `rewrk` real run PASS |
