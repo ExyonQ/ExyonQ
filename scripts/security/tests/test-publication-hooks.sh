@@ -91,8 +91,15 @@ git -C "$REPO" remote remove origin
 git -C "$REPO" init -q
 git -C "$REPO" config user.name 'ExyonQ Publication Hook Test'
 git -C "$REPO" config user.email 'publication-hook-test@exyonq.invalid'
-git -C "$REPO" add -A
-git -C "$REPO" commit -q --no-verify -m 'publication hook test baseline'
+# When the test runs from a committed tree, the clone plus the copied security
+# files can already be clean. Only create a baseline commit when that copy
+# actually changed the index; an empty commit is not a valid baseline.
+if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
+  git -C "$REPO" add -A
+  git -C "$REPO" commit -q --no-verify -m 'publication hook test baseline'
+else
+  echo 'PUBLICATION_HOOK_TEST_BASELINE=already-clean'
+fi
 
 run_in_repo bash scripts/setup-githooks.sh
 [[ "$(git -C "$REPO" config --get core.hooksPath)" == ".githooks" ]] || {
