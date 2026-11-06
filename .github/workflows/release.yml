@@ -55,9 +55,17 @@ jobs:
       - name: cargo deny check advisories bans sources
         run: cargo deny check advisories bans sources
       - name: security tests
+        # Keep build artifacts out of the checkout: the fail-closed publication
+        # scan below must not inspect generated rlib/rmeta files.
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/exyonq-release-target
         run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security)' --test-threads=1
       - name: private-material-zero
-        run: bash scripts/security/scan-private-material.sh --publication --repo .
+        # target/ is generated build output, never publication material.
+        # Remove cached/generated copies before the fail-closed scan.
+        run: |
+          rm -rf -- target
+          bash scripts/security/scan-private-material.sh --publication --repo .
       - name: verify release audit
         run: bash scripts/verify-release-audit.sh "${{ steps.ver.outputs.version }}"
 
