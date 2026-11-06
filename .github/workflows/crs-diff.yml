@@ -48,6 +48,15 @@ jobs:
       # Both directories are bind-mounted into the reference container, so they
       # must be visible to the Docker daemon. Keeping them under the checkout
       # also works on containerized runners that do not share /tmp.
+      - name: Clean cached CRS workspace
+        # Swatinem/rust-cache caches target/. A previous CI run can leave the
+        # pinned checkout or gate work directories there; crs-fetch is
+        # fail-closed on non-empty destinations. Do not let cached CI state
+        # change the measured corpus.
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/target/crs-$CRS_REF" \
+                 "$GITHUB_WORKSPACE/target/crs-diff-work" \
+                 "$GITHUB_WORKSPACE/target/crs-dry-run-work"
       - name: fetch pinned CRS
         run: bash scripts/gates/crs-fetch.sh "$GITHUB_WORKSPACE/target/crs-$CRS_REF"
       - name: CRS differential over the OWASP corpus
