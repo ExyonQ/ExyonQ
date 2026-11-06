@@ -128,19 +128,19 @@ git -C "$REPO" reset --hard -q HEAD
 # commit does not. --no-verify is only used to create the hostile local commit.
 git init --bare -q "$BARE"
 git -C "$REPO" remote add origin "$BARE"
-expect_pass push_hook_clean git -C "$REPO" push -q origin HEAD
+expect_pass push_hook_clean git -C "$REPO" push -q origin HEAD:refs/heads/publication-hook-test
 
 pem_canary >"$REPO/push-canary.txt"
 git -C "$REPO" add push-canary.txt
 git -C "$REPO" commit -q --no-verify -m 'push canary'
-expect_block push_hook_canary git -C "$REPO" push -q origin HEAD
+expect_block push_hook_canary git -C "$REPO" push -q origin HEAD:refs/heads/publication-hook-test
 git -C "$REPO" reset --hard -q HEAD~1
 rm -f "$REPO/push-canary.txt"
 
 printf 'clean push after rejection\n' >"$REPO/clean-push.txt"
 git -C "$REPO" add clean-push.txt
 git -C "$REPO" commit -q -m 'clean push after rejection'
-expect_pass push_hook_clean_after_rejection git -C "$REPO" push -q origin HEAD
+expect_pass push_hook_clean_after_rejection git -C "$REPO" push -q origin HEAD:refs/heads/publication-hook-test
 
 # 3. Literal CI command: the same invocation used by ci.yml/security.yml.
 expect_pass ci_publication_clean run_in_repo bash scripts/security/scan-private-material.sh --publication --repo .

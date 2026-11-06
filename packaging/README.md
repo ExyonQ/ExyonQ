@@ -160,12 +160,15 @@ and are not rebuilt by ExyonQ.
 
 GitHub Release workflow (`.github/workflows/release.yml`) builds Tier 1 matrix on tag `v*` and publishes SHA256 checksums. Linux packages job builds **both** amd64 and arm64 `.deb`/`.rpm`.
 
-OCI publish (`docker` job) encodes the canonical contract explicitly:
+OCI publish encodes the canonical contract explicitly for both images:
 
+- `docker` job: `ghcr.io/exyonq/exyonq:<version>`
+- `docker-wordpress` job: `ghcr.io/exyonq/exyonq-wordpress:<version>`,
+  built from the just-published server image and the same version tag
 - platforms: `linux/amd64,linux/arm64` (multiarch index)
 - provenance: `mode=max`
 - SBOM attestation: enabled
-- tags: `ghcr.io/exyonq/exyonq:<version>` only (no `:latest`)
+- version tag only (no `:latest`)
 - revision/version/source via build-args + OCI labels
 
 Signing (cosign/minisign) is optional follow-up when infra is ready.
