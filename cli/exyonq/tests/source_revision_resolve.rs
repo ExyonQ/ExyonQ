@@ -19,7 +19,9 @@
 #[path = "../build_support.rs"]
 mod build_support;
 
-use build_support::{is_canonical_git_sha40, resolve_source_revision_with};
+use build_support::{
+    is_canonical_git_sha40, resolve_source_revision_with, resolve_source_tag_with,
+};
 
 fn sha40(byte: u8) -> String {
     format!("{:02x}", byte).repeat(20)
@@ -88,4 +90,46 @@ fn amd64_arm64_same_forced_revision() {
     let arm = resolve_source_revision_with(Some(&head), None, true).unwrap();
     assert_eq!(amd, arm);
     assert_eq!(amd, head);
+}
+
+#[test]
+fn source_tag_empty_without_forced_or_git() {
+    let r = resolve_source_tag_with(None, None, false, "0.9.0").unwrap();
+    assert_eq!(r, "");
+}
+
+#[test]
+fn source_tag_prefers_forced_env() {
+    let r = resolve_source_tag_with(Some("v0.9.1"), Some("v0.9.0"), false, "0.9.0").unwrap();
+    assert_eq!(r, "v0.9.1");
+}
+
+#[test]
+fn source_tag_uses_exact_git_tag() {
+    let r = resolve_source_tag_with(None, Some("v0.9.0"), false, "0.9.0").unwrap();
+    assert_eq!(r, "v0.9.0");
+}
+
+#[test]
+fn source_tag_whitespace_forced_falls_back_to_git() {
+    let r = resolve_source_tag_with(Some("  "), Some("v0.9.0"), false, "0.9.0").unwrap();
+    assert_eq!(r, "v0.9.0");
+}
+
+#[test]
+fn official_source_tag_required() {
+    let err = resolve_source_tag_with(None, None, true, "0.9.0").unwrap_err();
+    assert!(err.contains("EXYONQ_SOURCE_TAG"), "{err}");
+}
+
+#[test]
+fn official_source_tag_must_match_product_version() {
+    let err = resolve_source_tag_with(Some("v0.9.1"), None, true, "0.9.0").unwrap_err();
+    assert!(err.contains("v0.9.0"), "{err}");
+}
+
+#[test]
+fn official_source_tag_accepts_matching_version() {
+    let r = resolve_source_tag_with(Some("v0.9.0"), None, true, "0.9.0").unwrap();
+    assert_eq!(r, "v0.9.0");
 }

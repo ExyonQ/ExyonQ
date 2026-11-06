@@ -21,6 +21,7 @@
 
 #![forbid(unsafe_code)]
 
+mod body_syntax;
 mod challenge;
 mod compile;
 mod crs;
@@ -32,7 +33,7 @@ mod normalize;
 mod snapshot;
 mod xml;
 
-pub use challenge::ChallengeService;
+pub use challenge::{ChallengeProvider, ChallengeProviderKind, ChallengeService};
 pub use compile::{
     compile_waf, BuiltinDetectors, CompileError, DetectorToggle, ExclusionInput, FailPolicy,
     IpFilterInput, MatchTarget, RuleInput, RulesetInput, WafCompileInput,

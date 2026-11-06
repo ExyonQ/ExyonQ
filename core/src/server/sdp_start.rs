@@ -121,6 +121,7 @@ pub fn start_sdp(
                         pinned_generation: reload::active_runtime_generation(),
                         scheme: "http",
                         local_port,
+                        client_guard: None,
                     };
                     if peek.is_empty() {
                         dispatch_tcp_inner(stream, ctx).await;

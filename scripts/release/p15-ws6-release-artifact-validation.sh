@@ -213,7 +213,7 @@ if [[ -n "$TARBALL" ]]; then
   tar -xzf "$TARBALL" -C "$UTMP"
   UNIT="$UTMP/usr/lib/systemd/system/exyonq.service"
   SYS_OK=true
-  for key in ExecStart= ExecStartPre= KillSignal=SIGTERM User=exyonq RuntimeDirectory=exyonq; do
+  for key in ExecStart= ExecStartPre= KillSignal=SIGTERM User=exyonq RuntimeDirectory=%p; do
     grep -q "$key" "$UNIT" || SYS_OK=false
   done
   if [[ "$SYS_OK" == "true" ]]; then

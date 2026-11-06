@@ -9,7 +9,11 @@ Type=simple
 User=exyonq
 Group=exyonq
 Environment=EXYONQ_CONFIG=/etc/exyonq/config.toml
-Environment=EXYONQ_CONTROL_SOCKET=/run/exyonq/control.sock
+# Per-unit runtime/control socket: copying this unit as exyonq-http.service
+# and exyonq-sites.service must not make them delete each other's socket.
+# %p is the unit prefix: exyonq.service -> /run/exyonq,
+# exyonq-http.service -> /run/exyonq-http. Do not prepend another exyonq-.
+Environment=EXYONQ_CONTROL_SOCKET=/run/%p/control.sock
 # Validate IR before start (fail closed on bad config).
 ExecStartPre=/usr/bin/exyonq validate -c ${EXYONQ_CONFIG}
 ExecStart=/usr/bin/exyonq serve -c ${EXYONQ_CONFIG}
@@ -21,7 +25,7 @@ TimeoutStopSec=90
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
-RuntimeDirectory=exyonq
+RuntimeDirectory=%p
 RuntimeDirectoryMode=0750
 StateDirectory=exyonq
 StateDirectoryMode=0750
@@ -40,7 +44,7 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/exyonq /var/log/exyonq /run/exyonq
+ReadWritePaths=/var/lib/exyonq /var/log/exyonq /run/%p
 # Config is read-only at runtime; upgrades use config|noreplace packaging.
 ReadOnlyPaths=/etc/exyonq
 

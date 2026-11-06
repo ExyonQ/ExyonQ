@@ -84,6 +84,17 @@ pub fn epoll_sendfile_eligible(head: &[u8]) -> bool {
     if !path.starts_with(b"/") {
         return false;
     }
+    // H-01: sensitive names stay on Hyper, where the static policy returns an
+    // opaque 404. Path traversal is different: the wire owns its pre-existing
+    // 403 terminal, but must never open a sendfile asset; `match_sendfile_asset`
+    // applies the same policy before any open.
+    match std::str::from_utf8(path) {
+        Ok(path) => match crate::sensitive::ensure_relative_allowed(path) {
+            Ok(()) | Err(crate::StaticError::PathTraversal) => {}
+            Err(_) => return false,
+        },
+        Err(_) => return false,
+    }
     // Origin-form extract of `/health` / `/metrics` (including absolute-form).
     // `/metrics` excluded here even though it is not an inline probe — Hyper only.
     if path == b"/health" || path == b"/live" || path == b"/ready" || path == b"/metrics" {

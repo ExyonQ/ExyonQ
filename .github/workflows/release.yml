@@ -57,7 +57,7 @@ jobs:
       - name: security tests
         run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security)' --test-threads=1
       - name: private-material-zero
-        run: bash scripts/security/scan-private-material.sh --git-tree --repo .
+        run: bash scripts/security/scan-private-material.sh --publication --repo .
       - name: verify release audit
         run: bash scripts/verify-release-audit.sh "${{ steps.ver.outputs.version }}"
 
@@ -120,6 +120,15 @@ jobs:
         # P1.5-WS6: --locked required for release artifacts.
         # SBOM embebido vía cargo-auditable — `cargo audit bin` puede verificar el binario suelto.
         run: cargo auditable build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli --target ${{ matrix.target }}
+      - name: Verify artifact source tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${GITHUB_REF#refs/tags/v}"
+          BIN="target/${{ matrix.target }}/release/exyonq"
+          "$BIN" --version | tee /tmp/exyonq-version.txt
+          grep -Fx "source_tag=$TAG" /tmp/exyonq-version.txt
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{}")"
       - name: Verify embedded SBOM
         run: |
           for bin in exyonq exyonqctl exyonq-compat; do
@@ -426,6 +435,7 @@ jobs:
             EXYONQ_VERSION=${{ steps.ver.outputs.version }}
             EXYONQ_GIT_REVISION=${{ github.sha }}
             EXYONQ_OFFICIAL_RELEASE=1
+            EXYONQ_SOURCE_TAG=v${{ steps.ver.outputs.version }}
           # Explicit OCI identity (also set in Dockerfile LABEL from the same ARGs).
           labels: |
             org.opencontainers.image.title=ExyonQ

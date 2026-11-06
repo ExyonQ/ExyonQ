@@ -45,6 +45,8 @@ pub struct MinForwardRequest {
     pub server_protocol: String,
     pub server_name: String,
     pub server_port: u16,
+    /// Connection scheme (`http` or `https`) for CGI `REQUEST_SCHEME`/`HTTPS`.
+    pub scheme: String,
     pub query_string: Option<String>,
     pub content_type: Option<String>,
     pub path_info: Option<String>,
@@ -65,6 +67,7 @@ impl MinForwardRequest {
             server_protocol: "HTTP/1.1".to_string(),
             server_name: "localhost".to_string(),
             server_port: 80,
+            scheme: "http".to_string(),
             query_string: None,
             content_type: None,
             path_info: None,
@@ -128,6 +131,16 @@ impl MinForwardRequest {
             ("REMOTE_ADDR".to_string(), self.remote_addr.clone()),
         ];
 
+        let scheme = if self.scheme.eq_ignore_ascii_case("https") {
+            "https"
+        } else {
+            "http"
+        };
+        push_param(&mut params, "REQUEST_SCHEME", scheme)?;
+        if scheme == "https" {
+            push_param(&mut params, "HTTPS", "on")?;
+        }
+
         if let Some(q) = &self.query_string {
             if !q.is_empty() {
                 push_param(&mut params, "QUERY_STRING", q)?;
@@ -153,7 +166,6 @@ impl MinForwardRequest {
         }
 
         let nominated = connection_nominated_names_from_pairs(&self.http_headers);
-
         for (name, value) in &self.http_headers {
             if nominated
                 .iter()
@@ -178,10 +190,23 @@ impl MinForwardRequest {
                     validate_param_pair(&cgi_name, &merged)?;
                     *existing = merged;
                 }
+
                 continue;
             }
             push_param(&mut params, &cgi_name, value)?;
             seen.insert(cgi_name);
+        }
+
+        // Hyper may expose the authority separately from the header list. CGI
+        // clients and WordPress use HTTP_HOST for absolute admin/login URLs;
+        // never leave it empty when SERVER_NAME is known.
+        if !seen.contains("HTTP_HOST") {
+            let host = if self.server_name.is_empty() {
+                "localhost"
+            } else {
+                self.server_name.as_str()
+            };
+            push_param(&mut params, "HTTP_HOST", host)?;
         }
 
         Ok(params)
@@ -328,6 +353,36 @@ mod tests {
             .map(|(_, v)| v.as_str())
             .collect();
         assert_eq!(accepts, ["text/html, application/json"]);
+    }
+
+    #[test]
+    fn missing_host_falls_back_to_server_name() {
+        let req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        let params = req.to_fcgi_params().expect("params");
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "HTTP_HOST" && v == "localhost"));
+    }
+
+    #[test]
+    fn https_scheme_emits_https_and_request_scheme() {
+        let mut req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        req.scheme = "https".into();
+        let params = req.to_fcgi_params().expect("params");
+        assert!(params.iter().any(|(k, v)| k == "HTTPS" && v == "on"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "REQUEST_SCHEME" && v == "https"));
+    }
+
+    #[test]
+    fn http_scheme_does_not_claim_https() {
+        let req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        let params = req.to_fcgi_params().expect("params");
+        assert!(!params.iter().any(|(k, _)| k == "HTTPS"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "REQUEST_SCHEME" && v == "http"));
     }
 
     #[test]

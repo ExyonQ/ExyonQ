@@ -62,8 +62,8 @@ p14sign_assert_version_policy() {
     p14sign_fixture_version "$version" || p14sign_die "with --test-fixture only approved fixture versions are allowed (got $version)"
   else
     case "$version" in
-      0.4.0|0.4.1|0.4.2|0.4.3|0.4.4|0.4.4.1|0.4.5|0.4.6|0.4.7|0.4.8|0.4.9|0.4.10|0.4.11|0.7.0) ;;
-      *) p14sign_die "without --test-fixture only versions 0.4.0–0.4.11, 0.7.0 are allowed on this line (got $version)" ;;
+      0.4.0|0.4.1|0.4.2|0.4.3|0.4.4|0.4.4.1|0.4.5|0.4.6|0.4.7|0.4.8|0.4.9|0.4.10|0.4.11|0.7.0|0.9.0|0.9.1) ;;
+      *) p14sign_die "without --test-fixture only versions 0.4.0–0.4.11, 0.7.0, 0.9.0, 0.9.1 are allowed on this line (got $version)" ;;
     esac
   fi
 }
@@ -213,7 +213,7 @@ p14sign_assert_bundle_tree_clean() {
   while IFS= read -r -d '' name; do
     name="${name#"$root"/}"
       case "$name" in
-      release-manifest.json|SHA256SUMS.txt|SHA256SUMS.txt.sig|SHA256SUMS.txt.bundle|SHA256SUMS.txt.sigstore.json|exyonq-cosign.pub|cosign.pub|exyonq-release-tag-signers|proof-summary.env|CLASSIFICATION.txt|artifacts|THIRD_PARTY_NOTICES.md|sbom.cdx.json)
+      release-manifest.json|SHA256SUMS.txt|SHA256SUMS.txt.sig|SHA256SUMS.txt.bundle|SHA256SUMS.txt.sigstore.json|exyonq-cosign.pub|cosign.pub|exyonq-release-tag-signers|exyonq-release-artifact-signers|CANDIDATE-NOT-FOR-RELEASE.txt|proof-summary.env|CLASSIFICATION.txt|artifacts|THIRD_PARTY_NOTICES.md|sbom.cdx.json)
         ;;
       *)
         p14sign_die "dirty release tree: unexpected bundle entry: $name"

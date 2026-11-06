@@ -36,8 +36,17 @@ use exyonq_module_api::static_dispatch::{
     StaticMetricsSnapshot,
 };
 use http_body_util::BodyExt;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PreloadKey {
+    filesystem_root: std::path::PathBuf,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+    max_entries: u64,
+}
 
 struct RootTable {
     generation: u64,
@@ -110,7 +119,15 @@ impl StaticRuntime {
     /// On hard failure, keeps the previously published snapshot (reload safety).
     pub fn bind_compiled_slots(&self, generation: u64, slots: &[StaticCompiledSlot]) {
         let mut built = Vec::with_capacity(slots.len());
+        let mut preloaded: HashMap<PreloadKey, Arc<StaticRoot>> = HashMap::new();
+        let mut shared = 0usize;
         for slot in slots {
+            let key = PreloadKey {
+                filesystem_root: slot.filesystem_root.clone(),
+                max_file_bytes: slot.preload_max_file_bytes,
+                max_total_bytes: slot.preload_max_total_bytes,
+                max_entries: slot.preload_max_entries,
+            };
             let limits = PreloadLimits {
                 max_file_bytes: slot.preload_max_file_bytes,
                 max_total_bytes: slot.preload_max_total_bytes,
@@ -148,6 +165,12 @@ impl StaticRuntime {
                     return;
                 }
             };
+            if let Some(existing) = preloaded.get(&key) {
+                root.share_preload_cache_from(existing);
+                built.push(Arc::new(root));
+                shared += 1;
+                continue;
+            }
             if let Err(err) = root.preload_tree() {
                 tracing::error!(
                     generation,
@@ -157,11 +180,14 @@ impl StaticRuntime {
                 );
                 return;
             }
-            built.push(Arc::new(root));
+            let root = Arc::new(root);
+            preloaded.insert(key, Arc::clone(&root));
+            built.push(root);
         }
         tracing::info!(
             generation,
             slots = built.len(),
+            shared_preloads = shared,
             "static preload snapshot published"
         );
         self.bind_roots(generation, built.into_boxed_slice());

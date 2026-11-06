@@ -152,6 +152,32 @@ pub struct WafAbuseConfig {
     pub requests_per_second: u32,
     #[serde(default = "default_abuse_burst")]
     pub burst: u32,
+    /// OL-04: external CAPTCHA provider. `native` keeps the self-hosted PoW.
+    #[serde(default, skip_serializing_if = "is_native_provider")]
+    pub provider: WafCaptchaProvider,
+    /// Public site key rendered into the challenge page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_key: Option<String>,
+    /// Environment variable holding the provider secret; never the secret itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_env: Option<String>,
+    /// Optional provider verification URL (defaults to the provider endpoint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify_url: Option<String>,
+}
+
+/// OL-04: CAPTCHA provider selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WafCaptchaProvider {
+    #[default]
+    Native,
+    Recaptcha,
+    Hcaptcha,
+}
+
+fn is_native_provider(provider: &WafCaptchaProvider) -> bool {
+    *provider == WafCaptchaProvider::Native
 }
 
 impl Default for WafAbuseConfig {
@@ -160,6 +186,10 @@ impl Default for WafAbuseConfig {
             mode: WafAbuseMode::Off,
             requests_per_second: default_abuse_rps(),
             burst: default_abuse_burst(),
+            provider: WafCaptchaProvider::Native,
+            site_key: None,
+            secret_env: None,
+            verify_url: None,
         }
     }
 }
@@ -350,6 +380,29 @@ fn validate_waf_abuse(abuse: &WafAbuseConfig) -> Result<(), ConfigError> {
             "waf.abuse.burst must be >= 1 when mode is not off".into(),
         ));
     }
+    if abuse.provider != WafCaptchaProvider::Native {
+        let site_key = abuse.site_key.as_deref().unwrap_or("").trim();
+        if site_key.is_empty() {
+            return Err(ConfigError::Parse(
+                "waf.abuse.site_key is required when a CAPTCHA provider is set".into(),
+            ));
+        }
+        if abuse.secret_env.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(ConfigError::Parse(
+                "waf.abuse.secret_env is required when a CAPTCHA provider is set".into(),
+            ));
+        }
+        if let Some(url) = abuse.verify_url.as_deref() {
+            let uri: hyper::Uri = url.parse().map_err(|_| {
+                ConfigError::Parse("waf.abuse.verify_url must be an absolute http(s) URI".into())
+            })?;
+            if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.authority().is_none() {
+                return Err(ConfigError::Parse(
+                    "waf.abuse.verify_url must be an absolute http(s) URI".into(),
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -464,6 +517,8 @@ target = "http://127.0.0.1:9000"
         assert_eq!(config.waf.abuse.mode, WafAbuseMode::Off);
         assert_eq!(config.waf.abuse.requests_per_second, 10);
         assert_eq!(config.waf.abuse.burst, 20);
+        assert_eq!(config.waf.abuse.provider, WafCaptchaProvider::Native);
+        assert!(config.waf.abuse.site_key.is_none());
         assert!(config.waf.rulesets.is_empty());
         assert!(config.waf.exclusions.is_empty());
     }
@@ -537,6 +592,33 @@ burst = 20
             err.to_string().contains("waf.abuse"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn external_captcha_requires_site_key_and_secret_env() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.abuse]
+mode = "challenge"
+provider = "recaptcha"
+"#
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(err.to_string().contains("site_key"), "{err}");
+
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.abuse]
+mode = "challenge"
+provider = "recaptcha"
+site_key = "k"
+secret_env = "RECAPTCHA_SECRET"
+"#
+        );
+        let config: AppConfig = input.parse().expect("provider config");
+        assert_eq!(config.waf.abuse.provider, WafCaptchaProvider::Recaptcha);
     }
 
     #[test]

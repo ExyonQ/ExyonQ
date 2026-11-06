@@ -37,7 +37,13 @@ pub fn analyze(config: &Config, report: &mut CompatibilityReport) -> AnalyzedCon
                 out.slice_http = parse_slice(&block.directives, report);
                 out.auth_http = parse_auth(&block.directives, report);
                 out.limit_zones_http = parse_limit_req_zone(&block.directives, report);
-                out.limit_req_http = parse_limit_req(&block.directives, report);
+                (
+                    out.limit_req_http,
+                    out.limit_reqs_http,
+                    out.limit_req_dry_run_http,
+                    out.limit_req_status_http,
+                    out.limit_req_log_level_http,
+                ) = parse_limit_scope(&block.directives, report);
             }
         }
     }
@@ -129,6 +135,11 @@ fn walk_http(directive: &Directive, out: &mut AnalyzedConfig, report: &mut Compa
                 None,
             );
         }
+        "limit_req"
+        | "limit_req_zone"
+        | "limit_req_dry_run"
+        | "limit_req_status"
+        | "limit_req_log_level" => {}
         _ => report_unknown(directive, "http", report),
     }
 }
@@ -634,6 +645,10 @@ fn parse_server(directive: &Directive, out: &mut AnalyzedConfig, report: &mut Co
         slice: None,
         auth: None,
         limit_req: None,
+        limit_reqs: Vec::new(),
+        limit_req_dry_run: None,
+        limit_req_status: None,
+        limit_req_log_level: None,
     };
     let mut loc_order = 0usize;
     if let Some(block) = &directive.block {
@@ -682,13 +697,17 @@ fn parse_server(directive: &Directive, out: &mut AnalyzedConfig, report: &mut Co
                 if matches!(child.name.as_str(), "auth_basic" | "auth_basic_user_file") {
                     server.auth = parse_auth(&server.directives, report);
                 }
-                if child.name == "limit_req" {
-                    server.limit_req = parse_limit_req(&server.directives, report);
-                }
                 classify_server_directive(child, out, report);
             }
         }
     }
+    (
+        server.limit_req,
+        server.limit_reqs,
+        server.limit_req_dry_run,
+        server.limit_req_status,
+        server.limit_req_log_level,
+    ) = parse_limit_scope(&server.directives, report);
     out.servers.push(server);
 }
 
@@ -732,7 +751,11 @@ fn classify_server_directive(
         "mirror" | "mirror_request_body" => {}
         "slice" => {}
         "auth_basic" | "auth_basic_user_file" => {}
-        "limit_req" | "limit_req_zone" => {}
+        "limit_req"
+        | "limit_req_zone"
+        | "limit_req_dry_run"
+        | "limit_req_status"
+        | "limit_req_log_level" => {}
         "sub_filter_unsupported_placeholder" => {
             report.push(
                 &directive.loc,
@@ -1166,14 +1189,18 @@ pub(crate) fn parse_limit_req_zone(
                 } else if let Some(rate) = rest.strip_suffix("r/m") {
                     rps = rate.parse::<u32>().ok().map(|v| (v / 60).max(1));
                 }
-            } else if arg.starts_with('$') {
+            } else if arg.starts_with('$') || arg.contains('$') {
                 key = Some(match arg.as_str() {
                     "$binary_remote_addr" | "$remote_addr" => "ip".to_string(),
                     "$host" => "host".to_string(),
-                    _ if arg.starts_with("$http_") => {
+                    "$remote_user" => "user".to_string(),
+                    _ if arg.starts_with("$http_") && !arg[1..].contains('$') => {
                         format!("header:{}", arg["$http_".len()..].replace('_', "-"))
                     }
-                    _ => String::new(),
+                    _ if arg.starts_with("$cookie_") && !arg[1..].contains('$') => {
+                        format!("cookie:{}", &arg["$cookie_".len()..])
+                    }
+                    _ => format!("expr:{arg}"),
                 });
             }
         }
@@ -1187,12 +1214,12 @@ pub(crate) fn parse_limit_req_zone(
             );
             continue;
         };
-        if key.is_empty() {
+        if key.is_empty() || (key.starts_with("expr:") && !valid_nginx_key_expr(&key[5..])) {
             report.push(
                 &d.loc,
                 "limit_req_zone",
                 CompatStatus::Partial,
-                "limit_req_zone key is not supported (ip/host/$http_*)",
+                "limit_req_zone key contains an unsupported nginx variable",
                 None,
             );
             continue;
@@ -1215,22 +1242,182 @@ pub(crate) fn parse_limit_req_zone(
     out
 }
 
-/// 0.5: `limit_req zone=name burst=N nodelay`.
+/// Variables the runtime can evaluate in a combined key expression.
+fn valid_nginx_key_expr(expr: &str) -> bool {
+    let mut rest = expr;
+    while let Some(pos) = rest.find('$') {
+        rest = &rest[pos + 1..];
+        let braced = rest.starts_with('{');
+        if braced {
+            rest = &rest[1..];
+        }
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        if name.is_empty() || !known_nginx_key_variable(name) {
+            return false;
+        }
+        rest = &rest[end..];
+        if braced {
+            let Some(after) = rest.strip_prefix('}') else {
+                return false;
+            };
+            rest = after;
+        }
+    }
+    true
+}
+
+fn known_nginx_key_variable(name: &str) -> bool {
+    matches!(
+        name,
+        "binary_remote_addr"
+            | "remote_addr"
+            | "host"
+            | "server_name"
+            | "remote_user"
+            | "uri"
+            | "document_uri"
+            | "request_uri"
+            | "args"
+            | "is_args"
+            | "request_method"
+            | "scheme"
+            | "server_port"
+    ) || name.starts_with("http_")
+        || name.starts_with("cookie_")
+        || name.starts_with("arg_")
+}
+
+/// 0.5: all `limit_req` directives plus the inherited scope settings.
+type LimitScope = (
+    Option<crate::ast::ParsedLimitReq>,
+    Vec<crate::ast::ParsedLimitReq>,
+    Option<bool>,
+    Option<u16>,
+    Option<String>,
+);
+
+pub(crate) fn parse_limit_scope(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> LimitScope {
+    let reqs = parse_limit_reqs(directives, report);
+    let mut dry_run = None;
+    let mut status = None;
+    let mut log_level = None;
+    for d in directives {
+        match d.name.as_str() {
+            "limit_req_dry_run" => match parse_on_off(d) {
+                Ok(value) => {
+                    dry_run = Some(value);
+                    report.push(
+                        &d.loc,
+                        "limit_req_dry_run",
+                        CompatStatus::Supported,
+                        format!("limit_req_dry_run {}", if value { "on" } else { "off" }),
+                        Some("modules.ratelimit.route_limits".into()),
+                    );
+                }
+                Err(msg) => {
+                    report.push(&d.loc, "limit_req_dry_run", CompatStatus::Error, msg, None)
+                }
+            },
+            "limit_req_status" => match d.args.as_slice() {
+                [value] => match value.parse::<u16>() {
+                    Ok(code) if (400..=599).contains(&code) => {
+                        status = Some(code);
+                        report.push(
+                            &d.loc,
+                            "limit_req_status",
+                            CompatStatus::Supported,
+                            format!("limit_req_status {code}"),
+                            Some("modules.ratelimit.route_limits".into()),
+                        );
+                    }
+                    _ => report.push(
+                        &d.loc,
+                        "limit_req_status",
+                        CompatStatus::Error,
+                        "limit_req_status expects a code in 400..599",
+                        None,
+                    ),
+                },
+                _ => report.push(
+                    &d.loc,
+                    "limit_req_status",
+                    CompatStatus::Error,
+                    "limit_req_status expects one status code",
+                    None,
+                ),
+            },
+            "limit_req_log_level" => match d.args.as_slice() {
+                [level] if matches!(level.as_str(), "info" | "notice" | "warn" | "error") => {
+                    log_level = Some(level.clone());
+                    report.push(
+                        &d.loc,
+                        "limit_req_log_level",
+                        CompatStatus::Supported,
+                        format!("limit_req_log_level {level}"),
+                        Some("modules.ratelimit.route_limits".into()),
+                    );
+                }
+                _ => report.push(
+                    &d.loc,
+                    "limit_req_log_level",
+                    CompatStatus::Error,
+                    "limit_req_log_level expects info, notice, warn or error",
+                    None,
+                ),
+            },
+            _ => {}
+        }
+    }
+    (reqs.last().cloned(), reqs, dry_run, status, log_level)
+}
+
+/// Compatibility wrapper for callers that only need the last directive.
+#[allow(dead_code)]
 pub(crate) fn parse_limit_req(
     directives: &[Directive],
     report: &mut CompatibilityReport,
 ) -> Option<crate::ast::ParsedLimitReq> {
+    parse_limit_reqs(directives, report).pop()
+}
+
+pub(crate) fn parse_limit_reqs(
+    directives: &[Directive],
+    report: &mut CompatibilityReport,
+) -> Vec<crate::ast::ParsedLimitReq> {
+    let mut out = Vec::new();
     for d in directives {
         if d.name != "limit_req" {
             continue;
         }
         let mut zone = None;
-        let mut burst = 1;
+        // nginx defaults to burst=0 and delay=0 (all excess delayed).
+        let mut burst = 0;
+        let mut nodelay = false;
+        let mut delay = None;
+        let mut invalid_burst = false;
+        let mut invalid_delay = false;
         for arg in &d.args {
             if let Some(rest) = arg.strip_prefix("zone=") {
                 zone = Some(rest.to_string());
             } else if let Some(rest) = arg.strip_prefix("burst=") {
-                burst = rest.parse::<u32>().unwrap_or(1);
+                match rest.parse::<u32>() {
+                    Ok(value) if value > 0 => burst = value,
+                    _ => invalid_burst = true,
+                }
+            } else if arg == "nodelay" {
+                nodelay = true;
+            } else if let Some(rest) = arg.strip_prefix("delay=") {
+                match rest.parse::<u32>() {
+                    Ok(value) if value > 0 => delay = Some(value),
+                    // nginx rejects an explicit delay=0; absence means delay=0.
+                    _ => invalid_delay = true,
+                }
             }
         }
         let Some(zone) = zone else {
@@ -1243,16 +1430,38 @@ pub(crate) fn parse_limit_req(
             );
             continue;
         };
+        if invalid_burst || invalid_delay || (nodelay && delay.is_some()) {
+            report.push(
+                &d.loc,
+                "limit_req",
+                CompatStatus::Error,
+                "limit_req expects burst=<positive>, delay=<positive> and delay cannot be combined with nodelay",
+                None,
+            );
+            continue;
+        }
+        let mode = if nodelay {
+            "nodelay".to_string()
+        } else if let Some(delay) = delay {
+            format!("delay={delay}")
+        } else {
+            "delay=0".to_string()
+        };
         report.push(
             &d.loc,
             "limit_req",
             CompatStatus::Supported,
-            format!("limit_req `{zone}` → modules.ratelimit.routes"),
-            Some("modules.ratelimit.routes".into()),
+            format!("limit_req `{zone}` → modules.ratelimit.route_limits ({mode})"),
+            Some("modules.ratelimit.route_limits".into()),
         );
-        return Some(crate::ast::ParsedLimitReq { zone, burst });
+        out.push(crate::ast::ParsedLimitReq {
+            zone,
+            burst,
+            nodelay,
+            delay,
+        });
     }
-    None
+    out
 }
 
 fn strip_quotes(value: &str) -> &str {

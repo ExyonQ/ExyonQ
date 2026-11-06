@@ -19,14 +19,15 @@
 //! hooks, abuse gate, and real challenge handler. Core depends only on waf-api.
 
 use exyonq_config_ir::{
-    AppConfig, WafAbuseMode, WafConfig, WafDetectorModeIr, WafModeIr, WafOnInspectionLimitIr,
-    WafPhaseIr, WafRuleActionIr,
+    AppConfig, WafAbuseMode, WafCaptchaProvider, WafConfig, WafDetectorModeIr, WafModeIr,
+    WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr,
 };
 use exyonq_core::WafRuntimeBinding;
 use exyonq_ratelimit::SyncTokenBucket;
 use exyonq_waf::{
-    BuiltinDetectors, ChallengeService, DetectorToggle, ExclusionInput, FailPolicy, FixedWafEngine,
-    IpFilterInput, MatchTarget, RuleInput, RulesetInput, WafCompileInput,
+    BuiltinDetectors, ChallengeProvider, ChallengeService, DetectorToggle, ExclusionInput,
+    FailPolicy, FixedWafEngine, IpFilterInput, MatchTarget, RuleInput, RulesetInput,
+    WafCompileInput,
 };
 use exyonq_waf_api::{
     InspectionLimits, OnInspectionLimit, WafAbuseGate, WafAction, WafDecision, WafEngine, WafMode,
@@ -41,7 +42,7 @@ use tracing::{info, warn};
 /// Fail-closed: when `waf.enabled` and compile fails → `Err` (do not silently nop).
 /// Uses generation-frozen [`FixedWafEngine`] bindings (Cap013 / Cap015 WAF-LOGIC-P3-A).
 pub fn install_native_waf_runtime(config: &AppConfig) -> anyhow::Result<()> {
-    let challenge = ChallengeService::from_env_or_random()
+    let challenge = ChallengeService::from_env_or_random_with_provider(challenge_provider(config))
         .map_err(|e| anyhow::anyhow!("waf challenge key: {e}"))?;
     exyonq_core::install_waf_challenge_handler(Arc::new(challenge));
 
@@ -53,6 +54,19 @@ pub fn install_native_waf_runtime(config: &AppConfig) -> anyhow::Result<()> {
         "waf runtime binding installed (fixed snapshot; Cap013 prepare/commit)"
     );
     Ok(())
+}
+
+fn challenge_provider(config: &AppConfig) -> Option<ChallengeProvider> {
+    let abuse = &config.waf.abuse;
+    let site_key = abuse.site_key.as_deref()?.trim();
+    if site_key.is_empty() {
+        return None;
+    }
+    match abuse.provider {
+        WafCaptchaProvider::Native => None,
+        WafCaptchaProvider::Recaptcha => Some(ChallengeProvider::recaptcha(site_key)),
+        WafCaptchaProvider::Hcaptcha => Some(ChallengeProvider::hcaptcha(site_key)),
+    }
 }
 
 fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBinding> {
@@ -78,7 +92,7 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
         )
     };
     let abuse = build_abuse_gate_from_config(config)?;
-    // ARCH-002: same effective-active predicate as engine compile (+ abuse under enforce).
+    // ARCH-002: same effective-active predicate as engine compile (+ independent abuse).
     let signature_active = config.waf.enabled && mode != WafMode::Disabled;
     let wire_inspection_active =
         exyonq_core::compute_wire_inspection_active(signature_active, abuse.is_some(), enforce);

@@ -237,6 +237,12 @@ pub fn match_sendfile_asset(
         let site_slot = rt.slot_for_request_path(path, request_host_from_head(head).as_deref())?;
         let root = rt.root_for_slot_public(site_slot).ok()?;
 
+        // H-01: sendfile must not handle a sensitive path even if an old FD
+        // cache entry or a direct caller reaches this function.
+        if root.ensure_request_allowed(path).is_err() {
+            return None;
+        }
+
         // EXY-03: directory-without-slash on a dir_redirect route must not be
         // sendfile-served — the miss path emits the NGINX-style 301. Wire path
         // is plaintext-only (sendfile cannot run under TLS) so http is right.
@@ -467,6 +473,14 @@ pub fn sendfile_miss_http_wire(
         let Ok(root) = rt.root_for_slot_public(site_slot) else {
             return Some(not_found(client_close));
         };
+        // H-01: never let the wire/sendfile path serve a sensitive name. This
+        // check precedes the FD cache, so a previously cached descriptor cannot
+        // bypass the policy after a reload.
+        match root.ensure_request_allowed(path) {
+            Ok(()) => {}
+            Err(crate::StaticError::PathTraversal) => return Some(forbidden(client_close)),
+            Err(_) => return Some(not_found(client_close)),
+        }
         // EXY-03: NGINX-style 301 for directory-without-slash on imported
         // routes, emitted on the wire path to preserve sendfile eligibility.
         if let Some(location) = root.dir_redirect_location(
@@ -484,9 +498,9 @@ pub fn sendfile_miss_http_wire(
         }
         match root.resolved_file_path(path) {
             Err(crate::StaticError::PathTraversal) => Some(forbidden(client_close)),
-            Err(crate::StaticError::NotFound) | Err(crate::StaticError::BudgetExceeded) => {
-                Some(not_found(client_close))
-            }
+            Err(crate::StaticError::SensitivePath)
+            | Err(crate::StaticError::NotFound)
+            | Err(crate::StaticError::BudgetExceeded) => Some(not_found(client_close)),
             Err(crate::StaticError::Io(_)) => {
                 // Do not leak IO detail on the static surface.
                 Some(not_found(client_close))

@@ -1,16 +1,20 @@
 # syntax=docker/dockerfile:1
 # Independent real HTTP upstream peer for the benchmark compose stack.
 # Builds tools/upstream (standalone crate; not a product workspace member).
+# OPEN: tools/upstream is absent from this checkout and from every public git
+# object. The build fails closed at COPY until the owner supplies the source or
+# retires this image; do not replace it with a non-Wolfi base.
 
-FROM rust:1.94-bookworm AS builder
+FROM cgr.dev/chainguard/rust:latest@sha256:7dcfdd758567d7ce289b4e9e840b251f27397b26412a944af9c091ed048d9fdb AS builder
+USER root
 WORKDIR /build
 COPY tools/upstream/ ./
 RUN cargo build --release
 
-FROM debian:bookworm-slim
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:771146c2dfc880902a185f060c3db5571473c46b267edd98c3119c83068dfb61
+RUN apk update \
+    && apk add --no-cache ca-certificates curl \
+    && rm -rf /var/cache/apk/*
 COPY --from=builder /build/target/release/exyonq-upstream /usr/local/bin/exyonq-upstream
 COPY benchmarks/scenarios/payloads/www /bench/www
 COPY benchmarks/scenarios/payloads/health.txt /bench/health.txt

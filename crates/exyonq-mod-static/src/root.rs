@@ -17,7 +17,7 @@
 
 use super::body::BoxBody;
 use super::precooked::PrecookedResponse;
-use super::{content_type_for, relative_as_safe_path, strip_route_prefix, StaticError};
+use super::{content_type_for, relative_as_safe_path, sensitive, strip_route_prefix, StaticError};
 use crate::conditional::PreparedStaticWire;
 use crate::identity::StaticResourceIdentity;
 use bytes::Bytes;
@@ -197,6 +197,13 @@ impl StaticRoot {
         // NGINX `alias` to a regular file (`location = /x { alias file; }`):
         // the root is the file itself — no dirfd, no tree walk, wire-invisible.
         let file_root = canonical_root.is_file();
+        if file_root {
+            let file_name = canonical_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(StaticError::SensitivePath)?;
+            sensitive::ensure_relative_allowed(file_name)?;
+        }
         #[cfg(target_os = "linux")]
         let root_dir = if file_root {
             None
@@ -242,6 +249,23 @@ impl StaticRoot {
         }
     }
 
+    /// H-01: classify the root-relative path before any cache or filesystem use.
+    fn checked_relative(&self, request_path: &str) -> Result<String, StaticError> {
+        let relative = self
+            .relative_for(request_path)
+            .ok_or(StaticError::NotFound)?;
+        sensitive::ensure_relative_allowed(&relative)?;
+        Ok(relative)
+    }
+
+    /// Wire/sendfile entry points need the same policy without exposing the
+    /// relative path machinery across modules. Linux-only today: the Hyper
+    /// path uses `resolved_file_path`/`serve_request` directly.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn ensure_request_allowed(&self, request_path: &str) -> Result<(), StaticError> {
+        self.checked_relative(request_path).map(|_| ())
+    }
+
     /// EXY-03: NGINX-style directory redirect. When `dir_redirect` is on and
     /// the request resolves to a directory while lacking a trailing `/`,
     /// returns the `Location` target. NGINX `absolute_redirect` default emits
@@ -258,7 +282,7 @@ impl StaticRoot {
         if !self.dir_redirect || request_path.ends_with('/') {
             return None;
         }
-        let relative = self.relative_for(request_path)?;
+        let relative = self.checked_relative(request_path).ok()?;
         let candidate = self
             .canonical_root
             .join(relative_as_safe_path(&relative).ok()?);
@@ -324,15 +348,17 @@ impl StaticRoot {
 
     /// Canonical filesystem path for a request (preload hit or on-demand resolve).
     pub fn resolved_file_path(&self, request_path: &str) -> Result<PathBuf, StaticError> {
-        if let Some(entry) = self.lookup_entry(request_path) {
+        let relative = self.checked_relative(request_path)?;
+        if let Some(entry) = self.lookup_entry(&relative) {
             return Ok(entry.path.clone());
         }
-        self.resolve_path_uncached(request_path)
+        self.resolve_relative_uncached(&relative)
     }
 
     /// Cap067: generation-scoped prepared validators/headers when request is preloaded.
     pub fn prepared_wire(&self, request_path: &str) -> Option<&PreparedStaticWire> {
-        Some(&self.lookup_entry(request_path)?.prepared)
+        let relative = self.checked_relative(request_path).ok()?;
+        Some(&self.lookup_entry(&relative)?.prepared)
     }
 
     /// Capture file identity for cache storage (metadata only, no body read).
@@ -364,7 +390,8 @@ impl StaticRoot {
 
     /// HTTP/3 static fast path: shared body bytes for preloaded cache assets.
     pub fn lookup_h3_static(&self, request_path: &str) -> Option<(&'static str, Arc<Bytes>)> {
-        let entry = self.lookup_entry(request_path)?;
+        let relative = self.checked_relative(request_path).ok()?;
+        let entry = self.lookup_entry(&relative)?;
         Some((
             entry.precooked.content_type,
             Arc::clone(&entry.precooked.body),
@@ -376,15 +403,9 @@ impl StaticRoot {
         &self,
         request_path: &str,
     ) -> Result<hyper::Response<BoxBody>, StaticError> {
-        if let Some(relative) = self.relative_for(request_path) {
-            let _ = relative_as_safe_path(&relative)?;
-        } else {
-            return Err(StaticError::NotFound);
-        }
-
-        let entry = self
-            .lookup_entry(request_path)
-            .ok_or(StaticError::NotFound)?;
+        let relative = self.checked_relative(request_path)?;
+        let _ = relative_as_safe_path(&relative)?;
+        let entry = self.lookup_entry(&relative).ok_or(StaticError::NotFound)?;
         Ok(entry.precooked.to_response())
     }
 
@@ -393,35 +414,37 @@ impl StaticRoot {
         &self,
         request_path: &str,
     ) -> Result<hyper::Response<BoxBody>, StaticError> {
-        if let Some(relative) = self.relative_for(request_path) {
-            let _ = relative_as_safe_path(&relative)?;
-        } else {
-            return Err(StaticError::NotFound);
-        }
-
-        let entry = self
-            .lookup_entry(request_path)
-            .ok_or(StaticError::NotFound)?;
+        let relative = self.checked_relative(request_path)?;
+        let _ = relative_as_safe_path(&relative)?;
+        let entry = self.lookup_entry(&relative).ok_or(StaticError::NotFound)?;
         Ok(entry.precooked.to_head_response())
     }
 
-    fn lookup_entry(&self, request_path: &str) -> Option<&CachedEntry> {
-        if let Some(entry) = self.cache.get(request_path) {
+    fn lookup_entry(&self, relative: &str) -> Option<&CachedEntry> {
+        if let Some(entry) = self.cache.get(relative) {
             return Some(entry);
         }
         let index_name = self.index.as_deref().unwrap_or("index.html");
-        // Under join_uri the effective lookup prefix is `/` (full-URI keys).
-        let lookup_prefix = if self.join_uri {
-            "/"
-        } else {
-            self.route_prefix.as_str()
-        };
-        for candidate in index_lookup_candidates(lookup_prefix, request_path, index_name) {
-            if let Some(entry) = self.cache.get(&candidate) {
-                return Some(entry);
+        // Cache keys are always root-relative, so a preload can be shared by
+        // routes with different prefixes/hosts over the same filesystem root.
+        if relative.is_empty() || relative.ends_with('/') {
+            let dir = relative.trim_end_matches('/');
+            let candidate = if dir.is_empty() {
+                index_name.to_string()
+            } else {
+                format!("{dir}/{index_name}")
+            };
+            if sensitive::ensure_relative_allowed(&candidate).is_err() {
+                return None;
             }
+            return self.cache.get(&candidate);
         }
         None
+    }
+
+    /// Reuse an already-built tree when another route resolves the same root.
+    pub(crate) fn share_preload_cache_from(&mut self, other: &StaticRoot) {
+        self.cache = Arc::clone(&other.cache);
     }
 
     /// Warm path: load files under the document root into an immutable cache (startup/reload).
@@ -614,6 +637,13 @@ impl StaticRoot {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
+            let rel = relative.join(entry.file_name());
+            let Some(rel_str) = rel.to_str() else {
+                continue;
+            };
+            if sensitive::ensure_relative_allowed(rel_str).is_err() {
+                continue;
+            }
             // Follow symlinks only after canonicalize + root containment.
             // Without this, `is_file()`/`is_dir()` follow escapes and preload can
             // cache outside-root bytes under an in-root request path (Cap004).
@@ -629,40 +659,39 @@ impl StaticRoot {
                 );
                 continue;
             }
+            // Classify the canonical target too: a symlink with a harmless name
+            // must not smuggle `.env` or `config.php` into the preload cache.
+            let Ok(canonical_rel) = canonical.strip_prefix(&self.canonical_root) else {
+                continue;
+            };
+            let Some(canonical_rel_str) = canonical_rel.to_str() else {
+                continue;
+            };
+            if sensitive::ensure_relative_allowed(canonical_rel_str).is_err() {
+                continue;
+            }
             if canonical.is_dir() {
-                let next = relative.join(entry.file_name());
-                self.collect_preload_candidates(&canonical, &next, out)?;
+                self.collect_preload_candidates(&canonical, &rel, out)?;
                 continue;
             }
             if !canonical.is_file() {
                 continue;
             }
-            let rel = relative.join(entry.file_name());
-            let request_path = if self.join_uri {
-                format!("/{}", rel.to_string_lossy())
-            } else if rel.as_os_str().is_empty() {
-                self.route_prefix.clone()
-            } else {
-                format!(
-                    "{}/{}",
-                    self.route_prefix.trim_end_matches('/'),
-                    rel.to_string_lossy()
-                )
-            };
             out.push(PreloadCandidate {
                 path: canonical,
-                request_path,
+                request_path: rel_str.to_string(),
             });
         }
         Ok(())
     }
 
     fn resolve_path_uncached(&self, request_path: &str) -> Result<PathBuf, StaticError> {
-        let relative = match self.relative_for(request_path) {
-            Some(value) => value,
-            None => return Err(StaticError::NotFound),
-        };
-        let relative_path = relative_as_safe_path(&relative)?;
+        let relative = self.checked_relative(request_path)?;
+        self.resolve_relative_uncached(&relative)
+    }
+
+    fn resolve_relative_uncached(&self, relative: &str) -> Result<PathBuf, StaticError> {
+        let relative_path = relative_as_safe_path(relative)?;
 
         // Empty remainder (exact `location =` file alias): `join("")` would
         // append a trailing separator and ENOTDIR on regular-file roots.
@@ -676,6 +705,7 @@ impl StaticRoot {
         match std::fs::metadata(&candidate) {
             Ok(meta) if meta.is_dir() => {
                 let index_name = self.index.as_deref().unwrap_or("index.html");
+                sensitive::ensure_relative_allowed(index_name)?;
                 candidate = candidate.join(index_name);
             }
             Ok(_) => {}
@@ -697,6 +727,14 @@ impl StaticRoot {
 
         if !canonical.starts_with(&self.canonical_root) {
             return Err(StaticError::PathTraversal);
+        }
+        if self.file_root {
+            sensitive::ensure_file_name_allowed(&canonical)?;
+        }
+        if let Ok(canonical_rel) = canonical.strip_prefix(&self.canonical_root) {
+            if let Some(rel) = canonical_rel.to_str() {
+                sensitive::ensure_relative_allowed(rel)?;
+            }
         }
         // Regular-file confirmation deferred to open(O_NOFOLLOW) at the I/O boundary.
         Ok(canonical)
@@ -766,30 +804,6 @@ fn load_preload_body_bounded(
     let buf = crate::bounded_read::read_bounded_from_reader(&mut file, max_file_bytes)?;
     let _ = path;
     Ok(Arc::new(Bytes::from(buf)))
-}
-
-fn index_lookup_candidates(
-    route_prefix: &str,
-    request_path: &str,
-    index_name: &str,
-) -> Vec<String> {
-    let index_name = if index_name.is_empty() {
-        "index.html"
-    } else {
-        index_name
-    };
-    let prefix = route_prefix.trim_end_matches('/');
-    let mut out = Vec::new();
-    if request_path == prefix || request_path == format!("{prefix}/") {
-        out.push(format!("{prefix}/{index_name}"));
-        return out;
-    }
-    if request_path.ends_with('/') {
-        out.push(format!("{request_path}{index_name}"));
-        let dir = request_path.trim_end_matches('/');
-        out.push(format!("{dir}/{index_name}"));
-    }
-    out
 }
 
 #[cfg(test)]
@@ -977,5 +991,18 @@ mod tests {
                 .as_deref(),
             Some("https://h.example/assets/")
         );
+    }
+
+    #[test]
+    fn preload_cache_is_shared_across_route_prefixes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("index.html"), b"shared").expect("write");
+        let mut a = StaticRoot::new(dir.path(), "/a", Some("index.html")).expect("root a");
+        let mut b = StaticRoot::new(dir.path(), "/b", Some("index.html")).expect("root b");
+        a.preload_tree().expect("preload");
+        assert_eq!(a.cache_len(), 1);
+        b.share_preload_cache_from(&a);
+        assert_eq!(b.cache_len(), 1);
+        assert!(b.serve_request("/b/index.html").is_ok());
     }
 }

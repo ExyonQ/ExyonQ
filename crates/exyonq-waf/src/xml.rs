@@ -143,6 +143,185 @@ pub(crate) fn parse(body: &[u8]) -> Option<XmlValues> {
     Some(values)
 }
 
+/// Well-formedness check used for the body-processor 400. This is stricter
+/// than [`parse`], which only extracts CRS-visible values and tolerates
+/// truncated input.
+pub(crate) fn strict_error(body: &[u8]) -> Option<&'static str> {
+    if body.len() > MAX_TOTAL_BYTES {
+        return Some("XML body exceeds the inspection limit");
+    }
+    let text = match std::str::from_utf8(body) {
+        Ok(text) => text,
+        Err(_) => return Some("XML body is not valid UTF-8"),
+    };
+    if text.trim().is_empty() {
+        return Some("XML body is empty");
+    }
+
+    let mut stack: Vec<&str> = Vec::new();
+    let mut root_seen = false;
+    let mut i = 0usize;
+    while i < text.len() {
+        if text.as_bytes()[i] != b'<' {
+            let end = text[i..]
+                .find('<')
+                .map(|offset| i + offset)
+                .unwrap_or(text.len());
+            if stack.is_empty() && !text[i..end].trim().is_empty() {
+                return Some("text outside the root element");
+            }
+            i = end;
+            continue;
+        }
+        let rest = &text[i..];
+        if rest.starts_with("<!--") {
+            let Some(end) = rest.find("-->") else {
+                return Some("unterminated comment");
+            };
+            i += end + 3;
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            if stack.is_empty() {
+                return Some("CDATA outside the root element");
+            }
+            let Some(end) = rest.find("]]>") else {
+                return Some("unterminated CDATA section");
+            };
+            i += end + 3;
+            continue;
+        }
+        if rest.starts_with("<?") {
+            let Some(end) = rest.find("?>") else {
+                return Some("unterminated processing instruction");
+            };
+            i += end + 2;
+            continue;
+        }
+        if rest.starts_with("<!") {
+            let Some(len) = skip_declaration(rest) else {
+                return Some("unterminated declaration");
+            };
+            i += len;
+            continue;
+        }
+        if rest.starts_with("</") {
+            let Some(end) = rest.find('>') else {
+                return Some("unterminated closing tag");
+            };
+            let name = rest[2..end].trim();
+            if name.is_empty() || name.split_whitespace().count() != 1 {
+                return Some("malformed closing tag");
+            }
+            if stack.pop() != Some(name) {
+                return Some("mismatched closing tag");
+            }
+            i += end + 1;
+            continue;
+        }
+        let Some(end) = tag_end(rest) else {
+            return Some("unterminated start tag");
+        };
+        let inner = rest[1..end].trim_end();
+        let self_closing = inner.ends_with('/');
+        let inner = if self_closing {
+            inner[..inner.len() - 1].trim_end()
+        } else {
+            inner
+        };
+        let name_end = inner
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(inner.len());
+        let name = &inner[..name_end];
+        if name.is_empty() || name.contains('/') {
+            return Some("malformed element name");
+        }
+        if let Some(reason) = validate_attributes(&inner[name_end..]) {
+            return Some(reason);
+        }
+        if stack.is_empty() {
+            if root_seen {
+                return Some("multiple root elements");
+            }
+            root_seen = true;
+        }
+        if !self_closing {
+            stack.push(name);
+        }
+        i += end + 1;
+    }
+
+    if !stack.is_empty() {
+        return Some("unclosed element");
+    }
+    if !root_seen {
+        return Some("no root element");
+    }
+    None
+}
+
+/// Validate the attribute list of a start tag. This rejects, among other
+/// malformed forms, a backslash before the opening quote (`a=\"x\"`), which
+/// is accepted by a tokenizer but is not well-formed XML and which
+/// ModSecurity rejects with 400.
+fn validate_attributes(rest: &str) -> Option<&'static str> {
+    let bytes = rest.as_bytes();
+    let mut i = 0usize;
+    loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i == bytes.len() {
+            return None;
+        }
+
+        let name_start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && bytes[i] != b'='
+            && bytes[i] != b'/'
+        {
+            if matches!(bytes[i], b'\\' | b'"' | b'\'' | b'<' | b'&') {
+                return Some("malformed attribute name");
+            }
+            i += 1;
+        }
+        if i == name_start {
+            return Some("malformed attribute name");
+        }
+
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i == bytes.len() || bytes[i] != b'=' {
+            return Some("attribute without value");
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+
+        if i == bytes.len() {
+            return Some("unterminated attribute value");
+        }
+        let quote = bytes[i];
+        if quote != b'"' && quote != b'\'' {
+            return Some("unquoted attribute value");
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i] != quote {
+            if bytes[i] == b'<' {
+                return Some("malformed attribute value");
+            }
+            i += 1;
+        }
+        if i == bytes.len() {
+            return Some("unterminated attribute value");
+        }
+        i += 1;
+    }
+}
+
 /// Length of the start tag up to and including its `>` (quotes respected).
 fn tag_end(rest: &str) -> Option<usize> {
     let bytes = rest.as_bytes();

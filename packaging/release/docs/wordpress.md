@@ -3,10 +3,13 @@
 Applies to **v0.7.0**.
 
 ExyonQ is the HTTP server. PHP-FPM is another process. The official server
-image is Debian bookworm slim and does not contain PHP. The WordPress image is
-separate: `php:8.4-fpm-bookworm` plus the `exyonq` binary copied from that
-image. SQLite or MySQL is also another process, or a file on the volume.
-ExyonQ does not run PHP inside its binary.
+image is Wolfi (Chainguard `glibc-dynamic`) and does not contain PHP. The
+WordPress image is separate: Wolfi `php-8.5-fpm` (PHP 8.5.12) plus the `exyonq`
+binary copied from that image. SQLite or MySQL is also another process, or a
+file on the volume.
+ExyonQ does not run PHP inside its binary. On first boot the WordPress image
+creates `wp-config.php` and fills the eight salts locally with PHP's CSPRNG;
+the container does not need outbound network access for that step.
 
 ## Which file to use
 
@@ -15,10 +18,19 @@ ExyonQ does not run PHP inside its binary.
 | `packaging/docker/default.toml` | Official server image. Static page on `0.0.0.0:8080`. `config_version` 1. |
 | `packaging/release/conf/wordpress.toml` | WordPress image. `config_version` 2. Static `/wp-includes` and `/wp-content`. PHP on `/`. |
 
-This tree does not ship `conf/exyonq.toml` or `conf/php-fpm.toml`. A single PHP
-application uses the same route shape as WordPress: `root`, `fastcgi`, and
-`htaccess = "overlay"`. The front controller comes from the application's
-`.htaccess`, not from a TOML field.
+This tree does not ship `conf/exyonq.toml` or `conf/php-fpm.toml`. The
+validated, copyable example is `packaging/release/conf/wordpress.toml`;
+`scripts/gates/config-examples-validate.sh` copies it to a temporary path and
+runs `exyonq validate` against the real binary. The same file is the source of
+the route shapes below.
+
+A PHP application uses **separate routes**: static prefixes with `root` and
+one catch-all route with `fastcgi`. A route cannot set both `root` and
+`fastcgi`; that is a conflicting action and `exyonq validate` rejects it with
+`EXY-CONFIG-0011`. Do not copy a single-route nginx location shape into TOML.
+The catch-all route may use `htaccess = "overlay"` (as WordPress does) or an
+explicit `front_controller = "index.php"`. The front controller is not a
+property of a `root` route.
 
 `root` on a route is the directory of that prefix. In nginx that is `alias`,
 not `root /var/www/html` for every location.
@@ -27,6 +39,46 @@ not `root /var/www/html` for every location.
 `.ht*` or dotfile on those routes is denied. `.well-known` stays reachable.
 Plugin PHP is loaded by PHP-FPM from disk, not by downloading the file.
 The database file is in that denied set.
+
+The `/` route uses `htaccess = "overlay"`; the stock WordPress `.htaccess`
+provides the front-controller rewrite. Without an overlay, set
+`front_controller = "index.php"` explicitly. This is the equivalent of
+`try_files $uri $uri/ /index.php?$args`: existing files and directory indexes
+win, and every other URI runs `/index.php` with `PATH_INFO` and the original
+query string.
+
+## Static asset caching
+
+Both static asset routes set a 30-day, immutable `Cache-Control` for every
+MIME type served under that prefix:
+
+```toml
+[route.cache_headers.by_mime."*"]
+max_age = 2592000
+immutable = true
+```
+
+WordPress appends a version query to enqueued assets, so the 30-day window is
+intentional. This is a route-level header policy, not a page-cache TTL; PHP
+execution and `/wp-config.php` are not affected. The production file uses the
+inline equivalent so the policy stays attached to each static route.
+
+## Blocking `wp-config.php`
+
+The production config contains a terminal route with no backend:
+
+```toml
+[[route]]
+name = "wp-config-deny"
+match = { path = "/wp-config.php" }
+access = { deny = ["all"] }
+```
+
+`match.path` uses a segment boundary, so this returns `403` for
+`/wp-config.php`, `/wp-config.php/` and `/wp-config.php/nested`, without
+executing PHP. It does not block `/wp-config.php.bak` or `/wp-config.phpx`;
+those continue to normal route resolution. Do not use `exact = true` for this
+security boundary.
 
 The `/` route executes an existing `.php`. An existing directory runs its
 `index.php`, or serves `index.html` when that is the only index. Every
@@ -54,6 +106,28 @@ profile used in tests stays at 30000. A plugin install or a core update
 can exceed 30 seconds. A timeout from ExyonQ is 504. A dead PHP-FPM is
 502.
 
+## Capacity and 503
+
+ExyonQ admits `max_concurrency` FastCGI requests per pool and keeps at most
+`max_connections` sockets (defaults to `max_concurrency`). Size the pool to the
+PHP-FPM worker ceiling and leave measured headroom:
+
+```text
+max_concurrency >= php-fpm pm.max_children
+max_connections  = max_concurrency
+```
+
+This is a bounded fail-fast policy, not an unbounded nginx queue. With 20
+simultaneous 2 s requests and a 100 ms checkout budget, a pool of 16 returns
+four 503s; a pool of 40 returns 20×200 in the F6-WP-02 real PHP-FPM test.
+`checkout_timeout_ms` can absorb a short burst, but raising it does not add
+PHP-FPM workers. Alert on sustained
+`exyonq_fcgi_saturation_rejections_total` /
+`exyonq_fcgi_pool_saturation_rejections_total{pool=…}`, or
+`exyonq_fcgi_responses_total{status="503"}` /
+`exyonq_fcgi_pool_responses_total{pool=…,status="503"}`; the warn log names the
+pool and includes `queue=disabled`.
+
 ## .htaccess
 
 The stock WordPress file compiles. `RewriteBase` is accepted and not
@@ -65,6 +139,39 @@ front page uses.
 
 The watcher recompiles only when a file named `.htaccess` changes. A
 SQLite write does not republish the site.
+
+## Migrating from nginx and rolling back
+
+Treat ExyonQ as a replacement for the nginx `server` block, not as a
+byte-for-byte emulation. Keep nginx installed and its configuration untouched
+until the direct path has passed the gate.
+
+1. Keep the production listener and nginx upstream unchanged. Run ExyonQ on a
+   spare port against a **copy** of the docroot, the same PHP-FPM socket and a
+   disposable copy of the database. Do not point the public listener at it yet.
+2. If the docroot has no stock WordPress `.htaccess` (a common nginx
+   `try_files` setup), use `front_controller = "index.php"` on the catch-all
+   FastCGI route. Existing files and directory indexes still win; every other
+   URI runs `/index.php` with the original query string. Do not use
+   `htaccess = "overlay"` without the stock file: the route has no rewrite and
+   returns 404.
+3. Gate the copy on `/`, a category, a post, a missing URL (404), `/feed/`,
+   `/wp-json/`, CSS/JS and uploads, `/wp-admin/`, `/wp-login.php`,
+   `/wp-config.php` (403), Brotli, immutable asset caching and at least 20
+   concurrent PHP requests. Compare the decoded HTML with the current
+   production response; compressed sizes are useful, but the decoded bytes
+   are the content contract.
+4. Cut over only after that evidence is recorded and the release artifact is
+   the version being advertised. Stop the public ExyonQ process and restore the
+   previous nginx listener (or the previous reverse-proxy unit) to roll back.
+   The docroot, database and nginx configuration are unchanged, so rollback
+   needs no content or data migration.
+5. Do not change the production footer or release post to a new ExyonQ version
+   until the published artifact for that version has passed the gate.
+
+The F6-WP-04 harness is `scripts/e2e/f6-wp04-migration-content-e2e.sh`; it
+copies a real tree and DB into a temporary directory, runs PHP-FPM and ExyonQ
+without nginx, and records the HTTP, Brotli and concurrency results.
 
 ## Page cache
 

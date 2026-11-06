@@ -562,6 +562,19 @@ const SQL_PATTERNS: &[(&str, &str)] = &[
     ),
     // Quote closed by a SQL comment: `admin'--`.
     ("EXY-SQL-1005", r#"(?i)['"]\s*(?:--|#)\s*$"#),
+    // SQLite `EXCEPT SELECT` auth bypass (CRS 942340/942100).
+    ("EXY-SQL-1006", r"(?i)\bexcept\s+select\b"),
+    // Quoted OR/AND comparison: `'or 1 > 1` (CRS 942390/942100).
+    (
+        "EXY-SQL-1007",
+        r#"(?i)['"`]\s*(?:or|and)\s+[0-9]+\s*[<>=]\s*[0-9]+"#,
+    ),
+    // A quoted cookie/argument name made only of punctuation is the SQLi
+    // shape libinjection flags in 942100 (CRS 942420-t11).
+    ("EXY-SQL-1008", r#"^['"`][^A-Za-z0-9]{8,}$"#),
+    // `(select min(name)` is 942310's positive shape; libinjection reaches it
+    // through 942100 when the standalone 942310 regex does not fire.
+    ("EXY-SQL-1009", r"(?i)\(\s*select\s+[0-9a-z_]+\s*\("),
 ];
 
 const XSS_PATTERNS: &[(&str, &str)] = &[
@@ -571,6 +584,13 @@ const XSS_PATTERNS: &[(&str, &str)] = &[
         r"(?i)\bon(?:load|error|click|mouseover)\s*=",
     ),
     ("EXY-XSS-1003", r"(?i)javascript\s*:"),
+    // PHP open tags are treated as XSS by libinjection (CRS 941100); 933100
+    // itself only inspects cookies/args/XML, not User-Agent. `<?php` without
+    // a following delimiter is explicitly a negative CRS case (933100 t24/t25).
+    (
+        "EXY-XSS-1004",
+        r"(?i)<\?(?:php[\s\x0b]|=|xml(?:[\s\x0b]+[^a-z]|:)|$)|\[[/\x5c]?php\]|\{/?php\}",
+    ),
 ];
 
 const PATH_PATTERNS: &[(&str, &str)] = &[

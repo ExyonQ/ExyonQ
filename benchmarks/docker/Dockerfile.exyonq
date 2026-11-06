@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.94-bookworm AS builder
+# Wolfi/Chainguard builder with the workspace-pinned rustc 1.99.1.
+FROM cgr.dev/chainguard/rust:latest@sha256:7dcfdd758567d7ce289b4e9e840b251f27397b26412a944af9c091ed048d9fdb AS builder
+# Chainguard images default to nonroot; the workspace contains 0600 files that
+# the compiler must read, so build as root (the runtime stays nonroot).
+USER root
 WORKDIR /app
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY core ./core
@@ -24,12 +28,14 @@ RUN if [ -n "$ALLOCATOR_FEATURE" ]; then \
       cargo build --release -p exyonq -p exyonqctl; \
     fi
 
-FROM debian:bookworm-slim
+# Wolfi runtime: the benchmark needs a shell and TLS tooling, so it uses the
+# Wolfi base with explicit packages instead of the distroless server runtime.
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:771146c2dfc880902a185f060c3db5571473c46b267edd98c3119c83068dfb61
 ARG ALLOCATOR_FEATURE=
 LABEL exyonq.allocator_feature="${ALLOCATOR_FEATURE:-system}"
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl openssl bash \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk update \
+    && apk add --no-cache ca-certificates curl openssl bash coreutils \
+    && rm -rf /var/cache/apk/*
 COPY --from=builder /app/target/release/exyonq /usr/local/bin/exyonq
 COPY --from=builder /app/target/release/exyonqctl /usr/local/bin/exyonqctl
 COPY benchmarks/configs/exyonq/bench.toml /bench/bench.toml

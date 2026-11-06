@@ -16,7 +16,9 @@
 //! FastCGI module metrics — owned by exyonq-mod-fastcgi (KD1).
 
 use exyonq_module_api::fcgi_dispatch::FcgiMetricsSnapshot;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 static FCGI_RESPONSES_501: AtomicU64 = AtomicU64::new(0);
 static FCGI_RESPONSES_501_SUCCESS_NOT_AUTHORIZED: AtomicU64 = AtomicU64::new(0);
@@ -43,6 +45,108 @@ static FCGI_FPM_DISCONNECTS: AtomicU64 = AtomicU64::new(0);
 static FCGI_FPM_RECONNECTS: AtomicU64 = AtomicU64::new(0);
 /// Last observed recovery latency in milliseconds (gauge; no high-cardinality labels).
 static FCGI_RECOVERY_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Config-defined pool names are bounded; excess names share one overflow label.
+const MAX_FCGI_POOL_METRIC_SERIES: usize = 64;
+
+#[derive(Default)]
+pub(crate) struct FcgiPoolMetrics {
+    responses_501: AtomicU64,
+    responses_200: AtomicU64,
+    responses_502: AtomicU64,
+    responses_503: AtomicU64,
+    responses_504: AtomicU64,
+    saturation_rejections: AtomicU64,
+    checkout_timeouts: AtomicU64,
+    inflight_current: AtomicI64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FcgiPoolSnapshot {
+    pub responses_501: u64,
+    pub responses_200: u64,
+    pub responses_502: u64,
+    pub responses_503: u64,
+    pub responses_504: u64,
+    pub saturation_rejections: u64,
+    pub checkout_timeouts: u64,
+    pub inflight_current: i64,
+}
+
+impl FcgiPoolMetrics {
+    pub(crate) fn note_response(&self, status: u16) {
+        match status {
+            501 => self.responses_501.fetch_add(1, Ordering::Relaxed),
+            200 => self.responses_200.fetch_add(1, Ordering::Relaxed),
+            502 => self.responses_502.fetch_add(1, Ordering::Relaxed),
+            503 => self.responses_503.fetch_add(1, Ordering::Relaxed),
+            504 => self.responses_504.fetch_add(1, Ordering::Relaxed),
+            _ => return,
+        };
+    }
+
+    pub(crate) fn note_saturation_rejection(&self) {
+        self.saturation_rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn note_checkout_timeout(&self) {
+        self.checkout_timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn inflight_acquire(&self) {
+        self.inflight_current.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn inflight_release(&self) {
+        self.inflight_current.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> FcgiPoolSnapshot {
+        FcgiPoolSnapshot {
+            responses_501: self.responses_501.load(Ordering::Relaxed),
+            responses_200: self.responses_200.load(Ordering::Relaxed),
+            responses_502: self.responses_502.load(Ordering::Relaxed),
+            responses_503: self.responses_503.load(Ordering::Relaxed),
+            responses_504: self.responses_504.load(Ordering::Relaxed),
+            saturation_rejections: self.saturation_rejections.load(Ordering::Relaxed),
+            checkout_timeouts: self.checkout_timeouts.load(Ordering::Relaxed),
+            inflight_current: self.inflight_current.load(Ordering::Relaxed),
+        }
+    }
+
+    fn has_data(&self) -> bool {
+        let snap = self.snapshot();
+        snap.responses_501 != 0
+            || snap.responses_200 != 0
+            || snap.responses_502 != 0
+            || snap.responses_503 != 0
+            || snap.responses_504 != 0
+            || snap.saturation_rejections != 0
+            || snap.checkout_timeouts != 0
+            || snap.inflight_current != 0
+    }
+}
+
+static FCGI_POOL_METRICS: LazyLock<Mutex<BTreeMap<String, Arc<FcgiPoolMetrics>>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static FCGI_POOL_OVERFLOW: LazyLock<Arc<FcgiPoolMetrics>> =
+    LazyLock::new(|| Arc::new(FcgiPoolMetrics::default()));
+
+/// Return the stable per-pool counter handle, registering it on first use.
+pub(crate) fn pool_metrics(pool: &str) -> Arc<FcgiPoolMetrics> {
+    let mut registry = FCGI_POOL_METRICS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(metrics) = registry.get(pool) {
+        return Arc::clone(metrics);
+    }
+    if registry.len() >= MAX_FCGI_POOL_METRIC_SERIES {
+        return Arc::clone(&FCGI_POOL_OVERFLOW);
+    }
+    let metrics = Arc::new(FcgiPoolMetrics::default());
+    registry.insert(pool.to_string(), Arc::clone(&metrics));
+    metrics
+}
 
 #[cfg(test)]
 static FCGI_TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -337,6 +441,109 @@ pub fn append_fcgi_prometheus(out: &mut String) {
         "exyonq_fcgi_connect_failures_total {}\n",
         ops.connect_failures
     ));
+    append_fcgi_pool_prometheus(out);
+}
+
+fn append_fcgi_pool_prometheus(out: &mut String) {
+    let snapshots: Vec<(String, FcgiPoolSnapshot)> = {
+        let registry = FCGI_POOL_METRICS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registry
+            .iter()
+            .map(|(name, metrics)| (name.clone(), metrics.snapshot()))
+            .collect()
+    };
+    if snapshots.is_empty() {
+        return;
+    }
+
+    out.push_str("# HELP exyonq_fcgi_pool_responses_total FastCGI responses by configured pool and status (process lifetime).\n");
+    out.push_str("# TYPE exyonq_fcgi_pool_responses_total counter\n");
+    for (pool, snap) in &snapshots {
+        let label = escape_prometheus_label(pool);
+        for (status, count) in [
+            ("200", snap.responses_200),
+            ("501", snap.responses_501),
+            ("502", snap.responses_502),
+            ("503", snap.responses_503),
+            ("504", snap.responses_504),
+        ] {
+            out.push_str(&format!(
+                "exyonq_fcgi_pool_responses_total{{pool=\"{label}\",status=\"{status}\"}} {count}\n"
+            ));
+        }
+    }
+    out.push_str("# TYPE exyonq_fcgi_pool_saturation_rejections_total counter\n");
+    for (pool, snap) in &snapshots {
+        out.push_str(&format!(
+            "exyonq_fcgi_pool_saturation_rejections_total{{pool=\"{}\"}} {}\n",
+            escape_prometheus_label(pool),
+            snap.saturation_rejections
+        ));
+    }
+    out.push_str("# TYPE exyonq_fcgi_pool_checkout_timeouts_total counter\n");
+    for (pool, snap) in &snapshots {
+        out.push_str(&format!(
+            "exyonq_fcgi_pool_checkout_timeouts_total{{pool=\"{}\"}} {}\n",
+            escape_prometheus_label(pool),
+            snap.checkout_timeouts
+        ));
+    }
+    out.push_str("# TYPE exyonq_fcgi_pool_inflight_current gauge\n");
+    for (pool, snap) in &snapshots {
+        out.push_str(&format!(
+            "exyonq_fcgi_pool_inflight_current{{pool=\"{}\"}} {}\n",
+            escape_prometheus_label(pool),
+            snap.inflight_current
+        ));
+    }
+
+    let overflow = &*FCGI_POOL_OVERFLOW;
+    if overflow.has_data() {
+        append_pool_series(out, "__overflow__", &overflow.snapshot());
+    }
+}
+
+fn append_pool_series(out: &mut String, pool: &str, snap: &FcgiPoolSnapshot) {
+    let label = escape_prometheus_label(pool);
+    for (status, count) in [
+        ("200", snap.responses_200),
+        ("501", snap.responses_501),
+        ("502", snap.responses_502),
+        ("503", snap.responses_503),
+        ("504", snap.responses_504),
+    ] {
+        out.push_str(&format!(
+            "exyonq_fcgi_pool_responses_total{{pool=\"{label}\",status=\"{status}\"}} {count}\n"
+        ));
+    }
+    out.push_str(&format!(
+        "exyonq_fcgi_pool_saturation_rejections_total{{pool=\"{label}\"}} {}\n",
+        snap.saturation_rejections
+    ));
+    out.push_str(&format!(
+        "exyonq_fcgi_pool_checkout_timeouts_total{{pool=\"{label}\"}} {}\n",
+        snap.checkout_timeouts
+    ));
+    out.push_str(&format!(
+        "exyonq_fcgi_pool_inflight_current{{pool=\"{label}\"}} {}\n",
+        snap.inflight_current
+    ));
+}
+
+fn escape_prometheus_label(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -372,5 +579,36 @@ mod tests {
         assert!(out.contains("exyonq_fcgi_checkout_timeouts_total"));
         assert!(out.contains("exyonq_fcgi_inflight_current"));
         assert!(out.contains("exyonq_fcgi_responses_total"));
+    }
+
+    #[test]
+    fn pool_metrics_are_exported_with_pool_label() {
+        let _gate = fcgi_metric_test_gate();
+        let name = format!("php-unit-{}", std::process::id());
+        let metric = pool_metrics(&name);
+        metric.note_response(200);
+        metric.note_response(503);
+        metric.note_saturation_rejection();
+        metric.note_checkout_timeout();
+        metric.inflight_acquire();
+        metric.inflight_release();
+
+        let mut out = String::new();
+        append_fcgi_prometheus(&mut out);
+        assert!(out.contains(&format!(
+            "exyonq_fcgi_pool_responses_total{{pool=\"{name}\",status=\"200\"}} 1"
+        )));
+        assert!(out.contains(&format!(
+            "exyonq_fcgi_pool_responses_total{{pool=\"{name}\",status=\"503\"}} 1"
+        )));
+        assert!(out.contains(&format!(
+            "exyonq_fcgi_pool_saturation_rejections_total{{pool=\"{name}\"}} 1"
+        )));
+        assert!(out.contains(&format!(
+            "exyonq_fcgi_pool_checkout_timeouts_total{{pool=\"{name}\"}} 1"
+        )));
+        assert!(out.contains(&format!(
+            "exyonq_fcgi_pool_inflight_current{{pool=\"{name}\"}} 0"
+        )));
     }
 }

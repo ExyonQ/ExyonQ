@@ -1364,8 +1364,14 @@ impl ProxyDispatchService for ProxyRuntime {
                     None,
                 );
             }
+            // A GET/HEAD may legitimately carry a request body. The empty-body
+            // fast path must not forward its Content-Length without those bytes:
+            // the upstream would wait forever for a body that is not sent. Keep
+            // the fast path for bodyless requests and use the framed path when
+            // the collected body is non-empty.
+            let has_body = request.body.as_ref().is_some_and(|body| !body.is_empty());
             let attempt = match request.method {
-                ProxyMethod::Get | ProxyMethod::Head => {
+                ProxyMethod::Get | ProxyMethod::Head if !has_body => {
                     self.attempt_get_like(&target, &request, budget).await
                 }
                 ProxyMethod::Post
@@ -1373,7 +1379,9 @@ impl ProxyDispatchService for ProxyRuntime {
                 | ProxyMethod::Patch
                 | ProxyMethod::Delete
                 | ProxyMethod::Options
-                | ProxyMethod::Other => self.attempt_post_like(&target, &request, budget).await,
+                | ProxyMethod::Other
+                | ProxyMethod::Get
+                | ProxyMethod::Head => self.attempt_post_like(&target, &request, budget).await,
             };
             match attempt {
                 Ok(mut outcome) => {

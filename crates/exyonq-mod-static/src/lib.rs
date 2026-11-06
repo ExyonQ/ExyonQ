@@ -30,6 +30,7 @@ pub mod identity;
 mod precooked;
 mod root;
 pub mod sendfile;
+mod sensitive;
 pub mod static_cache;
 pub mod wire;
 
@@ -137,10 +138,23 @@ pub const INLINE_BODY_MAX_BYTES: u64 = 1024 * 1024;
 
 pub use bounded_read::read_bounded_from_reader;
 
+/// H-01: conservative pre-cache classifier for a full request path.
+///
+/// This is intentionally stricter than route-relative classification: a path
+/// that looks sensitive is routed through the static service (and its opaque
+/// 404) instead of a static cache hit. The service performs the authoritative
+/// route-relative check.
+pub fn request_path_may_be_sensitive(request_path: &str) -> bool {
+    sensitive::ensure_relative_allowed(request_path).is_err()
+}
+
 #[derive(Debug, Error)]
 pub enum StaticError {
     #[error("path traversal blocked")]
     PathTraversal,
+
+    #[error("sensitive static path blocked")]
+    SensitivePath,
 
     #[error("file not found")]
     NotFound,
@@ -169,6 +183,7 @@ pub fn resolve_path(
 }
 
 pub async fn serve_file(path: &Path) -> Result<Response<BoxBody>, StaticError> {
+    sensitive::ensure_file_name_allowed(path)?;
     let content_type = content_type_for(path);
     let bytes = tokio::fs::read(path).await?;
     Ok(file_response(bytes::Bytes::from(bytes), content_type))
@@ -193,6 +208,7 @@ pub fn read_file_bytes_with_budget(
     path: &Path,
     budget: Option<u64>,
 ) -> Result<(Vec<u8>, &'static str), StaticError> {
+    sensitive::ensure_file_name_allowed(path)?;
     let mut file = File::open(path)?;
     let meta = file.metadata()?;
     if !meta.is_file() {
@@ -223,6 +239,7 @@ pub fn read_file_range(
     start: u64,
     length: u64,
 ) -> Result<(Vec<u8>, &'static str), StaticError> {
+    sensitive::ensure_file_name_allowed(path)?;
     let len_usize = usize::try_from(length).map_err(|_| {
         StaticError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -247,6 +264,7 @@ pub fn read_file_range(
 }
 
 pub fn serve_head_sync(path: &Path) -> Result<Response<BoxBody>, StaticError> {
+    sensitive::ensure_file_name_allowed(path)?;
     let meta = std::fs::metadata(path)?;
     if !meta.is_file() {
         return Err(StaticError::NotFound);

@@ -2,36 +2,41 @@
 
 ExyonQ is a modular HTTP server and reverse proxy written in Rust: static files, FastCGI/PHP-FPM, TLS, HTTP/2 and HTTP/3, full page cache, WAF, and a balancer with nginx/Apache-compatible configuration migration.
 
-This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark campaigns and raw evidence packs are intentionally not included; methodology notes and summary dashboards live under `docs/benchmarks/`.
+This repository is the public product source tree (compile / maintain). Internal benchmark campaigns and raw evidence packs are intentionally not included; methodology notes and summary dashboards live under `docs/benchmarks/`.
 
-Lab integration tree. Public product release: **v0.9.0** on [exyonq-github](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.9.0) (`ghcr.io/exyonq/exyonq:0.9.0`, `ghcr.io/exyonq/exyonq-wordpress:0.9.0`, `exyonq/exyonq:0.9.0` on Docker Hub — no `:latest`). This lab worktree may diverge; do not treat lab HEAD as the published tag.
+Public releases are published on [GitHub Releases](https://github.com/ExyonQ/ExyonQ/releases/latest) and in GHCR as versioned images (`ghcr.io/exyonq/exyonq`, `ghcr.io/exyonq/exyonq-wordpress`); Docker Hub mirrors use the same version tags. No `:latest` tag is published. A local worktree may diverge; do not treat its HEAD as a published tag.
 
-## What's in 0.9.0
+## What's in this release line
 
-- Proxy cache keys with vary/bypass semantics, `stale-if-error` serving, and purge by tag/URL/namespace via `exyonqctl`
+- External authentication with fail-closed JWT handling, plus user/zone rate limits
+- Client throttling for static and dynamic requests, inbound/outbound bandwidth, and hard/soft connection limits with OLS-compatible close/ban behavior
+- Human challenge support: native proof-of-work, monitor mode, reCAPTCHA and hCaptcha, with provider failures denied closed
+- WAF with OWASP CRS import and real-corpus differential/dry-run tooling, per-rule metrics, body inspection (`crs`/`multipart`/`xml`), and bounded buffering
+- Proxy cache keys with vary/bypass semantics, `stale-if-error`, and purge by tag/URL/namespace via `exyonqctl`
 - `expires`/`cache_headers` runtime application and route `add_header` with inheritance and denylist
-- Response body transforms: `gunzip` (bounded streaming decode), `sub_filter` (MIME-scoped), `mirror` (background subrequests), `slice` (range-keyed segment cache)
+- Response body transforms: `gunzip`, `sub_filter`, `mirror`, and `slice`
 - OpenLiteSpeed parity: private-cookie cache denial and nonce-safe FPC hard-deny prefixes
-- ACME HTTP-01 across processes: filesystem-shared challenge store so redirect + TLS processes validate issuance without DNS API tokens
-- WAF surface: `auth_basic`, `zone_ratelimit`, body inspection (`crs`/`multipart`/`xml`), and WAF metrics on `/metrics`
-- `exyonq_http_request_duration_seconds` histograms with bounded route cardinality
-- NGINX `root`/`alias` semantics: `root_mode` join behavior, exact-file `alias`, directory-redirect flags (`absolute_redirect`, `port_in_redirect`, `server_name_in_redirect` equivalents), and `alias` + `fastcgi_pass` dispatch — see release notes for the remaining deliberate differentials
-- WordPress image on PHP **8.5.12** FPM (official bookworm build)
-- Supply chain: cargo-auditable embedded SBOM, `cargo audit` 0 vulnerabilities
+- ACME HTTP-01 across processes with a filesystem-shared challenge store
+- NGINX `root`/`alias` semantics, directory-redirect flags, and `alias` + `fastcgi_pass` dispatch
+- WordPress image on PHP **8.5.12** FPM (Wolfi `php-8.5-fpm`)
+- Supply chain: cargo-auditable embedded SBOM and `cargo audit`
 
-Full notes: [`docs/release/v0.9.0.md`](docs/release/v0.9.0.md) — security audit: `docs/security/audit-v0.9.0.md`.
+Full release notes live under [`docs/release/`](docs/release/), with the running history in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Get it
 
+Set `VERSION` to the release you want to run:
+
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.9.0
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.9.0
+VERSION=<release-version>
+docker pull "ghcr.io/exyonq/exyonq:${VERSION}"
+docker pull "ghcr.io/exyonq/exyonq-wordpress:${VERSION}"
 # Docker Hub mirror:
-docker pull exyonq/exyonq:0.9.0
-docker pull exyonq/exyonq-wordpress:0.9.0
+docker pull "exyonq/exyonq:${VERSION}"
+docker pull "exyonq/exyonq-wordpress:${VERSION}"
 ```
 
-Release assets on GitHub: `exyonq-0.9.0-linux-{amd64,arm64}.tar.gz` (versioned layout), `exyonq-linux-{amd64,arm64}.tar.gz` (flat), `SHA256SUMS.txt`, `sbom.cdx.json`, `THIRD_PARTY_NOTICES.md`. Linux binaries are built with `cargo auditable` — verify the embedded SBOM with `cargo audit bin`.
+Release assets on GitHub use the same version identity: `exyonq-${VERSION}-linux-{amd64,arm64}.tar.gz` (versioned layout), `exyonq-linux-{amd64,arm64}.tar.gz` (flat), `.deb`/`.rpm` packages, `SHA256SUMS.txt`, `release-manifest.json`, `sbom.cdx.json`, and `THIRD_PARTY_NOTICES.md`. Linux binaries are built with `cargo auditable`; verify the embedded SBOM with `cargo audit bin`.
 
 ## Build
 

@@ -18,7 +18,7 @@ use crate::crs::CrsRulesetInput;
 use crate::detect::{compile_detectors, BuiltinDetectorsInput};
 use crate::exclusion::CompiledExclusion;
 use crate::normalize::NormalizeBudget;
-use crate::snapshot::{CompiledCrsRule, CrsMatcher};
+use crate::snapshot::{CompiledChainMember, CompiledCrsRule, CrsMatcher};
 use crate::snapshot::{CompiledRule, CompiledRuleset, CompiledWafSnapshot, LiteralMatcher};
 use exyonq_waf_api::{InspectionLimits, OnInspectionLimit, WafAction, WafMode, WafPhase};
 use thiserror::Error;
@@ -192,11 +192,15 @@ pub fn compile_crs_ruleset(input: CrsRulesetInput) -> Result<CompiledRuleset, Co
         let chain = rule
             .chain
             .iter()
-            .map(|chained| CrsMatcher {
-                targets: chained.targets.clone(),
-                op: chained.op.clone(),
-                negated: chained.negated,
-                transforms: chained.transforms.clone(),
+            .map(|chained| CompiledChainMember {
+                matcher: CrsMatcher {
+                    targets: chained.targets.clone(),
+                    op: chained.op.clone(),
+                    negated: chained.negated,
+                    transforms: chained.transforms.clone(),
+                },
+                capture: chained.capture,
+                setvars: chained.setvars.clone(),
             })
             .collect();
         let skip_after = rule

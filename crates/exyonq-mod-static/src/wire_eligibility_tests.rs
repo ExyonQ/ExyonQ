@@ -89,6 +89,30 @@ mod linux {
     }
 
     #[test]
+    fn epoll_sendfile_eligible_denies_sensitive_request_paths() {
+        for head in [
+            b"GET /.env HTTP/1.1\r\n".as_slice(),
+            b"GET /.git/config HTTP/1.1\r\n".as_slice(),
+            b"GET /config.php HTTP/1.1\r\n".as_slice(),
+            b"GET /%2eenv HTTP/1.1\r\n".as_slice(),
+        ] {
+            assert!(
+                !wire_eligibility::epoll_sendfile_eligible(head),
+                "sensitive path must stay on Hyper: {}",
+                String::from_utf8_lossy(head)
+            );
+        }
+        assert!(wire_eligibility::epoll_sendfile_eligible(
+            b"GET /.well-known/test HTTP/1.1\r\n"
+        ));
+        // Traversal keeps the existing 403 terminal on the wire; it never
+        // reaches sendfile open because match_sendfile_asset applies the policy.
+        assert!(wire_eligibility::epoll_sendfile_eligible(
+            b"GET /.well-known/../.env HTTP/1.1\r\n"
+        ));
+    }
+
+    #[test]
     fn epoll_sendfile_eligible_treats_http11_absolute_form_as_origin_path() {
         // RFC 9112 absolute-form is a valid HTTP/1.1 request-target (rewrk, proxies).
         // Same product path as origin-form — not a filename or loadgen special case.

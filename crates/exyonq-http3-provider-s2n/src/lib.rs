@@ -117,13 +117,19 @@ where
         let dispatch = Arc::clone(&dispatch);
         let lifecycle = Arc::clone(&lifecycle);
         tokio::spawn(async move {
-            let Ok(lease) = lifecycle.try_enter_connection() else {
+            let peer_ip = connection
+                .remote_addr()
+                .map(|a| a.ip().to_string())
+                .unwrap_or_else(|_| "0.0.0.0".to_string());
+            let Ok(lease) = lifecycle.try_enter_connection_for(&peer_ip) else {
                 DIAG.handshake_rejects.fetch_add(1, Ordering::Relaxed);
-                // Drop connection without serving while draining.
+                // Drop connection without serving while draining or over limit.
                 drop(connection);
                 return;
             };
-            if let Err(err) = serve_connection(connection, dispatch, lease, drain_cap).await {
+            if let Err(err) =
+                serve_connection(connection, dispatch, lease, drain_cap, peer_ip).await
+            {
                 warn!(%err, "s2n http3 connection ended with error");
             }
         });
@@ -137,15 +143,11 @@ async fn serve_connection<L>(
     dispatch: Arc<dyn Http3DispatchService>,
     _lease: L,
     drain_cap: usize,
+    peer_ip: String,
 ) -> anyhow::Result<()>
 where
     L: Send + 'static,
 {
-    let peer_ip = connection
-        .remote_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|_| "0.0.0.0".to_string());
-
     let mut h3_conn = h3::server::builder()
         .build(tachyon_quic::Connection::new(connection))
         .await?;
