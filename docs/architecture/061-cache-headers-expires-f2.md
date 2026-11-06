@@ -12,12 +12,14 @@ COMPAT_APACHE §4.2 / F2 transversal / adelanto NG-17: operators need `ExpiresBy
 ## Decision
 
 1. **IR:** `[[route]].cache_headers.by_mime."<mime>" = { max_age = N, immutable = false }`  
-   - `max_age`: seconds, validated `1..=315360000`  
+   - `max_age`: seconds, validated `0..=315360000`; `0` emits `Cache-Control: no-cache`
+     (Apache `A0` needs revalidation, not a one-second stale window)
+   - `immutable = true` is rejected with `max_age = 0`
    - mime key `"*"` = ExpiresDefault fallback  
 2. **Migrator:** `ExpiresActive On` + `ExpiresByType` / `ExpiresDefault` → map on DocumentRoot static route (`vhN_site`) and Alias root routes.  
    Supported duration forms: `A####` and `access plus N year|month|week|day|hour|minute|second(s)` (month=30d, year=365d).  
    Unsupported forms (including `M####` / modification) → reject (no silent drop).  
-3. **Runtime:** On static HTTP 200, if response has no `Cache-Control` and the matched route’s `by_mime` hits Content-Type (exact, then `*`), set `Cache-Control: public, max-age=N` (+ `, immutable` when set).  
+3. **Runtime:** On static HTTP 200, if response has no `Cache-Control` and the matched route’s `by_mime` hits Content-Type (exact, then `*`), set `Cache-Control: public, max-age=N` (+ `, immutable` when set), or `Cache-Control: no-cache` when `N = 0`.
 4. **Non-goals:** nginx `expires`, `Header set` / add_header, `.htaccess` Expires execution (still fail-closed ADR-055), FPC TTL coupling.
 
 ## Consequences

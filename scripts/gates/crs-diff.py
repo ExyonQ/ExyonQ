@@ -9,6 +9,7 @@ Usage:
   crs-diff.py --rules FILE [--corpus FILE.json] [--builtins on|off]
 """
 import argparse
+import http.client
 import json
 import os
 import shutil
@@ -21,11 +22,21 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-WORK = Path("/tmp/crs-diff")
+# The work directory holds files bind-mounted into the reference container, so
+# it must live on the Docker host. CI keeps it under the checkout because some
+# runners (containerized CI) do not share /tmp with the daemon.
+WORK = Path(os.environ.get("CRS_DIFF_WORK", "/tmp/crs-diff"))
 ORIGIN_PORT = 19130
 EXY_PORT = 18131
 REF_PORT = 18141
 CONTAINER = "crs-diff-ref"
+# Reference engine image. Pin the local default too: CI also sets
+# CRS_REF_IMAGE by digest so the differential cannot drift with a floating tag.
+DEFAULT_REF_IMAGE = (
+    "owasp/modsecurity-crs@sha256:"
+    "873ce68a658d2e3b61484a8a24d215f7d15456e7ce5aec5e7114bf000d743365"
+)
+REF_IMAGE = os.environ.get("CRS_REF_IMAGE", DEFAULT_REF_IMAGE)
 
 ORIGIN_HITS = 0
 ORIGIN_LOCK = threading.Lock()
@@ -161,7 +172,7 @@ def _send_once(port: int, case: dict) -> tuple[int, int]:
         sock.close()
 
 
-def exy_config(rules: Path, builtins: str, threshold: int) -> str:
+def exy_config(rules: Path, builtins: str, threshold: int, dry_run: bool) -> str:
     toggles = ""
     if builtins == "off":
         toggles = """
@@ -174,16 +185,21 @@ header_anomaly = "off"
 bot_ua = "off"
 ip_filter = { enabled = false }
 """
+    mode = "monitor" if dry_run else "block"
     return f"""config_version = 1
 [waf]
 enabled = true
-mode = "block"
+mode = "{mode}"
 max_inspection_body_bytes = 1048576
 [[waf.ruleset]]
 id = "diff"
 rules_file = "{rules}"
 inbound_threshold = {threshold}
 {toggles}
+[modules.metrics]
+enabled = true
+path = "/metrics"
+health_path = "/exyonq-metrics-health"
 [[server]]
 listen = "127.0.0.1:{EXY_PORT}"
 routes = ["all"]
@@ -197,8 +213,8 @@ target = "http://127.0.0.1:{ORIGIN_PORT}"
 """
 
 
-def start_exy(rules: Path, builtins: str, threshold: int) -> subprocess.Popen:
-    (WORK / "exy.toml").write_text(exy_config(rules, builtins, threshold))
+def start_exy(rules: Path, builtins: str, threshold: int, dry_run: bool) -> subprocess.Popen:
+    (WORK / "exy.toml").write_text(exy_config(rules, builtins, threshold, dry_run))
     require_free_port(EXY_PORT)
     exy = subprocess.Popen(
         [str(ROOT / "target/debug/exyonq"), "serve", "-c", str(WORK / "exy.toml")],
@@ -250,7 +266,7 @@ def start_reference(rules: Path, crs_dir: Path | None = None) -> None:
             "-e", "PROXY_HOST_HEADER=crs.test",
             *(["-v", f"{crs_dir}:/crs:ro", "-v", f"{WORK / 'ref-main.conf'}:/ref-main.conf:ro"] if crs_dir else ["-v", f"{rules}:{rules}:ro"]),
             "-v", f"{WORK / 'setup.conf.template'}:/etc/nginx/templates/modsecurity.d/setup.conf.template:ro",
-            "owasp/modsecurity-crs:nginx-alpine",
+            REF_IMAGE,
         ],
         check=True,
         stdout=subprocess.DEVNULL,
@@ -267,7 +283,7 @@ def stop_reference() -> None:
     )
 
 
-def run_concurrent(case: dict) -> int:
+def run_concurrent(case: dict, dry_run: bool = False) -> int:
     """Per-request state isolation: N parallel requests, each with its own token."""
     count = int(case["concurrent"])
     results = {}
@@ -284,13 +300,129 @@ def run_concurrent(case: dict) -> int:
         thread.start()
     for thread in threads:
         thread.join()
-    ok = len(results) == count and all(status == case["expect"] for status in results.values())
+    expect = 200 if dry_run else case["expect"]
+    ok = len(results) == count and all(status == expect for status in results.values())
     print(
         f"{case.get('name', 'concurrent')}: {'PASS' if ok else 'FAIL'} "
         f"concurrent={count} statuses={sorted(set(results.values()))} "
-        f"expect={case['expect']}"
+        f"expect={expect}"
     )
     return 0 if ok else 1
+
+
+def fetch_metrics() -> str:
+    conn = http.client.HTTPConnection("127.0.0.1", EXY_PORT, timeout=20)
+    try:
+        conn.request("GET", "/metrics")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8", "replace")
+        if response.status != 200:
+            raise RuntimeError(f"metrics returned HTTP {response.status}")
+        return body
+    finally:
+        conn.close()
+
+
+def metric_value(text: str, name: str, labels: str) -> int:
+    prefix = f"{name}{{{labels}}} "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return int(float(line[len(prefix):]))
+    return 0
+
+
+def bare_metric_value(text: str, name: str) -> int:
+    prefix = f"{name} "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return int(float(line[len(prefix):]))
+    return 0
+
+
+def check_dry_run_evidence(metrics: str) -> int:
+    checks = {
+        "violations_942100": metric_value(
+            metrics, "exyonq_waf_violations_total", 'rule_id="942100"'
+        ),
+        "violations_949110": metric_value(
+            metrics, "exyonq_waf_violations_total", 'rule_id="949110"'
+        ),
+        # Monitor mode never emits action="block": that would be enforcement.
+        # The anomaly-threshold rule 949110 is the real "would have blocked"
+        # signal, while action="log" proves the monitor decision path ran.
+        "would_block": metric_value(
+            metrics, "exyonq_waf_violations_total", 'rule_id="949110"'
+        ),
+        "decisions_log": metric_value(
+            metrics, "exyonq_waf_decisions_total", 'action="log"'
+        ),
+        "inspections": metric_value(
+            metrics, "exyonq_waf_inspections_total", 'phase="request_body_complete"'
+        ),
+        "latency_samples": bare_metric_value(
+            metrics, "exyonq_waf_inspection_seconds_count"
+        ),
+    }
+    print("dry_run_evidence=" + " ".join(f"{key}={value}" for key, value in checks.items()))
+    return 0 if all(value > 0 for value in checks.values()) else 1
+
+
+def case_key(case: dict, index: int) -> str:
+    """Stable identity for named and unnamed corpus cases."""
+    name = case.get("name")
+    return name if name else f"index:{index}"
+
+
+def load_exclusions(path: Path) -> dict[str, dict]:
+    """Load evidence-backed divergences; malformed evidence is fatal."""
+    raw = json.loads(path.read_text())
+    if isinstance(raw, dict):
+        raw = raw.get("exclusions", [])
+    if not isinstance(raw, list):
+        raise ValueError("exclusions must be a JSON list")
+    required = (
+        "case",
+        "rule",
+        "crs_expectation",
+        "exyonq",
+        "modsecurity",
+        "reference_behavior",
+        "reason",
+        "evidence",
+    )
+    exclusions: dict[str, dict] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError("each exclusion must be a JSON object")
+        missing = [field for field in required if field not in entry]
+        if missing:
+            raise ValueError(f"exclusion missing {missing}: {entry.get('case')}")
+        key = entry["case"]
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"invalid exclusion case: {key!r}")
+        if key in exclusions:
+            raise ValueError(f"duplicate exclusion: {key}")
+        for field in ("crs_expectation", "exyonq", "modsecurity"):
+            value = entry[field]
+            if not isinstance(value, dict) or not isinstance(value.get("status"), int):
+                raise ValueError(f"{key}: {field}.status must be an integer")
+            if not isinstance(value.get("hits"), int):
+                raise ValueError(f"{key}: {field}.hits must be an integer")
+        if not isinstance(entry["reference_behavior"], str) or not entry["reference_behavior"]:
+            raise ValueError(f"{key}: reference_behavior must be non-empty")
+        if not isinstance(entry["reason"], str) or not entry["reason"]:
+            raise ValueError(f"{key}: reason must be non-empty")
+        evidence = entry["evidence"]
+        if not isinstance(evidence, list) or not evidence:
+            raise ValueError(f"{key}: evidence must be a non-empty list")
+        if any(not isinstance(item, str) or not item for item in evidence):
+            raise ValueError(f"{key}: evidence entries must be non-empty strings")
+        exclusions[key] = entry
+    return exclusions
+
+
+def status_pair(status: int, hits: int) -> dict[str, int]:
+    return {"status": status, "hits": hits}
 
 
 def main() -> int:
@@ -298,8 +430,14 @@ def main() -> int:
     parser.add_argument("--rules")
     parser.add_argument("--crs", help="CRS checkout: rules/ + crs-setup.conf.example")
     parser.add_argument("--corpus", required=True)
+    parser.add_argument("--exclusions", help="evidence-backed divergence list")
     parser.add_argument("--builtins", choices=["on", "off"], default="off")
     parser.add_argument("--threshold", type=int, default=5)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="monitor-mode pass: no 403/429, real rule hits and metrics",
+    )
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
 
@@ -309,6 +447,15 @@ def main() -> int:
     else:
         rules = Path(args.rules).resolve()
     corpus = json.loads(Path(args.corpus).read_text())
+    try:
+        exclusions = (
+            {}
+            if args.dry_run
+            else (load_exclusions(Path(args.exclusions)) if args.exclusions else {})
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"exclusions: {error}", file=sys.stderr)
+        return 2
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True)
     if crs_dir:
@@ -319,25 +466,92 @@ def main() -> int:
             "Include /crs/crs-setup.conf.example\nInclude /crs/rules/*.conf\n"
         )
 
+    print(f"mode={'dry-run' if args.dry_run else 'block'} reference_image={REF_IMAGE}")
     origin = origin_server()
-    exy = start_exy(rules, args.builtins, args.threshold)
-    start_reference(rules, crs_dir)
+    exy = start_exy(rules, args.builtins, args.threshold, args.dry_run)
+    if not args.dry_run:
+        start_reference(rules, crs_dir)
     failures = 0
+    excluded = 0
+    configuration_errors = 0
+    encountered: set[str] = set()
     try:
-        for case in corpus:
+        for index, case in enumerate(corpus):
+            key = case_key(case, index)
             if case.get("concurrent"):
-                failures += run_concurrent(case)
+                if key in exclusions:
+                    print(f"{key}: EXCLUSION_UNSUPPORTED_FOR_CONCURRENT")
+                    configuration_errors += 1
+                failures += run_concurrent(case, args.dry_run)
                 continue
             exy_status, exy_hits = send(EXY_PORT, case)
+            if args.dry_run:
+                if exy_status in (403, 429):
+                    failures += 1
+                    print(
+                        f"{key}: FAIL dry-run blocked "
+                        f"exyonq={exy_status}/hits={exy_hits}"
+                    )
+                else:
+                    print(
+                        f"{key}: PASS dry-run exyonq={exy_status}/hits={exy_hits}"
+                    )
+                continue
             ref_status, ref_hits = send(REF_PORT, case)
             same = exy_status == ref_status and exy_hits == ref_hits
-            failures += 0 if same else 1
+            entry = exclusions.get(key)
+            if entry is not None:
+                encountered.add(key)
+            if same:
+                if entry is not None:
+                    print(
+                        f"{key}: STALE_EXCLUSION now passes "
+                        f"exyonq={exy_status}/hits={exy_hits} "
+                        f"modsecurity={ref_status}/hits={ref_hits}"
+                    )
+                    configuration_errors += 1
+                else:
+                    print(
+                        f"{key}: PASS "
+                        f"exyonq={exy_status}/hits={exy_hits} "
+                        f"modsecurity={ref_status}/hits={ref_hits}"
+                    )
+                continue
+            if entry is None:
+                failures += 1
+                print(
+                    f"{key}: FAIL "
+                    f"exyonq={exy_status}/hits={exy_hits} "
+                    f"modsecurity={ref_status}/hits={ref_hits}"
+                )
+                continue
+            expected_case_rule = case.get("crs_rule")
+            observed_exy = status_pair(exy_status, exy_hits)
+            observed_ref = status_pair(ref_status, ref_hits)
+            if (
+                expected_case_rule is not None
+                and str(entry["rule"]) != str(expected_case_rule)
+            ) or entry["exyonq"] != observed_exy or entry["modsecurity"] != observed_ref:
+                print(
+                    f"{key}: STALE_EXCLUSION expected "
+                    f"rule={entry['rule']} exyonq={entry['exyonq']} "
+                    f"modsecurity={entry['modsecurity']} observed "
+                    f"exyonq={observed_exy} modsecurity={observed_ref}"
+                )
+                configuration_errors += 1
+                continue
+            excluded += 1
             print(
-                f"{case.get('name', case.get('path'))}: "
-                f"{'PASS' if same else 'FAIL'} "
-                f"exyonq={exy_status}/hits={exy_hits} "
-                f"modsecurity={ref_status}/hits={ref_hits}"
+                f"{key}: EXCLUDED exyonq={exy_status}/hits={exy_hits} "
+                f"modsecurity={ref_status}/hits={ref_hits} "
+                f"evidence={len(entry['evidence'])}"
             )
+        if args.dry_run:
+            try:
+                failures += check_dry_run_evidence(fetch_metrics())
+            except (OSError, RuntimeError) as error:
+                failures += 1
+                print(f"dry_run_metrics: FAIL {error}")
     finally:
         exy.terminate()
         try:
@@ -347,8 +561,14 @@ def main() -> int:
         origin.shutdown()
         if not args.keep:
             stop_reference()
+    unused = sorted(set(exclusions) - encountered)
+    for key in unused:
+        print(f"UNUSED_EXCLUSION: {key}")
+    configuration_errors += len(unused)
     print(f"failures={failures}/{len(corpus)}")
-    return 1 if failures else 0
+    print(f"excluded_with_evidence={excluded}/{len(corpus)}")
+    print(f"mode={'dry-run' if args.dry_run else 'block'}")
+    return 1 if failures or configuration_errors else 0
 
 
 if __name__ == "__main__":

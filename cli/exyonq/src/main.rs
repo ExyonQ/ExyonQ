@@ -316,6 +316,10 @@ async fn async_main() -> anyhow::Result<()> {
                 .map_err(|_| anyhow::anyhow!("ACME integration service already registered"))?;
             exyonq_metrics::register_observability_runtime()
                 .map_err(|_| anyhow::anyhow!("observability runtime already registered"))?;
+            // AP P1: real process RSS and configured accept-worker count on /metrics.
+            exyonq_module_api::register_prometheus_appender(
+                exyonq_core::append_worker_memory_prometheus,
+            );
             // Q-04 / ADR-057: FPC counters on /metrics for `exyonqctl cache stats`.
             exyonq_module_api::register_prometheus_appender(exyonq_core::append_fpc_prometheus);
             // NG-09: upstream DNS re-resolve counters on /metrics.
@@ -675,6 +679,7 @@ mod htaccess_overlay_tests {
         config.routes.push(exyonq_config_ir::RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
+            access: None,
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),
@@ -731,6 +736,7 @@ mod htaccess_overlay_tests {
         config.routes.push(exyonq_config_ir::RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
+            access: None,
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),

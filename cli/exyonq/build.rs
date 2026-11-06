@@ -31,8 +31,15 @@ fn main() {
     };
     println!("cargo:rustc-env=EXYONQ_SOURCE_REVISION={revision}");
 
-    // Empty when HEAD is not an exact tag — honest metadata, no invented value.
-    let tag = git_describe_exact_tag().unwrap_or_default();
+    // Explicit tag env (official container builds have no .git) → exact git tag.
+    // Empty in a dev tree without a tag — honest metadata, no invented value.
+    let tag = match build_support::resolve_source_tag(git_describe_exact_tag()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("cargo:rustc-env=EXYONQ_SOURCE_TAG={tag}");
 
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
@@ -51,6 +58,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../.git/refs/tags");
     println!("cargo:rerun-if-changed=../../.git/packed-refs");
     println!("cargo:rerun-if-env-changed=EXYONQ_SOURCE_REVISION");
+    println!("cargo:rerun-if-env-changed=EXYONQ_SOURCE_TAG");
     println!("cargo:rerun-if-env-changed=EXYONQ_ARTIFACT_VERSION");
     println!("cargo:rerun-if-env-changed=EXYONQ_OFFICIAL_RELEASE");
     println!("cargo:rerun-if-env-changed=EXYONQ_REQUIRE_SOURCE_REVISION");

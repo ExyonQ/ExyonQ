@@ -103,6 +103,13 @@ curl -sS -b "$COOKIE" -c "$COOKIE" -o /tmp/wp-e2e-install.html \
   "$BASE/wp-admin/install.php?step=2"
 grep -q 'Success!' /tmp/wp-e2e-install.html || fail "WordPress install did not succeed"
 
+# wp-config.php must carry all eight non-empty salts. A failed remote fetch used
+# to write an empty salts file and leave the site with predictable empty keys.
+for key in AUTH_KEY SECURE_AUTH_KEY LOGGED_IN_KEY NONCE_KEY AUTH_SALT SECURE_AUTH_SALT LOGGED_IN_SALT NONCE_SALT; do
+  docker exec "$NAME" grep -qE "define\\( '$key', '[^']+' \\);" /var/www/html/wp-config.php \
+    || fail "wp-config.php missing non-empty $key"
+done
+
 # Login and verify the session reaches wp-admin.
 curl -sS -b "$COOKIE" -c "$COOKIE" -o /dev/null "$BASE/wp-login.php"
 curl -sS -b "$COOKIE" -c "$COOKIE" -o /dev/null -D /tmp/wp-e2e-login.headers \

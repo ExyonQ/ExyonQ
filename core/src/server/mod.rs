@@ -152,6 +152,9 @@ fn accept_workers() -> usize {
     crate::server::runtime_parallelism::resolve_accept_workers()
 }
 
+// The guard is a distinct ownership parameter: it must be moved into the
+// connection task, not reconstructed from shared state.
+#[allow(clippy::too_many_arguments)]
 async fn serve_hyper<S>(
     mut stream: S,
     shared: reload::SharedServerState,
@@ -160,6 +163,7 @@ async fn serve_hyper<S>(
     ops: Arc<LifecycleState>,
     scheme: &'static str,
     local_port: Option<u16>,
+    client_guard: Option<crate::client_throttle::ClientGuard>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -176,7 +180,33 @@ async fn serve_hyper<S>(
         let _ = stream.shutdown().await;
         return;
     };
+    // OL-03: one slot per TCP/QUIC connection, held across every request on
+    // this transport. A refused connection is closed without a response.
+    let _client_guard = match client_guard {
+        Some(guard) => Some(guard),
+        None => {
+            let state = reload::read_state(&shared);
+            let ip = handler::client_ip_from_xff(Some(&x_forwarded_for));
+            match crate::client_throttle::acquire_connection(
+                &state.config.modules.ratelimit.client,
+                ip,
+            ) {
+                Ok(guard) => guard,
+                Err(decision) => {
+                    tracing::debug!(?decision, %ip, "per-client connection limit refused connection");
+                    return;
+                }
+            }
+        }
+    };
     let io = TokioIo::new(stream);
+    let bad_req_ip = handler::client_ip_from_xff(Some(&x_forwarded_for));
+    let bad_req_cfg = reload::read_state(&shared)
+        .config
+        .modules
+        .ratelimit
+        .client
+        .clone();
     let ops_for_service = Arc::clone(&ops);
     // Cap057 LA-CAP057-002: refresh live SharedServerState per request (mirror H3).
     // Accept-time Arc pin made FPC HITs survive reload disable / live purge on keep-alive.
@@ -215,6 +245,15 @@ async fn serve_hyper<S>(
     let mut builder = ServerBuilder::new(TokioExecutor::new());
     builder.http1().keep_alive(true);
     if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
+        // OL-03 blockBadReq: Hyper rejects malformed request lines before the
+        // service is invoked. Count protocol-parse failures (never incomplete
+        // client disconnects) toward the per-IP ban.
+        let parse_error = err
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_parse);
+        if parse_error {
+            crate::client_throttle::note_bad_request(&bad_req_cfg, bad_req_ip);
+        }
         warn!(%err, "connection error");
     }
 }
@@ -238,6 +277,7 @@ fn wire_dispatch_ctx(
         pinned_generation,
         scheme,
         local_port,
+        client_guard: None,
     }
 }
 
@@ -343,6 +383,7 @@ async fn accept_loop(
                                 ops_conn,
                                 "https",
                                 local_addr.map(|a| a.port()),
+                                None,
                             )
                             .await;
                         }
@@ -732,6 +773,9 @@ async fn run_on_impl(
     } else {
         accept_workers()
     };
+    // Expose the actual primary accept-pool geometry on /metrics. The
+    // appender reads /proc at scrape time; this only records the real count.
+    crate::worker_memory::set_server_worker_count(workers);
     let tls_on_listen = shared_tls.snapshot().is_some();
     #[cfg(target_os = "linux")]
     let use_io_uring = io_uring_start::io_uring_env_enabled(tls_on_listen);

@@ -223,12 +223,27 @@ impl ServerState {
             || self.config.routes.get(route_idx).is_some_and(|route| {
                 let modules = &self.config.modules;
                 let name = route.name.as_str();
+                // EXY-16/ADR-050: the wire transport cannot substitute a
+                // server error document after an upstream 4xx/5xx. Keep such
+                // routes on the full dispatch path, where error_pages runs.
+                let server_has_error_pages = self.config.servers.iter().any(|server| {
+                    !server.error_pages.is_empty()
+                        && server.routes.iter().any(|candidate| candidate == name)
+                });
                 // cache_headers needs the Hyper path to emit Cache-Control —
                 // the wire surface cannot materialize it (EXY-01/EXY-05 trap).
                 // dir_redirect is NOT gated here — the wire path emits the
                 // NGINX-style 301 inline (EXY-03), keeping sendfile eligible.
-                route.cache_headers.is_some()
+                server_has_error_pages
+                    || route.cache_headers.is_some()
+                    // Structural rewrite/redirect is evaluated only after route
+                    // lookup in full dispatch. The wire path would answer 404
+                    // (rewrite) or bypass the route redirect entirely.
+                    || route.rewrite.is_some()
+                    || route.redirect.is_some()
+                    || route.access.is_some()
                     || modules.auth.routes.contains_key(name)
+                    || modules.ratelimit.client.enabled
                     || modules.ratelimit.routes.contains_key(name)
                     || modules.sub_filter.routes.contains_key(name)
                     || modules.mirror.routes.contains_key(name)
@@ -243,6 +258,7 @@ impl ServerState {
     pub fn wire_incompatible_features_active(&self) -> bool {
         self.snapshot.full_page_cache.enabled
             || self.gunzip_configured()
+            || self.config.modules.ratelimit.client.enabled
             || self.waf.inspects_responses()
     }
 }

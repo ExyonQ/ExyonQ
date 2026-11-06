@@ -182,20 +182,22 @@ pub fn apply_compiled_rewrite(
                     }
                 }
                 RewriteFlagConfig::Redirect => {
-                    if location_valid(&expanded) {
+                    let location = append_query(expanded, req.query);
+                    if location_valid(&location) {
                         RewriteApplyOutcome::Redirect {
                             status: 302,
-                            location: expanded,
+                            location,
                         }
                     } else {
                         RewriteApplyOutcome::Rejected
                     }
                 }
                 RewriteFlagConfig::Permanent => {
-                    if location_valid(&expanded) {
+                    let location = append_query(expanded, req.query);
+                    if location_valid(&location) {
                         RewriteApplyOutcome::Redirect {
                             status: 301,
-                            location: expanded,
+                            location,
                         }
                     } else {
                         RewriteApplyOutcome::Rejected
@@ -204,6 +206,16 @@ pub fn apply_compiled_rewrite(
             }
         }
     }
+}
+
+/// nginx/Apache preserve the original query string on an external redirect
+/// when the replacement does not declare its own `?` separator. Without this,
+/// a canonical-host redirect silently drops campaign/query parameters.
+fn append_query(location: String, query: &str) -> String {
+    if query.is_empty() || location.contains('?') || location.contains('#') {
+        return location;
+    }
+    format!("{location}?{query}")
 }
 
 fn when_match(when: &[CompiledWhen], req: RewriteRequest<'_>) -> bool {
@@ -347,6 +359,60 @@ mod tests {
             RewriteApplyOutcome::Redirect {
                 status: 301,
                 location: "/new/x".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn permanent_redirect_preserves_original_query() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/(.*)$".into(),
+            replacement: "https://example.com/$1".into(),
+            flag: RewriteFlagConfig::Permanent,
+            when: vec![],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(
+            &compiled,
+            RewriteRequest {
+                path: "/old",
+                host: Some("www.example.com"),
+                query: "utm_source=x&a=1",
+                headers: &[],
+            },
+        );
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Redirect {
+                status: 301,
+                location: "https://example.com/old?utm_source=x&a=1".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn redirect_replacement_with_query_keeps_its_query() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/old$".into(),
+            replacement: "/new?fixed=1".into(),
+            flag: RewriteFlagConfig::Redirect,
+            when: vec![],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(
+            &compiled,
+            RewriteRequest {
+                path: "/old",
+                host: None,
+                query: "ignored=1",
+                headers: &[],
+            },
+        );
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Redirect {
+                status: 302,
+                location: "/new?fixed=1".into(),
             }
         );
     }

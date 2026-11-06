@@ -51,6 +51,7 @@ struct QueuedHandoff {
     prefetched: Option<(Bytes, Bytes)>,
     generation: GenerationView,
     token: ConnectionLifecycleToken,
+    client_guard: Option<crate::client_throttle::ClientGuard>,
 }
 
 struct HandoffBridge {
@@ -145,6 +146,7 @@ impl HandoffBridge {
             prefetched,
             generation,
             token,
+            client_guard,
         } = handoff;
         let mut guard = match self.queue.lock() {
             Ok(g) => g,
@@ -157,6 +159,7 @@ impl HandoffBridge {
                 prefetched,
                 generation,
                 token,
+                client_guard,
             });
         }
         guard.push_back(QueuedHandoff {
@@ -165,6 +168,7 @@ impl HandoffBridge {
             prefetched,
             generation,
             token,
+            client_guard,
         });
         drop(guard);
         self.depth.fetch_add(1, Ordering::Relaxed);
@@ -219,6 +223,7 @@ fn spawn_queued_handoff(
         prefetched,
         generation,
         token,
+        client_guard,
     } = item;
     let _ = stream.set_nonblocking(true);
     let xff = xff_from_peer(peer);
@@ -240,6 +245,7 @@ fn spawn_queued_handoff(
                 pinned_generation: generation.generation,
                 scheme: "http",
                 local_port,
+                client_guard,
             };
             if let Some((head, rest)) = prefetched {
                 dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
@@ -265,6 +271,7 @@ fn spawn_hyper_handoff_direct(
     let prefetched = handoff.prefetched;
     let generation = handoff.generation;
     let token = handoff.token;
+    let client_guard = handoff.client_guard;
     let stream = handoff.stream;
     runtime.spawn(async move {
         lifecycle::run_with_connection_token(token, async move {
@@ -282,6 +289,7 @@ fn spawn_hyper_handoff_direct(
                 pinned_generation: generation.generation,
                 scheme: "http",
                 local_port,
+                client_guard,
             };
             if let Some((head, rest)) = prefetched {
                 dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
@@ -310,6 +318,7 @@ fn drain_stranded_handoffs(
             prefetched,
             generation,
             token,
+            client_guard,
         } = item;
         let _ = stream.set_nonblocking(true);
         let xff = xff_from_peer(peer);
@@ -332,6 +341,7 @@ fn drain_stranded_handoffs(
                     pinned_generation: generation.generation,
                     scheme: "http",
                     local_port,
+                    client_guard,
                 };
                 if let Some((head, rest)) = prefetched {
                     dispatch_tcp_prefixed_inner(stream, head, rest, ctx).await;
@@ -508,6 +518,7 @@ mod tests {
             prefetched,
             generation: got_gen,
             token: got_token,
+            client_guard: _client_guard,
         } = handoff;
         let (h, r) = prefetched.unwrap();
         assert_eq!(got_peer, peer);

@@ -54,7 +54,7 @@ pub(crate) struct CompiledCrsRule {
     pub enabled: bool,
     pub phases: Vec<WafPhase>,
     pub matcher: CrsMatcher,
-    pub chain: Vec<CrsMatcher>,
+    pub chain: Vec<CompiledChainMember>,
     pub action: WafAction,
     pub score: u32,
     pub skip: u32,
@@ -72,6 +72,16 @@ pub(crate) struct CrsMatcher {
     pub op: CrsOp,
     pub negated: bool,
     pub transforms: Vec<CrsTransform>,
+}
+
+/// One `SecRule ... chain` member. Captures and setvars live on the member,
+/// not the starter: 943110 captures the Referer host in member 2 and compares
+/// it in member 3.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledChainMember {
+    pub matcher: CrsMatcher,
+    pub capture: bool,
+    pub setvars: Vec<CrsSetVar>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +136,15 @@ impl CompiledWafSnapshot {
         })
     }
 
+    /// True when at least one enabled ruleset carries CRS rules. Strict body
+    /// processing (ModSecurity 200002/200003) only applies then; builtins-only
+    /// rulesets keep ExyonQ's lenient body handling.
+    pub(crate) fn has_crs_rules(&self) -> bool {
+        self.rulesets
+            .iter()
+            .any(|rs| rs.enabled && !rs.crs_rules.is_empty())
+    }
+
     pub(crate) fn evaluate_phase(
         &self,
         phase: WafPhase,
@@ -171,7 +190,16 @@ impl CompiledWafSnapshot {
             let mut detection_only = rs.crs_detection_only;
             let mut removed_ids = rs.crs_disabled_ids.clone();
             let mut tx: HashMap<String, String> = HashMap::new();
+            // ModSecurity keeps TX for the whole transaction. Phase 2 sees the
+            // body but needs phase 1's defaults and scores, so seed TX from a
+            // phase-1 replay before evaluating phase 2.
+            if phase == WafPhase::RequestBodyComplete {
+                crs_score = crs_score.saturating_add(prepare_crs_tx(rs, req, &views, &mut tx));
+            }
             for (idx, rule) in rs.crs_rules.iter().enumerate() {
+                // The stock reference executes PL2 (932200 blocks) but not the
+                // PL4 942432 false positive. The setup's blocking_paranoia=1
+                // is not the execution ceiling for this differential corpus.
                 let executing_pl = tx
                     .get("executing_paranoia_level")
                     .and_then(|value| value.parse::<u8>().ok())
@@ -191,14 +219,45 @@ impl CompiledWafSnapshot {
                 let Some(matched) = rule.matcher.matches_collect(req, &views, &tx) else {
                     continue;
                 };
+                let score_before = anomaly_score(&tx);
                 let mut chain_tx = tx.clone();
                 record_matched_vars(&mut chain_tx, &matched);
-                if let Some((_, value)) = matched.last() {
-                    if rule.capture {
-                        apply_captures(&mut chain_tx, &rule.matcher.op, value);
+                // A starter can match several variables. When its setvars use
+                // the match capture, ModSecurity applies them per match; doing
+                // it once with the last value loses entries such as 920450's
+                // header_name_920450_<header> collection.
+                if setvars_use_captures(&rule.setvars) {
+                    for (_, value) in &matched {
+                        if rule.capture {
+                            apply_captures(&mut chain_tx, &rule.matcher.op, value);
+                        }
+                        apply_setvars(&mut chain_tx, &rule.setvars, Some(req), Some(&views));
                     }
+                } else {
+                    if let Some((_, value)) = matched.last() {
+                        if rule.capture {
+                            apply_captures(&mut chain_tx, &rule.matcher.op, value);
+                        }
+                    }
+                    apply_setvars(&mut chain_tx, &rule.setvars, Some(req), Some(&views));
                 }
-                if !rule.chain.iter().all(|m| m.matches(req, &views, &chain_tx)) {
+                let mut chain_ok = true;
+                for member in &rule.chain {
+                    let Some(member_matched) =
+                        member.matcher.matches_collect(req, &views, &chain_tx)
+                    else {
+                        chain_ok = false;
+                        break;
+                    };
+                    record_matched_vars(&mut chain_tx, &member_matched);
+                    if let Some((_, value)) = member_matched.last() {
+                        if member.capture {
+                            apply_captures(&mut chain_tx, &member.matcher.op, value);
+                        }
+                    }
+                    apply_setvars(&mut chain_tx, &member.setvars, Some(req), Some(&views));
+                }
+                if !chain_ok {
                     continue;
                 }
                 tx = chain_tx;
@@ -206,7 +265,9 @@ impl CompiledWafSnapshot {
                 if self.exclusions.iter().any(|ex| ex.matches(req, &rule_id)) {
                     continue;
                 }
-                crs_score = crs_score.saturating_add(rule.score);
+                let score_after = anomaly_score(&tx);
+                crs_score = crs_score
+                    .saturating_add(score_after.saturating_sub(score_before).max(rule.score));
                 hits.push((
                     WafViolation {
                         rule_id,
@@ -234,12 +295,11 @@ impl CompiledWafSnapshot {
                     detection_only = true;
                 }
                 removed_ids.extend(rule.ctl_remove_ids.iter().copied());
-                apply_setvars(&mut tx, &rule.setvars);
                 if let Some(score) = tx
                     .get("inbound_anomaly_score")
                     .and_then(|value| value.parse::<u32>().ok())
                 {
-                    crs_score = score;
+                    crs_score = crs_score.max(score);
                 }
             }
             if rs.inbound_threshold > 0 && crs_score >= rs.inbound_threshold {
@@ -284,7 +344,15 @@ impl CompiledWafSnapshot {
             let mut detection_only = rs.crs_detection_only;
             let mut removed_ids = rs.crs_disabled_ids.clone();
             let mut tx: HashMap<String, String> = HashMap::new();
+            let req_views = BodyViews::new(req.headers, None);
+            prepare_crs_tx(rs, req, &req_views, &mut tx);
+            if phase == WafPhase::ResponseBodyChunk {
+                prepare_crs_response_tx(rs, req, resp, &mut tx);
+            }
             for (idx, rule) in rs.crs_rules.iter().enumerate() {
+                // The stock reference executes PL2 (932200 blocks) but not the
+                // PL4 942432 false positive. The setup's blocking_paranoia=1
+                // is not the execution ceiling for this differential corpus.
                 let executing_pl = tx
                     .get("executing_paranoia_level")
                     .and_then(|value| value.parse::<u8>().ok())
@@ -301,9 +369,10 @@ impl CompiledWafSnapshot {
                 {
                     continue;
                 }
-                if !rule.matcher.matches_response(resp, &tx) {
+                if !rule.matcher.matches_response(resp, &tx, Some(req)) {
                     continue;
                 }
+                let score_before = anomaly_score(&tx);
                 let mut chain_tx = tx.clone();
                 if let Some(value) = rule.matcher.first_response_value(resp, &tx) {
                     chain_tx.insert("matched_var".to_string(), value.clone());
@@ -311,11 +380,21 @@ impl CompiledWafSnapshot {
                         apply_captures(&mut chain_tx, &rule.matcher.op, &value);
                     }
                 }
-                if !rule
-                    .chain
-                    .iter()
-                    .all(|m| m.matches_response(resp, &chain_tx))
-                {
+                apply_setvars(&mut chain_tx, &rule.setvars, Some(req), None);
+                let mut chain_ok = true;
+                for member in &rule.chain {
+                    if !member.matcher.matches_response(resp, &chain_tx, Some(req)) {
+                        chain_ok = false;
+                        break;
+                    }
+                    if let Some(value) = member.matcher.first_response_value(resp, &chain_tx) {
+                        if member.capture {
+                            apply_captures(&mut chain_tx, &member.matcher.op, &value);
+                        }
+                    }
+                    apply_setvars(&mut chain_tx, &member.setvars, Some(req), None);
+                }
+                if !chain_ok {
                     continue;
                 }
                 tx = chain_tx;
@@ -323,7 +402,9 @@ impl CompiledWafSnapshot {
                 if self.exclusions.iter().any(|ex| ex.matches(req, &rule_id)) {
                     continue;
                 }
-                crs_score = crs_score.saturating_add(rule.score);
+                let score_after = anomaly_score(&tx);
+                crs_score = crs_score
+                    .saturating_add(score_after.saturating_sub(score_before).max(rule.score));
                 hits.push((
                     WafViolation {
                         rule_id,
@@ -351,12 +432,11 @@ impl CompiledWafSnapshot {
                     detection_only = true;
                 }
                 removed_ids.extend(rule.ctl_remove_ids.iter().copied());
-                apply_setvars(&mut tx, &rule.setvars);
                 if let Some(score) = tx
                     .get("inbound_anomaly_score")
                     .and_then(|value| value.parse::<u32>().ok())
                 {
-                    crs_score = score;
+                    crs_score = crs_score.max(score);
                 }
             }
             if rs.inbound_threshold > 0 && crs_score >= rs.inbound_threshold {
@@ -386,51 +466,223 @@ impl CompiledWafSnapshot {
     }
 }
 
-fn expand_tx(value: &str, tx: &HashMap<String, String>) -> String {
-    let mut out = value.to_string();
-    while let Some(start) = out.find("%{") {
-        let Some(end) = out[start + 2..].find('}') else {
-            break;
+/// Replay phase 1 for a request-phase evaluation: CRS initializes its
+/// thresholds, anomaly score weights, allowed lists and paranoia level there.
+/// Without this, phase 2 sees an empty TX and neither scores nor blocks.
+/// Sum of the CRS inbound anomaly buckets. ModSecurity adds each rule's
+/// severity to one of these; the delta is the rule's real contribution.
+fn anomaly_score(tx: &HashMap<String, String>) -> u32 {
+    [
+        "inbound_anomaly_score_pl1",
+        "inbound_anomaly_score_pl2",
+        "inbound_anomaly_score_pl3",
+        "inbound_anomaly_score",
+    ]
+    .iter()
+    .filter_map(|name| tx.get(*name).and_then(|value| value.parse::<u32>().ok()))
+    .sum()
+}
+
+fn prepare_crs_tx(
+    rs: &CompiledRuleset,
+    req: &WafRequest<'_>,
+    views: &BodyViews<'_>,
+    tx: &mut HashMap<String, String>,
+) -> u32 {
+    let mut score = 0u32;
+    for rule in &rs.crs_rules {
+        let executing_pl = tx
+            .get("executing_paranoia_level")
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(1);
+        if rule.paranoia_level > executing_pl {
+            continue;
+        }
+        if !rule.enabled || !rule.phases.contains(&WafPhase::RequestHeaders) {
+            continue;
+        }
+        if !rule.matcher.matches(req, views, tx) {
+            continue;
+        }
+        if rule.chain.is_empty() {
+            score = score.saturating_add(rule.score);
+        }
+        apply_setvars(tx, &rule.setvars, Some(req), Some(views));
+    }
+    score
+}
+
+fn prepare_crs_response_tx(
+    rs: &CompiledRuleset,
+    req: &WafRequest<'_>,
+    resp: &WafResponse<'_>,
+    tx: &mut HashMap<String, String>,
+) {
+    for rule in &rs.crs_rules {
+        if !rule.enabled || !rule.phases.contains(&WafPhase::ResponseHeaders) {
+            continue;
+        }
+        if !rule.matcher.matches_response(resp, tx, Some(req)) {
+            continue;
+        }
+        apply_setvars(tx, &rule.setvars, Some(req), None);
+    }
+}
+
+fn expand_macros(
+    value: &str,
+    tx: &HashMap<String, String>,
+    req: Option<&WafRequest<'_>>,
+    views: Option<&BodyViews<'_>>,
+) -> String {
+    // One pass over the original text. Re-scanning inserted text would recurse
+    // forever when a TX value itself contains a `%{...}` sequence (ModSecurity
+    // does not recursively expand variable values either).
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("%{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            out.push_str(&rest[start..]);
+            return out;
         };
-        let key = out[start + 2..start + 2 + end].to_ascii_lowercase();
+        let key = after[..end].to_ascii_lowercase();
         // ModSecurity writes collections as `%{ARGS:name}` or `%{ARGS.name}`.
         let key = match key.split_once(':') {
             Some((collection, name)) => format!("{collection}.{name}"),
             None => key,
         };
-        // `tx.*` is stored unprefixed; `args.*` keeps its collection prefix.
-        let name = key.strip_prefix("tx.").unwrap_or(&key);
-        let replacement = tx.get(name).cloned().unwrap_or_default();
-        out.replace_range(start..start + 2 + end + 1, &replacement);
+        out.push_str(&macro_value(&key, tx, req, views));
+        rest = &after[end + 1..];
     }
+    out.push_str(rest);
     out
 }
 
-fn apply_setvars(tx: &mut HashMap<String, String>, vars: &[CrsSetVar]) {
+fn macro_value(
+    key: &str,
+    tx: &HashMap<String, String>,
+    req: Option<&WafRequest<'_>>,
+    views: Option<&BodyViews<'_>>,
+) -> String {
+    if let Some(name) = key.strip_prefix("tx.") {
+        return tx.get(name).cloned().unwrap_or_default();
+    }
+    if let Some(name) = key.strip_prefix("request_headers.") {
+        return req
+            .and_then(|req| req.headers.get(name))
+            .map(|value| String::from_utf8_lossy(value).to_string())
+            .unwrap_or_default();
+    }
+    if let Some(name) = key.strip_prefix("request_cookies.") {
+        return req
+            .and_then(|req| {
+                cookie_pairs(req)
+                    .into_iter()
+                    .find(|(cookie, _)| cookie.eq_ignore_ascii_case(name))
+                    .map(|(_, value)| value)
+            })
+            .unwrap_or_default();
+    }
+    if let Some(name) = key
+        .strip_prefix("args.")
+        .or_else(|| key.strip_prefix("args_get."))
+        .or_else(|| key.strip_prefix("args_post."))
+    {
+        if let (Some(req), Some(views)) = (req, views) {
+            return all_args(req, views)
+                .into_iter()
+                .find(|(arg, _)| arg.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value)
+                .unwrap_or_default();
+        }
+        return String::new();
+    }
+    if let Some(req) = req {
+        match key {
+            "remote_addr" => return req.client_ip.to_string(),
+            "request_method" => return req.method.to_string(),
+            "request_uri" => {
+                return req
+                    .query
+                    .map(|query| format!("{}?{query}", req.path))
+                    .unwrap_or_else(|| req.path.to_string())
+            }
+            "request_filename" => return req.path.to_string(),
+            "request_basename" => return req.path.rsplit('/').next().unwrap_or("").to_string(),
+            "query_string" => return req.query.unwrap_or("").to_string(),
+            _ => {}
+        }
+    }
+    // `tx.*` is stored unprefixed; fall back to a direct TX lookup.
+    tx.get(key).cloned().unwrap_or_default()
+}
+
+fn pm_matches(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let is_boundary = |c: Option<char>| {
+        c.is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '/' && c != '\\')
+    };
+    let mut start = 0;
+    while let Some(offset) = haystack[start..].find(needle) {
+        let index = start + offset;
+        let before = haystack[..index].chars().next_back();
+        let after = haystack[index + needle.len()..].chars().next();
+        if is_boundary(before) && is_boundary(after) {
+            return true;
+        }
+        start = index + 1;
+    }
+    false
+}
+
+fn setvars_use_captures(vars: &[CrsSetVar]) -> bool {
+    vars.iter().any(|var| {
+        let text = format!("{}{}", var.name, var.value).to_ascii_lowercase();
+        text.contains("%{tx.0}")
+            || text.contains("%{matched_var}")
+            || text.contains("%{matched_var_name}")
+    })
+}
+
+fn apply_setvars(
+    tx: &mut HashMap<String, String>,
+    vars: &[CrsSetVar],
+    req: Option<&WafRequest<'_>>,
+    views: Option<&BodyViews<'_>>,
+) {
     for var in vars {
-        let value = expand_tx(&var.value, tx);
+        // ModSecurity expands macros in the variable name as well as the value
+        // (`setvar:'tx.header_name_920450_%{tx.0}=/%{tx.0}/'`). Keeping the
+        // literal name collapses every header into one TX entry and breaks
+        // chained rules such as 920450.
+        let name = expand_macros(&var.name, tx, req, views);
+        let value = expand_macros(&var.value, tx, req, views);
         match var.op {
             CrsSetVarOp::Set => {
-                tx.insert(var.name.clone(), value);
+                tx.insert(name, value);
             }
             CrsSetVarOp::Add => {
                 let current = tx
-                    .get(&var.name)
+                    .get(&name)
                     .and_then(|value| value.parse::<i64>().ok())
                     .unwrap_or(0);
                 let delta = value.parse::<i64>().unwrap_or(0);
-                tx.insert(var.name.clone(), (current + delta).to_string());
+                tx.insert(name, (current + delta).to_string());
             }
             CrsSetVarOp::Sub => {
                 let current = tx
-                    .get(&var.name)
+                    .get(&name)
                     .and_then(|value| value.parse::<i64>().ok())
                     .unwrap_or(0);
                 let delta = value.parse::<i64>().unwrap_or(0);
-                tx.insert(var.name.clone(), (current - delta).to_string());
+                tx.insert(name, (current - delta).to_string());
             }
             CrsSetVarOp::Remove => {
-                tx.remove(&var.name);
+                tx.remove(&name);
             }
         }
     }
@@ -452,6 +704,8 @@ impl CrsMatcher {
             CrsTarget::Basename => "basename".into(),
             CrsTarget::Cookie => "cookies".into(),
             CrsTarget::CookieName => "cookie_names".into(),
+            CrsTarget::CookieNamed(pattern) => format!("cookies:/{pattern}/"),
+            CrsTarget::CookieNameNamed(pattern) => format!("cookie_names:/{pattern}/"),
             CrsTarget::Body => "body".into(),
             CrsTarget::ResponseStatus => "response_status".into(),
             CrsTarget::ResponseHeader(name) => format!("response_header:{name}"),
@@ -460,6 +714,9 @@ impl CrsMatcher {
             CrsTarget::Unconditional => "unconditional".into(),
             CrsTarget::Tx(name) => format!("tx:{name}"),
             CrsTarget::TxCount(name) => format!("txcount:{name}"),
+            CrsTarget::TxRegex(pattern) => format!("tx:/{pattern}/"),
+            CrsTarget::MultipartPartHeaders => "multipart_part_headers".into(),
+            CrsTarget::MultipartPartHeadersCount => "multipart_part_headers_count".into(),
             CrsTarget::HeaderCount(name) => format!("header_count:{name}"),
             CrsTarget::ArgCount => "arg_count".into(),
             CrsTarget::CookieCount => "cookie_count".into(),
@@ -521,15 +778,20 @@ impl CrsMatcher {
         for target in &self.targets {
             values.extend(request_target_values(target, req, views, &tx, &excluded));
         }
-        self.matches_values(&values, &tx)
+        self.matches_values(&values, &tx, Some(req), Some(views))
     }
 
-    fn matches_response(&self, resp: &WafResponse<'_>, tx: &HashMap<String, String>) -> bool {
+    fn matches_response(
+        &self,
+        resp: &WafResponse<'_>,
+        tx: &HashMap<String, String>,
+        req: Option<&WafRequest<'_>>,
+    ) -> bool {
         let mut values = Vec::new();
         for target in &self.targets {
             values.extend(response_target_values(target, resp, tx));
         }
-        self.matches_values(&values, tx).is_some()
+        self.matches_values(&values, tx, req, None).is_some()
     }
 
     fn first_response_value(
@@ -551,6 +813,8 @@ impl CrsMatcher {
         &self,
         values: &[TargetValue],
         tx: &HashMap<String, String>,
+        req: Option<&WafRequest<'_>>,
+        views: Option<&BodyViews<'_>>,
     ) -> Option<Vec<TargetValue>> {
         // A missing variable never matches, negated or not (ModSecurity: there is
         // nothing to negate). Without this, `!@rx` rules fire on absent headers.
@@ -571,22 +835,47 @@ impl CrsMatcher {
                         false
                     }
                 },
-                CrsOp::Contains(v) => value.contains(v.as_str()),
-                CrsOp::StartsWith(v) => value.starts_with(v.as_str()),
-                CrsOp::Eq(v) => value == expand_tx(v, tx),
-                // ModSecurity @pm/@pmFromFile are case-insensitive phrase lists.
+                CrsOp::Contains(v) => value.contains(expand_macros(v, tx, req, views).as_str()),
+                CrsOp::StartsWith(v) => {
+                    value.starts_with(expand_macros(v, tx, req, views).as_str())
+                }
+                CrsOp::Eq(v) => value == expand_macros(v, tx, req, views),
+                // ModSecurity @pm/@pmFromFile are case-insensitive phrase
+                // lists. A phrase must be delimited by a non-word boundary;
+                // path separators are not boundaries, so a benign filename
+                // such as `/document.cookie` does not trigger 941180.
                 CrsOp::Pm(items) => {
                     let haystack = value.to_ascii_lowercase();
-                    items
-                        .iter()
-                        .any(|item| haystack.contains(&expand_tx(item, tx).to_ascii_lowercase()))
+                    let filename = name.starts_with("REQUEST_FILENAME")
+                        || name.starts_with("REQUEST_BASENAME");
+                    items.iter().any(|item| {
+                        let needle = expand_macros(item, tx, req, views).to_ascii_lowercase();
+                        // Path rules such as 930130/930140 use @pm for directory
+                        // segments (`.claude/`, `sys`, `/.git`); those must keep
+                        // substring semantics. The 941180 false positive is a
+                        // basename phrase with an extension (`document.cookie`),
+                        // where a preceding `/` must not count as a boundary.
+                        let basename_phrase = filename
+                            && needle
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_ascii_alphanumeric())
+                            && needle.contains('.');
+                        if basename_phrase {
+                            pm_matches(&haystack, &needle)
+                        } else {
+                            haystack.contains(&needle)
+                        }
+                    })
                 }
-                CrsOp::EqNum(n) => numeric_cmp(&value, n, tx).is_some_and(|(v, n)| v == n),
-                CrsOp::Ge(n) => numeric_cmp(&value, n, tx).is_some_and(|(v, n)| v >= n),
-                CrsOp::Gt(n) => numeric_cmp(&value, n, tx).is_some_and(|(v, n)| v > n),
-                CrsOp::Le(n) => numeric_cmp(&value, n, tx).is_some_and(|(v, n)| v <= n),
-                CrsOp::Lt(n) => numeric_cmp(&value, n, tx).is_some_and(|(v, n)| v < n),
-                CrsOp::EndsWith(v) => value.ends_with(v.as_str()),
+                CrsOp::EqNum(n) => {
+                    numeric_cmp(&value, n, tx, req, views).is_some_and(|(v, n)| v == n)
+                }
+                CrsOp::Ge(n) => numeric_cmp(&value, n, tx, req, views).is_some_and(|(v, n)| v >= n),
+                CrsOp::Gt(n) => numeric_cmp(&value, n, tx, req, views).is_some_and(|(v, n)| v > n),
+                CrsOp::Le(n) => numeric_cmp(&value, n, tx, req, views).is_some_and(|(v, n)| v <= n),
+                CrsOp::Lt(n) => numeric_cmp(&value, n, tx, req, views).is_some_and(|(v, n)| v < n),
+                CrsOp::EndsWith(v) => value.ends_with(expand_macros(v, tx, req, views).as_str()),
                 CrsOp::VerifyCc => luhn_valid(&value),
                 CrsOp::ValidateUtf8Encoding => std::str::from_utf8(value.as_bytes()).is_err(),
                 CrsOp::ValidateUrlEncoding => {
@@ -610,7 +899,7 @@ impl CrsMatcher {
                     invalid
                 }
                 CrsOp::Within(items) => items.iter().any(|item| {
-                    expand_tx(item, tx)
+                    expand_macros(item, tx, req, views)
                         .split_whitespace()
                         .any(|part| value == part)
                 }),
@@ -719,10 +1008,22 @@ fn apply_captures(tx: &mut HashMap<String, String>, op: &CrsOp, value: &str) {
     }
 }
 
-fn numeric_cmp(value: &str, operand: &str, tx: &HashMap<String, String>) -> Option<(i64, i64)> {
+fn numeric_cmp(
+    value: &str,
+    operand: &str,
+    tx: &HashMap<String, String>,
+    req: Option<&WafRequest<'_>>,
+    views: Option<&BodyViews<'_>>,
+) -> Option<(i64, i64)> {
     let value = value.trim().parse::<i64>().ok()?;
-    let operand = expand_tx(operand, tx).parse::<i64>().ok()?;
+    let operand = expand_macros(operand, tx, req, views).parse::<i64>().ok()?;
     Some((value, operand))
+}
+
+fn cookie_name_matches(pattern: &str, name: &str) -> bool {
+    regex::Regex::new(pattern)
+        .map(|re| re.is_match(name))
+        .unwrap_or(false)
 }
 
 fn cookie_pairs(req: &WafRequest<'_>) -> Vec<(String, String)> {
@@ -733,7 +1034,10 @@ fn cookie_pairs(req: &WafRequest<'_>) -> Vec<(String, String)> {
                 .split(';')
                 .filter_map(|pair| {
                     let pair = pair.trim();
-                    let (name, value) = pair.split_once('=')?;
+                    if pair.is_empty() {
+                        return None;
+                    }
+                    let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
                     Some((name.to_string(), value.to_string()))
                 })
                 .collect()
@@ -741,11 +1045,57 @@ fn cookie_pairs(req: &WafRequest<'_>) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// ModSecurity ARGS: GET parameters first, then urlencoded POST parameters.
+/// ModSecurity ARGS: GET parameters first, then the body processor's
+/// parameters (urlencoded form or flattened JSON).
 fn all_args(req: &WafRequest<'_>, views: &BodyViews<'_>) -> Vec<(String, String)> {
     let mut args = query_pairs(req);
     args.extend(views.form.iter().cloned());
+    args.extend(views.json.iter().cloned());
     args
+}
+
+/// Flatten a JSON document the way ModSecurity exposes it in `ARGS`.
+fn json_body_args(content_type: &str, body: &[u8]) -> Vec<(String, String)> {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if mime != "application/json" && !mime.ends_with("+json") {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let mut args = Vec::new();
+    flatten_json("", &value, &mut args);
+    args
+}
+
+fn flatten_json(prefix: &str, value: &serde_json::Value, out: &mut Vec<(String, String)>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                let name = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten_json(&name, value, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, value) in items.iter().enumerate() {
+                let name = format!("{prefix}.{index}");
+                flatten_json(&name, value, out);
+            }
+        }
+        serde_json::Value::String(value) => out.push((prefix.to_string(), value.clone())),
+        serde_json::Value::Number(value) => out.push((prefix.to_string(), value.to_string())),
+        serde_json::Value::Bool(value) => out.push((prefix.to_string(), value.to_string())),
+        serde_json::Value::Null => {}
+    }
 }
 
 fn query_pairs(req: &WafRequest<'_>) -> Vec<(String, String)> {
@@ -755,7 +1105,7 @@ fn query_pairs(req: &WafRequest<'_>) -> Vec<(String, String)> {
                 .split('&')
                 .map(|pair| {
                     let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-                    (url_decode(name), url_decode(value))
+                    (url_decode(name, true), url_decode(value, true))
                 })
                 .collect()
         })
@@ -770,6 +1120,10 @@ pub(crate) struct BodyViews<'a> {
     /// `application/x-www-form-urlencoded` body parameters. ModSecurity's ARGS
     /// collection is GET + POST parameters, so these join the query pairs.
     form: Vec<(String, String)>,
+    /// `application/json` body parameters, flattened into ARGS.
+    json: Vec<(String, String)>,
+    /// Raw header lines of every multipart part.
+    part_headers: Vec<String>,
 }
 
 impl<'a> BodyViews<'a> {
@@ -795,6 +1149,8 @@ impl<'a> BodyViews<'a> {
             } else {
                 Vec::new()
             },
+            json: json_body_args(&content_type, bytes),
+            part_headers: crate::multipart::part_header_lines(&content_type, bytes),
         }
     }
 }
@@ -862,17 +1218,34 @@ fn request_target_values(
             .map(|(name, _)| named(&format!("ARGS_NAMES:{name}"), name))
             .collect(),
         CrsTarget::QueryString => vec![named("QUERY_STRING", req.query.unwrap_or("").to_string())],
-        CrsTarget::Filename => vec![named("REQUEST_FILENAME", req.path.to_string())],
+        // ModSecurity exposes REQUEST_FILENAME/REQUEST_BASENAME decoded; the
+        // raw request path keeps `%28` and would hide 933160-style payloads
+        // (`/post/subSTR%28%24x%29`).
+        CrsTarget::Filename => vec![named("REQUEST_FILENAME", url_decode(req.path, false))],
         CrsTarget::Basename => vec![named(
             "REQUEST_BASENAME",
-            req.path.rsplit('/').next().unwrap_or("").to_string(),
+            url_decode(req.path, false)
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_string(),
         )],
         CrsTarget::Cookie => cookie_pairs(req)
             .into_iter()
             .map(|(name, value)| named(&format!("REQUEST_COOKIES:{name}"), value))
             .collect(),
+        CrsTarget::CookieNamed(pattern) => cookie_pairs(req)
+            .into_iter()
+            .filter(|(name, _)| cookie_name_matches(pattern, name))
+            .map(|(name, value)| named(&format!("REQUEST_COOKIES:{name}"), value))
+            .collect(),
         CrsTarget::CookieName => cookie_pairs(req)
             .into_iter()
+            .map(|(name, _)| named(&format!("REQUEST_COOKIES_NAMES:{name}"), name))
+            .collect(),
+        CrsTarget::CookieNameNamed(pattern) => cookie_pairs(req)
+            .into_iter()
+            .filter(|(name, _)| cookie_name_matches(pattern, name))
             .map(|(name, _)| named(&format!("REQUEST_COOKIES_NAMES:{name}"), name))
             .collect(),
         CrsTarget::Body => views
@@ -893,6 +1266,26 @@ fn request_target_values(
         CrsTarget::TxCount(name) => vec![named(
             &format!("&TX:{name}"),
             if tx.contains_key(name) { "1" } else { "0" }.to_string(),
+        )],
+        // CRS 922110: `TX:/MULTIPART_HEADERS_CONTENT_TYPES_*/` — every TX
+        // variable whose name matches, which is how the multipart header
+        // capture list is iterated.
+        CrsTarget::TxRegex(pattern) => regex::Regex::new(pattern)
+            .map(|re| {
+                tx.iter()
+                    .filter(|(name, _)| re.is_match(name))
+                    .map(|(name, value)| named(&format!("TX:{name}"), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        CrsTarget::MultipartPartHeaders => views
+            .part_headers
+            .iter()
+            .map(|header| named("MULTIPART_PART_HEADERS", header.clone()))
+            .collect(),
+        CrsTarget::MultipartPartHeadersCount => vec![named(
+            "&MULTIPART_PART_HEADERS",
+            views.part_headers.len().to_string(),
         )],
         CrsTarget::HeaderCount(name) if name.is_empty() => {
             let mut count = 0usize;
@@ -1174,5 +1567,59 @@ impl HeaderView for MapHeaders {
         for (n, v) in &self.entries {
             f(n.as_bytes(), v.as_slice());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pm_phrase_does_not_match_inside_a_path_segment() {
+        assert!(pm_matches("(document.domain)", "document.domain"));
+        assert!(!pm_matches(
+            "/get/javascript-manual/document.cookie",
+            "document.cookie"
+        ));
+    }
+
+    #[test]
+    fn select_function_shape_is_sql() {
+        assert!(crate::detect::detect_sql(
+            "' and 1 in (select min(name) from sysobjects) --"
+        ));
+        assert!(!crate::detect::detect_sql("(select a, b from t)"));
+    }
+
+    #[test]
+    fn php_open_tag_requires_a_delimiter() {
+        assert!(!crate::detect::detect_xss("<?php"));
+        assert!(!crate::detect::detect_xss("<?xml version=\"1.0\"?>"));
+        // 941100 applies htmlEntityDecode before libinjection; `&lt;?` is a
+        // benign fixture (933100-t33), not a PHP open tag.
+        assert!(!crate::detect::detect_xss("<? should not trigger"));
+        assert!(crate::detect::detect_xss("<?php echo 1;"));
+        assert!(crate::detect::detect_xss("<?= $x"));
+    }
+
+    #[test]
+    fn setvar_macros_expand_in_the_name_too() {
+        let mut tx = HashMap::new();
+        tx.insert("0".to_string(), "content-range".to_string());
+        apply_setvars(
+            &mut tx,
+            &[CrsSetVar {
+                name: "header_name_%{tx.0}".to_string(),
+                op: CrsSetVarOp::Set,
+                value: "/%{tx.0}/".to_string(),
+            }],
+            None,
+            None,
+        );
+        assert_eq!(
+            tx.get("header_name_content-range").map(String::as_str),
+            Some("/content-range/")
+        );
+        assert!(!tx.contains_key("header_name_%{tx.0}"));
     }
 }

@@ -19,7 +19,9 @@ use crate::execute_backend::{
     FCGI_REQUEST_BODY_LIMIT,
 };
 use crate::fcgi_cache_registry::{prepare_fcgi_cache_load, serve_fastcgi_with_cache};
-use crate::htaccess_runtime_registry::{htaccess_adjust_route, HtaccessDispatchAdjustment};
+use crate::htaccess_runtime_registry::{
+    htaccess_access_policy, htaccess_adjust_route, htaccess_auth_policy, HtaccessDispatchAdjustment,
+};
 use crate::http3_runtime_registry::h3_materialization_budget_bytes;
 use crate::http_cache::{apply_plan10b_cache_headers, plan10b_cache_headers_enabled};
 use crate::pipeline_registry::{inject_client_ip, pipeline_handle_http3, pipeline_handle_incoming};
@@ -37,6 +39,7 @@ use exyonq_mod_proxy::{
 use exyonq_mod_static::{serve_static_with_cache, StaticCacheLoad};
 use exyonq_module_api::kernel_observation::{note_fastcgi_http_501, note_proxy_http_501};
 use exyonq_module_api::static_dispatch::StaticMethod;
+use http_body::Body as _;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::header::{
@@ -184,8 +187,14 @@ pub async fn serve_http3_request<B: Http3RequestBody>(
     let waf_request_headers = mirror_headers.clone();
     let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
     let state = Arc::clone(&ctx.state);
+    let throttle_cfg = state.config.modules.ratelimit.client.clone();
     let (parts, body) = req.into_parts();
-    let req = Request::from_parts(parts, body.into_http3_bytes());
+    let body = body.into_http3_bytes();
+    let inbound_wait = crate::client_throttle::inbound_wait(&throttle_cfg, client_ip, body.len());
+    if !inbound_wait.is_zero() {
+        tokio::time::sleep(inbound_wait).await;
+    }
+    let req = Request::from_parts(parts, body);
     let local_port = ctx.local_port;
     let response = serve_http3_request_bytes(ctx, req).await;
     let mut response: Response<FinalBoxBody> = response.map(|body| {
@@ -215,7 +224,7 @@ pub async fn serve_http3_request<B: Http3RequestBody>(
         state.config.waf.max_inspection_body_bytes as usize,
         &mut response,
     );
-    response
+    response.map(|body| crate::client_throttle::wrap_body(body, None, client_ip, &throttle_cfg))
 }
 
 async fn serve_http3_request_bytes(
@@ -299,7 +308,7 @@ async fn serve_http3_request_bytes(
                 exyonq_module_api::WireAdmit::Allow => {}
                 exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
                     exyonq_module_api::wire_record_response(429);
-                    return rate_limit_reject_response(retry_after_secs);
+                    return rate_limit_reject_response(retry_after_secs, 429);
                 }
             }
         }
@@ -307,7 +316,7 @@ async fn serve_http3_request_bytes(
         let request_headers = header_pairs_from_map(req.headers());
         let budget = Some(h3_materialization_budget_bytes());
         let (parts, body) = req.into_parts();
-        let post_body = if method == Method::POST {
+        let post_body = if method == Method::POST || !body.is_empty() {
             Some(body)
         } else {
             None
@@ -340,6 +349,16 @@ async fn serve_http3_request_bytes(
             budget,
             post_body,
             &ctx.ops,
+        )
+        .await;
+        let response = maybe_error_page(
+            &ctx.state,
+            &parts.method,
+            parts.uri.path(),
+            request_host.as_deref(),
+            ctx.local_port,
+            &request_headers,
+            response,
         )
         .await;
         if ctx.state.wire_cheap_modules_active() {
@@ -405,7 +424,7 @@ async fn serve_http3_with_modules(
         let budget = Some(h3_materialization_budget_bytes());
         let uri = parts.uri.clone();
         let method = parts.method.clone();
-        let post_body = if method == Method::POST {
+        let post_body = if method == Method::POST || !body.is_empty() {
             Some(body)
         } else {
             None
@@ -425,7 +444,7 @@ async fn serve_http3_with_modules(
             }
         }
         let host = request_host_from_parts(&uri, &parts.headers);
-        let mut response = dispatch_core(
+        let response = dispatch_core(
             &ctx.state,
             ctx.scheme,
             ctx.local_port,
@@ -438,6 +457,16 @@ async fn serve_http3_with_modules(
             budget,
             post_body,
             &ctx.ops,
+        )
+        .await;
+        let mut response = maybe_error_page(
+            &ctx.state,
+            &method,
+            uri.path(),
+            host.as_deref(),
+            ctx.local_port,
+            &headers,
+            response,
         )
         .await;
         attach_route_labels(
@@ -478,6 +507,7 @@ pub async fn serve_connection(
     let waf_request_headers = mirror_headers.clone();
     let client_ip = client_ip_from_xff(Some(&ctx.x_forwarded_for));
     let state = Arc::clone(&ctx.state);
+    let throttle_cfg = state.config.modules.ratelimit.client.clone();
     let local_port = ctx.local_port;
     let response = serve_connection_inner(ctx, req).await?;
     let mut response: Response<FinalBoxBody> = response.map(|body| {
@@ -507,7 +537,10 @@ pub async fn serve_connection(
         state.config.waf.max_inspection_body_bytes as usize,
         &mut response,
     );
-    Ok(response)
+    Ok(
+        response
+            .map(|body| crate::client_throttle::wrap_body(body, None, client_ip, &throttle_cfg)),
+    )
 }
 
 async fn serve_connection_inner(
@@ -634,8 +667,9 @@ async fn serve_connection_inner(
                     .route_index
                     .match_route_index_with_host_port(path, host.as_deref(), ctx.local_port)
                     .is_some_and(|(idx, _)| ctx.state.route_requires_full_dispatch(idx));
-                let static_ok =
-                    !route_forces_dispatch && !ctx.state.wire_incompatible_features_active();
+                let static_ok = !request_has_body(&req)
+                    && !route_forces_dispatch
+                    && !ctx.state.wire_incompatible_features_active();
                 if static_ok {
                     if let Some(root_slot) = site_static_root_slot(&ctx.state) {
                         let headers = header_pairs_from_map(req.headers());
@@ -713,7 +747,7 @@ async fn serve_connection_inner(
                 match exyonq_module_api::wire_admit(client_ip.as_str()) {
                     exyonq_module_api::WireAdmit::Allow => {}
                     exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
-                        let response = rate_limit_reject_response(retry_after_secs);
+                        let response = rate_limit_reject_response(retry_after_secs, 429);
                         exyonq_module_api::wire_record_response(429);
                         let outcome = outcome_from_response(&response);
                         return finish_hyper(
@@ -869,10 +903,17 @@ fn outcome_from_response(response: &Response<BoxBody>) -> Option<&'static str> {
     {
         return Some("sse");
     }
+    // Outcome must describe the real response class. Only a genuine 2xx (or
+    // 1xx upgrade) is `ok`; a 404/5xx recorded as `ok` hides failures from
+    // operators and from evidence gates.
     match response.status().as_u16() {
-        429 => Some("rate_limited"),
-        403 => Some("forbidden"),
         101 => Some("websocket_upgrade"),
+        403 => Some("forbidden"),
+        404 => Some("not_found"),
+        429 => Some("rate_limited"),
+        300..=399 => Some("redirect"),
+        400..=499 => Some("client_error"),
+        500..=599 => Some("server_error"),
         _ => Some("ok"),
     }
 }
@@ -901,8 +942,9 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
                 .route_index
                 .match_route_index_with_host_port(path, host.as_deref(), ctx.local_port)
                 .is_some_and(|(idx, _)| ctx.state.route_requires_full_dispatch(idx));
-            let static_ok =
-                !route_forces_dispatch && !ctx.state.wire_incompatible_features_active();
+            let static_ok = !request_has_body(&req)
+                && !route_forces_dispatch
+                && !ctx.state.wire_incompatible_features_active();
             if static_ok {
                 if let Some(root_slot) = site_static_root_slot(&ctx.state) {
                     let headers = header_pairs_from_map(req.headers());
@@ -1017,7 +1059,7 @@ async fn handle_request_inner(
             exyonq_module_api::WireAdmit::Allow => {}
             exyonq_module_api::WireAdmit::Reject429 { retry_after_secs } => {
                 exyonq_module_api::wire_record_response(429);
-                return Ok(rate_limit_reject_response(retry_after_secs));
+                return Ok(rate_limit_reject_response(retry_after_secs, 429));
             }
         }
         let response_path = req.uri().path().to_string();
@@ -1218,7 +1260,18 @@ fn maybe_gunzip_response(
 
 fn basic_auth_challenge(realm: &str) -> Response<BoxBody> {
     let mut response = text_response(StatusCode::UNAUTHORIZED, "Unauthorized");
-    if let Ok(value) = HeaderValue::from_str(&format!("Basic realm=\"{realm}\"")) {
+    let escaped = realm.replace('\\', "\\\\").replace('"', "\\\"");
+    if let Ok(value) = HeaderValue::from_str(&format!("Basic realm=\"{escaped}\"")) {
+        response
+            .headers_mut()
+            .insert(hyper::header::WWW_AUTHENTICATE, value);
+    }
+    response
+}
+
+fn external_auth_challenge(www_authenticate: Option<&str>) -> Response<BoxBody> {
+    let mut response = text_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    if let Some(value) = www_authenticate.and_then(|value| HeaderValue::from_str(value).ok()) {
         response
             .headers_mut()
             .insert(hyper::header::WWW_AUTHENTICATE, value);
@@ -1291,6 +1344,16 @@ async fn handle_core_request(
         ops,
     )
     .await;
+    let response = maybe_error_page(
+        state,
+        &method,
+        &path,
+        host.as_deref(),
+        local_port,
+        &request_pairs,
+        response,
+    )
+    .await;
     waf_response_gate(
         state,
         &method,
@@ -1302,6 +1365,19 @@ async fn handle_core_request(
         response,
     )
     .await
+}
+
+fn request_has_body(req: &Request<Incoming>) -> bool {
+    request_has_body_headers(req.headers()) || !req.body().is_end_stream()
+}
+
+fn request_has_body_headers(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > 0)
+        || headers.contains_key(hyper::header::TRANSFER_ENCODING)
 }
 
 async fn handle_core_request_inner(
@@ -1326,7 +1402,7 @@ async fn handle_core_request_inner(
         .await;
     }
 
-    if *req.method() != Method::GET && *req.method() != Method::HEAD {
+    if (*req.method() != Method::GET && *req.method() != Method::HEAD) || request_has_body(&req) {
         return handle_core_request_with_body(
             state,
             scheme,
@@ -1384,26 +1460,32 @@ async fn handle_core_request_with_body(
             );
         }
         let headers_map = req.headers().clone();
-        let body = match collect_request_body_bounded(
-            &headers_map,
+        let throttle_cfg = state.config.modules.ratelimit.client.clone();
+        let body = crate::client_throttle::wrap_request_body(
             req.into_body(),
-            FCGI_REQUEST_BODY_LIMIT,
-        )
-        .await
-        {
-            Ok(body) => body,
-            Err(status) => return text_response(status, "request body too large"),
-        };
-        return waf_reject_response(crate::waf::handle_waf_challenge_verify(
-            state.waf.as_ref(),
-            method.as_str(),
-            host.as_deref(),
-            &header_view,
+            None,
             client_ip,
-            &body,
-            state.generation,
-            state.waf_enforce,
-        ));
+            &throttle_cfg,
+        );
+        let body =
+            match collect_request_body_bounded(&headers_map, body, FCGI_REQUEST_BODY_LIMIT).await {
+                Ok(body) => body,
+                Err(status) => return text_response(status, "request body too large"),
+            };
+        return waf_reject_response(
+            crate::waf::handle_waf_challenge_verify(
+                state.waf.as_ref(),
+                method.as_str(),
+                host.as_deref(),
+                &header_view,
+                client_ip,
+                &body,
+                state.generation,
+                state.waf_enforce,
+                &state.config.waf.abuse,
+            )
+            .await,
+        );
     }
 
     if let Some(reject) = waf_header_gate(
@@ -1469,20 +1551,22 @@ async fn handle_core_request_with_body(
     };
     let declared_len = parse_proxy_request_content_length(req.headers());
     let uri = req.uri().clone();
+    let throttle_cfg = state.config.modules.ratelimit.client.clone();
     let body =
-        match collect_proxy_request_body_bounded(declared_len, req.into_body(), body_limit).await {
-            Ok(body) => body,
-            Err(ProxyRequestBodyReadError::TooLarge) => {
-                return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
-            }
-            Err(ProxyRequestBodyReadError::Body) if is_proxy_route => {
-                return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
-            }
-            Err(ProxyRequestBodyReadError::Body) => {
-                return text_response(StatusCode::BAD_REQUEST, "request body too large");
-            }
-        };
-    if let Some(reject) = waf_body_gate(
+        crate::client_throttle::wrap_request_body(req.into_body(), None, client_ip, &throttle_cfg);
+    let body = match collect_proxy_request_body_bounded(declared_len, body, body_limit).await {
+        Ok(body) => body,
+        Err(ProxyRequestBodyReadError::TooLarge) => {
+            return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
+        }
+        Err(ProxyRequestBodyReadError::Body) if is_proxy_route => {
+            return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
+        }
+        Err(ProxyRequestBodyReadError::Body) => {
+            return text_response(StatusCode::BAD_REQUEST, "request body too large");
+        }
+    };
+    let waf_body_limited = match waf_body_gate(
         state,
         &method,
         host.as_deref(),
@@ -1492,10 +1576,11 @@ async fn handle_core_request_with_body(
         client_ip,
         &body,
     ) {
-        return reject;
-    }
+        WafBodyGate::Reject(reject) => return reject,
+        WafBodyGate::Continue { inspection_limited } => inspection_limited,
+    };
 
-    dispatch_core(
+    dispatch_core_with_limit(
         state,
         scheme,
         local_port,
@@ -1508,6 +1593,7 @@ async fn handle_core_request_with_body(
         None,
         Some(bytes::Bytes::from(body)),
         ops,
+        waf_body_limited,
     )
     .await
 }
@@ -1529,6 +1615,86 @@ async fn dispatch_core(
     materialization_budget_bytes: Option<u64>,
     request_body: Option<Bytes>,
     ops: &Arc<crate::lifecycle::LifecycleState>,
+) -> Response<BoxBody> {
+    dispatch_core_with_limit(
+        state,
+        scheme,
+        local_port,
+        proxy_client,
+        method,
+        uri,
+        host,
+        x_forwarded_for,
+        request_headers,
+        materialization_budget_bytes,
+        request_body,
+        ops,
+        false,
+    )
+    .await
+}
+
+/// Single attach point for `outcome=waf_body_limit` on every HTTP route.
+///
+/// `waf_body_limited` carries what a caller already knows (the Hyper pre-body
+/// gate). The in-dispatcher gate — reached by both Hyper and HTTP/3 — ORs its
+/// own result through `dispatch_core_inner`, so a third route cannot lose the
+/// marker by forgetting to attach it.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_core_with_limit(
+    state: &Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
+    proxy_client: &ProxyClient,
+    method: &Method,
+    uri: &hyper::Uri,
+    host: Option<String>,
+    x_forwarded_for: Option<&HeaderValue>,
+    request_headers: &[(String, String)],
+    materialization_budget_bytes: Option<u64>,
+    request_body: Option<Bytes>,
+    ops: &Arc<crate::lifecycle::LifecycleState>,
+    waf_body_limited: bool,
+) -> Response<BoxBody> {
+    let mut limited = waf_body_limited;
+    let response = dispatch_core_inner(
+        state,
+        scheme,
+        local_port,
+        proxy_client,
+        method,
+        uri,
+        host,
+        x_forwarded_for,
+        request_headers,
+        materialization_budget_bytes,
+        request_body,
+        ops,
+        &mut limited,
+    )
+    .await;
+    if limited {
+        crate::observability::attach_outcome_hint(response, "waf_body_limit")
+    } else {
+        response
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_core_inner(
+    state: &Arc<ServerState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
+    proxy_client: &ProxyClient,
+    method: &Method,
+    uri: &hyper::Uri,
+    host: Option<String>,
+    x_forwarded_for: Option<&HeaderValue>,
+    request_headers: &[(String, String)],
+    materialization_budget_bytes: Option<u64>,
+    request_body: Option<Bytes>,
+    ops: &Arc<crate::lifecycle::LifecycleState>,
+    waf_body_limited: &mut bool,
 ) -> Response<BoxBody> {
     let path = uri.path();
     let client_ip = client_ip_from_xff(x_forwarded_for);
@@ -1560,16 +1726,20 @@ async fn dispatch_core(
             );
         }
         let body = request_body.as_deref().unwrap_or(&[]);
-        return waf_reject_response(crate::waf::handle_waf_challenge_verify(
-            state.waf.as_ref(),
-            method.as_str(),
-            host.as_deref(),
-            &header_view,
-            client_ip,
-            body,
-            state.generation,
-            state.waf_enforce,
-        ));
+        return waf_reject_response(
+            crate::waf::handle_waf_challenge_verify(
+                state.waf.as_ref(),
+                method.as_str(),
+                host.as_deref(),
+                &header_view,
+                client_ip,
+                body,
+                state.generation,
+                state.waf_enforce,
+                &state.config.waf.abuse,
+            )
+            .await,
+        );
     }
 
     if (*method == Method::GET || *method == Method::HEAD) && path.as_bytes().starts_with(b"/site/")
@@ -1582,7 +1752,11 @@ async fn dispatch_core(
             .route_index
             .match_route_index_with_host_port(path, host.as_deref(), local_port)
             .is_some_and(|(idx, _)| state.route_requires_full_dispatch(idx));
-        if !route_forces_dispatch && !state.wire_incompatible_features_active() {
+        let has_collected_body = request_body.as_deref().is_some_and(|body| !body.is_empty());
+        if !has_collected_body
+            && !route_forces_dispatch
+            && !state.wire_incompatible_features_active()
+        {
             if let Some(reject) = waf_header_gate(
                 state,
                 method,
@@ -1619,25 +1793,152 @@ async fn dispatch_core(
     else {
         return text_response(StatusCode::NOT_FOUND, "not found");
     };
-    // 0.5: nginx auth_basic per-route challenge.
-    if let Some(realm) =
+    // OL-03: OpenLiteSpeed request quotas are per route class. Static routes
+    // use staticReqPerSec; proxy/FastCGI routes use dynReqPerSec. The excess is
+    // deferred, never rejected.
+    let dynamic = !matches!(
+        state.snapshot.resolve_backend(route_idx),
+        Some(Backend::Static { .. })
+    );
+    let wait = crate::client_throttle::request_wait(
+        &state.config.modules.ratelimit.client,
+        client_ip,
+        dynamic,
+    );
+    if !wait.is_zero() {
+        tokio::time::sleep(wait).await;
+    }
+    // AP-05: route ACL and inherited .htaccess ACL run before auth/challenge.
+    if let Some(policy) = state.snapshot.route_access_policy(route_idx) {
+        if !policy.allows(client_ip, method.as_str()) {
+            return text_response(StatusCode::FORBIDDEN, "forbidden");
+        }
+    }
+    if let Some(site_id) = state.snapshot.htaccess_site_id_for_route(route_idx) {
+        if let Some(policy) = htaccess_access_policy(site_id, path) {
+            if !policy.allows(client_ip, method.as_str()) {
+                return text_response(StatusCode::FORBIDDEN, "forbidden");
+            }
+        }
+    }
+    // AP-04: external auth is exclusive with basic auth for a route. Keep the
+    // authenticated username for nginx `$remote_user` rate-limit keys.
+    let mut authenticated_user: Option<String> = None;
+    if let Some(outcome) = crate::auth_external::check(
+        &state.config.modules.auth,
+        &route.name,
+        method,
+        uri,
+        host.as_deref(),
+        request_headers,
+    )
+    .await
+    {
+        match outcome {
+            crate::auth_external::AuthExternalOutcome::Challenge { www_authenticate } => {
+                return external_auth_challenge(www_authenticate.as_deref());
+            }
+            crate::auth_external::AuthExternalOutcome::Forbidden => {
+                return text_response(StatusCode::FORBIDDEN, "forbidden");
+            }
+            crate::auth_external::AuthExternalOutcome::Unavailable => {
+                return text_response(StatusCode::SERVICE_UNAVAILABLE, "auth unavailable");
+            }
+            crate::auth_external::AuthExternalOutcome::Allowed { user } => {
+                authenticated_user = user;
+            }
+        }
+    } else if let Some(outcome) =
         crate::auth_basic::check(&state.config.modules.auth, &route.name, request_headers)
     {
-        return basic_auth_challenge(&realm);
+        match outcome {
+            crate::auth_basic::AuthOutcome::Challenge { realm } => {
+                return basic_auth_challenge(&realm);
+            }
+            crate::auth_basic::AuthOutcome::Allowed { user } => {
+                authenticated_user = Some(user);
+            }
+        }
     }
-    // 0.5: nginx limit_req_zone per-route token bucket.
-    if let Some(retry) = crate::zone_ratelimit::check(
-        &state.config.modules.ratelimit,
-        &route.name,
-        request_headers,
-        host.as_deref(),
-        &client_ip.to_string(),
-    ) {
-        return rate_limit_reject_response(retry);
+    if let Some(site_id) = state.snapshot.htaccess_site_id_for_route(route_idx) {
+        if let Some(auth) = htaccess_auth_policy(site_id, path) {
+            if let Some(outcome) =
+                crate::auth_basic::check_user_file(&auth.realm, &auth.user_file, request_headers)
+            {
+                match outcome {
+                    crate::auth_basic::AuthOutcome::Challenge { realm } => {
+                        return basic_auth_challenge(&realm);
+                    }
+                    crate::auth_basic::AuthOutcome::Allowed { user } => {
+                        authenticated_user.get_or_insert(user);
+                    }
+                }
+            }
+        }
+    }
+    // 0.5: nginx limit_req_zone per-route leaky bucket. A delayed request is
+    // already accounted by the bucket, so it must not be re-checked after the
+    // wait (that would consume two slots).
+    let request_uri = uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/")
+        .to_string();
+    let client_ip_string = client_ip.to_string();
+    let zone_ctx = crate::zone_ratelimit::KeyContext {
+        route_name: &route.name,
+        headers: request_headers,
+        host: host.as_deref(),
+        client_ip: &client_ip_string,
+        user: authenticated_user.as_deref(),
+        method: method.as_str(),
+        path,
+        request_uri: &request_uri,
+        query: uri.query().unwrap_or(""),
+        scheme,
+        server_port: local_port.unwrap_or(0),
+    };
+    match crate::zone_ratelimit::check(&state.config.modules.ratelimit, &zone_ctx) {
+        crate::zone_ratelimit::LimitDecision::Allow => {}
+        crate::zone_ratelimit::LimitDecision::Delay { wait, log_level } => {
+            log_rate_limit("delay", &route.name, log_level, 0, 0, false);
+            tokio::time::sleep(wait).await;
+        }
+        crate::zone_ratelimit::LimitDecision::DryRun {
+            status,
+            retry_after_secs,
+            log_level,
+        } => {
+            log_rate_limit(
+                "dry_run",
+                &route.name,
+                log_level,
+                status,
+                retry_after_secs,
+                true,
+            );
+        }
+        crate::zone_ratelimit::LimitDecision::Reject {
+            status,
+            retry_after_secs,
+            log_level,
+        } => {
+            log_rate_limit(
+                "reject",
+                &route.name,
+                log_level,
+                status,
+                retry_after_secs,
+                false,
+            );
+            return rate_limit_reject_response(retry_after_secs, status);
+        }
     }
 
     // H1/H3: inspect the client-visible URI before htaccess/structural rewrite so
     // path-based signature rules cannot be dodged by InternalRewrite normalization.
+    // Abuse was already evaluated by the early gate above; running it again would
+    // consume a second token for one request (and challenge every burst=1 request).
     if let Some(reject) = waf_header_gate(
         state,
         method,
@@ -1646,12 +1947,12 @@ async fn dispatch_core(
         uri.query(),
         &header_view,
         client_ip,
-        false,
+        true,
     ) {
         return reject;
     }
     if let Some(body) = request_body.as_ref() {
-        if let Some(reject) = waf_body_gate(
+        match waf_body_gate(
             state,
             method,
             host.as_deref(),
@@ -1661,7 +1962,8 @@ async fn dispatch_core(
             client_ip,
             body.as_ref(),
         ) {
-            return reject;
+            WafBodyGate::Reject(reject) => return reject,
+            WafBodyGate::Continue { inspection_limited } => *waf_body_limited |= inspection_limited,
         }
     }
 
@@ -1712,6 +2014,27 @@ async fn dispatch_core(
             path.as_str(),
             path.as_str(),
         ) {
+            if adj.request_path != path {
+                if let Some(policy) = htaccess_access_policy(site_id, &adj.request_path) {
+                    if !policy.allows(client_ip, method.as_str()) {
+                        return text_response(StatusCode::FORBIDDEN, "forbidden");
+                    }
+                }
+                if let Some(auth) = htaccess_auth_policy(site_id, &adj.request_path) {
+                    if let Some(outcome) = crate::auth_basic::check_user_file(
+                        &auth.realm,
+                        &auth.user_file,
+                        request_headers,
+                    ) {
+                        match outcome {
+                            crate::auth_basic::AuthOutcome::Challenge { realm } => {
+                                return basic_auth_challenge(&realm);
+                            }
+                            crate::auth_basic::AuthOutcome::Allowed { .. } => {}
+                        }
+                    }
+                }
+            }
             if let Some(response) =
                 apply_htaccess_adjustment_terminal(method, &adj, &uri, materialization_budget_bytes)
                     .await
@@ -1727,45 +2050,94 @@ async fn dispatch_core(
         }
     }
 
-    // Cap035: structural rewrite is a single rematch pass (MAX_REWRITE_ITERATIONS=1).
-    // ORIGINAL path already passed WAF; rematch uses rewritten path + same Host (no host mutation).
-    // Query is preserved via uri_with_path. Second structural rewrite is not applied.
-    match crate::structural_route_rules::evaluate_route_structural_rules(route) {
-        exyonq_module_api::RouteRuleOutcome::NoChange => {}
-        exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
-            return redirect_response_parts(status, location);
-        }
-        exyonq_module_api::RouteRuleOutcome::InternalRewrite { path: rewritten } => {
-            // Fail closed: never rematch/proxy with path≠uri after a parse failure.
-            let Some(next_uri) = uri_with_path(&uri, rewritten) else {
-                return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
-            };
-            uri = next_uri;
-            path = rewritten.to_string();
-            let Some((rematch_idx, rematch_route)) = state
-                .route_index
-                .match_route_index_with_host_port(path.as_str(), host.as_deref(), local_port)
-            else {
-                return text_response(StatusCode::NOT_FOUND, "not found");
-            };
-            route_idx = rematch_idx;
-            match crate::structural_route_rules::evaluate_route_structural_rules(rematch_route) {
+    // Cap035/ADR-048: evaluate the compiled rewrite once. Literal rewrites and
+    // patterned rules share this path; a successful internal rewrite gets one
+    // rematch (MAX_REWRITE_ITERATIONS=1), while `break` keeps the current route.
+    // ORIGINAL path already passed WAF; rematch uses the rewritten path + same
+    // Host (no host mutation). Query is preserved via uri_with_path.
+    let rewrite_outcome = state
+        .snapshot
+        .route_rewrite(route_idx)
+        .map(|compiled| {
+            exyonq_module_api::apply_compiled_rewrite(
+                compiled,
+                exyonq_module_api::RewriteRequest {
+                    path: path.as_str(),
+                    host: host.as_deref(),
+                    query: uri.query().unwrap_or(""),
+                    headers: request_headers,
+                },
+            )
+        })
+        .unwrap_or(exyonq_module_api::RewriteApplyOutcome::NoChange);
+    match rewrite_outcome {
+        exyonq_module_api::RewriteApplyOutcome::NoChange => {
+            // No rewrite rule: preserve the Cap036 redirect / Cap035 literal
+            // surface (a configured literal is compiled above, so this is
+            // normally reached only by redirect-only routes).
+            match crate::structural_route_rules::evaluate_route_structural_rules(route) {
                 exyonq_module_api::RouteRuleOutcome::NoChange => {}
                 exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
-                    // Rematch landed on a redirect-only route (Cap036 surface).
                     return redirect_response_parts(status, location);
                 }
-                exyonq_module_api::RouteRuleOutcome::InternalRewrite { .. } => {
-                    // Bound: do not chain structural rewrites.
-                    return text_response(StatusCode::NOT_FOUND, "not found");
+                exyonq_module_api::RouteRuleOutcome::InternalRewrite { path: rewritten } => {
+                    let Some(next_uri) = uri_with_path(&uri, rewritten) else {
+                        return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
+                    };
+                    uri = next_uri;
+                    path = rewritten.to_string();
                 }
                 exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
                     return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
                 }
             }
         }
-        exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
-            return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
+        exyonq_module_api::RewriteApplyOutcome::Internal {
+            path: rewritten,
+            rematch,
+        } => {
+            // Fail closed: never rematch/proxy with path≠uri after a parse failure.
+            let Some(next_uri) = uri_with_path(&uri, &rewritten) else {
+                return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
+            };
+            uri = next_uri;
+            path = rewritten;
+            if rematch {
+                let Some((rematch_idx, rematch_route)) = state
+                    .route_index
+                    .match_route_index_with_host_port(path.as_str(), host.as_deref(), local_port)
+                else {
+                    return text_response(StatusCode::NOT_FOUND, "not found");
+                };
+                route_idx = rematch_idx;
+                if let Some(policy) = state.snapshot.route_access_policy(route_idx) {
+                    if !policy.allows(client_ip, method.as_str()) {
+                        return text_response(StatusCode::FORBIDDEN, "forbidden");
+                    }
+                }
+                // Do not chain rewrite rules; retain the Cap036 redirect surface
+                // on the rematched route and fail closed on another structural
+                // rewrite.
+                match crate::structural_route_rules::evaluate_route_structural_rules(rematch_route)
+                {
+                    exyonq_module_api::RouteRuleOutcome::NoChange => {}
+                    exyonq_module_api::RouteRuleOutcome::Redirect { status, location } => {
+                        return redirect_response_parts(status, location);
+                    }
+                    exyonq_module_api::RouteRuleOutcome::InternalRewrite { .. } => {
+                        return text_response(StatusCode::NOT_FOUND, "not found");
+                    }
+                    exyonq_module_api::RouteRuleOutcome::RejectedRedirect => {
+                        return text_response(StatusCode::BAD_REQUEST, "invalid redirect location");
+                    }
+                }
+            }
+        }
+        exyonq_module_api::RewriteApplyOutcome::Redirect { status, location } => {
+            return redirect_response_parts(status, &location);
+        }
+        exyonq_module_api::RewriteApplyOutcome::Rejected => {
+            return text_response(StatusCode::BAD_REQUEST, "invalid rewrite target");
         }
     }
     let path = path.as_str();
@@ -1799,25 +2171,22 @@ async fn dispatch_core(
     }
 
     if let Some(root_slot) = static_root_slot_for_route(state, route_idx) {
-        if let Some(ctx) = fpc_miss {
-            return fpc_bypassed!(
-                static_dispatch_fpc_fill(
-                    state,
-                    method,
-                    root_slot,
-                    path,
-                    request_headers,
-                    materialization_budget_bytes,
-                    scheme,
-                    uri.query(),
-                    uri.authority().map(|a| a.as_str()).or(host.as_deref()),
-                    local_port,
-                    ctx,
-                )
-                .await
-            );
-        }
-        return fpc_bypassed!(
+        let response = if let Some(ctx) = fpc_miss {
+            static_dispatch_fpc_fill(
+                state,
+                method,
+                root_slot,
+                path,
+                request_headers,
+                materialization_budget_bytes,
+                scheme,
+                uri.query(),
+                uri.authority().map(|a| a.as_str()).or(host.as_deref()),
+                local_port,
+                ctx,
+            )
+            .await
+        } else {
             static_dispatch_maybe_cached(
                 state,
                 scheme,
@@ -1832,7 +2201,8 @@ async fn dispatch_core(
                 materialization_budget_bytes,
             )
             .await
-        );
+        };
+        return fpc_bypassed!(response);
     }
 
     // WC2E: FPC fill for proxy (NG-15 keys/bypass/vary live in the FPC gate).
@@ -1892,6 +2262,7 @@ async fn dispatch_core(
                     &uri,
                     fcgi_script_path.as_deref(),
                     &remote_addr,
+                    scheme,
                     request_headers,
                     fcgi_body,
                     ctx,
@@ -1909,6 +2280,7 @@ async fn dispatch_core(
         host.as_deref(),
         fcgi_script_path.as_deref(),
         &remote_addr,
+        scheme,
         request_headers.to_vec(),
         fcgi_body,
     )
@@ -2022,6 +2394,7 @@ struct FcgiHttpContext<'a> {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     remote_addr: &'a str,
+    scheme: &'static str,
 }
 
 /// Plan 08 PR5-B1-real/PR5-B2: execute FastCGI backend and return materialized outcome.
@@ -2098,7 +2471,10 @@ async fn execute_fastcgi_backend(
                 http.remote_addr,
                 default_port,
             ) {
-                Ok(request) => request,
+                Ok(mut request) => {
+                    request.scheme = http.scheme.to_string();
+                    request
+                }
                 Err(outcome) => {
                     return Some(fcgi_resolution_error_outcome(outcome));
                 }
@@ -2148,6 +2524,7 @@ async fn fastcgi_dispatch_fpc_fill(
     uri: &hyper::Uri,
     script_path: Option<&str>,
     remote_addr: &str,
+    scheme: &'static str,
     request_headers: &[(String, String)],
     body: Vec<u8>,
     ctx: crate::fpc_lookup::FpcMissContext,
@@ -2159,6 +2536,7 @@ async fn fastcgi_dispatch_fpc_fill(
         headers: request_headers.to_vec(),
         body,
         remote_addr,
+        scheme,
     };
 
     // HEAD must not populate (or overwrite) a GET representation.
@@ -2266,6 +2644,7 @@ async fn fastcgi_dispatch_maybe_cached(
     host: Option<&str>,
     script_path: Option<&str>,
     remote_addr: &str,
+    scheme: &'static str,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
 ) -> Option<Response<BoxBody>> {
@@ -2275,6 +2654,18 @@ async fn fastcgi_dispatch_maybe_cached(
     };
     let pool_id = *pool_id;
 
+    // HTTP/2 carries :authority in the URI, not as a Host field. FastCGI needs
+    // Host for HTTP_HOST and WordPress admin/login absolute URLs.
+    let mut headers = headers;
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("host"))
+    {
+        if let Some(host) = host {
+            headers.push(("Host".to_string(), host.to_string()));
+        }
+    }
+
     let http = FcgiHttpContext {
         method,
         uri,
@@ -2282,6 +2673,7 @@ async fn fastcgi_dispatch_maybe_cached(
         headers: headers.clone(),
         body: body.clone(),
         remote_addr,
+        scheme,
     };
 
     let Some(policy) = state.snapshot.cache_policy_for_route(route_idx) else {
@@ -2484,11 +2876,14 @@ fn static_dispatch_range_headers_from_pairs(headers: &[(String, String)]) -> Vec
 ///
 /// Uses early Content-Length reject + incremental frames (SEC-PROXY-001 collector).
 /// Never `BodyExt::collect()` first — that waits for a full declared length.
-async fn collect_request_body_bounded(
+async fn collect_request_body_bounded<B>(
     headers: &hyper::HeaderMap,
-    body: Incoming,
+    body: B,
     limit: usize,
-) -> Result<Vec<u8>, StatusCode> {
+) -> Result<Vec<u8>, StatusCode>
+where
+    B: http_body::Body<Data = Bytes> + Unpin,
+{
     use crate::server::proxy_request_body::{
         collect_proxy_request_body_bounded, parse_proxy_request_content_length,
         ProxyRequestBodyReadError,
@@ -2891,6 +3286,26 @@ async fn static_dispatch_maybe_cached(
     request_headers: &[(String, String)],
     materialization_budget_bytes: Option<u64>,
 ) -> Response<BoxBody> {
+    // H-01: never consult a cached static representation for a sensitive
+    // request path. The static service owns the final route-relative decision;
+    // this guard prevents a pre-existing cache entry from bypassing it.
+    if exyonq_mod_static::request_path_may_be_sensitive(request_path) {
+        let mut response = static_dispatch_via_service(
+            method,
+            root_slot,
+            request_path,
+            request_headers.to_vec(),
+            materialization_budget_bytes,
+            scheme,
+            uri.query(),
+            uri.authority().map(|a| a.as_str()).or(host),
+            local_port,
+        )
+        .await;
+        apply_route_cache_headers(state, route_idx, &mut response);
+        return response;
+    }
+
     let Some(policy) = state.snapshot.cache_policy_for_route(route_idx) else {
         let mut response = static_dispatch_via_service(
             method,
@@ -3759,12 +4174,15 @@ async fn proxy_route_target(
         use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
 
         let declared_len = parse_proxy_request_content_length(req.headers());
-        match collect_proxy_request_body_bounded(
-            declared_len,
+        let throttle_cfg = state.config.modules.ratelimit.client.clone();
+        let body = crate::client_throttle::wrap_request_body(
             req.into_body(),
-            PROXY_MAX_REQUEST_BODY_BYTES,
-        )
-        .await
+            None,
+            client_ip,
+            &throttle_cfg,
+        );
+        match collect_proxy_request_body_bounded(declared_len, body, PROXY_MAX_REQUEST_BODY_BYTES)
+            .await
         {
             Ok(bytes) => Some(bytes),
             Err(ProxyRequestBodyReadError::TooLarge) => {
@@ -3780,7 +4198,7 @@ async fn proxy_route_target(
         }
     };
     if let Some(ref body_bytes) = body {
-        if let Some(reject) = waf_body_gate(
+        if let WafBodyGate::Reject(reject) = waf_body_gate(
             state,
             &http_method,
             host.as_deref(),
@@ -3901,11 +4319,137 @@ fn text_response(status: StatusCode, body: &str) -> Response<BoxBody> {
         .expect("valid response")
 }
 
-/// Cap055 / Cap067 wire-cheap 429 (Connection: close — fail closed).
-fn rate_limit_reject_response(retry_after_secs: u64) -> Response<BoxBody> {
-    let retry = retry_after_secs.max(1);
+fn accepts_html(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("accept")
+            && value
+                .split(',')
+                .any(|part| part.trim().to_ascii_lowercase().starts_with("text/html"))
+    })
+}
+
+/// EXY-16 / ADR-050: resolve a server-level `error_pages` target by matching
+/// the target path again against the same host/port. This lets a proxy or
+/// FastCGI error use a static error document, while the original status is
+/// preserved. The target must resolve to a static route; the rematch is not
+/// recursive, so an error page can never select itself as a new error page.
+async fn maybe_error_page(
+    state: &ServerState,
+    method: &Method,
+    path: &str,
+    host: Option<&str>,
+    local_port: Option<u16>,
+    request_headers: &[(String, String)],
+    response: Response<BoxBody>,
+) -> Response<BoxBody> {
+    if !matches!(response.status().as_u16(), 400..=599) || !accepts_html(request_headers) {
+        return response;
+    }
+    let Some((_, route)) = state
+        .route_index
+        .match_route_index_with_host_port(path, host, local_port)
+    else {
+        return response;
+    };
+    let Some(server) = state.config.servers.iter().find(|server| {
+        server
+            .routes
+            .iter()
+            .any(|candidate| candidate == &route.name)
+    }) else {
+        return response;
+    };
+    let Some(target) = server
+        .error_pages
+        .get(&response.status().as_u16().to_string())
+    else {
+        return response;
+    };
+    let Some((target_route_idx, target_route)) = state
+        .route_index
+        .match_route_index_with_host_port(target, host, local_port)
+    else {
+        return response;
+    };
+    if !server
+        .routes
+        .iter()
+        .any(|candidate| candidate == &target_route.name)
+    {
+        return response;
+    }
+    let Some(slot) = state
+        .snapshot
+        .static_slot_for_route_backend(target_route_idx)
+    else {
+        return response;
+    };
+    let Some(relative) = target.strip_prefix('/') else {
+        return response;
+    };
+    let relative = if slot.join_uri {
+        relative.to_string()
+    } else {
+        let prefix = slot.route_prefix.trim_end_matches('/');
+        if prefix.is_empty() {
+            relative.to_string()
+        } else {
+            let Some(rest) = target.strip_prefix(prefix) else {
+                return response;
+            };
+            rest.trim_start_matches('/').to_string()
+        }
+    };
+    if relative.is_empty()
+        || relative
+            .split('/')
+            .any(|part| part == ".." || part.is_empty())
+    {
+        return response;
+    }
+    let Ok(root) = std::fs::canonicalize(&slot.filesystem_root) else {
+        return response;
+    };
+    let Ok(path) = std::fs::canonicalize(root.join(relative)) else {
+        return response;
+    };
+    if !path.starts_with(&root) {
+        return response;
+    }
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return response;
+    };
+    if !metadata.is_file() || metadata.len() > 1_048_576 {
+        return response;
+    }
+    let Ok(bytes) = tokio::fs::read(&path).await else {
+        return response;
+    };
+    let body = if method == Method::HEAD {
+        bytes::Bytes::new()
+    } else {
+        bytes::Bytes::from(bytes)
+    };
+    let content_length = if method == Method::HEAD {
+        metadata.len()
+    } else {
+        body.len() as u64
+    };
     Response::builder()
-        .status(StatusCode::TOO_MANY_REQUESTS)
+        .status(response.status())
+        .header("content-type", "text/html; charset=utf-8")
+        .header("cache-control", "no-cache")
+        .header("content-length", content_length.to_string())
+        .body(Full::from(body).map_err(|never| match never {}).boxed())
+        .unwrap_or(response)
+}
+
+/// Cap055 / Cap067 wire-cheap 429 (Connection: close — fail closed).
+fn rate_limit_reject_response(retry_after_secs: u64, status: u16) -> Response<BoxBody> {
+    let retry = retry_after_secs.max(1);
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::TOO_MANY_REQUESTS);
+    Response::builder()
+        .status(status)
         .header(http::header::RETRY_AFTER, retry.to_string())
         .header(http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .header(http::header::CONNECTION, "close")
@@ -3914,7 +4458,52 @@ fn rate_limit_reject_response(retry_after_secs: u64) -> Response<BoxBody> {
                 .map_err(|never| match never {})
                 .boxed(),
         )
-        .expect("valid 429")
+        .expect("valid rate-limit response")
+}
+
+fn log_rate_limit(
+    action: &str,
+    route: &str,
+    level: &str,
+    status: u16,
+    retry_after_secs: u64,
+    dry_run: bool,
+) {
+    match level {
+        "info" => tracing::info!(
+            action,
+            route,
+            status,
+            retry_after_secs,
+            dry_run,
+            "rate limit"
+        ),
+        "notice" => tracing::info!(
+            action,
+            route,
+            status,
+            retry_after_secs,
+            dry_run,
+            nginx_log_level = "notice",
+            "rate limit"
+        ),
+        "warn" => tracing::warn!(
+            action,
+            route,
+            status,
+            retry_after_secs,
+            dry_run,
+            "rate limit"
+        ),
+        _ => tracing::error!(
+            action,
+            route,
+            status,
+            retry_after_secs,
+            dry_run,
+            "rate limit"
+        ),
+    }
 }
 
 fn waf_reject_response(reject: crate::waf::WafReject) -> Response<BoxBody> {
@@ -3931,6 +4520,9 @@ fn waf_reject_response(reject: crate::waf::WafReject) -> Response<BoxBody> {
     }
     if let Some(loc) = reject.location.as_deref() {
         builder = builder.header("location", loc);
+    }
+    if let Some(rule) = reject.rule_id.as_deref() {
+        builder = builder.header("x-waf-rule", rule);
     }
     let bytes = match reject.body {
         crate::waf::WafRejectBody::Static(b) => bytes::Bytes::from_static(b),
@@ -4088,13 +4680,27 @@ fn waf_header_gate(
     ) {
         crate::waf::WafHookResult::Continue => {
             if *method == Method::GET || *method == Method::HEAD {
-                waf_body_gate(state, method, host, path, query, headers, client_ip, b"")
+                match waf_body_gate(state, method, host, path, query, headers, client_ip, b"") {
+                    WafBodyGate::Reject(reject) => Some(reject),
+                    WafBodyGate::Continue { .. } => None,
+                }
             } else {
                 None
             }
         }
         crate::waf::WafHookResult::Reject(reject) => Some(waf_reject_response(reject)),
     }
+}
+
+/// Result of the host-side request-body WAF gate.
+///
+/// `Continue { inspection_limited: true }` means the documented
+/// `on_inspection_limit` policy allowed the request while the engine only
+/// inspected part of the body. Callers must surface it on the access log.
+#[derive(Debug)]
+enum WafBodyGate {
+    Continue { inspection_limited: bool },
+    Reject(Response<BoxBody>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4107,8 +4713,25 @@ fn waf_body_gate(
     headers: &dyn exyonq_waf_api::HeaderView,
     client_ip: std::net::IpAddr,
     body: &[u8],
-) -> Option<Response<BoxBody>> {
-    match crate::waf::inspect_request_body(
+) -> WafBodyGate {
+    // nginx rejects malformed percent escapes in XML bodies before CRS
+    // (920240-t4, `%1G`). Form bodies are URL-decoded by the application and
+    // must reach CRS (941110-t6 is a valid XSS block, 920240-t6 is benign).
+    let xml_body = headers
+        .get("content-type")
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .is_some_and(|value| {
+            let media_type = value.split(';').next().unwrap_or(value).trim();
+            media_type.eq_ignore_ascii_case("text/xml")
+                || media_type.eq_ignore_ascii_case("application/xml")
+        });
+    if xml_body && malformed_percent_encoding(body) {
+        return WafBodyGate::Reject(text_response(
+            StatusCode::BAD_REQUEST,
+            "malformed percent-encoding in request body",
+        ));
+    }
+    let (hook, inspection_limited) = crate::waf::inspect_request_body(
         state.waf.as_ref(),
         method.as_str(),
         host,
@@ -4120,13 +4743,34 @@ fn waf_body_gate(
         body,
         state.generation,
         state.waf_enforce,
-    ) {
-        crate::waf::WafHookResult::Continue => None,
-        crate::waf::WafHookResult::Reject(reject) => Some(waf_reject_response(reject)),
+    );
+    match hook {
+        crate::waf::WafHookResult::Continue => WafBodyGate::Continue { inspection_limited },
+        crate::waf::WafHookResult::Reject(reject) => {
+            WafBodyGate::Reject(waf_reject_response(reject))
+        }
     }
 }
 
-fn client_ip_from_xff(x_forwarded_for: Option<&HeaderValue>) -> std::net::IpAddr {
+fn malformed_percent_encoding(body: &[u8]) -> bool {
+    let mut index = 0;
+    while index < body.len() {
+        if body[index] == b'%' {
+            if index + 2 >= body.len()
+                || !body[index + 1].is_ascii_hexdigit()
+                || !body[index + 2].is_ascii_hexdigit()
+            {
+                return true;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    false
+}
+
+pub(crate) fn client_ip_from_xff(x_forwarded_for: Option<&HeaderValue>) -> std::net::IpAddr {
     crate::waf::parse_client_ip(x_forwarded_for.and_then(|v| v.to_str().ok()))
 }
 
@@ -4156,11 +4800,28 @@ fn effective_xff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, RouteConfig, RouteMatch, ServerConfig, ServerNames};
+    use crate::config::{
+        AppConfig, CachePolicyConfig, RouteConfig, RouteMatch, ServerConfig, ServerNames,
+    };
     use exyonq_mod_proxy::build_incoming_client;
     use hyper::Uri;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    #[test]
+    fn request_body_headers_are_detected() {
+        let mut headers = hyper::HeaderMap::new();
+        assert!(!request_has_body_headers(&headers));
+        headers.insert(CONTENT_LENGTH, HeaderValue::from_static("7"));
+        assert!(request_has_body_headers(&headers));
+        headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
+        assert!(!request_has_body_headers(&headers));
+        headers.insert(
+            hyper::header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
+        assert!(request_has_body_headers(&headers));
+    }
 
     #[test]
     fn post_is_not_served_as_static_get() {
@@ -4201,6 +4862,7 @@ mod tests {
             fastcgi: None,
             fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
@@ -4367,6 +5029,107 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    /// H-01: a pre-existing static cache entry keyed by a sensitive path must
+    /// never be served. The guard routes straight to the static service, whose
+    /// authoritative policy returns the opaque 404.
+    #[tokio::test]
+    async fn sensitive_static_path_bypasses_preexisting_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), b"SECRET=cache-leak").unwrap();
+        let mut site = route("site", "/");
+        site.root = Some(dir.path().to_path_buf());
+        site.cache = Some("micro".into());
+        let mut cache_policies = HashMap::new();
+        cache_policies.insert(
+            "micro".into(),
+            CachePolicyConfig {
+                name: "micro".into(),
+                ttl_seconds: 60,
+                max_object_bytes: 1024 * 1024,
+            },
+        );
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["site".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![site],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies,
+
+            maps: Default::default(),
+
+            modules: Default::default(),
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        let policy = state
+            .snapshot
+            .cache_policy_for_route(0)
+            .expect("cache policy");
+        let host = "cache-h01.invalid";
+        let key = build_storage_cache_key(CacheKeyParts {
+            range: String::new(),
+            site_id: 0,
+            namespace: 0,
+            backend_id: 0,
+            runtime_generation: state.generation,
+            policy_generation: policy.policy_generation,
+            route_idx: 0,
+            method: "GET".into(),
+            scheme: conn_scheme(&state).into(),
+            host: normalize_host(Some(host)),
+            path: "/.env".into(),
+            query: String::new(),
+            content_encoding: "identity".into(),
+            vary: String::new(),
+        });
+        global_response_cache().insert_entry(
+            key,
+            0,
+            0,
+            state.generation,
+            std::time::Duration::from_secs(60),
+            200,
+            vec![("content-type".into(), "text/plain".into())],
+            Bytes::from_static(b"SECRET=cache-leak"),
+            None,
+            exyonq_mod_static::STATIC_CACHE_NAMESPACE,
+            Arc::from(Vec::<String>::new()),
+            None,
+            NamespaceMetrics::NONE,
+        );
+        let response = static_dispatch_maybe_cached(
+            &state,
+            "http",
+            None,
+            0,
+            &Method::GET,
+            &Uri::from_static("/.env"),
+            Some(host),
+            0,
+            "/.env",
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"not found");
+    }
+
     #[tokio::test]
     async fn rewrite_static_via_backend_table() {
         // Cap035 contract: rewrite-only route rematches onto a distinct static route.
@@ -4420,6 +5183,134 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn patterned_rewrite_redirects_host_and_preserves_query() {
+        let mut www = route("www", "/");
+        www.r#match.host = Some("www.example.com".into());
+        www.rewrite = Some(exyonq_config_ir::RewriteConfig::Rule(
+            exyonq_config_ir::RewriteRuleConfig {
+                pattern: r"^/(.*)$".into(),
+                replacement: "https://example.com/$1".into(),
+                flag: exyonq_config_ir::RewriteFlagConfig::Permanent,
+                when: Vec::new(),
+            },
+        ));
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["www".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![www],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules: Default::default(),
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        let response = dispatch_core(
+            &state,
+            "http",
+            None,
+            &state.proxy_client,
+            &Method::GET,
+            &Uri::from_static("/assets/x.css?utm=1"),
+            Some("www.example.com".into()),
+            None,
+            &[],
+            None,
+            None,
+            &test_ops(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            response
+                .headers()
+                .get(hyper::header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("https://example.com/assets/x.css?utm=1")
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_max_age_cache_headers_emit_no_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), b"html").unwrap();
+        let mut site = route("site", "/");
+        site.root = Some(dir.path().to_path_buf());
+        site.index = Some("index.html".into());
+        let mut by_mime = std::collections::BTreeMap::new();
+        by_mime.insert(
+            "text/html".into(),
+            exyonq_config_ir::MimeCacheHeader {
+                max_age: 0,
+                immutable: false,
+            },
+        );
+        site.cache_headers = Some(exyonq_config_ir::CacheHeadersConfig { by_mime });
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["site".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![site],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules: Default::default(),
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        let response = dispatch_core(
+            &state,
+            "http",
+            None,
+            &state.proxy_client,
+            &Method::GET,
+            &Uri::from_static("/"),
+            None,
+            None,
+            &[],
+            None,
+            None,
+            &test_ops(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(hyper::header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-cache")
+        );
     }
 
     #[tokio::test]
@@ -4811,6 +5702,7 @@ mod tests {
             exyonq_config_ir::AuthRouteConfig {
                 realm: "restricted".into(),
                 user_file: htpasswd.display().to_string(),
+                auth_request: None,
             },
         );
         modules.mirror.routes.insert(
@@ -4920,6 +5812,7 @@ mod tests {
             exyonq_config_ir::AuthRouteConfig {
                 realm: "restricted".into(),
                 user_file: htpasswd.display().to_string(),
+                auth_request: None,
             },
         );
         let config = AppConfig {
@@ -4986,6 +5879,7 @@ mod tests {
             exyonq_config_ir::AuthRouteConfig {
                 realm: "r".into(),
                 user_file: "/dev/null".into(),
+                auth_request: None,
             },
         );
         modules
@@ -5016,7 +5910,16 @@ mod tests {
             exyonq_config_ir::SliceRouteConfig { size: 4096 },
         );
         let names = [
-            "site", "auth", "limited", "filtered", "mirrored", "sliced", "cached", "plain",
+            "site",
+            "auth",
+            "limited",
+            "filtered",
+            "mirrored",
+            "sliced",
+            "cached",
+            "plain",
+            "rewritten",
+            "redirected",
         ];
         let mut routes: Vec<RouteConfig> =
             names.iter().map(|n| route(n, &format!("/{n}"))).collect();
@@ -5033,6 +5936,15 @@ mod tests {
             },
         );
         routes[6].cache_headers = Some(exyonq_config_ir::CacheHeadersConfig { by_mime });
+        // Structural rules run only after route lookup in full dispatch; the
+        // wire path would serve its own 404 before a rewrite/redirect.
+        routes[8].rewrite = Some(exyonq_config_ir::RewriteConfig::Literal(
+            "/index.html".into(),
+        ));
+        routes[9].redirect = Some(exyonq_config_ir::RedirectConfig {
+            status: 301,
+            location: "https://example.com/".into(),
+        });
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
@@ -5067,6 +5979,8 @@ mod tests {
             (5, true),      // slice
             (6, true),      // cache_headers (EXY-01/EXY-05)
             (7, false),     // plain route stays wire-eligible
+            (8, true),      // structural rewrite
+            (9, true),      // structural redirect
         ] {
             assert_eq!(
                 state.route_requires_full_dispatch(idx),
@@ -5075,6 +5989,42 @@ mod tests {
                 names[idx]
             );
         }
+    }
+
+    #[tokio::test]
+    async fn server_error_pages_force_full_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut site = route("site", "/");
+        site.root = Some(dir.path().to_path_buf());
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["site".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::from([("404".into(), "/404.html".into())]),
+                proxy_protocol: None,
+            }],
+            routes: vec![site],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules: Default::default(),
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        assert!(
+            state.route_requires_full_dispatch(0),
+            "error_pages must keep the route on full dispatch"
+        );
     }
 
     /// AUDIT-D1/D2 (re-round): the keep-alive gate must normalize `Host:` the
@@ -5092,6 +6042,7 @@ mod tests {
             exyonq_config_ir::AuthRouteConfig {
                 realm: "r".into(),
                 user_file: "/dev/null".into(),
+                auth_request: None,
             },
         );
         let names = ["clean", "dirty"];
@@ -5246,6 +6197,7 @@ mod tests {
             exyonq_config_ir::AuthRouteConfig {
                 realm: "r".into(),
                 user_file: "/dev/null".into(),
+                auth_request: None,
             },
         );
         let config = AppConfig {
@@ -5290,6 +6242,7 @@ mod tests {
             exyonq_config_ir::AuthRouteConfig {
                 realm: "r".into(),
                 user_file: "/dev/null".into(),
+                auth_request: None,
             },
         );
         let fpc = exyonq_config_ir::FullPageCacheConfig {
@@ -5354,6 +6307,7 @@ mod tests {
             headers: Vec::new(),
             body: Vec::new(),
             remote_addr,
+            scheme: "http",
         }
     }
 
@@ -5407,17 +6361,28 @@ mod tests {
             .split("async fn handle_core_request_with_body")
             .nth(1)
             .expect("handle_core_request_with_body")
-            .split("\nasync fn dispatch_core(")
+            .split("\nasync fn dispatch_core_with_limit(")
             .next()
-            .expect("dispatch_core follows with_body");
+            .expect("dispatch_core_with_limit follows with_body");
         assert!(
-            with_body.contains("dispatch_core("),
-            "POST path must call dispatch_core after body collection"
+            with_body.contains("dispatch_core_with_limit("),
+            "POST path must call the shared dispatcher after body collection"
+        );
+        let shared = src
+            .split("async fn dispatch_core_with_limit(")
+            .nth(1)
+            .expect("dispatch_core_with_limit")
+            .split("\nasync fn dispatch_core_inner(")
+            .next()
+            .expect("dispatch_core_inner follows dispatch_core_with_limit");
+        assert!(
+            shared.contains("attach_outcome_hint(response, \"waf_body_limit\")"),
+            "shared dispatcher must attach the body-limit outcome marker"
         );
         let dispatch = src
-            .split("async fn dispatch_core(")
+            .split("async fn dispatch_core_inner(")
             .nth(1)
-            .expect("dispatch_core")
+            .expect("dispatch_core_inner")
             .split("\nasync fn apply_htaccess_adjustment_terminal")
             .next()
             .expect("dispatch_core body");
@@ -5518,6 +6483,45 @@ mod range_tests {
         assert_eq!(
             parse_single_range("bytes=0-9999", 1000),
             RangeOutcome::Single(0, 999)
+        );
+    }
+
+    #[test]
+    fn outcome_tracks_response_class() {
+        use crate::observability::attach_outcome_hint;
+        assert_eq!(
+            super::outcome_from_response(&super::text_response(
+                http::StatusCode::NOT_FOUND,
+                "not found"
+            )),
+            Some("not_found")
+        );
+        assert_eq!(
+            super::outcome_from_response(&super::text_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "boom"
+            )),
+            Some("server_error")
+        );
+        assert_eq!(
+            super::outcome_from_response(&super::text_response(
+                http::StatusCode::BAD_REQUEST,
+                "bad"
+            )),
+            Some("client_error")
+        );
+        assert_eq!(
+            super::outcome_from_response(&super::text_response(http::StatusCode::OK, "ok")),
+            Some("ok")
+        );
+        // Explicit WAF body-budget marker wins over the status class.
+        let limited = attach_outcome_hint(
+            super::text_response(http::StatusCode::OK, "ok"),
+            "waf_body_limit",
+        );
+        assert_eq!(
+            super::outcome_from_response(&limited),
+            Some("waf_body_limit")
         );
     }
 

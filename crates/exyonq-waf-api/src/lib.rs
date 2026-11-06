@@ -113,6 +113,11 @@ impl Default for InspectionLimits {
     }
 }
 
+/// Violation id used when a CRS-enabled engine rejects a request body that
+/// ModSecurity's body processor would not parse. The host maps this id to 400
+/// (modsecurity.conf 200002/200003); signature blocks stay 403.
+pub const RULE_ID_REQUEST_BODY_INVALID: &str = "EXY-REQBODY-001";
+
 /// Per-request mutable state for incremental body inspection.
 #[derive(Debug, Clone, Default)]
 pub struct BodyInspectionState {

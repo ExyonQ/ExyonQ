@@ -38,6 +38,33 @@ bash scripts/release/nfpm-package-linux.sh \
   --out-dir dist/packages
 ```
 
+## Old split units and custom control sockets
+
+The packaged unit uses `RuntimeDirectory=%p` and
+`EXYONQ_CONTROL_SOCKET=/run/%p/control.sock`. Units copied from 0.9.0 or
+older may still share `RuntimeDirectory=exyonq` and
+`/run/exyonq/control.sock`; two live units cannot own the same socket.
+
+`logrotate` now reads each live server's `EXYONQ_CONTROL_SOCKET` and
+`EXYONQ_CONFIG` from `/proc/<pid>/environ` (or `-c/--config` from its command
+line), so it reloads split units and custom socket paths with the matching
+config and without an extra logrotate stanza. That does **not** repair a
+socket bind collision. Migrate each old unit with a drop-in:
+
+```ini
+# /etc/systemd/system/exyonq-http.service.d/10-runtime-directory.conf
+[Service]
+RuntimeDirectory=
+RuntimeDirectory=%p
+Environment=EXYONQ_CONTROL_SOCKET=/run/%p/control.sock
+ReadWritePaths=/run/%p
+```
+
+Then run `systemctl daemon-reload` and restart that unit. For a template unit,
+use `RuntimeDirectory=exyonq-%i`,
+`EXYONQ_CONTROL_SOCKET=/run/exyonq-%i/control.sock` and
+`ReadWritePaths=/run/exyonq-%i` instead of `%p`.
+
 ## Optional L2 Redis coordination (WC7D)
 
 Examples (Redis not bundled; private network only):
@@ -100,7 +127,7 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.7.0 \
+  --build-arg EXYONQ_VERSION=0.9.1 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
@@ -108,11 +135,26 @@ docker buildx build -f packaging/docker/Dockerfile \
 # Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.7.0 \
+  --build-arg EXYONQ_VERSION=0.9.1 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t ghcr.io/exyonq/exyonq:0.7.0 .
+  -t ghcr.io/exyonq/exyonq:0.9.1 .
 ```
+
+## Docker image bases
+
+Every image ExyonQ builds uses a Wolfi/Chainguard base. Oracle/reference images
+pulled only by benchmarks (NGINX, ModSecurity/CRS, upstream PHP) are external
+and are not rebuilt by ExyonQ.
+
+| Image | Dockerfile | Base | Status (2026-11-04) |
+| --- | --- | --- | --- |
+| `exyonq` | `packaging/docker/Dockerfile` | `chainguard/rust:latest-dev` (build), `chainguard/glibc-dynamic` (runtime) | built and smoke-tested |
+| `exyonq-wordpress` | `packaging/docker/wordpress/Dockerfile` | `chainguard/wolfi-base` + Wolfi PHP 8.5.12 | built; install/login E2E PASS |
+| `exyonq-bench/server` | `benchmarks/docker/Dockerfile.exyonq` | `chainguard/rust` (build), `chainguard/wolfi-base` (runtime) | built; serves benchmark target |
+| `exyonq-bench/tls` | `benchmarks/docker/Dockerfile.bench-tls` | `chainguard/wolfi-base` | built |
+| `exyonq-bench/runner` | `benchmarks/docker/Dockerfile.bench-runner` | `chainguard/rust` (build), `chainguard/wolfi-base` (runtime) | built; `rewrk` real run PASS |
+| `exyonq-bench/upstream` | `benchmarks/docker/Dockerfile.upstream` | `chainguard/rust` (build), `chainguard/wolfi-base` (runtime) | **open**: `tools/upstream/` absent from checkout and public history |
 
 ## CI
 

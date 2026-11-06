@@ -32,6 +32,7 @@ fn r(name: &str, m: RouteMatch) -> RouteConfig {
         fastcgi: None,
         fastcgi_script_root: None,
         htaccess: Default::default(),
+        access: None,
         cache: None,
         fallback_rewrite: None,
         try_uri: None,

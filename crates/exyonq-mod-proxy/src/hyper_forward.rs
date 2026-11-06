@@ -307,6 +307,10 @@ pub async fn attempt_forward_empty_body_with_headers(
         if name.eq_ignore_ascii_case("x-forwarded-for")
             || name.eq_ignore_ascii_case("x-forwarded-proto")
             || name.eq_ignore_ascii_case("host")
+            // This path always sends Empty body: forwarding the client's
+            // Content-Length would make the upstream wait for bytes that are
+            // intentionally absent (GET/HEAD with a body takes the framed path).
+            || name.eq_ignore_ascii_case("content-length")
         {
             continue;
         }

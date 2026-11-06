@@ -38,13 +38,18 @@ Cap035 supports only a literal absolute-path `rewrite = "/target"` with a single
 
 Empty `when` → always apply when pattern matches.
 
+`redirect`/`permanent` append the original query string when the expanded
+replacement has no `?` of its own, matching nginx/Apache behavior. Internal
+`last`/`break` targets remain absolute paths and never carry a query.
+
 ### Compilation
 
 Pattern and `when.path` / `when.query` compile at plan build (with match.regex). Never on the hot path. Pattern length ≤ 256.
 
 ### Replacement
 
-Only `$1`…`$9` and `$$`. No named captures, no nginx variables (`$uri`, `$host`). After expansion:
+`$1`…`$9`, `$$`, and the narrow ADR-062 allowlist `$uri` / `$host`. No named
+captures or other nginx variables. After expansion:
 
 - `last`/`break`: must be a Cap035-valid absolute path (no `?`/`#`/authority)  
 - `redirect`/`permanent`: Cap036 location rules (absolute path or absolute URL; no CTL)

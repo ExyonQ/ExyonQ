@@ -381,7 +381,7 @@ LINUX: Netcup amd64 PASS; Oracle arm64 PASS
 PERFORMANCE: no material unexplained regression; raw evidence retained;
              hot-path dep deltas explicitly accepted
 
-OCI: amd64/arm64/multi-arch smoke PASS when packaging path touched;
+OCI: amd64/arm64/multi-arch smoke PASS when packaging path touched;  # HISTORICAL / NON_AUTHORITATIVE
      no latest; no publication until later express authorize
 
 RELEASE: signing manual outside Cursor; tag/release/GHCR need express

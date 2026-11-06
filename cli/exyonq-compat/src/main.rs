@@ -15,7 +15,7 @@
  */
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use exyonq_compat_common::MigrationReport;
+use exyonq_compat_common::{CompatLevel, CompatNote, MigrationReport};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -36,6 +36,15 @@ enum Commands {
     Migrate {
         #[arg(long, value_enum)]
         from: SourceFormat,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        report: PathBuf,
+    },
+    /// Translate one OpenLiteSpeed perClientConnLimit block into a TOML fragment.
+    OlsThrottle {
         #[arg(long)]
         input: PathBuf,
         #[arg(long)]
@@ -66,7 +75,65 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Commands::OlsThrottle { input, out, report } => {
+            match ols_throttle_command(&input, &out, &report) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("error: {err:#}");
+                    ExitCode::from(1)
+                }
+            }
+        }
     }
+}
+
+fn ols_throttle_command(input: &Path, out: &Path, report_path: &Path) -> anyhow::Result<()> {
+    let result = exyonq_compat_openlitespeed::translate_file(input);
+    let (toml_result, notes, unsupported) = match result {
+        Ok(translation) => (
+            Ok(translation.toml),
+            vec![CompatNote {
+                level: CompatLevel::Migrated,
+                message: format!(
+                    "translated perClientConnLimit fields: {}",
+                    translation.fields.join(", ")
+                ),
+            }],
+            vec![],
+        ),
+        Err(err) => (
+            Err(anyhow::anyhow!(err.to_string())),
+            vec![],
+            vec![err.to_string()],
+        ),
+    };
+    let migration_report = MigrationReport {
+        source: "openlitespeed".into(),
+        notes,
+        unsupported,
+    };
+    let report_output = if report_path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+        migration_report.render_json()?
+    } else {
+        migration_report.render_markdown()
+    };
+    std::fs::write(report_path, report_output)
+        .with_context(|| format!("failed writing report {}", report_path.display()))?;
+    let toml_output = toml_result.with_context(|| {
+        format!(
+            "OLS throttle migration refused (report written to {})",
+            report_path.display()
+        )
+    })?;
+    std::fs::write(out, toml_output)
+        .with_context(|| format!("failed writing output {}", out.display()))?;
+    println!(
+        "translated {} -> {} (report: {})",
+        input.display(),
+        out.display(),
+        report_path.display()
+    );
+    Ok(())
 }
 
 fn migrate_command(

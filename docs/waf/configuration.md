@@ -50,6 +50,10 @@ burst = 20
 | `mode` | string | `"off"` | `off` \| `rate_limit` \| `challenge` | Abuse gate mode |
 | `requests_per_second` | u32 | `10` | `>= 1` when mode ≠ `off` | Token bucket refill |
 | `burst` | u32 | `20` | `>= 1` when mode ≠ `off` | Token bucket capacity |
+| `provider` | string | `"native"` | `native` \| `recaptcha` \| `hcaptcha` | Challenge widget/provider |
+| `site_key` | string? | none | Required for non-native provider | Public widget site key |
+| `secret_env` | string? | none | Required for non-native provider | Env var holding the provider secret |
+| `verify_url` | string? | provider default | Absolute `http(s)` URI | Provider siteverify endpoint |
 
 Rationale: one process-global IP-keyed policy. Multiple overlapping abuse policies
 would have undefined same-IP precedence.
@@ -57,6 +61,34 @@ would have undefined same-IP precedence.
 Implementation: composition root `SyncTokenBucket` (`modules/ratelimit`).
 Rate-limit response: HTTP **429** with **`Retry-After`** from
 `SyncTokenBucket::retry_after_secs` (minimum 1 second).
+
+Abuse is independent of the signature `mode`: `monitor` still enforces the
+configured Challenge/429. It is evaluated once per request.
+
+### CAPTCHA providers
+
+`provider = "native"` keeps the self-hosted HMAC-PoW page. `recaptcha` uses the
+reCAPTCHA v2 checkbox widget; `hcaptcha` uses hCaptcha. Both require `site_key`
+and `secret_env`; the secret is read from that environment variable at verification
+time and must never be put in TOML. `verify_url` defaults to the provider’s
+siteverify endpoint and may be HTTP only for local tests.
+
+A provider page still performs the native PoW, waits for the widget token, and the
+server validates HMAC/PoW/replay before calling the provider. Provider failure,
+timeout, non-200 or malformed JSON returns `403` without a grant cookie. reCAPTCHA
+v3 is not implemented.
+
+```toml
+[waf.abuse]
+mode = "challenge"
+provider = "recaptcha"
+site_key = "public-site-key"
+secret_env = "RECAPTCHA_SECRET"
+```
+
+No-JavaScript clients receive the explicit `<noscript>` 403 page; no alternate
+access is granted. Details: [challenge.md](./challenge.md) and
+[captcha-provider.md](./captcha-provider.md).
 
 ## `[[waf.ruleset]]`
 
@@ -68,6 +100,10 @@ Repeatable. Duplicate `id` → config reject.
 | `enabled` | bool | `true` | Disabled ruleset rules are skipped |
 | `builtins` | table (optional) | — | Optional detector toggles (see rules.md) |
 | `rule` / `[[waf.ruleset.rule]]` | array | empty | Custom signature rules |
+| `rules_file` | string? | none | ModSecurity/CRS `SecRule` file to import (not full parity) |
+| `inbound_threshold` | integer? | `5` | CRS inbound anomaly threshold |
+| `detection_only` | bool | `false` | CRS `DetectionOnly` semantics for this ruleset |
+| `disabled_rule_ids` | integer[] | empty | CRS rule IDs skipped by this ruleset |
 
 When WAF is enabled and no ruleset supplies `builtins`, the engine uses the
 **default built-in detector pack** (SQL/XSS/path/cmd Block; header/bot Log).

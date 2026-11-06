@@ -28,8 +28,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: verify no private paths
         run: bash scripts/verify-no-private-paths.sh
-      - name: private-material-zero
-        run: bash scripts/security/scan-private-material.sh --git-tree --repo .
+      - name: private-material-zero (publication set)
+        run: bash scripts/security/scan-private-material.sh --publication --repo .
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
           toolchain: 1.99.1
@@ -41,10 +41,31 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: validate published TOML examples
+        run: bash scripts/gates/config-examples-validate.sh
       - name: install nextest
         uses: taiki-e/install-action@599db1c4ae1189bda3d02a890b7ede4888c9d8f5 # nextest
       - name: test
         run: cargo nextest run --workspace --exclude exyonq-wasm-host --locked
+
+  static-linux-arm64:
+    # EXY-07: run the Linux-only sendfile/admission tests on native ARM64.
+    # The macOS job skips them by cfg(target_os = "linux").
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: install nextest
+        uses: taiki-e/install-action@599db1c4ae1189bda3d02a890b7ede4888c9d8f5 # nextest
+      - name: static module tests (native ARM64)
+        run: cargo nextest run -p exyonq-mod-static --locked
 
   wasm-host-check:
     if: github.actor != 'dependabot[bot]'

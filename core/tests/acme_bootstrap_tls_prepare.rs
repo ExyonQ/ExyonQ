@@ -22,7 +22,23 @@
 use exyonq_core::config::AppConfig;
 use exyonq_core::reload::prepare_tls_acceptor;
 use exyonq_mod_tls::TlsSessionCache;
+use std::path::Path;
 use tempfile::TempDir;
+
+/// LibreSSL (the default `openssl` on macOS) emits an X.509 v1 certificate
+/// here; rustls correctly rejects it as `UnsupportedCertVersion`. Use OpenSSL 3
+/// for the ephemeral fixture, matching the TLS crate's own test helper.
+fn openssl_bin() -> &'static str {
+    for cand in [
+        "/opt/homebrew/opt/openssl@3/bin/openssl",
+        "/usr/local/opt/openssl@3/bin/openssl",
+    ] {
+        if Path::new(cand).is_file() {
+            return cand;
+        }
+    }
+    "openssl"
+}
 
 fn config_with_tls(cert: &str, key: &str, acme: &str) -> AppConfig {
     format!(
@@ -89,7 +105,7 @@ fn acme_enabled_existing_pair_builds_acceptor() {
     let cert = dir.path().join("cert.pem");
     let key = dir.path().join("key.pem");
     exyonq_mod_tls::install_rustls_provider();
-    let status = std::process::Command::new("openssl")
+    let status = std::process::Command::new(openssl_bin())
         .args(["req", "-x509", "-newkey", "rsa:2048", "-keyout"])
         .arg(&key)
         .arg("-out")

@@ -1291,11 +1291,10 @@ fn htaccess_explain(path: &Path, format: DiagFormat) -> ExitCode {
         let name = d.name.to_ascii_lowercase();
         let class = match name.as_str() {
             "directoryindex" | "redirect" | "rewriteengine" | "options" => "SUPPORTED",
-            "rewriterule" | "rewritecond" => "SUPPORTED_LIMITED",
-            "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authtype"
-            | "authuserfile" | "authname" | "authgroupfile" | "php_value" | "php_flag" => {
-                "FORBIDDEN"
-            }
+            "rewriterule" | "rewritecond" | "authtype" | "authname" | "authuserfile"
+            | "require" => "SUPPORTED_LIMITED",
+            "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authgroupfile"
+            | "php_value" | "php_flag" => "FORBIDDEN",
             "header" | "expiresactive" | "expiresbytype" | "expiresdefault" => "UNSUPPORTED",
             n if n.starts_with('<') => "UNSUPPORTED",
             _ => "UNSUPPORTED",

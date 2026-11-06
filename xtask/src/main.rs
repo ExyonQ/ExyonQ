@@ -204,6 +204,11 @@ fn ci() -> anyhow::Result<()> {
             ".",
         ],
     )?;
+    run_in(
+        root.clone(),
+        "bash",
+        &["scripts/gates/config-examples-validate.sh"],
+    )?;
     run("cargo", &["fmt", "--all", "--", "--check"])?;
     run(
         "cargo",

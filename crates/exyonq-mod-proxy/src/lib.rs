@@ -74,8 +74,8 @@ pub use headers::{
 };
 pub use health::append_health_prometheus;
 pub use hyper_client::{
-    build_incoming_client, get_empty_body_client, hyper_client_config, set_hyper_client_config,
-    HyperClientConfig, ProxyClient,
+    build_incoming_client, get_empty_body_client, hyper_client_config, post_body_client,
+    set_hyper_client_config, HyperClientConfig, ProxyClient,
 };
 pub use hyper_forward::{
     bad_gateway, bad_request, forward_get_streaming, gateway_timeout, response_is_event_stream,

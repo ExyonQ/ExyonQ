@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# EXYONQ-SEC-PRIVATE-MATERIAL-ZERO: fail-closed staged-index gate.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+exec bash "$ROOT/scripts/security/scan-private-material.sh" --git-index --repo "$ROOT"

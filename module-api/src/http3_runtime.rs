@@ -49,6 +49,13 @@ pub trait Http3ConnectionLifecycle: Send + Sync {
 
     /// Admit one QUIC connection after transport handshake (POST_HANDSHAKE policy).
     fn try_enter_connection(&self) -> Result<Self::Lease, Http3DrainRejected>;
+
+    /// OL-03: admit one QUIC connection for a client address. Providers call
+    /// this variant so the core can apply per-client connection limits; the
+    /// default preserves admission-only implementations.
+    fn try_enter_connection_for(&self, _peer_ip: &str) -> Result<Self::Lease, Http3DrainRejected> {
+        self.try_enter_connection()
+    }
 }
 
 /// Core-owned dispatch — H3 runtime calls this; no routing/policy in mod-http3.

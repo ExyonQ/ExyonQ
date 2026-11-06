@@ -1,6 +1,6 @@
 # Compatibility scope V1
 
-**Status:** active for ExyonQ 0.4.11 cut  
+**Status:** active for the ExyonQ 0.9.x cut
 **Rule:** offline importers only — ExyonQ never reads Apache/NGINX config at runtime.
 
 ## Declared sources
@@ -9,6 +9,7 @@
 | --- | --- | --- |
 | NGINX | `exyonq-compat-nginx` / `exyonq-compat migrate --from nginx` | Tier1/2 + static/proxy/fastcgi MVPs |
 | Apache httpd | `exyonq-compat-apache` / `exyonq-compat migrate --from apache` | **Equivalent map** (static + redirect + TLS + proxy + PHP-FPM) |
+| OpenLiteSpeed (throttle fragment) | `exyonq-compat-openlitespeed` / `exyonq-compat ols-throttle` | OL-03: one `perClientConnLimit` block → `[modules.ratelimit.client]`; unknown/multiple blocks fail closed; not a full OLS importer |
 
 ## Apache equivalent importer (Gate A precursor — not Gate A)
 
@@ -25,11 +26,20 @@ In scope for successful TOML emit when product IR already exists:
 - Authority-only `ProxyPass` → `[[upstream]]` + proxy route
 - `ProxyPassReverse <local-path> <remote-url>` → `[[route.location_rewrite]]` (F3-R20: `Location`/`Content-Location`/`URI`)
 - PHP-FPM via `ProxyPassMatch` / `FilesMatch`+`SetHandler` → `[[fcgi_pool]]` + fastcgi route
+- `Require ip` / `Require method` / `Require all granted|denied` / `Require not ip`, plus common `Order`/`Allow`/`Deny` forms → `[[route]] access`; exact order that cannot be represented is rejected
+
+## NGINX access ACL
+
+Server/location `allow` and `deny`, including `all`, map to ordered
+`[[route]] access.rules`; nginx first-match ordering is preserved.
+`satisfy any` is not representable and fails closed.
 
 Still **REJECTED_UNSUPPORTED** (blocks clean migration until product grows):
 
-- `ErrorDocument`, `AuthType` / `Require`
+- `ErrorDocument`; `Require env/group/expr`, `Require` beyond
+  `valid-user`/`ip`/`method`/`all`/`not ip`, and `Satisfy any`
 - Advanced rewrite: `RewriteCond [OR]` / `!` / unlisted vars / flags `QSA|PT|END|…`; `RedirectMatch`
+- `satisfy any` and arbitrary cross-module directive ordering remain out of scope
 - `ProxyPass` with upstream path, balancers, variables
 - `Include` / `IncludeOptional`
 - Unknown directives (never silent)

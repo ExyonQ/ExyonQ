@@ -435,7 +435,7 @@ pub(crate) fn evaluate_wire_waf(
         // phase 2 is skipped on the wire proxy fast path.
         let method = parse_wire_method(head);
         if method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD") {
-            return crate::waf::inspect_request_body(
+            let (hook, _inspection_limited) = crate::waf::inspect_request_body(
                 state.waf.as_ref(),
                 method,
                 host,
@@ -448,6 +448,7 @@ pub(crate) fn evaluate_wire_waf(
                 generation,
                 state.waf_enforce,
             );
+            return hook;
         }
     }
     decision
@@ -553,6 +554,24 @@ enum ProxyWireOutcome<S> {
 }
 
 /// Wire proxy fast path; returns `Fallback` when Hyper must complete the request.
+fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<Vec<u8>> {
+    // The wire view has no request body. POST/PUT must reach Hyper so body
+    // rules (944300, 920120, …) run against their real payload; applying the
+    // header-only wire view to them caused broad false 403s.
+    if !(head.starts_with(b"GET ") || head.starts_with(b"HEAD ")) {
+        return None;
+    }
+    match evaluate_wire_waf(
+        &ctx.state,
+        ctx.pinned_generation,
+        head,
+        &ctx.x_forwarded_for,
+    ) {
+        crate::waf::WafHookResult::Reject(reject) => Some(format_waf_reject_http(&reject)),
+        crate::waf::WafHookResult::Continue => None,
+    }
+}
+
 async fn serve_proxy_wire<S>(
     state: &Arc<ServerState>,
     generation: u64,
@@ -748,6 +767,29 @@ pub(crate) struct WireDispatchContext {
     /// Port the connection was accepted on (listener port) — NGINX
     /// `port_in_redirect` semantics. `None` when unknown.
     pub local_port: Option<u16>,
+    /// OL-03: one connection-level throttle slot. Passed to Hyper when this
+    /// wire path falls back; non-Hyper terminal owners keep it until done.
+    pub(crate) client_guard: Option<crate::client_throttle::ClientGuard>,
+}
+
+/// Acquire the connection slot once, before serving any request on the socket.
+/// Returns `false` when the connection must be dropped without a response.
+fn ensure_connection_guard(ctx: &mut WireDispatchContext) -> bool {
+    if ctx.client_guard.is_some() {
+        return true;
+    }
+    let ip = crate::server::handler::client_ip_from_xff(Some(&ctx.x_forwarded_for));
+    match crate::client_throttle::acquire_connection(&ctx.state.config.modules.ratelimit.client, ip)
+    {
+        Ok(guard) => {
+            ctx.client_guard = guard;
+            true
+        }
+        Err(decision) => {
+            debug!(?decision, %ip, "per-client connection limit refused connection");
+            false
+        }
+    }
 }
 
 enum WirePlan<S> {
@@ -950,8 +992,11 @@ pub(crate) async fn dispatch_tcp_prefixed_inner(
     stream: TcpStream,
     head: Bytes,
     rest: Bytes,
-    ctx: WireDispatchContext,
+    mut ctx: WireDispatchContext,
 ) {
+    if !ensure_connection_guard(&mut ctx) {
+        return;
+    }
     if ctx
         .state
         .modules_require_hyper_for_request_head(head.as_ref())
@@ -966,6 +1011,7 @@ pub(crate) async fn dispatch_tcp_prefixed_inner(
             ctx.ops,
             ctx.scheme,
             ctx.local_port,
+            ctx.client_guard,
         )
         .await;
         return;
@@ -1025,6 +1071,15 @@ async fn serve_hyper_fallback<S>(stream: S, head: Bytes, rest: Bytes, ctx: WireD
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Hyper's Uri drops the fragment from the request-target. Check the raw
+    // head before replaying it; otherwise 920610/920100 cannot see `#tag`.
+    if let Some(bytes) = wire_waf_reject_bytes(&ctx, head.as_ref()) {
+        let mut stream = stream;
+        if let Err(err) = stream.write_all(&bytes).await {
+            warn!(%err, "waf reject response write failed");
+        }
+        return;
+    }
     let prefixed = PrefixedStream::new(io::concat_bytes(head, rest), stream);
     super::serve_hyper(
         prefixed,
@@ -1034,6 +1089,7 @@ where
         ctx.ops,
         ctx.scheme,
         ctx.local_port,
+        ctx.client_guard,
     )
     .await;
 }
@@ -1049,10 +1105,13 @@ pub(crate) async fn dispatch_tcp(mut stream: TcpStream, ctx: WireDispatchContext
     .await;
 }
 
-pub(crate) async fn dispatch_tcp_inner(stream: TcpStream, ctx: WireDispatchContext) {
-    if ctx.state.hyper_required_for_modules()
-        || ctx.state.gunzip_configured()
-        || ctx.ops.is_draining()
+pub(crate) async fn dispatch_tcp_inner(stream: TcpStream, mut ctx: WireDispatchContext) {
+    if !ensure_connection_guard(&mut ctx) {
+        return;
+    }
+    let waf_wire = waf_wire_materialization_active(&ctx.state);
+    if ctx.ops.is_draining()
+        || ((ctx.state.hyper_required_for_modules() || ctx.state.gunzip_configured()) && !waf_wire)
     {
         super::serve_hyper(
             stream,
@@ -1062,6 +1121,7 @@ pub(crate) async fn dispatch_tcp_inner(stream: TcpStream, ctx: WireDispatchConte
             ctx.ops,
             ctx.scheme,
             ctx.local_port,
+            ctx.client_guard,
         )
         .await;
         return;
@@ -1088,10 +1148,13 @@ where
     .await;
 }
 
-pub(crate) async fn dispatch_stream_inner<S>(stream: S, ctx: WireDispatchContext)
+pub(crate) async fn dispatch_stream_inner<S>(stream: S, mut ctx: WireDispatchContext)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    if !ensure_connection_guard(&mut ctx) {
+        return;
+    }
     if ctx.state.hyper_required_for_modules() || ctx.ops.is_draining() {
         super::serve_hyper(
             stream,
@@ -1101,6 +1164,7 @@ where
             ctx.ops,
             ctx.scheme,
             ctx.local_port,
+            ctx.client_guard,
         )
         .await;
         return;
@@ -1299,6 +1363,7 @@ mod tests {
             fastcgi: None,
             fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
         };
         let api = RouteConfig {
@@ -1337,6 +1402,7 @@ mod tests {
             fastcgi: None,
             fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
         };
         let mut upstreams = HashMap::new();
@@ -1780,6 +1846,7 @@ mod tests {
                 pinned_generation,
                 scheme: "http",
                 local_port: None,
+                client_guard: None,
             };
             super::dispatch_tcp(stream, ctx).await;
         });
@@ -1842,6 +1909,7 @@ mod tests {
                     local_port: None,
                     ops: Arc::clone(&ops),
                     pinned_generation: state_accept.generation,
+                    client_guard: None,
                 };
                 tokio::spawn(async move {
                     super::dispatch_tcp(stream, ctx).await;
@@ -1935,6 +2003,7 @@ mod tests {
                 pinned_generation,
                 scheme: "http",
                 local_port: None,
+                client_guard: None,
             };
             super::dispatch_tcp(stream, ctx).await;
         });
@@ -2015,6 +2084,7 @@ mod tests {
                     local_port: None,
                     ops: Arc::clone(&ops),
                     pinned_generation: state_accept.generation,
+                    client_guard: None,
                 };
                 tokio::spawn(async move {
                     super::dispatch_tcp(stream, ctx).await;
@@ -2194,6 +2264,7 @@ mod ws_tunnel_tests {
             fastcgi: None,
             fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
             cache_headers: None,
             fallback_rewrite: None,
@@ -2319,6 +2390,7 @@ mod ws_tunnel_tests {
                     local_port: stream.local_addr().ok().map(|a| a.port()),
                     ops: Arc::clone(&ops),
                     pinned_generation: state.generation,
+                    client_guard: None,
                 };
                 tokio::spawn(async move {
                     dispatch_tcp(stream, ctx).await;
@@ -2593,8 +2665,8 @@ mod ws_tunnel_tests {
         use crate::waf::compute_wire_inspection_active;
         // Pure WAF-off P1: no signatures, no enforce+abuse → skip materialization.
         assert!(!compute_wire_inspection_active(false, false, false));
-        assert!(!compute_wire_inspection_active(false, true, false));
-        // enabled=false but abuse+enforce still requires wire inspect (pre-ARCH-002 behavior).
+        // Abuse is enforced independently of signature enforce/monitor mode.
+        assert!(compute_wire_inspection_active(false, true, false));
         assert!(compute_wire_inspection_active(false, true, true));
         // Monitor/Block signatures active regardless of enforce.
         assert!(compute_wire_inspection_active(true, false, false));

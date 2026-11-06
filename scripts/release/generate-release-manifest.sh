@@ -21,7 +21,7 @@ Usage:
     [--test-fixture] \
     [--force]
 
-Without --test-fixture, only versions 0.4.0–0.4.11, 0.7.0 are accepted.
+Without --test-fixture, only versions 0.4.0–0.4.11, 0.7.0, 0.9.0 and 0.9.1 are accepted.
 With --test-fixture, approved fixture versions only
 (0.0.0-p14sign-fixture or 0.4.0-test.p14sign5).
 Legacy 0.3.x / 0.2.x / 0.1.x are always forbidden.
@@ -72,5 +72,7 @@ ARGS=(
 [[ -n "$CREATED_AT" ]] && ARGS+=(--created-at "$CREATED_AT")
 [[ "$TEST_FIXTURE" == "1" ]] && ARGS+=(--test-fixture)
 [[ "$FORCE" == "1" ]] && ARGS+=(--force)
-ARGS+=("${OCI_ARGS[@]}")
+if [[ ${#OCI_ARGS[@]} -gt 0 ]]; then
+  ARGS+=("${OCI_ARGS[@]}")
+fi
 p14sign_python3 "${ARGS[@]}"

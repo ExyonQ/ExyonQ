@@ -27,6 +27,16 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 - Public **v0.4.11** published on exyonq-github (see below). Do not create `v0.3.x`, `v0.2.x`, or `v0.1.x` tags in this repository.
 
+### Added
+
+- **AP-05 route ACL:** `[[route]] access` supports `allow`/`deny` IP/CIDR entries, ordered first-match `rules`, an HTTP-method allowlist, and a UTC `schedule` (including overnight windows). For the list form, `deny` wins and a non-empty `allow` list is an allowlist. Denials return `403` before auth/content dispatch and are rechecked after internal rewrites. Common Apache `Require ip`/`method` and `Order`/`Allow`/`Deny` forms, nginx `allow`/`deny` with exact first-match order, and `.htaccess` `Require ip`/`method` now map to the same policy; unrepresentable forms fail closed.
+
+### Fixed
+
+- `cache_headers.by_mime` now accepts `max_age = 0` and emits `Cache-Control: no-cache`; `immutable = true` with zero is rejected.
+- Routes with `rewrite` or `redirect` now use the compiled rewrite engine in the full dispatcher, including pattern captures; external redirects preserve the original query unless the replacement declares its own `?`.
+- systemd `RuntimeDirectory` and the control socket use `%p`, so the single-instance unit keeps `/run/exyonq` and the two production units get separate `/run/exyonq-http` and `/run/exyonq-sites` paths.
+
 ---
 
 ## [0.4.11] — published on exyonq-github
@@ -57,7 +67,7 @@ TOTAL_COMPAT_PROMISE = FORBIDDEN (Gate A not closed)
 
 ### Limitations (honest)
 
-- Still **REJECTED_UNSUPPORTED**: `AuthType`/`Require`, `ErrorDocument`, `ProxyPassReverse`, regex `RewriteRule`/`RewriteCond`, `Include` expansion.
+- Still **REJECTED_UNSUPPORTED**: `Require env/group/expr`, `Satisfy any`, `ErrorDocument`, `ProxyPassReverse`, regex `RewriteRule`/`RewriteCond`, `Include` expansion. Basic `AuthType`/`Require valid-user` and common IP/method ACLs are migrated.
 - No “full Apache substitution” claim until Gate A corpus on Netcup AMD64 + Oracle ARM64.
 - Official AMD64 P4/P5 confirm cells after campaign binary rebuild remain **pending**.
 

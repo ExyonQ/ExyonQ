@@ -20,8 +20,9 @@ use crate::discovery::{discover_htaccess_files, DiscoveredFile, DiscoveryError};
 use crate::parser::{parse_htaccess, ParseError};
 use crate::report::CompileReport;
 use exyonq_module_api::{
-    validate_directory_index_candidate, validate_front_controller_target, CompiledFrontController,
-    CompiledRedirectRule, CompiledRewriteRedirect, NormalizedDirectory, OverlayEntry, VhostOverlay,
+    validate_directory_index_candidate, validate_front_controller_target, CompiledAccessPolicy,
+    CompiledBasicAuth, CompiledFrontController, CompiledRedirectRule, CompiledRewriteRedirect,
+    NormalizedDirectory, OverlayEntry, VhostOverlay, MAX_AUTH_REALM_LEN, MAX_AUTH_USER_FILE_LEN,
     MAX_DIRECTORY_INDEX_CANDIDATES, MAX_DIRECTORY_INDEX_CANDIDATE_LEN,
 };
 use std::collections::BTreeMap;
@@ -46,6 +47,21 @@ struct PendingRewriteConds {
 }
 
 #[derive(Debug, Clone, Default)]
+struct AuthDraft {
+    auth_type: Option<String>,
+    realm: Option<String>,
+    user_file: Option<String>,
+    require_valid_user: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AccessDraft {
+    allow: Vec<String>,
+    deny: Vec<String>,
+    methods: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
 struct DirState {
     directory_index: Option<Vec<String>>,
     redirects: Vec<CompiledRedirectRule>,
@@ -54,6 +70,8 @@ struct DirState {
     rewrite_engine: bool,
     pending_rewrite_conds: PendingRewriteConds,
     front_controller: Option<CompiledFrontController>,
+    auth: AuthDraft,
+    access: AccessDraft,
 }
 
 pub struct CompileOutput {
@@ -87,9 +105,23 @@ pub fn compile_from_discovered(
     }
 
     let merged = merge_inheritance(&per_dir);
-    let mut entries: Vec<OverlayEntry> = merged
-        .into_iter()
-        .map(|(directory, state)| OverlayEntry {
+    let mut entries: Vec<OverlayEntry> = Vec::with_capacity(merged.len());
+    for (directory, state) in merged {
+        let auth = match compile_auth(&directory, &state.auth) {
+            Ok(auth) => auth,
+            Err(err) => {
+                report.errors.push(err);
+                None
+            }
+        };
+        let access = match compile_access(&directory, &state.access) {
+            Ok(access) => access,
+            Err(err) => {
+                report.errors.push(err);
+                None
+            }
+        };
+        entries.push(OverlayEntry {
             directory: NormalizedDirectory(directory),
             directory_index: state
                 .directory_index
@@ -98,8 +130,10 @@ pub fn compile_from_discovered(
             rewrite_redirects: Arc::from(state.rewrite_redirects.into_boxed_slice()),
             indexes_disabled: state.indexes_disabled,
             front_controller: state.front_controller,
-        })
-        .collect();
+            auth,
+            access,
+        });
+    }
     entries.sort_by_key(|e| std::cmp::Reverse(e.directory.0.len()));
 
     report.executed = report
@@ -284,6 +318,99 @@ fn classify_and_apply(
             }
             Ok(DirectiveSupport::Executed)
         }
+        "authtype" => {
+            if d.args.len() != 1 {
+                return Err(format!(
+                    "{}:{} AuthType expects one argument",
+                    d.loc.file, d.loc.line
+                ));
+            }
+            if !d.args[0].eq_ignore_ascii_case("basic") {
+                return Err(format!(
+                    "EXY-HTACCESS-0003 {}:{} `AuthType` — only Basic is supported; ACL is AP-05",
+                    d.loc.file, d.loc.line
+                ));
+            }
+            state.auth.auth_type = Some("basic".into());
+            Ok(DirectiveSupport::Executed)
+        }
+        "authname" => {
+            if d.args.len() != 1 || d.args[0].trim().is_empty() {
+                return Err(format!(
+                    "{}:{} AuthName expects one non-empty realm",
+                    d.loc.file, d.loc.line
+                ));
+            }
+            if d.args[0].len() > MAX_AUTH_REALM_LEN || d.args[0].chars().any(char::is_control) {
+                return Err(format!(
+                    "{}:{} AuthName realm is invalid or too long",
+                    d.loc.file, d.loc.line
+                ));
+            }
+            state.auth.realm = Some(d.args[0].clone());
+            Ok(DirectiveSupport::Executed)
+        }
+        "authuserfile" => {
+            if d.args.len() != 1 || d.args[0].trim().is_empty() {
+                return Err(format!(
+                    "{}:{} AuthUserFile expects one non-empty path",
+                    d.loc.file, d.loc.line
+                ));
+            }
+            let path = &d.args[0];
+            if path.len() > MAX_AUTH_USER_FILE_LEN
+                || path.contains('\0')
+                || !Path::new(path).is_absolute()
+            {
+                return Err(format!(
+                    "{}:{} AuthUserFile must be an absolute bounded path",
+                    d.loc.file, d.loc.line
+                ));
+            }
+            state.auth.user_file = Some(path.clone());
+            Ok(DirectiveSupport::Executed)
+        }
+        "require" => {
+            let Some(kind) = d.args.first().map(|s| s.to_ascii_lowercase()) else {
+                return Err(format!(
+                    "EXY-HTACCESS-0003 {}:{} `Require` expects an argument",
+                    d.loc.file, d.loc.line
+                ));
+            };
+            match kind.as_str() {
+                "valid-user" if d.args.len() == 1 => {
+                    state.auth.require_valid_user = true;
+                }
+                "ip" if d.args.len() >= 2 => {
+                    state.access.allow.extend(d.args[1..].iter().cloned());
+                }
+                "method" if d.args.len() >= 2 => {
+                    state.access.methods.extend(d.args[1..].iter().cloned());
+                }
+                "not" if d.args.len() == 3 && d.args[1].eq_ignore_ascii_case("ip") => {
+                    state.access.deny.push(d.args[2].clone());
+                }
+                "all" if d.args.len() == 2 && d.args[1].eq_ignore_ascii_case("granted") => {
+                    // Explicitly public: no restriction to compile.
+                }
+                "all" if d.args.len() == 2 && d.args[1].eq_ignore_ascii_case("denied") => {
+                    state.access.deny.push("all".into());
+                }
+                _ => {
+                    return Err(format!(
+                        "EXY-HTACCESS-0003 {}:{} `Require` — supported: valid-user, ip, method, all granted/denied, not ip",
+                        d.loc.file, d.loc.line
+                    ));
+                }
+            }
+            Ok(DirectiveSupport::Executed)
+        }
+        "allow" | "deny" | "order" | "satisfy" => Err(format!(
+            "EXY-HTACCESS-0003 {}:{} `{other}` — legacy Allow/Deny/Order/Satisfy is not applied; use `Require ip`/`Require method` or [[route]] access",
+            d.loc.file,
+            d.loc.line,
+            other = d.name
+        )),
         other => {
             if let Some(msg) = q03_fail_closed_error(d.loc.file.as_str(), d.loc.line, other) {
                 return Err(msg);
@@ -298,8 +425,7 @@ fn classify_and_apply(
 fn q03_fail_closed_error(file: &str, line: u32, name: &str) -> Option<String> {
     let n = name.trim_start_matches('<').to_ascii_lowercase();
     let (code, alt) = match n.as_str() {
-        "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authtype"
-        | "authuserfile" | "authname" | "authgroupfile" => (
+        "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authgroupfile" => (
             "EXY-HTACCESS-0003",
             "use WAF ip_filter / [[route]] access (F6) — overlay never enforces ACL",
         ),
@@ -605,6 +731,84 @@ fn merge_state(dst: &mut DirState, src: &DirState) {
     if let Some(fc) = &src.front_controller {
         dst.front_controller = Some(fc.clone());
     }
+    if src.auth.auth_type.is_some() {
+        dst.auth.auth_type = src.auth.auth_type.clone();
+    }
+    if src.auth.realm.is_some() {
+        dst.auth.realm = src.auth.realm.clone();
+    }
+    if src.auth.user_file.is_some() {
+        dst.auth.user_file = src.auth.user_file.clone();
+    }
+    dst.auth.require_valid_user |= src.auth.require_valid_user;
+    dst.access.allow.extend(src.access.allow.iter().cloned());
+    dst.access.deny.extend(src.access.deny.iter().cloned());
+    dst.access
+        .methods
+        .extend(src.access.methods.iter().cloned());
+}
+
+fn compile_access(
+    directory: &str,
+    access: &AccessDraft,
+) -> Result<Option<CompiledAccessPolicy>, String> {
+    if access.allow.is_empty() && access.deny.is_empty() && access.methods.is_empty() {
+        return Ok(None);
+    }
+    CompiledAccessPolicy::from_parts(&access.allow, &access.deny, &access.methods)
+        .map(Some)
+        .map_err(|err| format!("EXY-HTACCESS-0003 directory `{directory}` — {err}"))
+}
+
+fn compile_auth(directory: &str, auth: &AuthDraft) -> Result<Option<CompiledBasicAuth>, String> {
+    let seen = auth.auth_type.is_some()
+        || auth.realm.is_some()
+        || auth.user_file.is_some()
+        || auth.require_valid_user;
+    if !seen {
+        return Ok(None);
+    }
+    if !auth
+        .auth_type
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("basic"))
+    {
+        return Err(format!(
+            "EXY-HTACCESS-0003 directory `{directory}` — AuthType Basic is required"
+        ));
+    }
+    let Some(realm) = auth
+        .realm
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err(format!(
+            "EXY-HTACCESS-0003 directory `{directory}` — AuthName is required"
+        ));
+    };
+    let Some(user_file) = auth
+        .user_file
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err(format!(
+            "EXY-HTACCESS-0003 directory `{directory}` — AuthUserFile is required"
+        ));
+    };
+    if !auth.require_valid_user {
+        return Err(format!(
+            "EXY-HTACCESS-0003 directory `{directory}` — Require valid-user is required"
+        ));
+    }
+    if !Path::new(user_file).is_absolute() {
+        return Err(format!(
+            "EXY-HTACCESS-0003 directory `{directory}` — AuthUserFile must be absolute"
+        ));
+    }
+    Ok(Some(CompiledBasicAuth {
+        realm: realm.to_string(),
+        user_file: user_file.to_string(),
+    }))
 }
 
 fn validate_directory_index_list(args: &[String]) -> Result<Vec<String>, String> {

@@ -23,6 +23,7 @@ pub enum SaturationKind {
     Checkout,
     Drain,
     Capacity,
+    Concurrency,
     Closed,
 }
 
@@ -32,6 +33,7 @@ impl SaturationKind {
             SaturationKind::Checkout => "checkout",
             SaturationKind::Drain => "drain",
             SaturationKind::Capacity => "capacity",
+            SaturationKind::Concurrency => "concurrency",
             SaturationKind::Closed => "closed",
         }
     }
@@ -39,11 +41,14 @@ impl SaturationKind {
     pub fn recommendation(self) -> &'static str {
         match self {
             SaturationKind::Checkout => {
-                "raise [[fcgi_pool]].max_concurrency / checkout_timeout_ms, or speed up PHP-FPM workers"
+                "ExyonQ fail-fast (no unbounded queue): set max_concurrency >= php-fpm pm.max_children; raise checkout_timeout_ms only for short bursts, or speed up PHP-FPM"
             }
             SaturationKind::Drain => "wait for reload drain to finish; do not send new FastCGI work",
             SaturationKind::Capacity => {
                 "raise max_connections (≤ max_concurrency) or reduce concurrent FastCGI load"
+            }
+            SaturationKind::Concurrency => {
+                "raise [[fcgi_pool]].max_concurrency so it is >= php-fpm pm.max_children; ExyonQ fail-fast has no unbounded queue"
             }
             SaturationKind::Closed => "pool is closed/draining; retry after reload completes",
         }
@@ -69,9 +74,18 @@ pub fn format_saturation_message(
     endpoint: &str,
 ) -> String {
     format!(
-        "fcgi pool saturated: pool={pool} timeout_kind={} open_sockets={open} idle_sockets={idle} waiters={waiters} max_connections={max_connections} endpoint={endpoint} recommendation={}",
+        "fcgi pool saturated: pool={pool} timeout_kind={} open_sockets={open} idle_sockets={idle} waiters={waiters} max_connections={max_connections} endpoint={endpoint} queue=disabled recommendation={}",
         kind.as_str(),
         kind.recommendation()
+    )
+}
+
+/// Message for the logical-concurrency semaphore, which rejects before the
+/// connection pool can emit its richer waiters/sockets diagnostic.
+pub fn format_concurrency_message(pool: &str, max_concurrency: u32) -> String {
+    format!(
+        "fcgi pool saturated: pool={pool} timeout_kind=concurrency max_concurrency={max_concurrency} queue=disabled recommendation={}",
+        SaturationKind::Concurrency.recommendation()
     )
 }
 
@@ -95,5 +109,16 @@ mod tests {
         assert!(msg.contains("open_sockets=4"));
         assert!(msg.contains("recommendation="));
         assert!(msg.contains("max_concurrency"));
+        assert!(msg.contains("queue=disabled"));
+    }
+
+    #[test]
+    fn concurrency_message_names_limit_and_policy() {
+        let msg = format_concurrency_message("php", 16);
+        assert!(msg.contains("pool=php"));
+        assert!(msg.contains("timeout_kind=concurrency"));
+        assert!(msg.contains("max_concurrency=16"));
+        assert!(msg.contains("pm.max_children"));
+        assert!(msg.contains("queue=disabled"));
     }
 }

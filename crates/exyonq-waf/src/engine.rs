@@ -156,7 +156,24 @@ fn decide_from_hits(
         };
     }
     let action = strongest_action(hits.iter().map(|(_, a)| *a));
-    let violations = hits.into_iter().map(|(v, _)| v).collect();
+    // Report the rule that actually blocks first: CRS has pass/nolog setup
+    // rules (900990) that are present in every request and would otherwise
+    // mask the blocking rule in `x-waf-rule` and audit evidence.
+    let mut violations: Vec<WafViolation> = hits
+        .iter()
+        .filter(|(_, hit_action)| *hit_action == action)
+        .map(|(violation, _)| violation.clone())
+        .collect();
+    violations.extend(
+        hits.into_iter()
+            .filter(|(_, hit_action)| *hit_action != action)
+            .map(|(violation, _)| violation),
+    );
+    tracing::debug!(
+        action = ?action,
+        rules = ?violations.iter().map(|v| v.rule_id.as_str()).collect::<Vec<_>>(),
+        "waf decision"
+    );
     let raw = WafDecision {
         action,
         violations,
@@ -250,6 +267,32 @@ fn inspect_body_with_snap(
     let mut hits = snap.evaluate_phase(WafPhase::RequestBodyChunk, req, Some(chunk));
     if end_of_stream {
         hits.extend(snap.evaluate_phase(WafPhase::RequestBodyComplete, req, Some(chunk)));
+        // ModSecurity rejects bodies its processor cannot parse strictly
+        // (modsecurity.conf 200002/200003). CRS parity means the same 400.
+        if snap.has_crs_rules() {
+            let content_type = req
+                .headers
+                .get("content-type")
+                .map(|value| String::from_utf8_lossy(value).to_string())
+                .unwrap_or_default();
+            let body_error = crate::multipart::strict_error(&content_type, chunk)
+                .or_else(|| crate::body_syntax::strict_error(&content_type, chunk));
+            if let Some(reason) = body_error {
+                hits.push((
+                    WafViolation {
+                        rule_id: WafRuleId::new(exyonq_waf_api::RULE_ID_REQUEST_BODY_INVALID),
+                        phase: WafPhase::RequestBodyComplete,
+                        message: reason.to_string(),
+                        evidence: WafEvidence {
+                            field: Some("body".into()),
+                            matched: None,
+                            transforms: Vec::new(),
+                        },
+                    },
+                    WafAction::Block,
+                ));
+            }
+        }
     }
     decide_from_hits(snap, hits, state.truncated)
 }

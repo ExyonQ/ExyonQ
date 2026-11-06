@@ -302,6 +302,14 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
             serde_json::Value::String("overlay".into()),
         );
     }
+    // AP-05: access is runtime-effective; a reload that changes only ACL must
+    // not be canonicalized as a no-op.
+    if let Some(access) = &route.access {
+        map.insert(
+            "access".into(),
+            serde_json::to_value(access).expect("access serialize"),
+        );
+    }
     // Cap048: route.cache binds a named cache_policy at request time.
     if let Some(cache) = &route.cache {
         map.insert("cache".into(), serde_json::Value::String(cache.clone()));
