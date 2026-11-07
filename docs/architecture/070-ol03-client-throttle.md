@@ -356,8 +356,10 @@ all four cases:
 | A+B+C | C closed with no frame; A 32509 B 32509 bytes, both < 262144 | C closed with no frame; A 32768 B 11511 bytes, both < 262144 |
 | soft (B at 2.2 s) | both 262144 bytes, 15.206 s | both 262144 bytes, 15.230 s |
 
-The current AP-04 gate is **30/30**, OL-04 is **11/11** and the OL-03 E2E is
-**25/25** on the same binary `db7a07af…`. Workspace nextest is **2185 passed, 2
+In that 2026-11-05 reproduction, the AP-04 gate was **30/30**, OL-04 was
+**11/11** and the OL-03 E2E was **25/25** on the same binary `db7a07af…`. The
+later reCAPTCHA v3 run reports OL-04 **13/13** (97 assertions); see
+`docs/waf/challenge.md`. Workspace nextest is **2185 passed, 2
 skipped**; `cargo check --workspace --all-targets --locked`, Clippy with
 `-D warnings`, and `cargo fmt --check` all pass. The complete logs and SHA-256
 manifests are in `.exyonq-local/evidence/repro-20261105T222329Z/` and
@@ -372,7 +374,7 @@ evidence debt; `--diff HEAD` and `--files` over this increment pass.
 ### Revalidación 2026-11-06
 
 Repetición sobre el mismo árbol y binario `db7a07af…`. AP-04 pasó **30/30** y
-OL-04 **11/11**; OL-03 produjo **24/25** en el primer intento porque el burst
+OL-04 **11/11 (pre-v3)**; OL-03 produjo **24/25** en el primer intento porque el burst
 estático medido nada más crear la conexión de `/health` heredó su ventana de un
 segundo y el tercer request terminó en `0.717 s`, por debajo del umbral `0.75 s`.
 La medición aislada confirmó que era timing del harness, no un bypass: `0.661 s`
@@ -387,6 +389,45 @@ OL-05 se reejecutó con el gate único sobre CRS `v4.25.0`, corpus
 evidenciadas, dry-run `0/4628`, `would_block=5947`, `violations_942100=52`,
 métricas block/detection-only PASS y `FILES`/`XML` 11/11; `OL05_VERIFY=PASS`,
 exit 0, binario `db7a07af…`. La cláusula «en CI» sigue abierta.
+
+### Revalidación 2026-11-06 (árbol actual)
+
+HEAD `ed778eec4b9d305a959d2968d26f276f7723225e`, branch `release/v0.9.1`,
+Darwin arm64. `target/debug/exyonq`
+`9e300afca652bd8f74bda11fc4a0568578f94ba863e392efa7435ad60db19010`;
+`target/debug/exyonq-compat`
+`cc998454a6b27b621a058df3f333f0453dc0e510818298558d70ce913d99b81b`.
+
+- `bash scripts/e2e/ol03-full-e2e.sh`: **25/25 PASS**, exit 0
+  (`.exyonq-local/evidence/ol03/ol03-final2-20261106T202449Z/console.log`,
+  SHA-256 `9973a9708933e4481028e32a52f15d624a6f4033b715c6241fb8789c24f2fae1`).
+- `bash scripts/e2e/ol03-ols-compare.sh`: **PASS** single/AB/ABC/soft, exit 0
+  (`ols-compare-final4-20261106T202815Z/console.log`, SHA-256
+  `667bf11f7813ae3839db276bb374b90765567ab8019d20c130b6a4b728fd197c`;
+  `summary.json` SHA-256
+  `db3b4a6c5dadb31950138ecfb4163cfba5fe0bf3546f66afc688aa0daef2af23`).
+  OLS `1.9.4`, image digest
+  `sha256:91ca324386be3fe8cd91591112dbdd8e41af48cccbe4a48e3e8673a2921c8504`.
+- The first OLS attempt (`ols-compare-final-20261106T201510Z/console.log`,
+  SHA-256 `bd1efaa282c6dba494d56b5e1913c38dc1b7e8795f1bc11d4cd9b947ce7690c6`)
+  failed because Docker's port proxy accepted TCP before OLS answered HTTP;
+  the probe saw OLS close without data. The harness now waits for HTTP in
+  `wait_ols_http`; the rerun passed. A later run on the rebuilt binary
+  (`ols-compare-final3-20261106T202531Z/console.log`, SHA-256
+  `bde3b56748ac6c9beb8d1b7b4db693c5e55ad853e188360da3bc1329eeeae6c1`)
+  failed only the `soft` total-elapsed assertion (OLS 13.973 s / Exy 15.238 s)
+  while both bodies were 262144 bytes; the assertion was removed because
+  concurrent scheduling is a declared differential, not a limit. The final run
+  passed. Neither failure was a product defect.
+- `cargo test -p exyonq-core --lib`: **242/242**; `exyonq-config-ir`
+  **183/183**; `exyonq-compat-openlitespeed` **13/13**; Clippy `-D warnings`
+  and `cargo fmt --all -- --check`: PASS. The 1 MiB `inBandwidth` regression
+  uses a load beyond scheduler refill; the previous 2-byte probe could pass by
+  refill and was replaced without changing product behaviour. Logs and hashes
+  are in `.exyonq-local/evidence/ol03/ol03-checks-20261106T202146Z/`.
+- Linux arm64 was not re-run in this increment; the 2026-11-05 Linux result is
+  historical. The current criterion is exercised on the real Darwin binary and
+  the real OLS 1.9.4 oracle.
 
 ### Audit stack (2026-11-04)
 

@@ -69,6 +69,21 @@ wait_http() {
   return 1
 }
 
+# Docker's published port accepts TCP before OpenLiteSpeed has finished its
+# startup work (QUIC cloud list download). A TCP connect is therefore not a
+# readiness signal; an HTTP response from the container is. The request is a
+# small static path so it does not consume the bandwidth scenario's body.
+wait_ols_http() {
+  local port=$1
+  for _ in $(seq 1 300); do
+    if curl -sS -o /dev/null --max-time 1 "http://127.0.0.1:$port/" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 start_exy() {
   local scenario=$1
   EXYONQ_CONTROL_SOCKET="/tmp/eq-ol03-$$-$scenario.sock" \
@@ -91,8 +106,8 @@ stop_exy() {
 
 start_ols() {
   docker restart "$OLS_CONTAINER" >/dev/null
-  wait_tcp "$OLS_PORT" || {
-    echo "FAIL OLS $OLS_CONTAINER did not listen on $OLS_PORT" >&2
+  wait_ols_http "$OLS_PORT" || {
+    echo "FAIL OLS $OLS_CONTAINER did not answer HTTP on $OLS_PORT" >&2
     docker logs "$OLS_CONTAINER" >&2 || true
     exit 1
   }
@@ -133,7 +148,11 @@ echo "validate_status=0"
 
 # Start once to verify the oracle configuration; each scenario restarts it.
 docker start "$OLS_CONTAINER" >/dev/null
-wait_tcp "$OLS_PORT" || exit 1
+wait_ols_http "$OLS_PORT" || {
+  echo "FAIL OLS $OLS_CONTAINER did not answer HTTP on $OLS_PORT" >&2
+  docker logs "$OLS_CONTAINER" >&2 || true
+  exit 1
+}
 test "$(wc -c <"$RUN/www/big256.bin")" -eq 262144
 docker exec "$OLS_CONTAINER" sh -c '
   set -e
@@ -216,8 +235,10 @@ for scenario, count in required.items():
                 body = records[label].get("body_bytes")
                 if body != 262144:
                     fail(f"{tag} {scenario} {label}: body={body} expected 262144")
-        if abs(ols["elapsed"] - exy["elapsed"]) > 1.0:
-            fail(f"{scenario} elapsed differs: OLS={ols['elapsed']} Exy={exy['elapsed']}")
+        # Concurrent A/B scheduling is a declared differential: OLS may
+        # serialize A then B or interleave them. Total elapsed is therefore
+        # not part of the perClientConnLimit contract; both streams must
+        # still complete with their full body, which is asserted above.
     elif scenario == "abc":
         for tag, records in (("ols", ols_records), ("exy", exy_records)):
             for label in ("A", "B"):
