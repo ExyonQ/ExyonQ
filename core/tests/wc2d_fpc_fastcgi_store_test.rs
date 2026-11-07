@@ -148,6 +148,8 @@ max_ttl_seconds = 300
     ));
     FcgiHarness {
         ctx: Arc::new(ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
@@ -455,6 +457,8 @@ max_ttl_seconds = 300
     ));
 
     let ctx_g1 = Arc::new(ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: Arc::clone(&state_g1),
         proxy_client: proxy_client.clone(),
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
@@ -580,6 +584,8 @@ max_ttl_seconds = 300
         .expect("state g2");
     assert_eq!(active_runtime_generation(), G2);
     let ctx_g2 = Arc::new(ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: Arc::clone(&state_g2),
         proxy_client,
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),

@@ -43,7 +43,7 @@ use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
 const BAD_REQUEST_RESPONSE: &[u8] =
-    b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    b"HTTP/1.1 400 Bad Request\r\nServer: exyonq\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
 
 /// Process-local count of failed WirePlan::Reject 400 response writes.
 static WIRE_REJECT_RESPONSE_WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -230,43 +230,80 @@ fn strip_host_port(host: &str) -> &str {
     }
 }
 
-fn head_matches_htaccess_route(state: &ServerState, head: &[u8]) -> bool {
+/// AUDIT-D1/D2/D7: single wire admission gate — full dispatch when
+/// generation-wide features the wire paths cannot honor are active (FPC,
+/// gunzip, response-phase WAF), or when the matched route binds features
+/// only Hyper implements (`auth_basic`, zone limits, `sub_filter`, mirror,
+/// slice, htaccess, cache policies, route `response_headers`). The wire
+/// paths are transport-only shortcuts: they cannot emit a route 401/429,
+/// transform a body, or apply response metadata. Supersedes the narrow
+/// htaccess/response-headers probes — the audit proved them incomplete
+/// (`auth_basic` bypassed entirely — D1 Critical; FPC/sub_filter/mirror/
+/// zone-limit/response-WAF silently dropped — D2).
+pub(crate) fn wire_head_requires_full_dispatch(state: &ServerState, head: &[u8]) -> bool {
+    if state.wire_incompatible_features_active() {
+        return true;
+    }
     let Some(path) = parse_wire_origin_path(head) else {
         return false;
     };
-    let Some((route_idx, _)) = state.route_index.match_route_index_with_host(path, None) else {
-        return false;
-    };
+    let header_pairs = parse_wire_header_pairs(head);
+    let host = wire_host_from_pairs(&header_pairs).map(strip_host_port);
     state
-        .snapshot
-        .htaccess_site_id_for_route(route_idx)
-        .is_some()
+        .route_index
+        .match_route_index_with_host(path, host)
+        .is_some_and(|(idx, _)| state.route_requires_full_dispatch(idx))
 }
 
-/// ADR-062: a matched route with `[[route.response_headers]]` must go through the
-/// Hyper path so the configured headers are applied (Cap067 wire does not yet
-/// materialize arbitrary response headers).
-fn wire_route_response_headers_for_head<'a>(
-    state: &'a ServerState,
-    head: &[u8],
-) -> &'a [(String, String, bool)] {
-    let Some(path) = parse_wire_origin_path(head) else {
-        return &[];
-    };
-    let host = parse_wire_header_pairs(head)
-        .into_iter()
-        .find(|(k, _)| k == "host")
-        .map(|(_, v)| {
-            let trimmed = v.trim();
-            strip_host_port(trimmed).to_string()
-        });
-    let Some((route_idx, _)) = state
-        .route_index
-        .match_route_index_with_host(path, host.as_deref())
-    else {
-        return &[];
-    };
-    state.snapshot.route_response_headers(route_idx)
+/// AUDIT-D2 (static keep-alive): a full-dispatch route whose paths a static
+/// slot could claim makes wire-static unsafe generation-wide. The epoll /
+/// blocking / tokio static loops re-resolve the *slot* per request but never
+/// the route — a keep-alive switch to `dirty_prefix/...` would serve the
+/// file with no auth/limit/headers. Non-prefix dirty matches (suffix/regex/
+/// header filter) can't be proven disjoint from the root → conservative
+/// overlap. Fail closed: plan Hyper for every static decision that could
+/// carry such a sibling.
+pub(crate) fn static_wire_route_overlap(state: &ServerState) -> bool {
+    state.config.routes.iter().enumerate().any(|(idx, route)| {
+        if !state.route_requires_full_dispatch(idx) {
+            return false;
+        }
+        let m = &route.r#match;
+        state.snapshot.static_slots.iter().any(|slot| {
+            let sp = slot.route_prefix.trim_end_matches('/');
+            if sp.is_empty() || m.suffix.is_some() || m.regex.is_some() || m.header.is_some() {
+                // Static "/" root claims every path; non-prefix or
+                // header-filtered matches can't be proven disjoint.
+                return true;
+            }
+            let dp = m.path.trim_end_matches('/');
+            dp == sp
+                || dp.starts_with(&format!("{sp}/"))
+                // A host-bound dirty *ancestor* (`/` or `/a` vs slot `/a/b`)
+                // outranks the hostless slot route by host-match for
+                // `Host: dirtyhost` — epoll sendfile would serve those
+                // bytes without auth. Hostless ancestors are provably
+                // shadowed by the deeper slot route. (audit D2/D7 re-round)
+                || (m.host.is_some() && sp.starts_with(&format!("{dp}/")))
+        })
+    })
+}
+
+/// AUDIT-D1 (keep-alive re-round): the gate must resolve `Host:` exactly as
+/// admission/`wire_head_requires_full_dispatch`/Hyper do — with the port
+/// stripped. `host_header_raw` carries `h:443`/`h:8080` verbatim; feeding it
+/// raw collapses resolution to `None` and `None == None` keep-alive tokens
+/// would proceed → auth/limits bypassed on the pinned cluster.
+pub(crate) fn build_keepalive_route_gate(
+    state: &Arc<ServerState>,
+) -> Arc<exyonq_module_api::wire_module_hooks::WireRouteGate> {
+    let state = Arc::clone(state);
+    Arc::new(move |path: &str, host: Option<&str>| {
+        let host = host.map(strip_host_port);
+        let (idx, _) = state.route_index.match_route_index_with_host(path, host)?;
+        (!state.route_requires_full_dispatch(idx) && !state.wire_incompatible_features_active())
+            .then_some(idx as u64)
+    })
 }
 
 fn parse_wire_origin_path(head: &[u8]) -> Option<&str> {
@@ -398,7 +435,7 @@ pub(crate) fn evaluate_wire_waf(
         // phase 2 is skipped on the wire proxy fast path.
         let method = parse_wire_method(head);
         if method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD") {
-            return crate::waf::inspect_request_body(
+            let (hook, _inspection_limited) = crate::waf::inspect_request_body(
                 state.waf.as_ref(),
                 method,
                 host,
@@ -411,6 +448,7 @@ pub(crate) fn evaluate_wire_waf(
                 generation,
                 state.waf_enforce,
             );
+            return hook;
         }
     }
     decision
@@ -426,7 +464,7 @@ fn wire_host_from_pairs(headers: &[(String, String)]) -> Option<&str> {
 pub(crate) fn format_waf_reject_http(reject: &crate::waf::WafReject) -> Vec<u8> {
     let body = reject.body.as_slice();
     let mut resp = format!(
-        "HTTP/1.1 {} \r\ncontent-type: {}\r\ncache-control: no-store\r\npragma: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n",
+        "HTTP/1.1 {} \r\nserver: exyonq\r\ncontent-type: {}\r\ncache-control: no-store\r\npragma: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n",
         reject.status.as_u16(),
         reject.content_type,
         body.len()
@@ -516,8 +554,26 @@ enum ProxyWireOutcome<S> {
 }
 
 /// Wire proxy fast path; returns `Fallback` when Hyper must complete the request.
+fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<Vec<u8>> {
+    // The wire view has no request body. POST/PUT must reach Hyper so body
+    // rules (944300, 920120, …) run against their real payload; applying the
+    // header-only wire view to them caused broad false 403s.
+    if !(head.starts_with(b"GET ") || head.starts_with(b"HEAD ")) {
+        return None;
+    }
+    match evaluate_wire_waf(
+        &ctx.state,
+        ctx.pinned_generation,
+        head,
+        &ctx.x_forwarded_for,
+    ) {
+        crate::waf::WafHookResult::Reject(reject) => Some(format_waf_reject_http(&reject)),
+        crate::waf::WafHookResult::Continue => None,
+    }
+}
+
 async fn serve_proxy_wire<S>(
-    state: &ServerState,
+    state: &Arc<ServerState>,
     generation: u64,
     mut stream: S,
     head: Bytes,
@@ -541,10 +597,14 @@ where
         return ProxyWireOutcome::Fallback(stream, head, rest);
     };
 
-    // Cap056: explicit `route.cache` / [[cache_policy]] is owned by Hyper
-    // `proxy_dispatch_maybe_cached`. The GET `/api/*` wire fast path must not
-    // silently bypass store/hit when a policy is bound (PRODUCTION_REACHABLE defect).
-    if state.snapshot.cache_policy_for_route(route_idx).is_some() {
+    // AUDIT-D1/D2: generalized wire admission. Cap056 gated only on
+    // `route.cache` — every route-bound feature shipped since silently
+    // bypassed on the wire path: auth_basic (the wire path cannot emit a
+    // route 401 at all — proven bypass), zone limits, sub_filter, mirror,
+    // slice, htaccess and route response_headers. FPC/gunzip/response-WAF
+    // are generation-wide and equally unreachable here. The wire path is a
+    // transport shortcut — routes that need semantics take full dispatch.
+    if state.route_requires_full_dispatch(route_idx) || state.wire_incompatible_features_active() {
         return ProxyWireOutcome::Fallback(stream, head, rest);
     }
 
@@ -623,6 +683,13 @@ where
         .and_then(|r| r.upstream.clone())
         .unwrap_or_else(|| "-".to_string());
     let boxed = exyonq_mod_proxy::box_wire_stream(stream);
+    // AUDIT-D1: keep-alive gate. wire_conn pins cluster+host for the whole
+    // connection and previously forwarded every subsequent GET path verbatim —
+    // a keep-alive switch to an auth-protected (or any full-dispatch) route
+    // would still be proxied wire-fast. The gate resolves each keep-alive
+    // path against the *same* generation pinned here; a token mismatch ends
+    // the admission inside wire_conn (fail closed → reconnect via dispatch).
+    let route_gate = build_keepalive_route_gate(state);
     // Bench/edge hot path: access logging is usually off — do not Bytes::clone the
     // request head solely for a no-op emit (refcount churn on every P4 wire GET).
     let head_for_access = observability::access_event_required().then(|| head.clone());
@@ -636,6 +703,7 @@ where
         head,
         rest,
         real_ip,
+        Some(route_gate),
     )
     .await
     {
@@ -694,6 +762,34 @@ pub(crate) struct WireDispatchContext {
     pub ops: Arc<crate::lifecycle::LifecycleState>,
     /// Pinned at handoff/admit time (Phase 0); proxy wire uses this instead of re-reading.
     pub pinned_generation: u64,
+    /// Connection-level scheme as seen by the accepting listener (`http`/`https`).
+    pub scheme: &'static str,
+    /// Port the connection was accepted on (listener port) — NGINX
+    /// `port_in_redirect` semantics. `None` when unknown.
+    pub local_port: Option<u16>,
+    /// OL-03: one connection-level throttle slot. Passed to Hyper when this
+    /// wire path falls back; non-Hyper terminal owners keep it until done.
+    pub(crate) client_guard: Option<crate::client_throttle::ClientGuard>,
+}
+
+/// Acquire the connection slot once, before serving any request on the socket.
+/// Returns `false` when the connection must be dropped without a response.
+fn ensure_connection_guard(ctx: &mut WireDispatchContext) -> bool {
+    if ctx.client_guard.is_some() {
+        return true;
+    }
+    let ip = crate::server::handler::client_ip_from_xff(Some(&ctx.x_forwarded_for));
+    match crate::client_throttle::acquire_connection(&ctx.state.config.modules.ratelimit.client, ip)
+    {
+        Ok(guard) => {
+            ctx.client_guard = guard;
+            true
+        }
+        Err(decision) => {
+            debug!(?decision, %ip, "per-client connection limit refused connection");
+            false
+        }
+    }
 }
 
 enum WirePlan<S> {
@@ -744,15 +840,12 @@ where
     if state.modules_require_hyper_for_request_head(head.as_ref()) {
         return Some(WirePlan::Hyper(stream, head, rest));
     }
-    // A static miss on the epoll path is a terminal 404. `.htaccess` Redirect
-    // is applied only by the full handler, so an overlay route must not be
-    // claimed as sendfile.
-    if head_matches_htaccess_route(state, head.as_ref()) {
-        return Some(WirePlan::Hyper(stream, head, rest));
-    }
-    // ADR-062: response headers (e.g. HSTS) are only materialized on the Hyper
-    // path. Force Hyper for any matched route that configures them.
-    if !wire_route_response_headers_for_head(state, head.as_ref()).is_empty() {
+    // AUDIT-D1/D2/D7: unified route-aware admission. A static miss on the
+    // epoll path is a terminal 404 and the wire paths cannot honor
+    // route-bound features (auth, zone limits, sub_filter, mirror, slice,
+    // htaccess, cache policies, response_headers) or generation-wide ones
+    // (FPC, gunzip, response WAF) — those requests must reach full dispatch.
+    if wire_head_requires_full_dispatch(state, head.as_ref()) {
         return Some(WirePlan::Hyper(stream, head, rest));
     }
     let view = generation_view_from_state(state);
@@ -765,6 +858,14 @@ where
         && !head.starts_with(b"HEAD /health ")
         && !exyonq_mod_static::static_slot_owns_request(head.as_ref())
     {
+        WirePlanDecision::Hyper
+    } else {
+        decision
+    };
+    // AUDIT-D2: static keep-alive loops never re-resolve the route — a
+    // sibling route requiring full dispatch under a static prefix would be
+    // served raw on a subsequent request. Fail closed generation-wide.
+    let decision = if decision == WirePlanDecision::Static && static_wire_route_overlap(state) {
         WirePlanDecision::Hyper
     } else {
         decision
@@ -891,8 +992,11 @@ pub(crate) async fn dispatch_tcp_prefixed_inner(
     stream: TcpStream,
     head: Bytes,
     rest: Bytes,
-    ctx: WireDispatchContext,
+    mut ctx: WireDispatchContext,
 ) {
+    if !ensure_connection_guard(&mut ctx) {
+        return;
+    }
     if ctx
         .state
         .modules_require_hyper_for_request_head(head.as_ref())
@@ -905,6 +1009,9 @@ pub(crate) async fn dispatch_tcp_prefixed_inner(
             ctx.proxy_client,
             ctx.x_forwarded_for.clone(),
             ctx.ops,
+            ctx.scheme,
+            ctx.local_port,
+            ctx.client_guard,
         )
         .await;
         return;
@@ -964,6 +1071,15 @@ async fn serve_hyper_fallback<S>(stream: S, head: Bytes, rest: Bytes, ctx: WireD
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Hyper's Uri drops the fragment from the request-target. Check the raw
+    // head before replaying it; otherwise 920610/920100 cannot see `#tag`.
+    if let Some(bytes) = wire_waf_reject_bytes(&ctx, head.as_ref()) {
+        let mut stream = stream;
+        if let Err(err) = stream.write_all(&bytes).await {
+            warn!(%err, "waf reject response write failed");
+        }
+        return;
+    }
     let prefixed = PrefixedStream::new(io::concat_bytes(head, rest), stream);
     super::serve_hyper(
         prefixed,
@@ -971,6 +1087,9 @@ where
         ctx.proxy_client,
         ctx.x_forwarded_for,
         ctx.ops,
+        ctx.scheme,
+        ctx.local_port,
+        ctx.client_guard,
     )
     .await;
 }
@@ -986,10 +1105,13 @@ pub(crate) async fn dispatch_tcp(mut stream: TcpStream, ctx: WireDispatchContext
     .await;
 }
 
-pub(crate) async fn dispatch_tcp_inner(stream: TcpStream, ctx: WireDispatchContext) {
-    if ctx.state.hyper_required_for_modules()
-        || ctx.state.gunzip_configured()
-        || ctx.ops.is_draining()
+pub(crate) async fn dispatch_tcp_inner(stream: TcpStream, mut ctx: WireDispatchContext) {
+    if !ensure_connection_guard(&mut ctx) {
+        return;
+    }
+    let waf_wire = waf_wire_materialization_active(&ctx.state);
+    if ctx.ops.is_draining()
+        || ((ctx.state.hyper_required_for_modules() || ctx.state.gunzip_configured()) && !waf_wire)
     {
         super::serve_hyper(
             stream,
@@ -997,6 +1119,9 @@ pub(crate) async fn dispatch_tcp_inner(stream: TcpStream, ctx: WireDispatchConte
             ctx.proxy_client,
             ctx.x_forwarded_for.clone(),
             ctx.ops,
+            ctx.scheme,
+            ctx.local_port,
+            ctx.client_guard,
         )
         .await;
         return;
@@ -1023,10 +1148,13 @@ where
     .await;
 }
 
-pub(crate) async fn dispatch_stream_inner<S>(stream: S, ctx: WireDispatchContext)
+pub(crate) async fn dispatch_stream_inner<S>(stream: S, mut ctx: WireDispatchContext)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    if !ensure_connection_guard(&mut ctx) {
+        return;
+    }
     if ctx.state.hyper_required_for_modules() || ctx.ops.is_draining() {
         super::serve_hyper(
             stream,
@@ -1034,6 +1162,9 @@ where
             ctx.proxy_client,
             ctx.x_forwarded_for.clone(),
             ctx.ops,
+            ctx.scheme,
+            ctx.local_port,
+            ctx.client_guard,
         )
         .await;
         return;
@@ -1105,7 +1236,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Once};
 
-    fn ensure_wire_hooks() {
+    fn install_wire_hooks_once() {
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
             exyonq_mod_static::install_kernel_hooks(Arc::new(
@@ -1114,6 +1245,13 @@ mod tests {
             let proxy_rt = Arc::new(exyonq_mod_proxy::ProxyRuntime::new());
             exyonq_mod_proxy::install_kernel_hooks(proxy_rt);
         });
+    }
+
+    /// Serialize the install-moment pin swap against tests holding
+    /// [`WIRE_HOOKS_GATE`](crate::kernel::test_hooks::WIRE_HOOKS_GATE) — the
+    /// pinned runtime they resolve through must not be replaced mid-flight.
+    fn ensure_wire_hooks() {
+        crate::kernel::test_hooks::with_wire_hooks_gate(install_wire_hooks_once);
     }
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
@@ -1127,6 +1265,9 @@ mod tests {
     #[test]
     fn wire_static_predicate_paths_are_health() {
         ensure_wire_hooks();
+        // `might_use_static_wire` resolves through the process sendfile-enabled
+        // cache / OTel flag — serialize against tests mutating those globals.
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         for head in WIRE_STATIC_HEADS {
             assert!(
                 might_use_static_wire(head),
@@ -1169,6 +1310,7 @@ mod tests {
     #[test]
     fn wire_static_predicates_exclude_proxy_paths() {
         ensure_wire_hooks();
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         assert!(!might_use_static_wire(b"GET /api/health HTTP/1.1\r\n"));
         assert!(!might_use_static_wire(b"GET /api/ HTTP/1.1\r\n"));
         // Cap067: non-API GET is a sendfile wire candidate on Linux; proxy prefix stays excluded.
@@ -1191,10 +1333,16 @@ mod tests {
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
             name: "site".into(),
             r#match: RouteMatch {
                 path: "/site".into(),
@@ -1203,6 +1351,9 @@ mod tests {
                 regex: None,
                 header: None,
                 header_value: None,
+                listen_port: None,
+                literal: false,
+                exact: false,
             },
             upstream: None,
             root,
@@ -1210,7 +1361,9 @@ mod tests {
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
         };
         let api = RouteConfig {
@@ -1219,10 +1372,16 @@ mod tests {
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
             name: "api".into(),
             r#match: RouteMatch {
                 path: "/api".into(),
@@ -1231,6 +1390,9 @@ mod tests {
                 regex: None,
                 header: None,
                 header_value: None,
+                listen_port: None,
+                literal: false,
+                exact: false,
             },
             upstream: Some("backend".into()),
             root: None,
@@ -1238,7 +1400,9 @@ mod tests {
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
         };
         let mut upstreams = HashMap::new();
@@ -1272,20 +1436,68 @@ mod tests {
         }
     }
 
-    async fn state_for(
+    async fn state_for_inner(
         config: AppConfig,
+    ) -> (Arc<ServerState>, execute_backend::StaticDispatchTestGuard) {
+        state_for_inner_with_waf(config, None).await
+    }
+
+    async fn state_for_inner_with_waf(
+        config: AppConfig,
+        waf_binding: Option<crate::waf::WafRuntimeBinding>,
     ) -> (Arc<ServerState>, execute_backend::StaticDispatchTestGuard) {
         let runtime = Arc::new(exyonq_mod_static::StaticRuntime::new());
         let service: Arc<dyn exyonq_module_api::static_dispatch::StaticDispatchService> =
             runtime.clone();
         let static_guard = execute_backend::StaticDispatchTestGuard::install(service);
-        ensure_wire_hooks();
+        install_wire_hooks_once();
         exyonq_mod_static::install_kernel_hooks(runtime);
         let proxy_client = build_incoming_client();
-        let state = ServerState::new_with_generation(1, config, proxy_client)
-            .await
-            .expect("server state");
+        let state = match waf_binding {
+            Some(binding) => {
+                ServerState::new_with_waf_binding_for_test(1, config, proxy_client, binding).await
+            }
+            None => ServerState::new_with_generation(1, config, proxy_client).await,
+        }
+        .expect("server state");
         (state, static_guard)
+    }
+
+    async fn state_for(
+        config: AppConfig,
+    ) -> (
+        Arc<ServerState>,
+        (
+            execute_backend::StaticDispatchTestGuard,
+            tokio::sync::MutexGuard<'static, ()>,
+        ),
+    ) {
+        // Hold the shared gate for the whole test: this installs a real pinned
+        // static runtime that must not be swapped out mid-flight by another
+        // test's kernel-hook install. Tests needing several states must hoist
+        // the gate once and call `state_for_inner` — the tokio mutex is not
+        // re-entrant, a second `state_for` would self-deadlock.
+        let gate = crate::kernel::test_hooks::wire_hooks_gate().await;
+        let (state, static_guard) = state_for_inner(config).await;
+        (state, (static_guard, gate))
+    }
+
+    /// WAF reject tests: same as `state_for` but the state carries an explicit
+    /// binding instead of the process-global one — installing a rejecting
+    /// binding globally would leak it into every concurrently built state.
+    async fn state_for_with_waf(
+        config: AppConfig,
+        waf_binding: crate::waf::WafRuntimeBinding,
+    ) -> (
+        Arc<ServerState>,
+        (
+            execute_backend::StaticDispatchTestGuard,
+            tokio::sync::MutexGuard<'static, ()>,
+        ),
+    ) {
+        let gate = crate::kernel::test_hooks::wire_hooks_gate().await;
+        let (state, static_guard) = state_for_inner_with_waf(config, Some(waf_binding)).await;
+        (state, (static_guard, gate))
     }
 
     /// `/site/*` wire heads must match route `"site"` and resolve to `Backend::Static` offline.
@@ -1390,8 +1602,11 @@ mod tests {
     #[tokio::test]
     async fn wire_static_plan_includes_sendfile_candidates_on_linux() {
         let dir = tempfile::tempdir().unwrap();
+        // Two states in one test: hoist the gate once (`state_for` would
+        // self-deadlock on the second acquire — the gate is not re-entrant).
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate().await;
         let (with_site, _static_guard) =
-            state_for(bench_site_config(Some(dir.path().to_path_buf()))).await;
+            state_for_inner(bench_site_config(Some(dir.path().to_path_buf()))).await;
         let health = Bytes::from_static(b"GET /health HTTP/1.1\r\n");
         let plan =
             plan_wire_after_headers(PlanStream, &with_site, health, Bytes::new()).expect("plan");
@@ -1409,7 +1624,7 @@ mod tests {
         #[cfg(not(target_os = "linux"))]
         assert!(matches!(plan, WirePlan::Hyper(..)));
 
-        let (api_only, _static_guard2) = state_for(bench_site_config(None)).await;
+        let (api_only, _static_guard2) = state_for_inner(bench_site_config(None)).await;
         assert!(api_only.site_static_slot.is_none());
         let plan =
             plan_wire_after_headers(PlanStream, &api_only, site_asset, Bytes::new()).expect("plan");
@@ -1468,6 +1683,7 @@ mod tests {
     #[test]
     fn core_blocking_path_semantics_use_module_api_facades() {
         ensure_wire_hooks();
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         let heads = [
             b"GET /site/1k.bin HTTP/1.1\r\n".as_slice(),
             b"HEAD /site/1k.bin HTTP/1.1\r\n",
@@ -1494,6 +1710,7 @@ mod tests {
     #[test]
     fn filename_is_not_special_for_sendfile_eligibility() {
         ensure_wire_hooks();
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         // Cap067: eligibility is capability-based; same predicate for any static GET/HEAD.
         // Cap061: must NOT require bench filenames — /site/foo.bin and /site/64k.bin equal.
         assert_eq!(
@@ -1523,6 +1740,9 @@ mod tests {
     #[test]
     fn sendfile_eligibility_kill_switch_disables() {
         ensure_wire_hooks();
+        // Mutates EXYONQ_EPOLL_SENDFILE + the process-lifetime cache — hold the
+        // gate so concurrent predicate asserts never observe the disabled flag.
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         exyonq_mod_static::reset_epoll_sendfile_enabled_cache_for_tests();
         std::env::set_var("EXYONQ_EPOLL_SENDFILE", "0");
         assert!(!epoll_sendfile_eligible(b"GET /site/64k.bin HTTP/1.1\r\n"));
@@ -1556,6 +1776,7 @@ mod tests {
     #[test]
     fn tokio_required_proxy_and_site_files() {
         ensure_wire_hooks();
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         assert!(tokio_accept_required(b"GET /api/ HTTP/1.1\r\n"));
         assert!(tokio_accept_required(b"GET /api/stream HTTP/1.1\r\n"));
         // Cap067: GET site assets are wire/sendfile candidates → not Tokio-required on Linux.
@@ -1623,6 +1844,9 @@ mod tests {
                     .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
                 ops,
                 pinned_generation,
+                scheme: "http",
+                local_port: None,
+                client_guard: None,
             };
             super::dispatch_tcp(stream, ctx).await;
         });
@@ -1681,8 +1905,11 @@ mod tests {
                     proxy_client: proxy_client.clone(),
                     x_forwarded_for: hyper::header::HeaderValue::from_str(&peer.ip().to_string())
                         .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
+                    scheme: "http",
+                    local_port: None,
                     ops: Arc::clone(&ops),
                     pinned_generation: state_accept.generation,
+                    client_guard: None,
                 };
                 tokio::spawn(async move {
                     super::dispatch_tcp(stream, ctx).await;
@@ -1744,13 +1971,16 @@ mod tests {
 
         ensure_wire_hooks();
         let _lock = WIRE_REJECT_TEST_LOCK.lock().await;
-        crate::waf::install_waf_runtime_binding(WafRuntimeBinding {
-            engine: Arc::new(NopWafEngine),
-            abuse: Some(Arc::new(AlwaysRateLimit)),
-            enforce: true,
-            wire_inspection_active: true,
-        });
-        let (state, _guard) = state_for(bench_site_config(None)).await;
+        let (state, _guard) = state_for_with_waf(
+            bench_site_config(None),
+            WafRuntimeBinding {
+                engine: Arc::new(NopWafEngine),
+                abuse: Some(Arc::new(AlwaysRateLimit)),
+                enforce: true,
+                wire_inspection_active: true,
+            },
+        )
+        .await;
         let before = super::wire_waf_reject_response_write_errors();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1771,6 +2001,9 @@ mod tests {
                     .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
                 ops,
                 pinned_generation,
+                scheme: "http",
+                local_port: None,
+                client_guard: None,
             };
             super::dispatch_tcp(stream, ctx).await;
         });
@@ -1798,7 +2031,6 @@ mod tests {
             before,
             "successful WAF reject write must not count as write failure"
         );
-        crate::waf::install_waf_runtime_binding(WafRuntimeBinding::default());
     }
 
     /// SUB-LET-PROTOCOL-WRITE-MISC / LET-059: after WAF reject is selected, a real peer
@@ -1820,13 +2052,16 @@ mod tests {
 
         ensure_wire_hooks();
         let _lock = WIRE_REJECT_TEST_LOCK.lock().await;
-        crate::waf::install_waf_runtime_binding(WafRuntimeBinding {
-            engine: Arc::new(NopWafEngine),
-            abuse: Some(Arc::new(AlwaysRateLimit)),
-            enforce: true,
-            wire_inspection_active: true,
-        });
-        let (state, _guard) = state_for(bench_site_config(None)).await;
+        let (state, _guard) = state_for_with_waf(
+            bench_site_config(None),
+            WafRuntimeBinding {
+                engine: Arc::new(NopWafEngine),
+                abuse: Some(Arc::new(AlwaysRateLimit)),
+                enforce: true,
+                wire_inspection_active: true,
+            },
+        )
+        .await;
         let before = super::wire_waf_reject_response_write_errors();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1845,8 +2080,11 @@ mod tests {
                     proxy_client: proxy_client.clone(),
                     x_forwarded_for: hyper::header::HeaderValue::from_str(&peer.ip().to_string())
                         .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
+                    scheme: "http",
+                    local_port: None,
                     ops: Arc::clone(&ops),
                     pinned_generation: state_accept.generation,
+                    client_guard: None,
                 };
                 tokio::spawn(async move {
                     super::dispatch_tcp(stream, ctx).await;
@@ -1882,7 +2120,6 @@ mod tests {
                 break;
             }
         }
-        crate::waf::install_waf_runtime_binding(WafRuntimeBinding::default());
         assert!(
             observed > before,
             "waf reject write failure must be observed (before={before} after={observed}); false DELIVERED_WAF_REJECT forbidden"
@@ -2015,6 +2252,9 @@ mod ws_tunnel_tests {
                 regex: None,
                 header: None,
                 header_value: None,
+                listen_port: None,
+                literal: false,
+                exact: false,
             },
             upstream: Some("backend".into()),
             root: None,
@@ -2022,15 +2262,23 @@ mod ws_tunnel_tests {
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
             cache_headers: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         };
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -2069,10 +2317,8 @@ mod ws_tunnel_tests {
         _proxy: crate::execute_backend::ProxyDispatchTestGuard,
     }
 
-    static WS_TUNNEL_TEST_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     pub(super) async fn install_cli_hooks() -> WireTunnelTestHooks {
-        let gate = WS_TUNNEL_TEST_GATE.lock().await;
+        let gate = crate::kernel::test_hooks::wire_hooks_gate().await;
         let static_runtime = Arc::new(exyonq_mod_static::StaticRuntime::new());
         let static_service: Arc<dyn StaticDispatchService> = static_runtime.clone();
         crate::execute_backend::clear_global_static_dispatch_for_register_once_test();
@@ -2094,7 +2340,7 @@ mod ws_tunnel_tests {
     }
 
     async fn install_hooks() -> WireTunnelTestHooks {
-        let gate = WS_TUNNEL_TEST_GATE.lock().await;
+        let gate = crate::kernel::test_hooks::wire_hooks_gate().await;
         let static_runtime = Arc::new(exyonq_mod_static::StaticRuntime::new());
         exyonq_mod_static::install_kernel_hooks(Arc::clone(&static_runtime));
         let static_service: Arc<dyn StaticDispatchService> = static_runtime.clone();
@@ -2140,8 +2386,11 @@ mod ws_tunnel_tests {
                     proxy_client: proxy_client.clone(),
                     x_forwarded_for: hyper::header::HeaderValue::from_str(&peer.ip().to_string())
                         .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("127.0.0.1")),
+                    scheme: "http",
+                    local_port: stream.local_addr().ok().map(|a| a.port()),
                     ops: Arc::clone(&ops),
                     pinned_generation: state.generation,
+                    client_guard: None,
                 };
                 tokio::spawn(async move {
                     dispatch_tcp(stream, ctx).await;
@@ -2218,12 +2467,11 @@ mod ws_tunnel_tests {
         let upstream_port = spawn_ws_echo_upstream().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen_port = listener.local_addr().unwrap().port();
-        drop(listener);
 
         let config = minimal_proxy_config(listen_port, upstream_port);
         let listen_addr: std::net::SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
         tokio::spawn(async move {
-            let _ = crate::server::run_on(listen_addr, config).await;
+            let _ = crate::server::run_on_with_listener(listen_addr, listener, config).await;
         });
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
@@ -2281,11 +2529,11 @@ mod ws_tunnel_tests {
         let upstream_port = spawn_ws_echo_upstream().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen_port = listener.local_addr().unwrap().port();
-        drop(listener);
 
         let config = minimal_proxy_config(listen_port, upstream_port);
+        let listen_addr: std::net::SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
         tokio::spawn(async move {
-            let _ = crate::server::run(config).await;
+            let _ = crate::server::run_on_with_listener(listen_addr, listener, config).await;
         });
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -2341,12 +2589,11 @@ mod ws_tunnel_tests {
         let upstream_port = spawn_ws_echo_upstream().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen_port = listener.local_addr().unwrap().port();
-        drop(listener);
 
         let config = minimal_proxy_config(listen_port, upstream_port);
         let listen_addr: std::net::SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
         tokio::spawn(async move {
-            let _ = crate::server::run_on(listen_addr, config).await;
+            let _ = crate::server::run_on_with_listener(listen_addr, listener, config).await;
         });
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -2418,8 +2665,8 @@ mod ws_tunnel_tests {
         use crate::waf::compute_wire_inspection_active;
         // Pure WAF-off P1: no signatures, no enforce+abuse → skip materialization.
         assert!(!compute_wire_inspection_active(false, false, false));
-        assert!(!compute_wire_inspection_active(false, true, false));
-        // enabled=false but abuse+enforce still requires wire inspect (pre-ARCH-002 behavior).
+        // Abuse is enforced independently of signature enforce/monitor mode.
+        assert!(compute_wire_inspection_active(false, true, false));
         assert!(compute_wire_inspection_active(false, true, true));
         // Monitor/Block signatures active regardless of enforce.
         assert!(compute_wire_inspection_active(true, false, false));
@@ -2483,13 +2730,12 @@ mod proxy_protocol_e2e_tests {
         let upstream_port = spawn_xff_echo_upstream().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen_port = listener.local_addr().unwrap().port();
-        drop(listener);
 
         let mut config = minimal_proxy_config(listen_port, upstream_port);
         config.servers[0].proxy_protocol = pp;
         let listen_addr: std::net::SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
         tokio::spawn(async move {
-            let _ = crate::server::run_on(listen_addr, config).await;
+            let _ = crate::server::run_on_with_listener(listen_addr, listener, config).await;
         });
         tokio::time::sleep(Duration::from_millis(400)).await;
         (listen_port, upstream_port)
@@ -2657,13 +2903,12 @@ mod proxy_protocol_e2e_tests {
         let upstream_port = spawn_xff_echo_upstream().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen_port = listener.local_addr().unwrap().port();
-        drop(listener);
 
         let mut config = minimal_proxy_config(listen_port, upstream_port);
         config.modules.real_ip = real_ip;
         let listen_addr: std::net::SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
         tokio::spawn(async move {
-            let _ = crate::server::run_on(listen_addr, config).await;
+            let _ = crate::server::run_on_with_listener(listen_addr, listener, config).await;
         });
         tokio::time::sleep(Duration::from_millis(400)).await;
         (listen_port, upstream_port)

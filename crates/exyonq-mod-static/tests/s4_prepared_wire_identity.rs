@@ -18,7 +18,8 @@
 
 use exyonq_mod_static::sendfile::SendfileAsset;
 use exyonq_mod_static::{
-    decide_conditional, ConditionalDecision, PreloadLimits, StaticRoot, StaticValidators,
+    decide_conditional, ConditionalDecision, DirRedirectPolicy, PreloadLimits, StaticRoot,
+    StaticRootRouteOpts, StaticValidators,
 };
 use std::fs;
 use std::path::Path;
@@ -28,9 +29,21 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 fn preload_root(root: &Path) -> StaticRoot {
-    let mut service =
-        StaticRoot::new_with_preload_limits(root, "/site", None, PreloadLimits::DEFAULT)
-            .expect("root");
+    let mut service = StaticRoot::new_with_preload_limits(
+        root,
+        "/site",
+        None,
+        PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            exact: false,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
+    )
+    .expect("root");
     service.preload_tree().expect("preload");
     service
 }
@@ -46,7 +59,7 @@ fn open_prepared(service: &StaticRoot, request_path: &str) -> SendfileAsset {
             &file_path,
             Some(exyonq_mod_static::sendfile::OpenUnderRoot {
                 canonical_root: service.canonical_root(),
-                root_dir_fd: service.root_dir_fd(),
+                root_dir_fd: service.root_dir_fd().expect("dir roots carry a dirfd"),
             }),
             0,
             prepared,

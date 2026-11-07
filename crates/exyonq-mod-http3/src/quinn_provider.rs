@@ -76,11 +76,12 @@ where
                     return;
                 }
             };
-            let Ok(lease) = lifecycle.try_enter_connection() else {
+            let peer_ip = conn.remote_address().ip().to_string();
+            let Ok(lease) = lifecycle.try_enter_connection_for(&peer_ip) else {
                 conn.close(VarInt::from_u32(0), b"draining");
                 return;
             };
-            if let Err(err) = serve_quic_connection(conn, dispatch, lease).await {
+            if let Err(err) = serve_quic_connection(conn, dispatch, lease, peer_ip).await {
                 warn!(%err, "http3 connection ended with error");
             }
         });
@@ -93,6 +94,7 @@ async fn serve_quic_connection<L>(
     conn: quinn::Connection,
     dispatch: Arc<dyn Http3DispatchService>,
     _lease: L,
+    peer_ip: String,
 ) -> anyhow::Result<()>
 where
     L: Send + 'static,
@@ -104,7 +106,6 @@ where
         let Ok((req, mut stream)) = resolver.resolve_request().await else {
             continue;
         };
-        let peer_ip = "127.0.0.1";
         let req = match collect_request_body(req, &mut stream).await {
             Ok(req) => req,
             Err(RequestBodyReadError::TooLarge) => {
@@ -126,7 +127,7 @@ where
                 continue;
             }
         };
-        match dispatch.dispatch(req, peer_ip).await {
+        match dispatch.dispatch(req, &peer_ip).await {
             Ok(response) => {
                 if let Err(err) = write_h3_response(&mut stream, response).await {
                     RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);

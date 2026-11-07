@@ -45,7 +45,8 @@ names the real commands that now provide that coverage.
 - [ ] `bash scripts/gates/project-integrity-gate.sh --selftest` and `--tree .` PASS.
 - [ ] `bash scripts/gates/benchmark-integrity-gate.sh --selftest` and `--tree .` PASS.
 - [ ] `bash scripts/gates/data-provenance-gate.sh --selftest` PASS (and `--check` on any result package used for claims).
-- [ ] `bash scripts/security/scan-private-material.sh --git-tree --repo .` PASS.
+- [ ] `bash scripts/security/scan-private-material.sh --publication --repo .` PASS (tracked + untracked, non-ignored; exact push publication set).
+- [ ] `bash scripts/release/build-signed-release-bundle.sh --signing-key <owner-key>` PASS on the host candidate; inspect `SIGNATURE_VERIFY=PASS`, `CHECKSUMS_VERIFY=PASS` and `OFFICIAL_RELEASE=NO`.
 - [ ] `bash scripts/gates/unsafe-allowlist-gate.sh --tree .` PASS (ADR-045 ratchet).
 - [ ] `bash scripts/gates/publication-privacy-gate.sh` PASS on release material (rule 135).
 - [ ] Tracked waivers under `docs/governance/exceptions/` complete with expiry (`waiver-expiry-gate.sh --check`).
@@ -63,6 +64,7 @@ names the real commands that now provide that coverage.
 - [ ] Signing readiness reviewed ([signing-readiness.md](../governance/signing-readiness.md)) — production keys **outside** repo.
 - [ ] `git tag -s -a vX.Y.Z` on audited commit (SSH tag signing).
 - [ ] Cosign blob + OCI digest signing per `security/signing/` (manual owner ceremony).
+- [ ] SSH artifact signature (V2, namespace `file`) verifies over `SHA256SUMS.txt` against `security/signing/exyonq-release-artifact-signers`.
 - [ ] `release.yml` `security-release` job green.
 - [ ] Update [SECURITY.md](../../SECURITY.md) supported versions / current audit link.
 

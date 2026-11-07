@@ -1,0 +1,8 @@
+[package]
+name = "exyonq-mime"
+description = "Canonical extension→Content-Type table shared by all ExyonQ serving paths"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

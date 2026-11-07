@@ -200,7 +200,12 @@ enum PurgeCommand {
 enum ConfigCommand {
     /// Parse and validate config (no RuntimePlan compile).
     Lint {
-        path: PathBuf,
+        /// Config file — or pass `--config <path>` (`exyonq validate` parity).
+        #[arg(conflicts_with = "config", required_unless_present = "config")]
+        path: Option<PathBuf>,
+        /// Same as positional `path`, in flag form.
+        #[arg(long)]
+        config: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
         #[arg(long)]
@@ -213,7 +218,12 @@ enum ConfigCommand {
     },
     /// Alias of `lint`: parse and validate config (no RuntimePlan compile).
     Check {
-        path: PathBuf,
+        /// Config file — or pass `--config <path>` (`exyonq validate` parity).
+        #[arg(conflicts_with = "config", required_unless_present = "config")]
+        path: Option<PathBuf>,
+        /// Same as positional `path`, in flag form.
+        #[arg(long)]
+        config: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
         #[arg(long)]
@@ -232,7 +242,12 @@ enum ConfigCommand {
     },
     /// Validate and compile RuntimePlan offline (discard; no listeners).
     Test {
-        path: PathBuf,
+        /// Config file — or pass `--config <path>` (`exyonq validate` parity).
+        #[arg(conflicts_with = "config", required_unless_present = "config")]
+        path: Option<PathBuf>,
+        /// Same as positional `path`, in flag form.
+        #[arg(long)]
+        config: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
         #[arg(long)]
@@ -551,6 +566,7 @@ fn run_config(command: ConfigCommand) -> ExitCode {
     match command {
         ConfigCommand::Lint {
             path,
+            config,
             format,
             strict,
             warn,
@@ -558,12 +574,13 @@ fn run_config(command: ConfigCommand) -> ExitCode {
         }
         | ConfigCommand::Check {
             path,
+            config,
             format,
             strict,
             warn,
             no_color,
         } => emit_result(&lint(
-            &path,
+            &path.or(config).expect("clap requires path or --config"),
             &CheckOptions {
                 format: map_fmt(format),
                 strict,
@@ -580,11 +597,12 @@ fn run_config(command: ConfigCommand) -> ExitCode {
         )),
         ConfigCommand::Test {
             path,
+            config,
             format,
             strict,
             no_color,
         } => emit_result(&test_config(
-            &path,
+            &path.or(config).expect("clap requires path or --config"),
             &CheckOptions {
                 format: map_fmt(format),
                 strict,
@@ -1273,11 +1291,10 @@ fn htaccess_explain(path: &Path, format: DiagFormat) -> ExitCode {
         let name = d.name.to_ascii_lowercase();
         let class = match name.as_str() {
             "directoryindex" | "redirect" | "rewriteengine" | "options" => "SUPPORTED",
-            "rewriterule" | "rewritecond" => "SUPPORTED_LIMITED",
-            "require" | "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authtype"
-            | "authuserfile" | "authname" | "authgroupfile" | "php_value" | "php_flag" => {
-                "FORBIDDEN"
-            }
+            "rewriterule" | "rewritecond" | "authtype" | "authname" | "authuserfile"
+            | "require" => "SUPPORTED_LIMITED",
+            "deny" | "allow" | "order" | "satisfy" | "allowoverride" | "authgroupfile"
+            | "php_value" | "php_flag" => "FORBIDDEN",
             "header" | "expiresactive" | "expiresbytype" | "expiresdefault" => "UNSUPPORTED",
             n if n.starts_with('<') => "UNSUPPORTED",
             _ => "UNSUPPORTED",

@@ -15,7 +15,7 @@
  */
 //! STATIC_PRELOAD_MEMORY_FIX — bounded deterministic tree preload.
 
-use exyonq_mod_static::{PreloadLimits, StaticRoot};
+use exyonq_mod_static::{PreloadLimits, StaticRoot, StaticRootRouteOpts};
 use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -25,8 +25,19 @@ fn write_file(dir: &std::path::Path, name: &str, bytes: &[u8]) {
 }
 
 fn preload_with(limits: PreloadLimits, root: &std::path::Path) -> StaticRoot {
-    let mut service =
-        StaticRoot::new_with_preload_limits(root, "/site", None, limits).expect("root");
+    let mut service = StaticRoot::new_with_preload_limits(
+        root,
+        "/site",
+        None,
+        limits,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            dir_redirect: false,
+            ..Default::default()
+        },
+    )
+    .expect("root");
     service.preload_tree().expect("preload");
     service
 }
@@ -215,6 +226,14 @@ async fn dispatch_serves_skipped_file_on_demand() {
             index_file: None,
             route_name: "site".into(),
             route_host: None,
+            join_uri: false,
+            literal: false,
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
+            listen_port: None,
+            exact: false,
             preload_max_file_bytes: 1024, // skip over.bin
             preload_max_total_bytes: 1024 * 1024,
             preload_max_entries: 64,
@@ -226,7 +245,10 @@ async fn dispatch_serves_skipped_file_on_demand() {
             root_slot: 0,
             method: StaticMethod::Get,
             request_path: Arc::from("/site/over.bin"),
+            scheme: "http",
+            request_query: None,
             headers: Vec::new(),
+            local_port: None,
             materialization_budget_bytes: None,
         })
         .await;
@@ -238,7 +260,10 @@ async fn dispatch_serves_skipped_file_on_demand() {
             root_slot: 0,
             method: StaticMethod::Get,
             request_path: Arc::from("/site/ok.txt"),
+            scheme: "http",
+            request_query: None,
             headers: Vec::new(),
+            local_port: None,
             materialization_budget_bytes: None,
         })
         .await;
@@ -266,6 +291,14 @@ async fn reload_failure_keeps_old_snapshot() {
             index_file: None,
             route_name: "site".into(),
             route_host: None,
+            join_uri: false,
+            literal: false,
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
+            listen_port: None,
+            exact: false,
             preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
             preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
             preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
@@ -282,6 +315,14 @@ async fn reload_failure_keeps_old_snapshot() {
             index_file: None,
             route_name: "site".into(),
             route_host: None,
+            join_uri: false,
+            literal: false,
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
+            listen_port: None,
+            exact: false,
             preload_max_file_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_FILE_BYTES,
             preload_max_total_bytes: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_TOTAL_BYTES,
             preload_max_entries: StaticCompiledSlot::DEFAULT_PRELOAD_MAX_ENTRIES,
@@ -294,7 +335,10 @@ async fn reload_failure_keeps_old_snapshot() {
             root_slot: 0,
             method: StaticMethod::Get,
             request_path: Arc::from("/site/a.txt"),
+            scheme: "http",
+            request_query: None,
             headers: Vec::new(),
+            local_port: None,
             materialization_budget_bytes: None,
         })
         .await;

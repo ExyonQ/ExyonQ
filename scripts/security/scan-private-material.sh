@@ -5,7 +5,9 @@
 # Usage:
 #   scan-private-material.sh --tree DIR
 #   scan-private-material.sh --git-index [--repo DIR]
-#   scan-private-material.sh --git-tree [--repo DIR]
+#   scan-private-material.sh --git-tree --allow-blind-scan [--repo DIR]
+#   scan-private-material.sh --publication [--repo DIR]
+#   scan-private-material.sh --history [--repo DIR]
 #   scan-private-material.sh --git-diff [--repo DIR] [--base REF]
 #   scan-private-material.sh --archive FILE
 #   scan-private-material.sh --oci PATH
@@ -51,12 +53,16 @@ BASE="origin/main"
 ARCHIVE=""
 OCI=""
 ASSETS=""
+ALLOW_BLIND=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tree) MODE=tree; ROOT="${2:-}"; shift 2 ;;
     --git-index) MODE=git-index; shift ;;
     --git-tree) MODE=git-tree; shift ;;
+    --allow-blind-scan) ALLOW_BLIND=1; shift ;;
+    --publication) MODE=publication; shift ;;
+    --history) MODE=history; shift ;;
     --git-diff) MODE=git-diff; shift ;;
     --archive) MODE=archive; ARCHIVE="${2:-}"; shift 2 ;;
     --oci) MODE=oci; OCI="${2:-}"; shift 2 ;;
@@ -73,6 +79,12 @@ done
 
 [[ -n "$MODE" ]] || { echo "ERROR: mode required" >&2; usage >&2; exit 2; }
 
+if [[ "$MODE" == "git-tree" && "$ALLOW_BLIND" != "1" ]]; then
+  echo "ERROR: --git-tree is blind to untracked and staged content; use --publication." >&2
+  echo "ERROR: --allow-blind-scan is accepted only for explicit diagnostic tests." >&2
+  exit 2
+fi
+
 PY="$(pick_python)"
 [[ -f "$ENGINE" ]] || { echo "ERROR: missing engine $ENGINE" >&2; exit 2; }
 
@@ -85,7 +97,13 @@ case "$MODE" in
     exec "$PY" "$ENGINE" git-index --repo "$REPO"
     ;;
   git-tree)
-    exec "$PY" "$ENGINE" git-tree --repo "$REPO"
+    exec "$PY" "$ENGINE" git-tree --repo "$REPO" --allow-blind-scan
+    ;;
+  publication)
+    exec "$PY" "$ENGINE" git-publication --repo "$REPO"
+    ;;
+  history)
+    exec "$PY" "$ENGINE" history --repo "$REPO"
     ;;
   git-diff)
     exec "$PY" "$ENGINE" git-diff --repo "$REPO" --base "$BASE"

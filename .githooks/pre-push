@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# EXYONQ-SEC-PRIVATE-MATERIAL-ZERO: fail-closed publication gate.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+# Consume Git's ref-update stream; the gate does not need it.
+cat >/dev/null || true
+bash "$ROOT/scripts/verify-no-private-paths.sh"
+exec bash "$ROOT/scripts/security/scan-private-material.sh" --publication --repo "$ROOT"

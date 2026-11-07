@@ -102,16 +102,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: private-material-zero (git tree)
-        run: bash scripts/security/scan-private-material.sh --git-tree --repo .
+        with:
+          # The history gate must inspect every reachable commit, not a shallow tip.
+          fetch-depth: 0
+      - name: private-material-zero (publication set)
+        run: bash scripts/security/scan-private-material.sh --publication --repo .
       - name: private-material-zero selftest
         run: bash scripts/security/scan-private-material.sh --selftest
+      - name: private-material-zero (reachable history)
+        run: bash scripts/security/scan-private-material.sh --history --repo .
+      - name: publication path guard
+        run: bash scripts/security/tests/test-publication-path-guard.sh
+      - name: publication hooks clean-worktree regression
+        run: bash scripts/security/tests/test-publication-hooks.sh
 
   integrity-gates:
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: project-integrity selftest + tree
         run: |
           bash scripts/gates/project-integrity-gate.sh --selftest
@@ -130,6 +141,16 @@ jobs:
         run: |
           bash scripts/gates/publication-privacy-gate.sh --selftest
           bash scripts/gates/publication-privacy-gate.sh
+      - name: real-evidence selftest + changed report/evidence
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          bash scripts/gates/real-evidence-gate.sh --selftest
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
+            bash scripts/gates/real-evidence-gate.sh --diff HEAD^
+          else
+            bash scripts/gates/real-evidence-gate.sh --diff "${BASE_SHA}...HEAD"
+          fi
       - name: release-audit infra selftest
         run: |
           bash scripts/verify-release-audit.sh --dry-run-infra

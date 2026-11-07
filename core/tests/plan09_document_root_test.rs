@@ -167,6 +167,9 @@ fn build_dispatch_request_uses_pool_a_script_under_root_a() {
     let request = build_fcgi_dispatch_request(
         0,
         Some(&root),
+        None,
+        None,
+        None,
         "GET",
         "/index.php",
         "",
@@ -196,6 +199,9 @@ fn build_dispatch_request_preserves_path_info() {
     let request = build_fcgi_dispatch_request(
         0,
         Some(&root),
+        None,
+        None,
+        None,
         "GET",
         "/api.php/posts/hello",
         "",
@@ -223,6 +229,9 @@ fn build_dispatch_request_pool_b_differs_from_pool_a() {
     let req_a = build_fcgi_dispatch_request(
         0,
         Some(&root_a),
+        None,
+        None,
+        None,
         "GET",
         "/a.php",
         "",
@@ -236,6 +245,9 @@ fn build_dispatch_request_pool_b_differs_from_pool_a() {
     let req_b = build_fcgi_dispatch_request(
         1,
         Some(&root_b),
+        None,
+        None,
+        None,
         "GET",
         "/b.php",
         "",
@@ -260,6 +272,9 @@ fn missing_document_root_fails_before_dispatch() {
     let err = build_fcgi_dispatch_request(
         0,
         None,
+        None,
+        None,
+        None,
         "GET",
         "/index.php",
         "",
@@ -270,7 +285,7 @@ fn missing_document_root_fails_before_dispatch() {
         80,
     )
     .unwrap_err();
-    assert_eq!(err, FastcgiScriptResolutionOutcome::Forbidden);
+    assert_eq!(err, FastcgiScriptResolutionOutcome::ProbeError);
 }
 
 #[tokio::test]
@@ -298,6 +313,9 @@ async fn script_resolution_failure_does_not_invoke_executor() {
     let err = build_fcgi_dispatch_request(
         0,
         None,
+        None,
+        None,
+        None,
         "GET",
         "/index.php",
         "",
@@ -308,7 +326,7 @@ async fn script_resolution_failure_does_not_invoke_executor() {
         80,
     )
     .unwrap_err();
-    assert_eq!(err, FastcgiScriptResolutionOutcome::Forbidden);
+    assert_eq!(err, FastcgiScriptResolutionOutcome::ProbeError);
     assert_eq!(CALLS.load(Ordering::SeqCst), 0);
 }
 

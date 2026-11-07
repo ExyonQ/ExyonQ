@@ -45,6 +45,8 @@ const CLI_VERSION: &str = concat!(
     env!("EXYONQ_ARTIFACT_VERSION"),
     "\nsource_revision=",
     env!("EXYONQ_SOURCE_REVISION"),
+    "\nsource_tag=",
+    env!("EXYONQ_SOURCE_TAG"),
     "\ntarget=",
     env!("EXYONQ_TARGET"),
     "\nprofile=",
@@ -61,6 +63,8 @@ const CLI_VERSION: &str = concat!(
     env!("EXYONQ_ARTIFACT_VERSION"),
     "\nsource_revision=",
     env!("EXYONQ_SOURCE_REVISION"),
+    "\nsource_tag=",
+    env!("EXYONQ_SOURCE_TAG"),
     "\ntarget=",
     env!("EXYONQ_TARGET"),
     "\nprofile=",
@@ -89,8 +93,10 @@ enum Commands {
     },
     /// Validate native IR (TOML).
     Validate {
+        /// Path to the IR TOML config (positional or --config).
+        path: Option<PathBuf>,
         #[arg(short, long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
     },
     /// Compile Serverfile (.exy) to IR TOML.
     Compile {
@@ -310,6 +316,10 @@ async fn async_main() -> anyhow::Result<()> {
                 .map_err(|_| anyhow::anyhow!("ACME integration service already registered"))?;
             exyonq_metrics::register_observability_runtime()
                 .map_err(|_| anyhow::anyhow!("observability runtime already registered"))?;
+            // AP P1: real process RSS and configured accept-worker count on /metrics.
+            exyonq_module_api::register_prometheus_appender(
+                exyonq_core::append_worker_memory_prometheus,
+            );
             // Q-04 / ADR-057: FPC counters on /metrics for `exyonqctl cache stats`.
             exyonq_module_api::register_prometheus_appender(exyonq_core::append_fpc_prometheus);
             // NG-09: upstream DNS re-resolve counters on /metrics.
@@ -340,7 +350,13 @@ async fn async_main() -> anyhow::Result<()> {
             }
             run_result?;
         }
-        Commands::Validate { config } => {
+        Commands::Validate { path, config } => {
+            let Some(config) = config.or(path) else {
+                eprintln!(
+                    "error: `exyonq validate` requires a config path (positional or --config)"
+                );
+                std::process::exit(2);
+            };
             eprintln!(
                 "warning: `exyonq validate` is transitional; prefer `exyonqctl config lint` \
                  (or `exyonqctl config test` for RuntimePlan compile)"
@@ -663,6 +679,7 @@ mod htaccess_overlay_tests {
         config.routes.push(exyonq_config_ir::RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
+            access: None,
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),
@@ -676,15 +693,22 @@ mod htaccess_overlay_tests {
             redirect: None,
             rewrite: None,
             fastcgi: Some("php".into()),
+            fastcgi_script_root: None,
             htaccess: exyonq_config_ir::HtaccessMode::Overlay,
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         });
         config.pools_fcgi.insert(
             "php".into(),
@@ -712,6 +736,7 @@ mod htaccess_overlay_tests {
         config.routes.push(exyonq_config_ir::RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
+            access: None,
             name: "php".into(),
             r#match: exyonq_config_ir::RouteMatch {
                 path: "/".into(),
@@ -725,15 +750,22 @@ mod htaccess_overlay_tests {
             redirect: None,
             rewrite: None,
             fastcgi: Some("php".into()),
+            fastcgi_script_root: None,
             htaccess: exyonq_config_ir::HtaccessMode::Off,
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         });
         assert!(compile_htaccess_site_bindings(&config).is_empty());
     }

@@ -15,9 +15,9 @@
  */
 //! Map analyzed NGINX config to ExyonQ IR and render TOML.
 
-use crate::ast::{AnalyzedConfig, LocationKind, ParsedLocation, ParsedServer};
+use crate::ast::{AnalyzedConfig, Directive, LocationKind, ParsedLocation, ParsedServer};
 use crate::location::{is_runtime_mappable, route_match_from_location, route_path};
-use crate::report::{CompatStatus, CompatibilityReport};
+use crate::report::{CompatStatus, CompatibilityReport, SourceLoc};
 use crate::rewrite::{is_safe_literal_redirect, map_rewrite_to_ir, parse_rewrite};
 use crate::upstream::{
     map_fcgi_pools_from_upstreams, map_http_upstreams, resolve_fastcgi_upstream_ref,
@@ -26,8 +26,8 @@ use crate::upstream::{
 use exyonq_config_ir::{
     deterministic_endpoint_id, AdminEndpointState, AppConfig, Endpoint, EndpointFailoverPolicy,
     EndpointSelectionPolicy, FcgiPoolConfig, MapConfig, MapInputKind, ModulesConfig,
-    ProxyProtocolConfig, RedirectConfig, RouteConfig, RouteMatch, ServerConfig, ServerNames,
-    UpstreamConfig, CONFIG_VERSION_V1,
+    ProxyProtocolConfig, RedirectConfig, RouteAccessConfig, RouteAccessEffect, RouteAccessRule,
+    RouteConfig, RouteMatch, ServerConfig, ServerNames, UpstreamConfig, CONFIG_VERSION_V1,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -126,8 +126,20 @@ pub fn map_to_ir(
             .collect();
     let mut rate_routes: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
+    let mut rate_route_options: std::collections::BTreeMap<
+        String,
+        exyonq_config_ir::RateLimitRouteOptions,
+    > = std::collections::BTreeMap::new();
+    let mut rate_route_limits: std::collections::BTreeMap<
+        String,
+        exyonq_config_ir::RateLimitRoutePolicy,
+    > = std::collections::BTreeMap::new();
 
     for (server_index, server) in analyzed.servers.iter().enumerate() {
+        // Routes accumulate globally across servers — remember where this
+        // server's span begins so the `/` fallback check below only considers
+        // THIS server's locations (per-server `root`/redirect options differ).
+        let routes_base = routes.len();
         let (listen, proxy_protocol_flag) = map_listen(server, report);
         let server_names = map_server_names(server, report);
         let mut route_names = Vec::new();
@@ -139,6 +151,7 @@ pub fn map_to_ir(
         let server_mirror = crate::analyze::parse_mirror(&server.directives, report);
         let server_slice = crate::analyze::parse_slice(&server.directives, report);
         let server_auth = crate::analyze::parse_auth(&server.directives, report);
+        let server_access = map_access_directives(&server.directives, report);
         if let Some(v) = server.gunzip {
             report.push(
                 &server.loc,
@@ -163,9 +176,21 @@ pub fn map_to_ir(
 
         if let Some(mut route) = map_server_return(server_index, server, report) {
             route.gunzip = server.gunzip;
+            route.access = server_access.clone();
             route_names.push(route.name.clone());
             routes.push(route);
         } else {
+            // EXY-03: `alias` is location-scoped in NGINX; at server level it
+            // cannot be represented — report once, never silently map.
+            if let Some(d) = server.directives.iter().find(|d| d.name == "alias") {
+                report.push(
+                    &d.loc,
+                    "alias",
+                    CompatStatus::Error,
+                    "`alias` is only valid inside a prefix location block",
+                    None,
+                );
+            }
             for (loc_index, location) in server.locations.iter().enumerate() {
                 let route_name = format!("srv{}_loc{}", server_index + 1, loc_index + 1);
                 if let Some(mut route) = map_location(
@@ -232,30 +257,91 @@ pub fn map_to_ir(
                         location_auth,
                         server_auth.clone(),
                         analyzed.auth_http.clone(),
+                        report,
+                        &location.loc,
                     ) {
                         auth_routes.insert(route.name.clone(), cfg);
                     }
-                    let location_limit =
-                        crate::analyze::parse_limit_req(&location.directives, report);
-                    if let Some(req) = location_limit
-                        .or(server.limit_req.clone())
-                        .or(analyzed.limit_req_http.clone())
-                    {
+                    let location_access = map_access_directives(&location.directives, report);
+                    route.access = location_access.or_else(|| server_access.clone());
+                    let (_, location_reqs, location_dry_run, location_status, location_log_level) =
+                        crate::analyze::parse_limit_scope(&location.directives, report);
+                    let reqs = if !location_reqs.is_empty() {
+                        location_reqs
+                    } else if !server.limit_reqs.is_empty() {
+                        server.limit_reqs.clone()
+                    } else {
+                        analyzed.limit_reqs_http.clone()
+                    };
+                    let status = location_status
+                        .or(server.limit_req_status)
+                        .or(analyzed.limit_req_status_http)
+                        .unwrap_or(503);
+                    let dry_run = location_dry_run
+                        .or(server.limit_req_dry_run)
+                        .or(analyzed.limit_req_dry_run_http)
+                        .unwrap_or(false);
+                    let log_level = location_log_level
+                        .or_else(|| server.limit_req_log_level.clone())
+                        .or_else(|| analyzed.limit_req_log_level_http.clone())
+                        .unwrap_or_else(|| "error".to_string());
+                    let mut limits = Vec::new();
+                    for req in reqs {
                         if let Some(zone) = rate_zones.get_mut(&req.zone) {
-                            zone.burst = req.burst;
-                            rate_routes.insert(route.name.clone(), req.zone);
+                            zone.burst = zone.burst.max(req.burst.max(1));
+                            limits.push(exyonq_config_ir::RateLimitLimit {
+                                zone: req.zone.clone(),
+                                burst: Some(req.burst),
+                                delay: req.delay,
+                                nodelay: req.nodelay,
+                            });
+                        } else {
+                            report.push(
+                                &location.loc,
+                                "limit_req",
+                                CompatStatus::Error,
+                                format!(
+                                    "limit_req references undefined zone `{}`; use limit_req_zone first",
+                                    req.zone
+                                ),
+                                None,
+                            );
                         }
+                    }
+                    if let Some(first) = limits.first() {
+                        rate_routes.insert(route.name.clone(), first.zone.clone());
+                        rate_route_options.insert(
+                            route.name.clone(),
+                            exyonq_config_ir::RateLimitRouteOptions {
+                                burst: first.burst,
+                                delay: first.delay,
+                                nodelay: first.nodelay,
+                            },
+                        );
+                        rate_route_limits.insert(
+                            route.name.clone(),
+                            exyonq_config_ir::RateLimitRoutePolicy {
+                                limits,
+                                status,
+                                dry_run,
+                                log_level,
+                            },
+                        );
                     }
                     route_names.push(route.name.clone());
                     routes.push(route);
                 }
             }
 
-            if route_names.is_empty() {
+            // EXY-03: NGINX serves unmatched URIs from the server `root` even
+            // when locations exist — emit the `/` fallback unless a location
+            // already produced a `/` route.
+            if !routes[routes_base..].iter().any(|r| r.r#match.path == "/") {
                 if let Some(mut route) = server_default_route(server_index, server, report) {
                     route.response_headers = server_headers.clone();
                     route.cache_headers = server_expires.clone();
                     route.gunzip = server.gunzip;
+                    route.access = server_access.clone();
                     if let Some(cfg) = merge_sub_filter(
                         None,
                         server_sub_filter.clone(),
@@ -327,9 +413,12 @@ pub fn map_to_ir(
     app.modules.slice.routes = slice_routes;
     app.modules.auth.routes = auth_routes;
     if !rate_zones.is_empty() {
-        app.modules.ratelimit.enabled = true;
+        // Zone limits are enforced by core/zone_ratelimit. Do not enable the
+        // legacy global IP limiter merely because nginx declared a zone.
         app.modules.ratelimit.zones = rate_zones;
         app.modules.ratelimit.routes = rate_routes;
+        app.modules.ratelimit.route_options = rate_route_options;
+        app.modules.ratelimit.route_limits = rate_route_limits;
     }
     report.summary.servers_parsed = analyzed.servers.len();
     report.summary.listeners_generated = app.servers.len();
@@ -614,19 +703,96 @@ fn server_index_files(server: &ParsedServer) -> Option<String> {
         .cloned()
 }
 
-fn location_root(
+/// EXY-03: resolve the effective filesystem root for a location *and* the
+/// mapping mode it requires.
+///
+/// - `alias` → [`RootMode::Remainder`] (`root + (URI − prefix)`) — a direct match
+///   for native `route.root` semantics.
+/// - `root` → [`RootMode::FullUri`] (`root + full URI`) — preserved faithfully
+///   via `route.root_mode = "full-uri"`, never silently re-rooted.
+/// - Server `root` inherited by a location keeps NGINX semantics as well.
+///
+/// Unrepresentable cases (`alias` outside a prefix location, both directives
+/// in one location, `alias` at server level) are reported as `Error` and
+/// produce no route — never silently transformed into other behavior.
+fn location_doc_root(
     location: &ParsedLocation,
     server: &ParsedServer,
     report: &mut CompatibilityReport,
-) -> Option<String> {
-    if let Some(local) = location
+) -> Option<(String, exyonq_config_ir::RootMode)> {
+    use exyonq_config_ir::RootMode;
+
+    let alias = location
+        .directives
+        .iter()
+        .find(|d| d.name == "alias")
+        .and_then(|d| d.args.first());
+    let root = location
         .directives
         .iter()
         .find(|d| d.name == "root")
-        .and_then(|d| d.args.first())
-    {
-        return Some(local.clone());
+        .and_then(|d| d.args.first());
+
+    if alias.is_some() && root.is_some() {
+        report.push(
+            &location.loc,
+            "alias",
+            CompatStatus::Error,
+            "location declares both `root` and `alias`; NGINX also rejects this \
+             (`alias` is duplicate after `root`)",
+            None,
+        );
+        return None;
     }
+
+    if let Some(path) = alias {
+        if matches!(location.kind, LocationKind::Exact) {
+            // EXY-03: `location =` + `alias` — the alias is the verbatim target
+            // (file or dir). match.exact + remainder join serves it for the
+            // single matching URI only.
+            report.push(
+                &location.loc,
+                "alias",
+                CompatStatus::Supported,
+                format!(
+                    "alias `{path}` under `=` location `{}` → verbatim file/dir target",
+                    location.raw_pattern
+                ),
+                Some(format!("route.root={path} (exact alias semantics)")),
+            );
+            return Some((path.clone(), exyonq_config_ir::RootMode::Remainder));
+        }
+        if !matches!(
+            location.kind,
+            LocationKind::Prefix | LocationKind::PreferentialPrefix
+        ) {
+            report.push(
+                &location.loc,
+                "alias",
+                CompatStatus::Error,
+                format!(
+                    "`alias` under a {} location is valid NGINX but not yet \
+                     representable — pending compatibility (EXY-03)",
+                    location.kind.as_str()
+                ),
+                None,
+            );
+            return None;
+        }
+        report.push(
+            &location.loc,
+            "alias",
+            CompatStatus::Supported,
+            format!("alias `{path}` mapped for `{}`", location.raw_pattern),
+            Some(format!("route.root={path} (alias semantics)")),
+        );
+        return Some((path.clone(), RootMode::Remainder));
+    }
+
+    if let Some(path) = root {
+        return Some((path.clone(), RootMode::FullUri));
+    }
+
     if let Some(inherited) = server_root(server) {
         report.summary.inherited_roots += 1;
         report.push(
@@ -634,9 +800,11 @@ fn location_root(
             "root",
             CompatStatus::Supported,
             format!("inherited root `{inherited}` from server block"),
-            Some(format!("route.document_root={inherited} (inherited)")),
+            Some(format!(
+                "route.root={inherited} + root_mode=full-uri (inherited)"
+            )),
         );
-        return Some(inherited);
+        return Some((inherited, RootMode::FullUri));
     }
     None
 }
@@ -695,6 +863,62 @@ fn d_extra_index_warnings(location: &ParsedLocation, report: &mut CompatibilityR
 }
 
 #[allow(clippy::too_many_arguments)]
+/// EXY-03: NGINX redirect-shaping directives (`absolute_redirect`,
+/// `port_in_redirect`, `server_name_in_redirect`). Location scope overrides
+/// server scope; absent → NGINX defaults (on/on/host-echo).
+fn redirect_policy_for(
+    location_directives: Option<&[Directive]>,
+    server: &ParsedServer,
+) -> (bool, bool, Option<String>) {
+    fn flag(directives: &[Directive], name: &str) -> Option<bool> {
+        directives
+            .iter()
+            .rev() // later directive wins within a scope
+            .find(|d| d.name == name)
+            .and_then(|d| d.args.first().map(|a| a == "on"))
+    }
+    let pick = |name: &str| {
+        location_directives
+            .and_then(|ds| flag(ds, name))
+            .or_else(|| flag(&server.directives, name))
+    };
+    let absolute = pick("absolute_redirect").unwrap_or(true);
+    let port = pick("port_in_redirect").unwrap_or(true);
+    let name_in_redirect = pick("server_name_in_redirect").unwrap_or(false);
+    // `server_name_in_redirect on` substitutes the primary literal server_name.
+    let fixed_host = if name_in_redirect {
+        server.directives.iter().find_map(|d| {
+            if d.name != "server_name" {
+                return None;
+            }
+            d.args
+                .iter()
+                .find(|a| !a.is_empty() && **a != "_" && !a.contains('*') && !a.starts_with('~'))
+                .cloned()
+        })
+    } else {
+        None
+    };
+    (absolute, port, fixed_host)
+}
+
+/// EXY-03: the server's `listen` port — NGINX routes are listener-scoped.
+/// `listen` missing → NGINX defaults to `80`.
+fn server_listen_port(server: &ParsedServer) -> Option<u16> {
+    let raw = server
+        .directives
+        .iter()
+        .find(|d| d.name == "listen")
+        .and_then(|d| d.args.first())
+        .and_then(|a| a.split_whitespace().next());
+    let port = match raw {
+        None => Some(80),
+        Some(v) => v.rsplit(':').next().and_then(|p| p.parse().ok()),
+    };
+    port.or(Some(80))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn map_location(
     route_name: &str,
     location: &ParsedLocation,
@@ -710,7 +934,16 @@ fn map_location(
     }
 
     let path = route_path(location);
-    let route_match = route_match_from_location(location);
+    let mut route_match = route_match_from_location(location);
+    route_match.listen_port = server_listen_port(server);
+    let deny_all_exact =
+        location.kind == LocationKind::Exact && location_has_unconditional_deny_all(location);
+    if deny_all_exact {
+        // Exact equality would leave `/wp-config.php/` to a catch-all FastCGI
+        // route (PHP PATH_INFO). A path-boundary deny is the safe equivalent.
+        route_match.exact = false;
+    }
+    let redirect_opts = redirect_policy_for(Some(&location.directives), server);
     if matches!(
         location.kind,
         LocationKind::Exact | LocationKind::PreferentialPrefix
@@ -724,8 +957,19 @@ fn map_location(
                 location.kind.as_str(),
                 location.raw_pattern
             ),
-            Some(format!("route match.path={path}")),
-            Some("Review exact/preferential-prefix semantics vs NGINX".into()),
+            Some(format!(
+                "route match.path={path} match.exact={}",
+                location.kind == LocationKind::Exact && !deny_all_exact
+            )),
+            Some(if deny_all_exact {
+                "exact deny-all widened to a path-boundary prefix to cover \
+                 slash/PATH_INFO variants; descendants also 403"
+                    .into()
+            } else if location.kind == LocationKind::Exact {
+                "EXY-03: `=` mapped to match.exact — verbatim equality, real".into()
+            } else {
+                "Review preferential-prefix semantics vs NGINX".into()
+            }),
             Some(location.kind.as_str()),
             None,
             None,
@@ -785,15 +1029,23 @@ fn map_location(
                         }),
                         rewrite: None,
                         fastcgi: None,
+                        fastcgi_script_root: None,
                         htaccess: Default::default(),
+                        access: None,
                         cache: None,
                         fallback_rewrite: None,
                         try_uri: None,
                         try_uri_dir: None,
+                        front_controller: None,
                         proxy_set_headers: Vec::new(),
                         cache_headers: None,
                         response_headers: Vec::new(),
                         location_rewrite: Vec::new(),
+                        root_mode: Default::default(),
+                        dir_redirect: false,
+                        dir_redirect_absolute: true,
+                        dir_redirect_port: true,
+                        dir_redirect_host: None,
                     });
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
@@ -808,15 +1060,23 @@ fn map_location(
                         redirect: None,
                         rewrite: Some(rw),
                         fastcgi: None,
+                        fastcgi_script_root: None,
                         htaccess: Default::default(),
+                        access: None,
                         cache: None,
                         fallback_rewrite: None,
                         try_uri: None,
                         try_uri_dir: None,
+                        front_controller: None,
                         proxy_set_headers: Vec::new(),
                         cache_headers: None,
                         response_headers: Vec::new(),
                         location_rewrite: Vec::new(),
+                        root_mode: Default::default(),
+                        dir_redirect: false,
+                        dir_redirect_absolute: true,
+                        dir_redirect_port: true,
+                        dir_redirect_host: None,
                     });
                 }
             }
@@ -853,16 +1113,16 @@ fn map_location(
         }
     }
 
-    let root = location_root(location, server, report);
-    if let Some(root) = root {
+    let doc_root = location_doc_root(location, server, report);
+    if let Some((root, root_mode)) = doc_root {
         let index = location_index(location, server, report);
         if location.directives.iter().any(|d| d.name == "root") {
             report.push(
                 &location.loc,
                 "root",
                 CompatStatus::Supported,
-                format!("static root `{root}` mapped for `{path}`"),
-                Some(format!("route.root={root}")),
+                format!("static root `{root}` mapped for `{path}` (root_mode=full-uri)"),
+                Some(format!("route.root={root} root_mode=full-uri")),
             );
         }
         let (fallback_rewrite, try_uri, try_uri_dir) =
@@ -878,19 +1138,107 @@ fn map_location(
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
             fallback_rewrite,
             try_uri,
             try_uri_dir,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode,
+            // NGINX answers directory-no-slash with 301 → URI/ for both `root`
+            // and `alias` locations.
+            dir_redirect: true,
+            dir_redirect_absolute: redirect_opts.0,
+            dir_redirect_port: redirect_opts.1,
+            dir_redirect_host: redirect_opts.2.clone(),
+        });
+    }
+
+    // F6-WP-01: `location = /wp-config.php { deny all; }` has no backend by
+    // design. Emit an access-only route; the caller attaches the mapped ACL
+    // and core treats an unconditional deny-all policy as a terminal (403).
+    if location_has_unconditional_deny_all(location) {
+        report.push(
+            &location.loc,
+            "deny",
+            if deny_all_exact {
+                CompatStatus::Partial
+            } else {
+                CompatStatus::Supported
+            },
+            if deny_all_exact {
+                format!(
+                    "deny all in exact `{}` widened to a path-boundary prefix; no backend emitted",
+                    location.raw_pattern
+                )
+            } else {
+                format!(
+                    "deny all in `{}` is the route terminal (403); no backend emitted",
+                    location.raw_pattern
+                )
+            },
+            Some("[[route]] access = { deny = [\"all\"] }".into()),
+        );
+        return Some(RouteConfig {
+            gunzip: None,
+            cache_tags: Vec::new(),
+            name: route_name.to_string(),
+            r#match: route_match,
+            upstream: None,
+            root: None,
+            index: None,
+            redirect: None,
+            rewrite: None,
+            fastcgi: None,
+            fastcgi_script_root: None,
+            htaccess: Default::default(),
+            access: None,
+            cache: None,
+            fallback_rewrite: None,
+            try_uri: None,
+            try_uri_dir: None,
+            front_controller: None,
+            proxy_set_headers: Vec::new(),
+            cache_headers: None,
+            response_headers: Vec::new(),
+            location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         });
     }
 
     None
+}
+
+/// True only when the location's own ACL denies every client unconditionally.
+/// Any `allow` or `satisfy` disqualified the terminal shortcut; the normal
+/// importer path then decides whether the location is representable.
+fn location_has_unconditional_deny_all(location: &ParsedLocation) -> bool {
+    let mut deny_all = false;
+    for d in &location.directives {
+        match d.name.as_str() {
+            "allow" | "satisfy" => return false,
+            "deny" => {
+                let Some(value) = d.args.first() else {
+                    return false;
+                };
+                if value.trim_matches('"').eq_ignore_ascii_case("all") {
+                    deny_all = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    deny_all
 }
 
 fn map_location_try_files(
@@ -1026,15 +1374,23 @@ fn map_proxy(
         redirect: None,
         rewrite: None,
         fastcgi: None,
+        fastcgi_script_root: None,
         htaccess: Default::default(),
+        access: None,
         cache: None,
         fallback_rewrite: None,
         try_uri: None,
         try_uri_dir: None,
+        front_controller: None,
         proxy_set_headers,
         cache_headers: None,
         response_headers: Vec::new(),
         location_rewrite,
+        root_mode: Default::default(),
+        dir_redirect: false,
+        dir_redirect_absolute: true,
+        dir_redirect_port: true,
+        dir_redirect_host: None,
     })
 }
 
@@ -1343,6 +1699,97 @@ fn parse_nginx_expires_seconds(s: &str) -> Option<u64> {
     n.checked_mul(mult)
 }
 
+/// AP-05: nginx `allow`/`deny` (http/server/location scope) → route access.
+/// The ordered `rules` form preserves nginx's first-match semantics exactly.
+fn map_access_directives(
+    directives: &[crate::ast::Directive],
+    report: &mut CompatibilityReport,
+) -> Option<RouteAccessConfig> {
+    let mut rules = Vec::new();
+    let mut seen = false;
+    let mut fail_closed = false;
+    for d in directives {
+        match d.name.as_str() {
+            "allow" | "deny" => {
+                seen = true;
+                if d.args.len() != 1 {
+                    report.push(
+                        &d.loc,
+                        &d.name,
+                        CompatStatus::Error,
+                        format!("{} expects exactly one address/all", d.name),
+                        None,
+                    );
+                    fail_closed = true;
+                    continue;
+                }
+                let value = d.args[0].trim_matches('"');
+                if value.is_empty() {
+                    report.push(
+                        &d.loc,
+                        &d.name,
+                        CompatStatus::Error,
+                        format!("{} has an empty address", d.name),
+                        None,
+                    );
+                    fail_closed = true;
+                    continue;
+                }
+                let effect = if d.name == "allow" {
+                    RouteAccessEffect::Allow
+                } else {
+                    RouteAccessEffect::Deny
+                };
+                rules.push(RouteAccessRule {
+                    effect,
+                    source: value.to_string(),
+                });
+                report.push(
+                    &d.loc,
+                    &d.name,
+                    CompatStatus::Supported,
+                    format!("{} `{value}` → route.access.rules (first match)", d.name),
+                    Some("[[route]] access.rules".into()),
+                );
+            }
+            "satisfy" => {
+                let mode = d.args.first().map(String::as_str).unwrap_or("");
+                if !mode.eq_ignore_ascii_case("all") {
+                    report.push(
+                        &d.loc,
+                        "satisfy",
+                        CompatStatus::Error,
+                        "satisfy any (OR with auth) is not representable; ACL fails closed",
+                        None,
+                    );
+                    fail_closed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    if !seen {
+        return None;
+    }
+    if fail_closed {
+        return Some(RouteAccessConfig {
+            allow: Vec::new(),
+            deny: vec!["all".into()],
+            rules: Vec::new(),
+            methods: Vec::new(),
+            schedule: None,
+        });
+    }
+
+    Some(RouteAccessConfig {
+        allow: Vec::new(),
+        deny: Vec::new(),
+        rules,
+        methods: Vec::new(),
+        schedule: None,
+    })
+}
+
 /// ADR-062 / F1-R19: `add_header Name Value [always];` → `response_headers`.
 fn map_add_header_directives(
     directives: &[crate::ast::Directive],
@@ -1571,8 +2018,65 @@ fn map_fastcgi(
     allow_tcp_fastcgi: bool,
 ) -> Option<RouteConfig> {
     let target = d.args.first()?;
-    let root = location_root(location, server, report);
-    let root_path = root.map(PathBuf::from);
+    let (root_path, script_root) = match location_doc_root(location, server, report) {
+        Some((alias, exyonq_config_ir::RootMode::Remainder)) => {
+            // EXY-03: `alias` + fastcgi_pass — faithful via route script root:
+            // resolution joins alias + (URI − match.path), SCRIPT_NAME keeps
+            // the full request URI ($request_filename semantics).
+            report.push(
+                &location.loc,
+                "alias",
+                CompatStatus::Supported,
+                format!("alias+fastcgi `{alias}` → route fastcgi_script_root (remainder join)"),
+                Some(format!("route fastcgi_script_root={alias}")),
+            );
+            (None, Some(PathBuf::from(alias)))
+        }
+        Some((root, _)) => (Some(PathBuf::from(root)), None),
+        None => (None, None),
+    };
+
+    // EXY-10: `try_files $uri $uri/ /index.php?$args` on a fastcgi location →
+    // route `front_controller` (PHP fallback only; other fallback shapes stay
+    // reported by the generic try_files analysis).
+    // Contract: only the canonical `$uri $uri/ /fallback.php` shape maps —
+    // without the `$uri/` candidate NGINX never consults the directory index,
+    // while our fallback does, so mapping it would misreport parity.
+    let tf_mapping = map_location_try_files(location);
+    let front_controller = tf_mapping
+        .as_ref()
+        .and_then(|(fallback, _, try_uri_dir)| {
+            (*try_uri_dir == Some(true))
+                .then(|| fallback.clone())
+                .flatten()
+        })
+        .filter(|path| path.ends_with(".php"))
+        .map(|path| path.trim_start_matches('/').to_string());
+    // Report fidelity: push only where a route is actually emitted — a refused
+    // `fastcgi_pass` target must not carry a `Supported` claim for a route that
+    // does not exist (audit F-A). And when an admitted `try_files` shape is
+    // present but not mapped to `front_controller`, the generic analysis still
+    // claims `route.fallback_rewrite` — the corrective `Partial` marks that the
+    // emitted FastCGI route has no such fallback (audit F-B).
+    let report_fc = |report: &mut CompatibilityReport| {
+        if let Some(ref fc) = front_controller {
+            report.push(
+                &d.loc,
+                "try_files",
+                CompatStatus::Supported,
+                format!("fastcgi try_files fallback → route front_controller `{fc}`"),
+                Some(format!("route.front_controller={fc}")),
+            );
+        } else if tf_mapping.is_some() {
+            report.push(
+                &d.loc,
+                "try_files",
+                CompatStatus::Partial,
+                "try_files in fastcgi location not mapped to front_controller (requires `$uri/` candidate + `.php` fallback): emitted route resolves files directly, misses return 404",
+                Some("no route fallback emitted".to_string()),
+            );
+        }
+    };
 
     if target.starts_with("unix:") {
         let pool_name = format!("{route_name}_fcgi");
@@ -1621,6 +2125,7 @@ fn map_fastcgi(
                 None,
             );
         }
+        report_fc(report);
         return Some(RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1632,15 +2137,23 @@ fn map_fastcgi(
             redirect: None,
             rewrite: None,
             fastcgi: Some(pool_name),
+            fastcgi_script_root: script_root.clone(),
             htaccess: Default::default(),
+            access: None,
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: front_controller.clone(),
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         });
     }
 
@@ -1691,6 +2204,7 @@ fn map_fastcgi(
                     None,
                 );
             }
+            report_fc(report);
             return Some(RouteConfig {
                 gunzip: None,
                 cache_tags: Vec::new(),
@@ -1702,15 +2216,23 @@ fn map_fastcgi(
                 redirect: None,
                 rewrite: None,
                 fastcgi: Some(pool_name),
+                fastcgi_script_root: script_root.clone(),
                 htaccess: Default::default(),
+                access: None,
                 cache: None,
                 fallback_rewrite: None,
                 try_uri: None,
                 try_uri_dir: None,
+                front_controller: front_controller.clone(),
                 proxy_set_headers: Vec::new(),
                 cache_headers: None,
                 response_headers: Vec::new(),
                 location_rewrite: Vec::new(),
+                root_mode: Default::default(),
+                dir_redirect: false,
+                dir_redirect_absolute: true,
+                dir_redirect_port: true,
+                dir_redirect_host: None,
             });
         }
         report.push(
@@ -1732,6 +2254,7 @@ fn map_fastcgi(
             &d.loc,
             report,
         )?;
+        report_fc(report);
         return Some(RouteConfig {
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1743,15 +2266,23 @@ fn map_fastcgi(
             redirect: None,
             rewrite: None,
             fastcgi: Some(pool_name),
+            fastcgi_script_root: script_root.clone(),
             htaccess: Default::default(),
+            access: None,
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: front_controller.clone(),
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         });
     }
 
@@ -1885,15 +2416,23 @@ fn map_return(
                 redirect: Some(RedirectConfig { status, location }),
                 rewrite: None,
                 fastcgi: None,
+                fastcgi_script_root: None,
                 htaccess: Default::default(),
+                access: None,
                 cache: None,
                 fallback_rewrite: None,
                 try_uri: None,
                 try_uri_dir: None,
+                front_controller: None,
                 proxy_set_headers: Vec::new(),
                 cache_headers: None,
                 response_headers: Vec::new(),
                 location_rewrite: Vec::new(),
+                root_mode: Default::default(),
+                dir_redirect: false,
+                dir_redirect_absolute: true,
+                dir_redirect_port: true,
+                dir_redirect_host: None,
             })
         }
         404 => {
@@ -1967,12 +2506,13 @@ fn server_default_route(
     report: &mut CompatibilityReport,
 ) -> Option<RouteConfig> {
     let root = server_root(server)?;
+    let redirect_opts = redirect_policy_for(None, server);
     report.push(
         &server.loc,
         "root",
         CompatStatus::Supported,
         format!("server root `{root}` mapped to default `/` route"),
-        Some("route.root".into()),
+        Some("route.root + root_mode=full-uri".into()),
     );
     Some(RouteConfig {
         gunzip: None,
@@ -1981,7 +2521,7 @@ fn server_default_route(
         r#match: RouteMatch {
             path: "/".into(),
             host: None,
-
+            listen_port: server_listen_port(server),
             ..Default::default()
         },
         upstream: None,
@@ -1990,15 +2530,24 @@ fn server_default_route(
         redirect: None,
         rewrite: None,
         fastcgi: None,
+        fastcgi_script_root: None,
         htaccess: Default::default(),
+        access: None,
         cache: None,
         fallback_rewrite: None,
         try_uri: None,
         try_uri_dir: None,
+        front_controller: None,
         proxy_set_headers: Vec::new(),
         cache_headers: None,
         response_headers: Vec::new(),
         location_rewrite: Vec::new(),
+        // Server `root` is NGINX docroot semantics (`root + URI`).
+        root_mode: exyonq_config_ir::RootMode::FullUri,
+        dir_redirect: true,
+        dir_redirect_absolute: redirect_opts.0,
+        dir_redirect_port: redirect_opts.1,
+        dir_redirect_host: redirect_opts.2.clone(),
     })
 }
 
@@ -2138,15 +2687,96 @@ fn merge_auth(
     location: Option<crate::ast::ParsedAuth>,
     server: Option<crate::ast::ParsedAuth>,
     http: Option<crate::ast::ParsedAuth>,
+    report: &mut CompatibilityReport,
+    loc: &SourceLoc,
 ) -> Option<exyonq_config_ir::AuthRouteConfig> {
     let cfg = location.or(server).or(http)?;
     if cfg.off {
         return None;
     }
-    Some(exyonq_config_ir::AuthRouteConfig {
-        realm: cfg.realm?,
-        user_file: cfg.user_file?,
-    })
+    match (cfg.realm, cfg.user_file) {
+        (Some(realm), Some(user_file)) => Some(exyonq_config_ir::AuthRouteConfig {
+            realm,
+            user_file,
+            auth_request: None,
+        }),
+        (Some(_), None) => {
+            report.push(
+                loc,
+                "auth_basic",
+                CompatStatus::Error,
+                "auth_basic requires auth_basic_user_file; refusing to disable auth silently",
+                Some("add auth_basic_user_file <path>".into()),
+            );
+            None
+        }
+        (None, Some(_)) => {
+            report.push(
+                loc,
+                "auth_basic_user_file",
+                CompatStatus::Error,
+                "auth_basic_user_file without auth_basic realm; refusing to guess",
+                Some("add auth_basic \"<realm>\"".into()),
+            );
+            None
+        }
+        (None, None) => None,
+    }
+}
+
+fn emit_route_access_toml(out: &mut String, route: &RouteConfig) {
+    let Some(access) = &route.access else {
+        return;
+    };
+    out.push_str("access = {");
+    let mut first = true;
+    if !access.allow.is_empty() {
+        out.push_str(&format!(" allow = {:?}", access.allow));
+        first = false;
+    }
+    if !access.deny.is_empty() {
+        if !first {
+            out.push(',');
+        }
+        out.push_str(&format!(" deny = {:?}", access.deny));
+        first = false;
+    }
+    if !access.rules.is_empty() {
+        if !first {
+            out.push(',');
+        }
+        let rules = access
+            .rules
+            .iter()
+            .map(|rule| {
+                let effect = match rule.effect {
+                    RouteAccessEffect::Allow => "allow",
+                    RouteAccessEffect::Deny => "deny",
+                };
+                format!("{{ effect = {effect:?}, source = {:?} }}", rule.source)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(" rules = [{rules}]"));
+        first = false;
+    }
+    if !access.methods.is_empty() {
+        if !first {
+            out.push(',');
+        }
+        out.push_str(&format!(" methods = {:?}", access.methods));
+        first = false;
+    }
+    if let Some(schedule) = &access.schedule {
+        if !first {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            " schedule = {{ days = {:?}, start = {:?}, end = {:?} }}",
+            schedule.days, schedule.start, schedule.end
+        ));
+    }
+    out.push_str(" }\n");
 }
 
 fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> String {
@@ -2255,7 +2885,8 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         out.push_str(&format!("user_file = {:?}\n\n", cfg.user_file));
     }
     if !app.modules.ratelimit.zones.is_empty() {
-        out.push_str("[modules.ratelimit]\nenabled = true\n");
+        // Zone limits are independent of the legacy global IP limiter.
+        out.push_str("[modules.ratelimit]\nenabled = false\n");
         for (name, zone) in &app.modules.ratelimit.zones {
             out.push_str(&format!("[modules.ratelimit.zones.{name:?}]\n"));
             out.push_str(&format!("key = {:?}\n", zone.key));
@@ -2269,6 +2900,35 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
             out.push_str("[modules.ratelimit.routes]\n");
             for (route, zone) in &app.modules.ratelimit.routes {
                 out.push_str(&format!("{route:?} = {zone:?}\n"));
+            }
+        }
+        for (route, options) in &app.modules.ratelimit.route_options {
+            out.push_str(&format!("[modules.ratelimit.route_options.{route:?}]\n"));
+            if let Some(burst) = options.burst {
+                out.push_str(&format!("burst = {burst}\n"));
+            }
+            if let Some(delay) = options.delay {
+                out.push_str(&format!("delay = {delay}\n"));
+            }
+            out.push_str(&format!("nodelay = {}\n", options.nodelay));
+        }
+        for (route, policy) in &app.modules.ratelimit.route_limits {
+            out.push_str(&format!("[modules.ratelimit.route_limits.{route:?}]\n"));
+            out.push_str(&format!("status = {}\n", policy.status));
+            out.push_str(&format!("dry_run = {}\n", policy.dry_run));
+            out.push_str(&format!("log_level = {:?}\n", policy.log_level));
+            for limit in &policy.limits {
+                out.push_str(&format!(
+                    "\n[[modules.ratelimit.route_limits.{route:?}.limits]]\n"
+                ));
+                out.push_str(&format!("zone = {:?}\n", limit.zone));
+                if let Some(burst) = limit.burst {
+                    out.push_str(&format!("burst = {burst}\n"));
+                }
+                if let Some(delay) = limit.delay {
+                    out.push_str(&format!("delay = {delay}\n"));
+                }
+                out.push_str(&format!("nodelay = {}\n", limit.nodelay));
             }
         }
         out.push('\n');
@@ -2285,8 +2945,17 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         } else {
             out.push_str(&format!("path = {:?}", route.r#match.path));
         }
+        if route.r#match.literal {
+            out.push_str(", literal = true");
+        }
+        if route.r#match.exact {
+            out.push_str(", exact = true");
+        }
         if let Some(host) = &route.r#match.host {
             out.push_str(&format!(", host = {host:?}"));
+        }
+        if let Some(port) = route.r#match.listen_port {
+            out.push_str(&format!(", listen_port = {port}"));
         }
         if let Some(header) = &route.r#match.header {
             out.push_str(&format!(", header = {header:?}"));
@@ -2295,11 +2964,27 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
             }
         }
         out.push_str(" }\n");
+        emit_route_access_toml(&mut out, route);
         if let Some(upstream) = &route.upstream {
             out.push_str(&format!("upstream = {upstream:?}\n"));
         }
         if let Some(root) = &route.root {
             out.push_str(&format!("root = {:?}\n", root.display()));
+        }
+        if route.root_mode != exyonq_config_ir::RootMode::Remainder {
+            out.push_str("root_mode = \"full-uri\"\n");
+        }
+        if route.dir_redirect {
+            out.push_str("dir_redirect = true\n");
+            if !route.dir_redirect_absolute {
+                out.push_str("dir_redirect_absolute = false\n");
+            }
+            if !route.dir_redirect_port {
+                out.push_str("dir_redirect_port = false\n");
+            }
+            if let Some(host) = &route.dir_redirect_host {
+                out.push_str(&format!("dir_redirect_host = {host:?}\n"));
+            }
         }
         if let Some(index) = &route.index {
             out.push_str(&format!("index = {index:?}\n"));
@@ -2343,6 +3028,15 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
         }
         if let Some(fastcgi) = &route.fastcgi {
             out.push_str(&format!("fastcgi = {fastcgi:?}\n"));
+        }
+        if let Some(script_root) = &route.fastcgi_script_root {
+            out.push_str(&format!(
+                "fastcgi_script_root = {:?}\n",
+                script_root.display()
+            ));
+        }
+        if let Some(fc) = &route.front_controller {
+            out.push_str(&format!("front_controller = {fc:?}\n"));
         }
         if !route.proxy_set_headers.is_empty() {
             out.push_str("proxy_set_headers = [\n");

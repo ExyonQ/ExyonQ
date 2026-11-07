@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 pub mod accept_encoding;
+pub mod access;
 pub mod acme_integration;
 pub mod cache;
 pub mod cache_coordination;
@@ -67,6 +68,7 @@ pub use accept_encoding::{
     compression_requires_hyper_for_request_head, negotiate, ContentCoding, NegotiateOutcome,
     Negotiation,
 };
+pub use access::CompiledAccessPolicy;
 pub use acme_integration::{
     acme_integration_registration_test_gate, acme_integration_service,
     clear_acme_integration_for_tests, register_acme_integration_service,
@@ -119,11 +121,12 @@ pub use hop_by_hop::{
     FIXED_HOP_BY_HOP_HEADERS,
 };
 pub use htaccess_overlay::{
-    join_directory_index_uri, lookup_overlay, normalize_uri_path,
-    validate_directory_index_candidate, validate_front_controller_target, validate_overlay,
-    validate_publish, CompiledFrontController, CompiledRedirectRule, CompiledRewriteRedirect,
-    NormalizedDirectory, OverlayEntry, OverlayLookupResult, OverlayPublishError,
-    RuntimePatchVhostOverlay, VhostOverlay, MAX_DIRECTORY_INDEX_CANDIDATES,
+    join_directory_index_uri, lookup_overlay, lookup_overlay_access, lookup_overlay_auth,
+    normalize_uri_path, validate_directory_index_candidate, validate_front_controller_target,
+    validate_overlay, validate_publish, CompiledBasicAuth, CompiledFrontController,
+    CompiledRedirectRule, CompiledRewriteRedirect, NormalizedDirectory, OverlayEntry,
+    OverlayLookupResult, OverlayPublishError, RuntimePatchVhostOverlay, VhostOverlay,
+    MAX_AUTH_REALM_LEN, MAX_AUTH_USER_FILE_LEN, MAX_DIRECTORY_INDEX_CANDIDATES,
     MAX_DIRECTORY_INDEX_CANDIDATE_LEN, MAX_FRONT_CONTROLLER_TARGET_LEN,
 };
 pub use htaccess_runtime::{

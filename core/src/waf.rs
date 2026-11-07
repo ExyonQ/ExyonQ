@@ -28,7 +28,7 @@ use arc_swap::ArcSwap;
 use exyonq_waf_api::{
     BodyInspectionState, ChallengeVerifyResult, EmptyHeaders, HeaderView, NopWafEngine,
     WafAbuseGate, WafAction, WafChallengeHandler, WafDecision, WafEngine, WafPhase, WafRequest,
-    WafResponse,
+    WafResponse, RULE_ID_REQUEST_BODY_INVALID,
 };
 use http::HeaderMap;
 use std::net::IpAddr;
@@ -46,7 +46,7 @@ pub struct WafRuntimeBinding {
     /// ARCH-002: generation-frozen — wire must materialize headers / run inspect when true.
     ///
     /// Matches composition compile predicate (`enabled && resolved_mode != Disabled`)
-    /// plus enforce+abuse (so `enabled=false` still runs abuse rejects when enforce).
+    /// plus any configured abuse gate. Abuse is independent of signature enforce.
     /// Never derive solely from IR `mode=Disabled` (EXYONQ_WAF_MODE may activate).
     pub wire_inspection_active: bool,
 }
@@ -58,9 +58,10 @@ pub struct WafRuntimeBinding {
 pub fn compute_wire_inspection_active(
     signature_active: bool,
     abuse_present: bool,
-    enforce: bool,
+    _enforce: bool,
 ) -> bool {
-    signature_active || (abuse_present && enforce)
+    // Abuse (Challenge/429) is independent of signature enforce/monitor mode.
+    signature_active || abuse_present
 }
 
 impl Default for WafRuntimeBinding {
@@ -333,6 +334,8 @@ pub struct WafReject {
     pub status: http::StatusCode,
     pub body: WafRejectBody,
     pub content_type: &'static str,
+    /// EXY-16: matched signature rule, emitted as `x-waf-rule`.
+    pub rule_id: Option<String>,
     /// If set, add `Retry-After` header (seconds as decimal string).
     pub retry_after_secs: Option<u32>,
     pub set_cookie: Option<String>,
@@ -362,11 +365,16 @@ fn finish(
 ) -> WafHookResult {
     emit_decision(phase, &decision);
     if enforce && decision.is_blocking() {
+        let rule_id = decision
+            .violations
+            .first()
+            .map(|violation| violation.rule_id.as_str().to_string());
         let reject = match decision.action {
             WafAction::RateLimit => WafReject {
                 status: http::StatusCode::TOO_MANY_REQUESTS,
                 body: WafRejectBody::Static(RATE_LIMIT_BODY),
                 content_type: TEXT_PLAIN,
+                rule_id: None,
                 retry_after_secs: decision.retry_after_secs.or(Some(1)),
                 set_cookie: None,
                 location: None,
@@ -379,6 +387,7 @@ fn finish(
                             .unwrap_or(http::StatusCode::FORBIDDEN),
                         body: WafRejectBody::Owned(issue.body),
                         content_type: issue.content_type,
+                        rule_id: None,
                         retry_after_secs: None,
                         set_cookie: None,
                         location: None,
@@ -388,20 +397,34 @@ fn finish(
                         status: http::StatusCode::FORBIDDEN,
                         body: WafRejectBody::Static(b"challenge required\n"),
                         content_type: TEXT_PLAIN,
+                        rule_id: None,
                         retry_after_secs: None,
                         set_cookie: None,
                         location: None,
                     }
                 }
             }
-            _ => WafReject {
-                status: http::StatusCode::FORBIDDEN,
-                body: WafRejectBody::Static(BLOCK_BODY),
-                content_type: TEXT_PLAIN,
-                retry_after_secs: None,
-                set_cookie: None,
-                location: None,
-            },
+            _ => {
+                let invalid_body = decision
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule_id.as_str() == RULE_ID_REQUEST_BODY_INVALID);
+                WafReject {
+                    // ModSecurity rejects unparsable bodies with 400; a
+                    // signature/anomaly block stays 403.
+                    status: if invalid_body {
+                        http::StatusCode::BAD_REQUEST
+                    } else {
+                        http::StatusCode::FORBIDDEN
+                    },
+                    body: WafRejectBody::Static(BLOCK_BODY),
+                    content_type: TEXT_PLAIN,
+                    rule_id,
+                    retry_after_secs: None,
+                    set_cookie: None,
+                    location: None,
+                }
+            }
         };
         return WafHookResult::Reject(reject);
     }
@@ -417,7 +440,6 @@ fn finish_abuse(
     cookie_header: Option<&[u8]>,
     generation: u64,
     skip_abuse: bool,
-    enforce: bool,
     abuse: Option<&dyn WafAbuseGate>,
 ) -> WafHookResult {
     if skip_abuse {
@@ -438,7 +460,8 @@ fn finish_abuse(
         matches!(decision.action, WafAction::Challenge | WafAction::RateLimit),
         "abuse gate must return Challenge or RateLimit"
     );
-    finish(phase, decision, client_ip, host, path, generation, enforce)
+    // Abuse is independent of the signature engine's monitor/block enforce flag.
+    finish(phase, decision, client_ip, host, path, generation, true)
 }
 
 /// H1 / H2 / H4 / H5: header-phase inspection.
@@ -491,7 +514,6 @@ pub(crate) fn inspect_request_headers(
                 cookie,
                 generation,
                 skip_abuse,
-                enforce,
                 abuse,
             )
         }
@@ -598,7 +620,7 @@ pub(crate) fn inspect_request_body(
     body: &[u8],
     generation: u64,
     enforce: bool,
-) -> WafHookResult {
+) -> (WafHookResult, bool) {
     let req = WafRequest {
         method,
         host,
@@ -612,19 +634,27 @@ pub(crate) fn inspect_request_body(
     let started = std::time::Instant::now();
     let decision = waf.inspect_body_chunk(&req, body, true, &mut state);
     crate::waf_metrics::note_inspection(WafPhase::RequestBodyComplete, started.elapsed());
-    finish(
-        WafPhase::RequestBodyComplete,
-        decision,
-        client_ip,
-        host,
-        path,
-        generation,
-        enforce,
+    // `inspection_truncated` is the engine's record that the body budget was
+    // exhausted (OnInspectionLimit applied). The host surfaces it on the
+    // access log so an allowed-but-partially-inspected request is never
+    // counted as clean traffic.
+    let inspection_limited = decision.inspection_truncated;
+    (
+        finish(
+            WafPhase::RequestBodyComplete,
+            decision,
+            client_ip,
+            host,
+            path,
+            generation,
+            enforce,
+        ),
+        inspection_limited,
     )
 }
 
 /// Verify POST `/.exyonq/waf-challenge` — signature WAF still applies; abuse skipped.
-pub(crate) fn handle_waf_challenge_verify(
+pub(crate) async fn handle_waf_challenge_verify(
     waf: &dyn WafEngine,
     method: &str,
     host: Option<&str>,
@@ -633,6 +663,7 @@ pub(crate) fn handle_waf_challenge_verify(
     body: &[u8],
     generation: u64,
     enforce: bool,
+    abuse: &exyonq_config_ir::WafAbuseConfig,
 ) -> WafReject {
     // Signature inspect first — Block still applies.
     let req = WafRequest {
@@ -653,6 +684,10 @@ pub(crate) fn handle_waf_challenge_verify(
             status: http::StatusCode::FORBIDDEN,
             body: WafRejectBody::Static(BLOCK_BODY),
             content_type: TEXT_PLAIN,
+            rule_id: decision
+                .violations
+                .first()
+                .map(|violation| violation.rule_id.as_str().to_string()),
             retry_after_secs: None,
             set_cookie: None,
             location: None,
@@ -665,26 +700,53 @@ pub(crate) fn handle_waf_challenge_verify(
             status: http::StatusCode::FORBIDDEN,
             body: WafRejectBody::Static(b"challenge unavailable\n"),
             content_type: TEXT_PLAIN,
+            rule_id: None,
             retry_after_secs: None,
             set_cookie: None,
             location: None,
         };
     };
-    match handler.verify_post(client_ip, host, body, generation) {
+    let verified = handler.verify_post(client_ip, host, body, generation);
+    match verified {
         ChallengeVerifyResult::Ok {
             status,
             content_type,
-            body,
+            body: response_body,
             set_cookie,
             location,
-        } => WafReject {
-            status: http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::OK),
-            body: WafRejectBody::Owned(body),
-            content_type,
-            retry_after_secs: None,
-            set_cookie: Some(set_cookie),
-            location,
-        },
+        } => {
+            // Native HMAC/PoW/replay passed. Only then spend a provider
+            // round-trip; an unauthenticated invalid proof cannot drive outbound calls.
+            if abuse.provider != exyonq_config_ir::WafCaptchaProvider::Native {
+                let token = crate::captcha::form_value(body, "provider_token").unwrap_or_default();
+                if let Err(reason) = crate::captcha::verify_provider(abuse, &token, client_ip).await
+                {
+                    warn!(
+                        provider = ?abuse.provider,
+                        reason = %reason,
+                        "captcha provider verification failed"
+                    );
+                    return WafReject {
+                        status: http::StatusCode::FORBIDDEN,
+                        body: WafRejectBody::Static(b"challenge failed\n"),
+                        content_type: TEXT_PLAIN,
+                        rule_id: None,
+                        retry_after_secs: None,
+                        set_cookie: None,
+                        location: None,
+                    };
+                }
+            }
+            WafReject {
+                status: http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::OK),
+                body: WafRejectBody::Owned(response_body),
+                content_type,
+                rule_id: None,
+                retry_after_secs: None,
+                set_cookie: Some(set_cookie),
+                location,
+            }
+        }
         ChallengeVerifyResult::Fail {
             status,
             content_type,
@@ -693,6 +755,7 @@ pub(crate) fn handle_waf_challenge_verify(
             status: http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::FORBIDDEN),
             body: WafRejectBody::Owned(body),
             content_type,
+            rule_id: None,
             retry_after_secs: None,
             set_cookie: None,
             location: None,
@@ -882,12 +945,39 @@ mod tests {
     }
 
     #[test]
+    fn abuse_rate_limit_rejects_when_signature_enforce_off() {
+        let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        ABUSE_MODE.store(1, Ordering::SeqCst);
+        let headers = EmptyHeaders;
+        let gate = ConfigurableAbuseGate;
+        let r = inspect_request_headers(
+            &NopWafEngine,
+            "GET",
+            None,
+            "/",
+            None,
+            &headers,
+            IpAddr::from_str("203.0.113.10").unwrap(),
+            None,
+            1,
+            false,
+            false,
+            Some(&gate),
+        );
+        ABUSE_MODE.store(0, Ordering::SeqCst);
+        let WafHookResult::Reject(reject) = r else {
+            panic!("expected abuse reject with signature enforce off");
+        };
+        assert_eq!(reject.status, http::StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
     fn body_inspect_does_not_run_abuse_gate() {
         let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
         ABUSE_MODE.store(1, Ordering::SeqCst);
         ABUSE_CHECKS.store(0, Ordering::SeqCst);
         let headers = EmptyHeaders;
-        let r = inspect_request_body(
+        let (r, inspection_limited) = inspect_request_body(
             &NopWafEngine,
             "POST",
             None,
@@ -900,6 +990,7 @@ mod tests {
             1,
             true,
         );
+        assert!(!inspection_limited);
         ABUSE_MODE.store(0, Ordering::SeqCst);
         assert!(matches!(r, WafHookResult::Continue));
         assert_eq!(ABUSE_CHECKS.load(Ordering::SeqCst), 0);

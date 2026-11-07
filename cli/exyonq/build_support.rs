@@ -84,3 +84,52 @@ pub fn resolve_source_revision(git_head: Option<String>) -> Result<String, Strin
         official_release_required(),
     )
 }
+
+/// Core tag resolver used by build scripts and unit tests (no ambient env reads for flags).
+/// Official release builds must carry the public tag as `v<product_version>`; a dev tree
+/// without an exact tag legitimately yields an empty value.
+pub fn resolve_source_tag_with(
+    forced: Option<&str>,
+    git_tag: Option<&str>,
+    official: bool,
+    product_version: &str,
+) -> Result<String, String> {
+    let forced = forced.map(str::trim).filter(|s| !s.is_empty());
+    let tag = match forced {
+        Some(s) => s.to_string(),
+        None => git_tag
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default()
+            .to_string(),
+    };
+
+    if official {
+        if tag.is_empty() {
+            return Err(format!(
+                "EXYONQ_OFFICIAL_RELEASE=1 requires EXYONQ_SOURCE_TAG=v{product_version} (or an exact git tag); got empty"
+            ));
+        }
+        let expected = format!("v{product_version}");
+        if tag != expected {
+            return Err(format!(
+                "EXYONQ_OFFICIAL_RELEASE=1 requires source_tag={expected:?} for product_version={product_version:?} (got {tag:?})"
+            ));
+        }
+    }
+
+    Ok(tag)
+}
+
+/// Resolve source tag: explicit env → optional exact git tag → empty (dev only).
+/// Docker builds exclude `.git`, so official images must pass `EXYONQ_SOURCE_TAG`.
+#[allow(dead_code)] // used from build.rs; integration tests call `resolve_source_tag_with`
+pub fn resolve_source_tag(git_tag: Option<String>) -> Result<String, String> {
+    let forced = std::env::var("EXYONQ_SOURCE_TAG").ok();
+    resolve_source_tag_with(
+        forced.as_deref(),
+        git_tag.as_deref(),
+        official_release_required(),
+        env!("CARGO_PKG_VERSION"),
+    )
+}

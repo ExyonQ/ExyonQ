@@ -21,16 +21,16 @@
 
 /// Generic drain reject (non-probe traffic).
 pub(crate) const DRAINING_RESPONSE: &[u8] =
-    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\ndraining";
+    b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\ndraining";
 
 const LIVE_RESPONSE: &[u8] =
-    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nlive";
+    b"HTTP/1.1 200 OK\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nlive";
 
 const HEALTH_RESPONSE: &[u8] =
-    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+    b"HTTP/1.1 200 OK\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
 
 const NOT_READY_RESPONSE: &[u8] =
-    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot_ready";
+    b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot_ready";
 
 /// Classify a partially-read HTTP/1 request head into a drain-boundary response.
 pub(crate) fn drain_boundary_response(request_head: &[u8]) -> &'static [u8] {

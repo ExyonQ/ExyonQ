@@ -1,0 +1,72 @@
+name: CRS differential (OL-05)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fixed by scripts/gates/crs-fetch.sh (repository + tag + commit). The gate
+  # fails closed if the tag does not resolve to this commit or the corpus is
+  # unreachable; it never skips or degrades the differential into a smoke test.
+  CRS_REPOSITORY: https://github.com/coreruleset/coreruleset.git
+  CRS_REF: v4.25.0
+  CRS_COMMIT: aabf675fcfc5e489b424b844e6c9f1b39802df69
+  # Multi-arch index digest of owasp/modsecurity-crs:nginx-alpine, so the
+  # reference engine cannot drift with a floating tag.
+  CRS_REF_IMAGE: owasp/modsecurity-crs@sha256:873ce68a658d2e3b61484a8a24d215f7d15456e7ce5aec5e7114bf000d743365
+
+jobs:
+  crs-diff:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: build the measured binary
+        run: cargo build -p exyonq --bin exyonq --locked
+      - name: record binary identity
+        run: |
+          sha256sum target/debug/exyonq
+          ./target/debug/exyonq --version
+      # Both directories are bind-mounted into the reference container, so they
+      # must be visible to the Docker daemon. Keeping them under the checkout
+      # also works on containerized runners that do not share /tmp.
+      - name: Clean cached CRS workspace
+        # Swatinem/rust-cache caches target/. A previous CI run can leave the
+        # pinned checkout or gate work directories there; crs-fetch is
+        # fail-closed on non-empty destinations. Do not let cached CI state
+        # change the measured corpus.
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/target/crs-$CRS_REF" \
+                 "$GITHUB_WORKSPACE/target/crs-diff-work" \
+                 "$GITHUB_WORKSPACE/target/crs-dry-run-work"
+      - name: fetch pinned CRS
+        run: bash scripts/gates/crs-fetch.sh "$GITHUB_WORKSPACE/target/crs-$CRS_REF"
+      - name: CRS differential over the OWASP corpus
+        env:
+          EXYONQ_CRS_DIR: ${{ github.workspace }}/target/crs-v4.25.0
+          CRS_DIFF_WORK: ${{ github.workspace }}/target/crs-diff-work
+        run: bash scripts/gates/crs-diff-gate.sh
+      - name: CRS dry-run over the OWASP corpus
+        env:
+          EXYONQ_CRS_DIR: ${{ github.workspace }}/target/crs-v4.25.0
+          CRS_DIFF_WORK: ${{ github.workspace }}/target/crs-dry-run-work
+          CRS_DRY_RUN: "1"
+        run: bash scripts/gates/crs-diff-gate.sh

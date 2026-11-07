@@ -36,8 +36,17 @@ use exyonq_module_api::static_dispatch::{
     StaticMetricsSnapshot,
 };
 use http_body_util::BodyExt;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PreloadKey {
+    filesystem_root: std::path::PathBuf,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+    max_entries: u64,
+}
 
 struct RootTable {
     generation: u64,
@@ -110,7 +119,15 @@ impl StaticRuntime {
     /// On hard failure, keeps the previously published snapshot (reload safety).
     pub fn bind_compiled_slots(&self, generation: u64, slots: &[StaticCompiledSlot]) {
         let mut built = Vec::with_capacity(slots.len());
+        let mut preloaded: HashMap<PreloadKey, Arc<StaticRoot>> = HashMap::new();
+        let mut shared = 0usize;
         for slot in slots {
+            let key = PreloadKey {
+                filesystem_root: slot.filesystem_root.clone(),
+                max_file_bytes: slot.preload_max_file_bytes,
+                max_total_bytes: slot.preload_max_total_bytes,
+                max_entries: slot.preload_max_entries,
+            };
             let limits = PreloadLimits {
                 max_file_bytes: slot.preload_max_file_bytes,
                 max_total_bytes: slot.preload_max_total_bytes,
@@ -121,6 +138,18 @@ impl StaticRuntime {
                 &slot.route_prefix,
                 slot.index_file.as_deref(),
                 limits,
+                crate::root::StaticRootRouteOpts {
+                    join_uri: slot.join_uri,
+                    literal: slot.literal,
+                    exact: slot.exact,
+                    dir_redirect: slot.dir_redirect,
+                    redirect_policy: crate::root::DirRedirectPolicy {
+                        absolute: slot.dir_redirect_absolute,
+                        include_port: slot.dir_redirect_port,
+                        fixed_host: slot.dir_redirect_host.clone(),
+                    },
+                    listen_port: slot.listen_port,
+                },
             ) {
                 Ok(mut root) => {
                     root.set_route_host(slot.route_host.clone());
@@ -136,6 +165,12 @@ impl StaticRuntime {
                     return;
                 }
             };
+            if let Some(existing) = preloaded.get(&key) {
+                root.share_preload_cache_from(existing);
+                built.push(Arc::new(root));
+                shared += 1;
+                continue;
+            }
             if let Err(err) = root.preload_tree() {
                 tracing::error!(
                     generation,
@@ -145,11 +180,14 @@ impl StaticRuntime {
                 );
                 return;
             }
-            built.push(Arc::new(root));
+            let root = Arc::new(root);
+            preloaded.insert(key, Arc::clone(&root));
+            built.push(root);
         }
         tracing::info!(
             generation,
             slots = built.len(),
+            shared_preloads = shared,
             "static preload snapshot published"
         );
         self.bind_roots(generation, built.into_boxed_slice());
@@ -181,15 +219,29 @@ impl StaticRuntime {
         let roots = self.roots.read().expect("static roots poisoned");
         let mut best: Option<(u32, usize, u8)> = None;
         for (idx, root) in roots.slots.iter().enumerate() {
-            if !Self::static_host_allows(root.route_host(), request_host) {
+            // EXY-03: `match.listen_port`-scoped (NGINX per-server) routes are
+            // Hyper-only — the wire path cannot scope by listener port here.
+            if root.listen_port().is_some()
+                || root.file_root()
+                || !Self::static_host_allows(root.route_host(), request_host)
+            {
                 continue;
             }
-            let prefix = root.route_prefix().trim_end_matches('/');
-            let matches = if prefix.is_empty() {
-                path.starts_with('/')
+            let matches = if root.exact_match() {
+                // NGINX `location =`: the whole URI must equal the pattern.
+                path == root.route_prefix()
+            } else if root.literal_prefix() {
+                // NGINX literal prefix: verbatim `starts_with`, no boundary.
+                path.starts_with(root.route_prefix())
             } else {
-                path == prefix || path.starts_with(&format!("{prefix}/"))
+                let prefix = root.route_prefix().trim_end_matches('/');
+                if prefix.is_empty() {
+                    path.starts_with('/')
+                } else {
+                    path == prefix || path.starts_with(&format!("{prefix}/"))
+                }
             };
+            let prefix = root.route_prefix().trim_end_matches('/');
             if !matches {
                 continue;
             }
@@ -311,6 +363,25 @@ impl StaticDispatchService for StaticRuntime {
         };
         let request_path = request.request_path.as_ref();
         let budget = request.materialization_budget_bytes;
+
+        // EXY-03: NGINX-style directory redirect (imported routes only).
+        let redirect_host = single_header_value(&request.headers, "host");
+        if let Some(location) = root.dir_redirect_location(
+            request_path,
+            redirect_host,
+            request.scheme,
+            request.request_query.as_deref(),
+            request.local_port,
+        ) {
+            let outcome = StaticDispatchOutcome {
+                status: 301,
+                headers: vec![("location".into(), location)],
+                body: StaticDispatchBody::Empty,
+            };
+            self.note_outcome(&outcome);
+            return outcome;
+        }
+
         let range_raw = range_header_value(&request.headers);
         let inm = single_header_value(&request.headers, "if-none-match");
         let ims = single_header_value(&request.headers, "if-modified-since");

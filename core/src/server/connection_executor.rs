@@ -98,7 +98,26 @@ impl CoreConnectionExecutor {
     }
 
     /// Sole productive admission authority for migrated workers: `PlatformConnectionAdmission::try_admit`.
+    fn acquire_connection_guard(
+        &self,
+        peer: SocketAddr,
+    ) -> Result<Option<crate::client_throttle::ClientGuard>, crate::client_throttle::ThrottleDecision>
+    {
+        let state = reload::read_state(&self.shared);
+        crate::client_throttle::acquire_connection(
+            &state.config.modules.ratelimit.client,
+            peer.ip(),
+        )
+    }
+
     pub(crate) fn serve_accepted(&self, mut conn: AcceptedConnection) -> ConnectionServeOutcome {
+        let client_guard = match self.acquire_connection_guard(conn.peer) {
+            Ok(guard) => guard,
+            Err(decision) => {
+                tracing::debug!(?decision, peer = %conn.peer, "per-client connection limit refused connection");
+                return ConnectionServeOutcome::Completed;
+            }
+        };
         let token = match PlatformConnectionAdmission::try_admit(&self.ops) {
             Ok(token) => token,
             Err(_) => {
@@ -124,7 +143,7 @@ impl CoreConnectionExecutor {
 
         // Compression (body filters) forces Hyper. Ratelimit+metrics are wire-cheap.
         if view.modules_enabled && self.hyper_required_from_shared() {
-            return self.spawn_hyper(conn, None, view, token);
+            return self.spawn_hyper(conn, None, view, token, client_guard);
         }
 
         let (head, rest) = match conn.prefetched.take() {
@@ -151,6 +170,35 @@ impl CoreConnectionExecutor {
 
         if head.is_empty() {
             return ConnectionServeOutcome::Completed;
+        }
+
+        // Proxy requests do not enter the static wire path, but they still need
+        // the raw request-target: Hyper's Uri drops the `#fragment`, which
+        // would make CRS 920610/920100 miss `/index.html:80?... #tag`. Inspect
+        // the raw GET/HEAD wire head before handing it to Hyper. Static requests
+        // keep their existing branch below (no duplicate inspection).
+        if view.site_static_slot.is_none()
+            && (head.starts_with(b"GET ") || head.starts_with(b"HEAD "))
+        {
+            let state = reload::read_state(&self.shared);
+            if waf_wire_materialization_active(&state) {
+                let xff = HeaderValue::from_str(&conn.peer.ip().to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
+                if let crate::waf::WafHookResult::Reject(reject) =
+                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff)
+                {
+                    let bytes = format_waf_reject_http(&reject);
+                    let _ = conn.stream.set_nodelay(true);
+                    if let Err(err) = conn.stream.write_all(&bytes) {
+                        warn!(
+                            %err,
+                            peer = %conn.peer,
+                            "waf reject response write failed"
+                        );
+                    }
+                    return ConnectionServeOutcome::Completed;
+                }
+            }
         }
 
         if let Some(site_slot) = view.site_static_slot {
@@ -207,7 +255,7 @@ impl CoreConnectionExecutor {
             }
         }
 
-        self.spawn_hyper(conn, Some((head, rest)), view, token)
+        self.spawn_hyper(conn, Some((head, rest)), view, token, client_guard)
     }
 
     /// Cap015 / WAF-KEEPALIVE-001: header-phase WAF for each epoll keepalive request.
@@ -323,13 +371,20 @@ impl CoreConnectionExecutor {
         bench_cache: SyncBenchCache,
         token: ConnectionLifecycleToken,
     ) -> ConnectionServeOutcome {
+        let client_guard = match self.acquire_connection_guard(peer) {
+            Ok(guard) => guard,
+            Err(decision) => {
+                tracing::debug!(?decision, %peer, "per-client connection limit refused connection");
+                return ConnectionServeOutcome::Completed;
+            }
+        };
         let conn = AcceptedConnection::new(
             stream,
             peer,
             None,
             crate::server::accepted_connection::TransportKind::Epoll,
         );
-        self.spawn_hyper(conn, prefetched, bench_cache.into(), token)
+        self.spawn_hyper(conn, prefetched, bench_cache.into(), token, client_guard)
     }
 
     /// PS3A-PM3-F1: Hyper handoff from opaque attachment scalars (no SyncBenchCache at kernel).
@@ -383,8 +438,10 @@ impl CoreConnectionExecutor {
         prefetched: Option<(Bytes, Bytes)>,
         view: GenerationView,
         token: ConnectionLifecycleToken,
+        client_guard: Option<crate::client_throttle::ClientGuard>,
     ) -> ConnectionServeOutcome {
-        let handoff = HyperHandoff::new(conn.stream, conn.peer, prefetched, view, token);
+        let handoff = HyperHandoff::new(conn.stream, conn.peer, prefetched, view, token)
+            .with_client_guard(client_guard);
         match spawn_hyper_handoff(
             handoff,
             &self.shared,

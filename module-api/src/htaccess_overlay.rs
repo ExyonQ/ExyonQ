@@ -15,6 +15,7 @@
  */
 //! Plan 05B — immutable `.htaccess` overlay contract (read-only at runtime).
 
+use crate::access::CompiledAccessPolicy;
 use std::sync::Arc;
 
 /// Maximum compiled `DirectoryIndex` candidates per directory (Plan 11).
@@ -26,6 +27,12 @@ pub const MAX_DIRECTORY_INDEX_CANDIDATE_LEN: usize = 255;
 /// Maximum compiled front-controller target URI length (Plan 11 tranche C).
 pub const MAX_FRONT_CONTROLLER_TARGET_LEN: usize = 2048;
 
+/// Maximum compiled Basic Auth realm length.
+pub const MAX_AUTH_REALM_LEN: usize = 256;
+
+/// Maximum compiled htpasswd path length.
+pub const MAX_AUTH_USER_FILE_LEN: usize = 4096;
+
 /// Compiled `RewriteCond !-f/!-d` + `RewriteRule` front-controller subset (no regex runtime).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledFrontController {
@@ -33,6 +40,13 @@ pub struct CompiledFrontController {
     pub require_not_file: bool,
     pub require_not_directory: bool,
     pub preserve_query: bool,
+}
+
+/// Compiled per-directory Basic Auth policy from `.htaccess`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledBasicAuth {
+    pub realm: String,
+    pub user_file: String,
 }
 
 /// Validate one directory-index candidate filename (not a URI path).
@@ -97,6 +111,8 @@ pub struct OverlayEntry {
     pub rewrite_redirects: Arc<[CompiledRewriteRedirect]>,
     pub indexes_disabled: bool,
     pub front_controller: Option<CompiledFrontController>,
+    pub auth: Option<CompiledBasicAuth>,
+    pub access: Option<CompiledAccessPolicy>,
 }
 
 /// Immutable per-vhost overlay published atomically.
@@ -151,16 +167,10 @@ pub fn normalize_uri_path(path: &str) -> String {
 
 /// Longest matching directory entry, then exact redirect rules (v0).
 pub fn lookup_overlay(uri_path: &str, overlay: &VhostOverlay) -> OverlayLookupResult {
-    let path = normalize_uri_path(uri_path);
-    let entry = overlay
-        .entries
-        .iter()
-        .filter(|e| path.starts_with(e.directory.0.as_str()))
-        .max_by_key(|e| e.directory.0.len());
-
-    let Some(entry) = entry else {
+    let Some(entry) = matching_entry(uri_path, overlay) else {
         return OverlayLookupResult::Miss;
     };
+    let path = normalize_uri_path(uri_path);
 
     for rule in entry.redirect_rules.iter() {
         if rule.from_path == path {
@@ -184,6 +194,28 @@ pub fn lookup_overlay(uri_path: &str, overlay: &VhostOverlay) -> OverlayLookupRe
         indexes_disabled: entry.indexes_disabled,
         front_controller: entry.front_controller.clone(),
     }
+}
+
+/// Basic Auth policy inherited by `uri_path`, if any.
+pub fn lookup_overlay_auth(uri_path: &str, overlay: &VhostOverlay) -> Option<CompiledBasicAuth> {
+    matching_entry(uri_path, overlay).and_then(|entry| entry.auth.clone())
+}
+
+/// AP-05 access policy inherited by `uri_path`, if any.
+pub fn lookup_overlay_access(
+    uri_path: &str,
+    overlay: &VhostOverlay,
+) -> Option<CompiledAccessPolicy> {
+    matching_entry(uri_path, overlay).and_then(|entry| entry.access.clone())
+}
+
+fn matching_entry<'a>(uri_path: &str, overlay: &'a VhostOverlay) -> Option<&'a OverlayEntry> {
+    let path = normalize_uri_path(uri_path);
+    overlay
+        .entries
+        .iter()
+        .filter(|e| path.starts_with(e.directory.0.as_str()))
+        .max_by_key(|e| e.directory.0.len())
 }
 
 /// Validate a compiled front-controller target URI (local, literal, bounded).
@@ -246,6 +278,18 @@ pub fn validate_overlay(overlay: &VhostOverlay) -> Result<(), OverlayPublishErro
                 return Err(OverlayPublishError::InvalidOverlay);
             }
         }
+        if let Some(auth) = &entry.auth {
+            if auth.realm.trim().is_empty()
+                || auth.realm.len() > MAX_AUTH_REALM_LEN
+                || auth.realm.chars().any(char::is_control)
+                || auth.user_file.trim().is_empty()
+                || auth.user_file.len() > MAX_AUTH_USER_FILE_LEN
+                || auth.user_file.contains('\0')
+                || !std::path::Path::new(&auth.user_file).is_absolute()
+            {
+                return Err(OverlayPublishError::InvalidOverlay);
+            }
+        }
     }
     Ok(())
 }
@@ -296,6 +340,8 @@ mod tests {
                     rewrite_redirects: Arc::from([]),
                     indexes_disabled: false,
                     front_controller: None,
+                    auth: None,
+                    access: None,
                 },
                 OverlayEntry {
                     directory: NormalizedDirectory("/admin/".into()),
@@ -304,6 +350,8 @@ mod tests {
                     rewrite_redirects: Arc::from([]),
                     indexes_disabled: false,
                     front_controller: None,
+                    auth: None,
+                    access: None,
                 },
             ]),
         };
@@ -333,6 +381,8 @@ mod tests {
                 rewrite_redirects: Arc::from([]),
                 indexes_disabled: false,
                 front_controller: None,
+                auth: None,
+                access: None,
             }]),
         };
         assert_eq!(

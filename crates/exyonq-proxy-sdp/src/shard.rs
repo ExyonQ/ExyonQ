@@ -280,7 +280,7 @@ fn drive_session(ctx: &mut DriveCtx<'_>, client_tok: Token, next_token: &mut Tok
                     Err(ParseErr::Incomplete) => return Action::Continue,
                     Err(_) => {
                         args.counters.errors.fetch_add(1, Ordering::Relaxed);
-                        queue_simple(sess, b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                        queue_simple(sess, b"HTTP/1.1 400 Bad Request\r\nserver: exyonq\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
                         sess.phase = Phase::DownstreamFlush;
                         sess.client_ka = false;
                         continue;
@@ -295,7 +295,7 @@ fn drive_session(ctx: &mut DriveCtx<'_>, client_tok: Token, next_token: &mut Tok
                             proj.resolve_proxy_upstream(&req.path_query, req.host.as_deref())
                         else {
                             args.counters.errors.fetch_add(1, Ordering::Relaxed);
-                            queue_simple(sess, b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                            queue_simple(sess, b"HTTP/1.1 404 Not Found\r\nserver: exyonq\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
                             sess.phase = Phase::DownstreamFlush;
                             sess.client_ka = false;
                             continue;
@@ -344,7 +344,7 @@ fn drive_session(ctx: &mut DriveCtx<'_>, client_tok: Token, next_token: &mut Tok
                         args.counters.waf_deny.fetch_add(1, Ordering::Relaxed);
                         args.counters.responses_4xx.fetch_add(1, Ordering::Relaxed);
                         let mut resp = format!(
-                            "HTTP/1.1 {status} \r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\n\r\n",
+                            "HTTP/1.1 {status} \r\nserver: exyonq\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\ncache-control: no-store\r\n\r\n",
                             body.len()
                         )
                         .into_bytes();
@@ -368,7 +368,7 @@ fn drive_session(ctx: &mut DriveCtx<'_>, client_tok: Token, next_token: &mut Tok
                         Ok(s) => s,
                         Err(_) => {
                             args.counters.responses_5xx.fetch_add(1, Ordering::Relaxed);
-                            queue_simple(sess, b"HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                            queue_simple(sess, b"HTTP/1.1 502 Bad Gateway\r\nserver: exyonq\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
                             sess.phase = Phase::DownstreamFlush;
                             sess.client_ka = false;
                             continue;
@@ -442,7 +442,7 @@ fn drive_session(ctx: &mut DriveCtx<'_>, client_tok: Token, next_token: &mut Tok
                     Err(ParseErr::Incomplete) => return Action::Continue,
                     Err(_) => {
                         args.counters.responses_5xx.fetch_add(1, Ordering::Relaxed);
-                        queue_simple(sess, b"HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                        queue_simple(sess, b"HTTP/1.1 502 Bad Gateway\r\nserver: exyonq\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
                         sess.phase = Phase::DownstreamFlush;
                         sess.client_ka = false;
                         continue;

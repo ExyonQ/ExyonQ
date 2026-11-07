@@ -103,6 +103,29 @@ struct TlsDraft {
 }
 
 #[derive(Debug, Clone, Default)]
+struct AuthDraft {
+    /// `basic` or `none`; any other type is rejected at parse time.
+    auth_type: Option<String>,
+    realm: Option<String>,
+    user_file: Option<String>,
+    require_valid_user: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApacheAccessOrder {
+    AllowDeny,
+    DenyAllow,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AccessDraft {
+    allow: Vec<String>,
+    deny: Vec<String>,
+    methods: Vec<String>,
+    order: Option<ApacheAccessOrder>,
+}
+
+#[derive(Debug, Clone, Default)]
 struct VirtualHostDraft {
     open_line: usize,
     listen_hint: Option<String>,
@@ -131,6 +154,14 @@ struct VirtualHostDraft {
     expires_by_mime: Vec<(String, u64)>,
     /// ADR-062 / F1-R19: `Header set Name Value` → route.response_headers (always=true).
     response_headers: Vec<(String, String)>,
+    /// AP-03: vhost-scoped Basic Auth (`AuthType`/`AuthName`/`AuthUserFile`/`Require`).
+    auth: AuthDraft,
+    /// AP-05: vhost-scoped IP/method ACL (`Require ip`/`method`, `Order`/`Allow`/`Deny`).
+    access: AccessDraft,
+    /// QUEJAS_APACHE §2.3: saw legacy `Order`/`Allow`/`Deny` syntax.
+    legacy_access_seen: bool,
+    /// QUEJAS_APACHE §2.3: saw modern `Require` syntax.
+    require_access_seen: bool,
 }
 
 #[derive(Debug)]
@@ -234,9 +265,22 @@ fn finish_migrate(state: ParseState) -> (Result<String>, MigrationReport) {
         );
     }
 
+    let mixed_notes: Vec<CompatNote> = state
+        .vhosts
+        .iter()
+        .filter(|vhost| vhost.legacy_access_seen && vhost.require_access_seen)
+        .map(|vhost| CompatNote {
+            level: CompatLevel::Manual,
+            message: format!(
+                "line {}: mixed Apache 2.2 `Order`/`Allow`/`Deny` and 2.4 `Require` authorization; Apache documents that mixing them has unexpected semantics. Review the emitted [[route]] access policy before deploying.",
+                vhost.open_line
+            ),
+        })
+        .collect();
     match render_toml(&state) {
         Ok(toml) => {
             let mut notes = state.notes;
+            notes.extend(mixed_notes);
             notes.push(CompatNote {
                 level: CompatLevel::Migrated,
                 message: format!(
@@ -519,6 +563,67 @@ fn validate_vhost(draft: &VirtualHostDraft, state: &mut ParseState) {
             "SSLEngine",
             "SSLEngine on requires SSLCertificateFile and SSLCertificateKeyFile",
         );
+    }
+    let auth = &draft.auth;
+    let auth_seen = auth.auth_type.is_some()
+        || auth.realm.is_some()
+        || auth.user_file.is_some()
+        || auth.require_valid_user;
+    if auth_seen {
+        let basic = auth
+            .auth_type
+            .as_deref()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("basic"));
+        let none = auth
+            .auth_type
+            .as_deref()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("none"));
+        if none {
+            if auth.realm.is_some() || auth.user_file.is_some() || auth.require_valid_user {
+                reject(
+                    state,
+                    draft.open_line,
+                    "AuthType",
+                    "AuthType None cannot be combined with AuthName/AuthUserFile/Require",
+                );
+            }
+        } else if !basic {
+            reject(
+                state,
+                draft.open_line,
+                "AuthType",
+                "Basic Auth requires `AuthType Basic`",
+            );
+        } else if auth
+            .realm
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            reject(
+                state,
+                draft.open_line,
+                "AuthType",
+                "AuthType Basic requires AuthName",
+            );
+        } else if auth
+            .user_file
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            reject(
+                state,
+                draft.open_line,
+                "AuthType",
+                "AuthType Basic requires AuthUserFile",
+            );
+        } else if !auth.require_valid_user {
+            reject(
+                state,
+                draft.open_line,
+                "Require",
+                "AuthType Basic requires `Require valid-user`",
+            );
+        }
     }
     if !draft.pending_conds.is_empty() {
         reject(
@@ -928,17 +1033,158 @@ fn handle_vhost_directive(line: usize, name: &str, args: &str, state: &mut Parse
         }
         return;
     }
-    if eq_ci(name, "AuthType")
-        || eq_ci(name, "AuthUserFile")
-        || eq_ci(name, "AuthName")
-        || eq_ci(name, "Require")
-    {
+    if eq_ci(name, "AuthType") {
+        let kind = first_token(args);
+        if !kind.eq_ignore_ascii_case("basic") && !kind.eq_ignore_ascii_case("none") {
+            reject(state, line, name, "AuthType supports Basic or None");
+            return;
+        }
+        if let Some(draft) = state.current.as_mut() {
+            draft.auth.auth_type = Some(
+                if kind.eq_ignore_ascii_case("basic") {
+                    "basic"
+                } else {
+                    "none"
+                }
+                .to_string(),
+            );
+        }
+        return;
+    }
+    if eq_ci(name, "AuthName") {
+        let realm = unquote(args.trim());
+        if realm.is_empty() {
+            reject(state, line, name, "AuthName requires a non-empty realm");
+            return;
+        }
+        if let Some(draft) = state.current.as_mut() {
+            draft.auth.realm = Some(realm.to_string());
+        }
+        return;
+    }
+    if eq_ci(name, "AuthUserFile") {
+        let path = unquote(args.trim());
+        if path.is_empty() {
+            reject(state, line, name, "AuthUserFile requires a non-empty path");
+            return;
+        }
+        if let Some(draft) = state.current.as_mut() {
+            draft.auth.user_file = Some(path.to_string());
+        }
+        return;
+    }
+    if eq_ci(name, "Order") {
+        let tokens: Vec<&str> = args.split_whitespace().collect();
+        let order = match tokens.as_slice() {
+            [one] if one.eq_ignore_ascii_case("allow,deny") => Some(ApacheAccessOrder::AllowDeny),
+            [one] if one.eq_ignore_ascii_case("deny,allow") => Some(ApacheAccessOrder::DenyAllow),
+            _ => None,
+        };
+        match order {
+            Some(order) => {
+                if let Some(draft) = state.current.as_mut() {
+                    draft.access.order = Some(order);
+                    draft.legacy_access_seen = true;
+                }
+            }
+            None => reject(state, line, name, "Order expects allow,deny or deny,allow"),
+        }
+        return;
+    }
+    if eq_ci(name, "Allow") || eq_ci(name, "Deny") {
+        let tokens: Vec<&str> = args.split_whitespace().collect();
+        let networks = match tokens.first() {
+            Some(first) if first.eq_ignore_ascii_case("from") => &tokens[1..],
+            _ => {
+                reject(state, line, name, "expected `from <ip|cidr|all>...`");
+                return;
+            }
+        };
+        match parse_access_networks(networks) {
+            Ok(values) => {
+                if let Some(draft) = state.current.as_mut() {
+                    if eq_ci(name, "Allow") {
+                        draft.access.allow.extend(values);
+                    } else {
+                        draft.access.deny.extend(values);
+                    }
+                    draft.legacy_access_seen = true;
+                }
+                state.notes.push(CompatNote {
+                    level: CompatLevel::Migrated,
+                    message: format!("line {line}: {name} from → [[route]] access"),
+                });
+            }
+            Err(msg) => reject(state, line, name, msg),
+        }
+        return;
+    }
+    if eq_ci(name, "Satisfy") {
+        if args.trim().eq_ignore_ascii_case("all") {
+            return;
+        }
         reject(
             state,
             line,
             name,
-            "Basic Auth / Require not implemented in ExyonQ yet",
+            "Satisfy any (OR with auth) is not representable; use Require ip/method",
         );
+        return;
+    }
+    if eq_ci(name, "Require") {
+        if let Some(draft) = state.current.as_mut() {
+            draft.require_access_seen = true;
+        }
+        let tokens: Vec<&str> = args.split_whitespace().map(unquote).collect();
+        let Some(kind) = tokens.first().map(|s| s.to_ascii_lowercase()) else {
+            reject(state, line, name, "Require expects an argument");
+            return;
+        };
+        match kind.as_str() {
+            "valid-user" if tokens.len() == 1 => {
+                if let Some(draft) = state.current.as_mut() {
+                    draft.auth.require_valid_user = true;
+                }
+            }
+            "ip" if tokens.len() >= 2 => match parse_access_networks(&tokens[1..]) {
+                Ok(values) => {
+                    if let Some(draft) = state.current.as_mut() {
+                        draft.access.allow.extend(values);
+                    }
+                }
+                Err(msg) => reject(state, line, name, msg),
+            },
+            "method" if tokens.len() >= 2 => {
+                if let Some(draft) = state.current.as_mut() {
+                    draft
+                        .access
+                        .methods
+                        .extend(tokens[1..].iter().map(|s| s.to_string()));
+                }
+            }
+            "all" if tokens.len() == 2 && tokens[1].eq_ignore_ascii_case("granted") => {}
+            "all" if tokens.len() == 2 && tokens[1].eq_ignore_ascii_case("denied") => {
+                if let Some(draft) = state.current.as_mut() {
+                    draft.access.deny.push("all".into());
+                }
+            }
+            "not" if tokens.len() == 3 && tokens[1].eq_ignore_ascii_case("ip") => {
+                match parse_access_networks(&tokens[2..]) {
+                    Ok(values) => {
+                        if let Some(draft) = state.current.as_mut() {
+                            draft.access.deny.extend(values);
+                        }
+                    }
+                    Err(msg) => reject(state, line, name, msg),
+                }
+            }
+            _ => reject(
+                state,
+                line,
+                name,
+                "supported: valid-user, ip, method, all granted/denied, not ip",
+            ),
+        }
         return;
     }
 
@@ -1036,6 +1282,125 @@ fn is_apache_response_header_denied(name: &str) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+#[derive(Debug)]
+struct NormalizedAccess {
+    allow: Vec<String>,
+    deny: Vec<String>,
+    methods: Vec<String>,
+}
+
+fn parse_access_networks(values: &[&str]) -> Result<Vec<String>, String> {
+    if values.is_empty() {
+        return Err("access requires at least one IP/CIDR/all".into());
+    }
+    let mut out = Vec::with_capacity(values.len());
+    for raw in values {
+        let value = unquote(raw);
+        if value.is_empty() {
+            return Err("access contains an empty address".into());
+        }
+        if !value.eq_ignore_ascii_case("all") && !valid_ip_or_cidr(value) {
+            return Err(format!("`{value}` is not an IP/CIDR or all"));
+        }
+        out.push(value.to_string());
+    }
+    Ok(out)
+}
+
+fn valid_ip_or_cidr(value: &str) -> bool {
+    if value.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    let Some((addr, prefix)) = value.split_once('/') else {
+        return false;
+    };
+    let Ok(ip) = addr.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    let Ok(prefix) = prefix.parse::<u8>() else {
+        return false;
+    };
+    prefix <= if ip.is_ipv4() { 32 } else { 128 }
+}
+
+fn has_all(values: &[String]) -> bool {
+    values.iter().any(|v| v.eq_ignore_ascii_case("all"))
+}
+
+fn normalize_access(access: &AccessDraft) -> Result<Option<NormalizedAccess>, String> {
+    if access.allow.is_empty() && access.deny.is_empty() && access.methods.is_empty() {
+        return Ok(None);
+    }
+    let mut allow = access.allow.clone();
+    let mut deny = access.deny.clone();
+    let order = access.order.unwrap_or_else(|| {
+        if has_all(&deny) && !allow.is_empty() {
+            ApacheAccessOrder::DenyAllow
+        } else {
+            ApacheAccessOrder::AllowDeny
+        }
+    });
+    match order {
+        ApacheAccessOrder::AllowDeny => {
+            // Default deny: an Allow-only policy is an allowlist; a Deny-only
+            // policy denies everything because no Allow matched.
+            if allow.is_empty() && !deny.is_empty() {
+                deny = vec!["all".into()];
+            }
+        }
+        ApacheAccessOrder::DenyAllow => {
+            if has_all(&deny) {
+                deny.clear();
+            } else if has_all(&allow) {
+                allow.clear();
+                deny.clear();
+            } else if !allow.is_empty() && !deny.is_empty() {
+                return Err(
+                    "Order Deny,Allow with non-all Allow and Deny cannot be represented exactly"
+                        .into(),
+                );
+            } else if !allow.is_empty() {
+                // Apache's default for this order is allow.
+                allow.clear();
+            }
+        }
+    }
+    if allow.is_empty() && deny.is_empty() && access.methods.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(NormalizedAccess {
+        allow,
+        deny,
+        methods: access.methods.clone(),
+    }))
+}
+
+fn toml_string_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("\"{}\"", escape_toml(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn emit_access_toml(out: &mut String, access: &AccessDraft) -> Result<()> {
+    let Some(access) = normalize_access(access).map_err(anyhow::Error::msg)? else {
+        return Ok(());
+    };
+    let mut fields = Vec::new();
+    if !access.allow.is_empty() {
+        fields.push(format!("allow = [{}]", toml_string_list(&access.allow)));
+    }
+    if !access.deny.is_empty() {
+        fields.push(format!("deny = [{}]", toml_string_list(&access.deny)));
+    }
+    if !access.methods.is_empty() {
+        fields.push(format!("methods = [{}]", toml_string_list(&access.methods)));
+    }
+    out.push_str(&format!("access = {{ {} }}\n", fields.join(", ")));
+    Ok(())
 }
 
 fn emit_response_headers_toml(out: &mut String, headers: &[(String, String)]) {
@@ -1625,6 +1990,24 @@ fn render_toml(state: &ParseState) -> Result<String> {
         let mut route_blocks = String::new();
         let mut upstream_blocks = String::new();
         let mut fcgi_blocks = String::new();
+        let mut auth_blocks = String::new();
+        let auth_pair = if vh
+            .auth
+            .auth_type
+            .as_deref()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("basic"))
+        {
+            match (&vh.auth.realm, &vh.auth.user_file) {
+                (Some(realm), Some(user_file))
+                    if !realm.trim().is_empty() && !user_file.trim().is_empty() =>
+                {
+                    Some((realm.clone(), user_file.clone()))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         // Redirects first (more specific paths).
         for (ri, r) in vh.redirects.iter().enumerate() {
@@ -1632,6 +2015,7 @@ fn render_toml(state: &ParseState) -> Result<String> {
             route_names.push(name.clone());
             route_blocks.push_str("[[route]]\n");
             route_blocks.push_str(&format!("name = \"{name}\"\n"));
+            emit_access_toml(&mut route_blocks, &vh.access)?;
             route_blocks.push_str(&format!(
                 "match = {{ path = \"{}\" }}\n",
                 escape_toml(&r.from_path)
@@ -1649,6 +2033,7 @@ fn render_toml(state: &ParseState) -> Result<String> {
             route_names.push(name.clone());
             route_blocks.push_str("[[route]]\n");
             route_blocks.push_str(&format!("name = \"{name}\"\n"));
+            emit_access_toml(&mut route_blocks, &vh.access)?;
             route_blocks.push_str(&format!(
                 "match = {{ regex = \"{}\" }}\n",
                 escape_toml(&rw.match_regex)
@@ -1663,6 +2048,7 @@ fn render_toml(state: &ParseState) -> Result<String> {
             route_names.push(name.clone());
             route_blocks.push_str("[[route]]\n");
             route_blocks.push_str(&format!("name = \"{name}\"\n"));
+            emit_access_toml(&mut route_blocks, &vh.access)?;
             route_blocks.push_str(&format!(
                 "match = {{ path = \"{}\" }}\n",
                 escape_toml(&a.url_path)
@@ -1691,6 +2077,7 @@ fn render_toml(state: &ParseState) -> Result<String> {
             upstream_blocks.push_str("timeout_ms = 30000\n\n");
             route_blocks.push_str("[[route]]\n");
             route_blocks.push_str(&format!("name = \"{rname}\"\n"));
+            emit_access_toml(&mut route_blocks, &vh.access)?;
             route_blocks.push_str(&format!(
                 "match = {{ path = \"{}\" }}\n",
                 escape_toml(&path)
@@ -1738,6 +2125,7 @@ fn render_toml(state: &ParseState) -> Result<String> {
             fcgi_blocks.push_str("checkout_timeout_ms = 5000\n\n");
             route_blocks.push_str("[[route]]\n");
             route_blocks.push_str(&format!("name = \"{rname}\"\n"));
+            emit_access_toml(&mut route_blocks, &vh.access)?;
             route_blocks.push_str("match = { path = \"/\" }\n");
             route_blocks.push_str(&format!("fastcgi = \"{pname}\"\n"));
             emit_response_headers_toml(&mut route_blocks, &vh.response_headers);
@@ -1750,6 +2138,7 @@ fn render_toml(state: &ParseState) -> Result<String> {
                 route_names.push(rname.clone());
                 route_blocks.push_str("[[route]]\n");
                 route_blocks.push_str(&format!("name = \"{rname}\"\n"));
+                emit_access_toml(&mut route_blocks, &vh.access)?;
                 route_blocks.push_str("match = { path = \"/\" }\n");
                 route_blocks.push_str(&format!("root = \"{}\"\n", escape_toml(root)));
                 if let Some(idx) = &vh.directory_index {
@@ -1760,6 +2149,14 @@ fn render_toml(state: &ParseState) -> Result<String> {
                 }
                 emit_response_headers_toml(&mut route_blocks, &vh.response_headers);
                 route_blocks.push('\n');
+            }
+        }
+
+        if let Some((realm, user_file)) = &auth_pair {
+            for name in &route_names {
+                auth_blocks.push_str(&format!("[modules.auth.routes.\"{name}\"]\n"));
+                auth_blocks.push_str(&format!("realm = \"{}\"\n", escape_toml(realm)));
+                auth_blocks.push_str(&format!("user_file = \"{}\"\n\n", escape_toml(user_file)));
             }
         }
 
@@ -1815,6 +2212,7 @@ fn render_toml(state: &ParseState) -> Result<String> {
         out.push_str(&route_blocks);
         out.push_str(&upstream_blocks);
         out.push_str(&fcgi_blocks);
+        out.push_str(&auth_blocks);
     }
     Ok(out)
 }
@@ -2110,6 +2508,110 @@ Listen 443
         assert!(toml.contains("fastcgi = \"php1\""));
         assert!(toml.contains("transport = \"unix\""));
         assert!(toml.contains("/legacy"));
+    }
+
+    #[test]
+    fn migrates_basic_auth_to_modules_auth() {
+        let src = r#"
+<VirtualHost *:80>
+    ServerName auth.example
+    DocumentRoot /var/www/auth
+    AuthType Basic
+    AuthName "Restricted"
+    AuthUserFile /etc/apache2/.htpasswd
+    Require valid-user
+</VirtualHost>
+"#;
+        let (toml, report) = migrate(src).expect("migrate");
+        assert!(report.unsupported.is_empty(), "{report:?}");
+        assert!(
+            toml.contains("[modules.auth.routes.\"vh1_site\"]"),
+            "{toml}"
+        );
+        assert!(toml.contains("realm = \"Restricted\""), "{toml}");
+        assert!(
+            toml.contains("user_file = \"/etc/apache2/.htpasswd\""),
+            "{toml}"
+        );
+    }
+
+    #[test]
+    fn rejects_basic_auth_without_user_file() {
+        let src = r#"
+<VirtualHost *:80>
+    ServerName auth.example
+    DocumentRoot /var/www/auth
+    AuthType Basic
+    AuthName "Restricted"
+    Require valid-user
+</VirtualHost>
+"#;
+        let (res, report) = migrate_with_report("httpd.conf", src);
+        assert!(res.is_err());
+        assert!(
+            report
+                .unsupported
+                .iter()
+                .any(|u| u.contains("AuthUserFile")),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn migrates_require_ip_and_method_to_route_access() {
+        let src = r#"
+<VirtualHost *:80>
+    ServerName acl.example
+    DocumentRoot /var/www/acl
+    Require ip 10.0.0.0/8 192.0.2.0/24
+    Require method GET POST
+</VirtualHost>
+"#;
+        let (toml, report) = migrate(src).expect("migrate ACL");
+        assert!(
+            toml.contains("allow = [\"10.0.0.0/8\", \"192.0.2.0/24\"]"),
+            "{toml}"
+        );
+        assert!(toml.contains("methods = [\"GET\", \"POST\"]"), "{toml}");
+        assert!(report.unsupported.is_empty(), "{report:?}");
+    }
+
+    #[test]
+    fn migrates_order_deny_allow_whitelist() {
+        let src = r#"
+<VirtualHost *:80>
+    ServerName acl.example
+    DocumentRoot /var/www/acl
+    Order Deny,Allow
+    Deny from all
+    Allow from 10.0.0.0/8
+</VirtualHost>
+"#;
+        let (toml, _) = migrate(src).expect("migrate Order");
+        assert!(toml.contains("allow = [\"10.0.0.0/8\"]"), "{toml}");
+        assert!(!toml.contains("deny = [\"all\"]"), "{toml}");
+    }
+
+    #[test]
+    fn warns_on_mixed_legacy_and_require_access() {
+        let src = r#"
+<VirtualHost *:80>
+    ServerName mixed.example
+    DocumentRoot /var/www/mixed
+    Order Deny,Allow
+    Deny from all
+    Require ip 10.0.0.0/8
+</VirtualHost>
+"#;
+        let (_toml, report) = migrate(src).expect("migrate mixed ACL");
+        assert!(
+            report.notes.iter().any(|note| {
+                note.level == CompatLevel::Manual
+                    && note.message.contains("mixed Apache 2.2")
+                    && note.message.contains("Require")
+            }),
+            "{report:?}"
+        );
     }
 
     #[test]

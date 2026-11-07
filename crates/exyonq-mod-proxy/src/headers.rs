@@ -18,7 +18,7 @@
 //! Fixed hop-by-hop semantics live in [`exyonq_module_api::hop_by_hop`]. This module
 //! re-exports them for proxy callers and adds request/content-length helpers.
 
-use http::header::{HeaderMap, CONTENT_LENGTH, TRANSFER_ENCODING};
+use http::header::{HeaderMap, HeaderValue, CONTENT_LENGTH, TRANSFER_ENCODING};
 
 pub use exyonq_module_api::hop_by_hop::{
     connection_nominated_header_names, is_fixed_hop_by_hop_header as is_hop_by_hop_header,
@@ -30,6 +30,76 @@ pub const RESPONSE_HOP_BY_HOP_HEADERS: &[&str] = FIXED_HOP_BY_HOP_HEADERS;
 
 /// Request header names stripped before forwarding to upstream.
 pub const REQUEST_UPSTREAM_STRIP_HEADERS: &[&str] = FIXED_HOP_BY_HOP_HEADERS;
+
+/// EXY-11: insert a header into an upstream `HeaderMap` preserving repeated
+/// `Cookie` lines. `Cookie` merges into the existing value with "; " (RFC 6265
+/// §5.4) because CGI-style backends read a single line; every other field keeps
+/// the previous replace-insert (last-wins) semantics — appending arbitrary
+/// fields could forward duplicate framing headers (`Content-Length`) on paths
+/// without `request_headers_safe_for_proxy`. If the cookie concatenation is not
+/// a valid `HeaderValue`, falls back to replace-insert.
+pub fn insert_or_merge_cookie(
+    map: &mut HeaderMap,
+    name: http::header::HeaderName,
+    value: HeaderValue,
+) {
+    if name.as_str().eq_ignore_ascii_case("cookie") {
+        if let Some(existing) = map.get(&name) {
+            let mut merged = existing.as_bytes().to_vec();
+            merged.extend_from_slice(b"; ");
+            merged.extend_from_slice(value.as_bytes());
+            if let Ok(v) = HeaderValue::from_bytes(&merged) {
+                map.insert(name, v);
+                return;
+            }
+            map.insert(name, value);
+            return;
+        }
+    }
+    map.insert(name, value);
+}
+
+/// EXY-11: fold repeated `cookie` pairs into one "; "-joined pair, keeping the
+/// first occurrence position and value order (RFC 6265 §5.4). Used by the
+/// streaming forward path, which builds the request pair-by-pair.
+pub fn merge_cookie_pairs(headers: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::with_capacity(headers.len());
+    let mut cookie_at: Option<usize> = None;
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case("cookie") {
+            match cookie_at {
+                Some(idx) => {
+                    out[idx].1.push_str("; ");
+                    out[idx].1.push_str(value);
+                }
+                None => {
+                    cookie_at = Some(out.len());
+                    out.push((name.clone(), value.clone()));
+                }
+            }
+            continue;
+        }
+        out.push((name.clone(), value.clone()));
+    }
+    out
+}
+
+/// EXY-11: fold repeated `Cookie` entries of a `HeaderMap` in place (RFC 6265
+/// §5.4). Used by paths that forward the client request verbatim (WebSocket
+/// upgrade, spike `forward_request_complete`) where cookies would otherwise
+/// arrive as separate lines.
+pub fn merge_cookie_header_map(map: &mut HeaderMap) {
+    let mut it = map.get_all(http::header::COOKIE).iter();
+    let Some(first) = it.next() else { return };
+    let mut merged = first.as_bytes().to_vec();
+    for v in it {
+        merged.extend_from_slice(b"; ");
+        merged.extend_from_slice(v.as_bytes());
+    }
+    if let Ok(v) = HeaderValue::from_bytes(&merged) {
+        map.insert(http::header::COOKIE, v);
+    }
+}
 
 /// Reject ambiguous length/framing headers before forwarding to upstream.
 pub fn request_headers_safe_for_proxy(headers: &HeaderMap) -> bool {
@@ -74,6 +144,76 @@ pub fn parse_response_content_length(headers: &HeaderMap) -> ContentLengthParse 
 mod tests {
     use super::*;
     use http::header::{HeaderName, HeaderValue};
+
+    #[test]
+    fn cookie_insert_merges_repeated_with_semicolon() {
+        let mut headers = HeaderMap::new();
+        insert_or_merge_cookie(
+            &mut headers,
+            HeaderName::from_static("cookie"),
+            HeaderValue::from_static("a=1"),
+        );
+        insert_or_merge_cookie(
+            &mut headers,
+            HeaderName::from_static("cookie"),
+            HeaderValue::from_static("b=2"),
+        );
+        assert_eq!(
+            headers.get("cookie").and_then(|v| v.to_str().ok()),
+            Some("a=1; b=2")
+        );
+        assert_eq!(headers.get_all("cookie").iter().count(), 1);
+    }
+
+    #[test]
+    fn insert_keeps_last_wins_for_non_cookie_fields() {
+        // Only `Cookie` merges — other fields keep the previous replace-insert
+        // semantics so duplicate framing headers (Content-Length) cannot leak
+        // into upstreams on paths without the framing check (contract-audit
+        // MF-2).
+        let mut headers = HeaderMap::new();
+        insert_or_merge_cookie(
+            &mut headers,
+            HeaderName::from_static("content-length"),
+            HeaderValue::from_static("5"),
+        );
+        insert_or_merge_cookie(
+            &mut headers,
+            HeaderName::from_static("content-length"),
+            HeaderValue::from_static("5"),
+        );
+        let all: Vec<_> = headers.get_all("content-length").iter().collect();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn merge_cookie_pairs_keeps_position_and_order() {
+        let pairs = vec![
+            ("Accept".to_string(), "text/html".to_string()),
+            ("Cookie".to_string(), "a=1".to_string()),
+            ("X-Other".to_string(), "x".to_string()),
+            ("cookie".to_string(), "b=2".to_string()),
+            ("Cookie".to_string(), "c=3".to_string()),
+        ];
+        let merged = merge_cookie_pairs(&pairs);
+        assert_eq!(
+            merged,
+            vec![
+                ("Accept".to_string(), "text/html".to_string()),
+                ("Cookie".to_string(), "a=1; b=2; c=3".to_string()),
+                ("X-Other".to_string(), "x".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_cookie_pairs_passthrough_when_single() {
+        let pairs = vec![
+            ("Cookie".to_string(), "a=1".to_string()),
+            ("Accept".to_string(), "*/*".to_string()),
+        ];
+        assert_eq!(merge_cookie_pairs(&pairs), pairs);
+    }
 
     #[test]
     fn detects_duplicate_content_length() {

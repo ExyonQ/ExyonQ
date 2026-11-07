@@ -123,16 +123,43 @@ fn h3_oversized_materialized_response() -> Http3MaterializedResponse {
 }
 
 /// RAII lease — one per QUIC connection (PS1A-H3). Not `Clone`.
-pub struct Http3ConnectionLease(#[allow(dead_code)] ConnectionLifecycleToken);
+pub struct Http3ConnectionLease {
+    #[allow(dead_code)]
+    token: ConnectionLifecycleToken,
+    /// OL-03 connection-level slot, held for the QUIC connection lifetime.
+    _throttle: Option<crate::client_throttle::ClientGuard>,
+}
 
 /// Core implementation of kernel QUIC connection admission.
 pub struct CoreHttp3Lifecycle {
     ops: Arc<LifecycleState>,
+    /// Present for the production listener; tests construct admission-only.
+    shared: Option<SharedServerState>,
 }
 
 impl CoreHttp3Lifecycle {
     pub fn new(ops: Arc<LifecycleState>) -> Self {
-        Self { ops }
+        Self { ops, shared: None }
+    }
+
+    pub fn with_shared(ops: Arc<LifecycleState>, shared: SharedServerState) -> Self {
+        Self {
+            ops,
+            shared: Some(shared),
+        }
+    }
+
+    fn lease(
+        &self,
+        throttle: Option<crate::client_throttle::ClientGuard>,
+    ) -> Result<Http3ConnectionLease, Http3DrainRejected> {
+        self.ops
+            .try_enter()
+            .map(|token| Http3ConnectionLease {
+                token,
+                _throttle: throttle,
+            })
+            .map_err(|_| Http3DrainRejected)
     }
 }
 
@@ -140,10 +167,24 @@ impl Http3ConnectionLifecycle for CoreHttp3Lifecycle {
     type Lease = Http3ConnectionLease;
 
     fn try_enter_connection(&self) -> Result<Http3ConnectionLease, Http3DrainRejected> {
-        self.ops
-            .try_enter()
-            .map(Http3ConnectionLease)
-            .map_err(|_| Http3DrainRejected)
+        self.lease(None)
+    }
+
+    fn try_enter_connection_for(
+        &self,
+        peer_ip: &str,
+    ) -> Result<Http3ConnectionLease, Http3DrainRejected> {
+        let Some(shared) = &self.shared else {
+            return self.try_enter_connection();
+        };
+        let ip = peer_ip
+            .parse()
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        let state = read_state(shared);
+        let guard =
+            crate::client_throttle::acquire_connection(&state.config.modules.ratelimit.client, ip)
+                .map_err(|_| Http3DrainRejected)?;
+        self.lease(guard)
     }
 }
 
@@ -151,6 +192,8 @@ pub struct CoreHttp3Dispatcher {
     shared: SharedServerState,
     proxy_client: ProxyClient,
     lifecycle: Arc<LifecycleState>,
+    /// QUIC listen port — NGINX `port_in_redirect` source for H3 redirects.
+    local_port: Option<u16>,
 }
 
 impl CoreHttp3Dispatcher {
@@ -158,11 +201,13 @@ impl CoreHttp3Dispatcher {
         shared: SharedServerState,
         proxy_client: ProxyClient,
         lifecycle: Arc<LifecycleState>,
+        local_port: Option<u16>,
     ) -> Self {
         Self {
             shared,
             proxy_client,
             lifecycle,
+            local_port,
         }
     }
 }
@@ -180,6 +225,8 @@ impl Http3DispatchService for CoreHttp3Dispatcher {
         let response = handler::serve_http3_request(
             ConnectionContext {
                 state,
+                scheme: "https",
+                local_port: self.local_port,
                 proxy_client: self.proxy_client.clone(),
                 x_forwarded_for,
                 ops: Arc::clone(&self.lifecycle),
@@ -281,12 +328,17 @@ pub fn spawn_http3_listener(
     proxy_client: ProxyClient,
     lifecycle: Arc<LifecycleState>,
 ) {
+    let local_port = Some(settings.listen.port());
     let dispatch = Arc::new(CoreHttp3Dispatcher::new(
         SharedServerState::clone(&shared),
         proxy_client.clone(),
         Arc::clone(&lifecycle),
+        local_port,
     ));
-    let admission = Arc::new(CoreHttp3Lifecycle::new(Arc::clone(&lifecycle)));
+    let admission = Arc::new(CoreHttp3Lifecycle::with_shared(
+        Arc::clone(&lifecycle),
+        SharedServerState::clone(&shared),
+    ));
     tokio::spawn(async move {
         if let Err(err) = exyonq_mod_http3::serve(settings, dispatch, admission).await {
             tracing::warn!(%err, "http3 listener stopped");
@@ -610,7 +662,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let resp = dispatcher
@@ -651,7 +703,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
         ops.start_drain();
 
         let live = dispatcher
@@ -709,7 +761,7 @@ mod tests {
             .await
             .expect("state");
         let shared = crate::reload::wrap_state(state);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
         assert_eq!(ops.active_connections(), 0);
         let req = Request::get("/health").body(Bytes::new()).unwrap();
         let _ = dispatcher.dispatch(req, "127.0.0.1").await;
@@ -729,7 +781,7 @@ mod tests {
         let capture = Arc::new(CapturingProxy::default());
         let service: Arc<dyn ProxyDispatchService> = capture.clone();
         let _guard = crate::execute_backend::ProxyDispatchTestGuard::install(service);
-        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops));
+        let dispatcher = CoreHttp3Dispatcher::new(shared, proxy, Arc::clone(&ops), None);
 
         let req = Request::builder()
             .method("POST")

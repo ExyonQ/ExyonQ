@@ -171,6 +171,9 @@ mod tests {
     #[test]
     fn i0_tokio_accept_required_vs_planner_transport_delta() {
         ensure_wire_hooks_installed();
+        // Asserts resolve through the process sendfile-enabled cache / OTel
+        // flag — serialize against tests mutating those globals.
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         use crate::server::wire_dispatch::tokio_accept_required;
 
         // Cap067: site GETs are wire/sendfile candidates (not Tokio-forced).

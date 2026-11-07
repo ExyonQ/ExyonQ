@@ -158,6 +158,40 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
             };
             out.push_str(&format!("htaccess = {mode:?}\n"));
         }
+        if let Some(access) = &route.access {
+            let mut parts = Vec::new();
+            if !access.allow.is_empty() {
+                parts.push(format!("allow = {:?}", access.allow));
+            }
+            if !access.deny.is_empty() {
+                parts.push(format!("deny = {:?}", access.deny));
+            }
+            if !access.rules.is_empty() {
+                let rules = access
+                    .rules
+                    .iter()
+                    .map(|rule| {
+                        let effect = match rule.effect {
+                            exyonq_config_ir::RouteAccessEffect::Allow => "allow",
+                            exyonq_config_ir::RouteAccessEffect::Deny => "deny",
+                        };
+                        format!("{{ effect = {effect:?}, source = {:?} }}", rule.source)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                parts.push(format!("rules = [{rules}]"));
+            }
+            if !access.methods.is_empty() {
+                parts.push(format!("methods = {:?}", access.methods));
+            }
+            if let Some(schedule) = &access.schedule {
+                parts.push(format!(
+                    "schedule = {{ days = {:?}, start = {:?}, end = {:?} }}",
+                    schedule.days, schedule.start, schedule.end
+                ));
+            }
+            out.push_str(&format!("access = {{ {} }}\n", parts.join(", ")));
+        }
         if let Some(cache) = &route.cache {
             out.push_str(&format!("cache = {cache:?}\n"));
         }

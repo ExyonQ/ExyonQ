@@ -76,6 +76,8 @@ async fn proxy_ctx(counting: Arc<CountingProxy>) -> (ConnectionContext, ProxyDis
         .expect("state");
     (
         ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -93,6 +95,8 @@ async fn live_post(
 ) -> u16 {
     let (mut client_io, server_io) = duplex(64 * 1024);
     let server_ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: Arc::clone(&ctx.state),
         proxy_client: ctx.proxy_client.clone(),
         x_forwarded_for: ctx.x_forwarded_for.clone(),
@@ -102,6 +106,8 @@ async fn live_post(
     let server = tokio::spawn(async move {
         let service = hyper::service::service_fn(move |req| {
             let server_ctx = ConnectionContext {
+                scheme: "http",
+                local_port: None,
                 state: Arc::clone(&server_ctx.state),
                 proxy_client: server_ctx.proxy_client.clone(),
                 x_forwarded_for: server_ctx.x_forwarded_for.clone(),

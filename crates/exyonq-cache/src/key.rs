@@ -68,6 +68,30 @@ pub fn build_storage_cache_key(mut parts: CacheKeyParts) -> CacheKey {
     build_cache_key(parts)
 }
 
+/// URL-level cache identity for `purge.url` (AUDIT-D5): the same fold as
+/// [`CacheKey`] minus the variant dimensions (`vary`, `range`,
+/// `content_encoding`). Every variant of one URL shares the group, so a URL
+/// purge can invalidate all `Vary`/coding/slice variants without knowing
+/// their exact keys — the old exact-`vary:""`-key purge silently missed them.
+pub fn url_group(parts: &CacheKeyParts) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (
+        parts.site_id,
+        parts.namespace,
+        parts.backend_id,
+        parts.runtime_generation,
+        parts.policy_generation,
+        parts.route_idx,
+        parts.method.as_str(),
+        parts.scheme.as_str(),
+        parts.host.as_str(),
+        parts.path.as_str(),
+        parts.query.as_str(),
+    )
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
 fn fold_key(parts: &CacheKeyParts) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     parts.hash(&mut hasher);

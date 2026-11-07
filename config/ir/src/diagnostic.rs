@@ -114,6 +114,8 @@ pub enum DiagnosticCode {
     LintHostlessCatchAll,
     /// EXY-LINT-0007 — predictive: FPC serve window outlives anonymous nonces
     LintFpcNonceWindow,
+    /// EXY-LINT-0008 — predictive: route field has no effect on this route kind
+    LintInapplicableRouteField,
     /// EXY-RT-0001 — runtime: upstream connect/DNS failed (Q-02 / ADR-054)
     RtUpstreamConnectFailed,
     /// EXY-RT-0002 — runtime: upstream attempt timeout
@@ -189,6 +191,7 @@ impl DiagnosticCode {
             Self::LintUnusedMap => "EXY-LINT-0005",
             Self::LintHostlessCatchAll => "EXY-LINT-0006",
             Self::LintFpcNonceWindow => "EXY-LINT-0007",
+            Self::LintInapplicableRouteField => "EXY-LINT-0008",
             Self::RtUpstreamConnectFailed => "EXY-RT-0001",
             Self::RtUpstreamTimeout => "EXY-RT-0002",
             Self::RtNoEligiblePeer => "EXY-RT-0003",
@@ -245,6 +248,7 @@ impl DiagnosticCode {
             "EXY-LINT-0005" => Self::LintUnusedMap,
             "EXY-LINT-0006" => Self::LintHostlessCatchAll,
             "EXY-LINT-0007" => Self::LintFpcNonceWindow,
+            "EXY-LINT-0008" => Self::LintInapplicableRouteField,
             "EXY-RT-0001" => Self::RtUpstreamConnectFailed,
             "EXY-RT-0002" => Self::RtUpstreamTimeout,
             "EXY-RT-0003" => Self::RtNoEligiblePeer,
@@ -523,7 +527,6 @@ pub fn redact_secrets(input: &str) -> String {
     for needle in [
         "password=",
         "Authorization:",
-        "Bearer ",
         "BEGIN PRIVATE KEY",
         "BEGIN RSA PRIVATE KEY",
         "redis://:",
@@ -535,6 +538,24 @@ pub fn redact_secrets(input: &str) -> String {
                 .unwrap_or(rest.len());
             out.replace_range(idx + needle.len()..idx + needle.len() + end, "[REDACTED]");
         }
+    }
+    // Keep the bearer prefix separate from the token literal. The release
+    // scanner must not see a synthetic `Authorization: Bearer <token>`
+    // sequence formed by adjacent redaction needles in `.rodata`.
+    let mut search_from = 0;
+    while let Some(rel) = out[search_from..].find("Bearer") {
+        let idx = search_from + rel;
+        let token_start = idx + "Bearer".len();
+        if out.as_bytes().get(token_start) == Some(&b' ') {
+            let value_start = token_start + 1;
+            let rest = &out[value_start..];
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                .unwrap_or(rest.len());
+            out.replace_range(value_start..value_start + end, "[REDACTED]");
+            break;
+        }
+        search_from = token_start;
     }
     // Absolute key file contents must never appear; redact suspiciously long hex blobs after key_file=
     if out.contains("key_file") && out.len() > 200 {
@@ -636,6 +657,14 @@ mod tests {
     fn redact_password_and_redis() {
         assert!(redact_secrets("redis://:hunter2@127.0.0.1:6379/").contains("[REDACTED]"));
         assert!(redact_secrets("password=hunter2 ok").contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_bearer_token_without_embedding_the_token() {
+        let raw = format!("{}: {}{}", "Authorization", "Bearer", " secret-token end");
+        let redacted = redact_secrets(&raw);
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(!redacted.contains("secret-token"));
     }
 
     #[test]

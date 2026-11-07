@@ -17,7 +17,7 @@
 
 #[cfg(target_os = "linux")]
 use exyonq_mod_static::sendfile::SendfileAsset;
-use exyonq_mod_static::{PreloadLimits, StaticRoot};
+use exyonq_mod_static::{DirRedirectPolicy, PreloadLimits, StaticRoot, StaticRootRouteOpts};
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::symlink;
@@ -30,9 +30,21 @@ fn preload_hit_returns_cached_path_without_requiring_uncached_walk() {
     fs::create_dir_all(root.join("nested")).expect("mkdir");
     fs::write(root.join("nested/a.bin"), b"hello").expect("write");
 
-    let mut service =
-        StaticRoot::new_with_preload_limits(&root, "/site", None, PreloadLimits::DEFAULT)
-            .expect("root");
+    let mut service = StaticRoot::new_with_preload_limits(
+        &root,
+        "/site",
+        None,
+        PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            exact: false,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
+    )
+    .expect("root");
     service.preload_tree().expect("preload");
     assert!(service.cache_len() >= 1);
 
@@ -59,9 +71,21 @@ fn open_under_root_rejects_intermediate_symlink_escape_after_preload() {
     fs::write(root.join("nested/a.bin"), b"inside").expect("write inside");
     fs::write(outside.join("a.bin"), b"SECRET").expect("write outside");
 
-    let mut service =
-        StaticRoot::new_with_preload_limits(&root, "/site", None, PreloadLimits::DEFAULT)
-            .expect("root");
+    let mut service = StaticRoot::new_with_preload_limits(
+        &root,
+        "/site",
+        None,
+        PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            exact: false,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
+    )
+    .expect("root");
     service.preload_tree().expect("preload");
     let cached = service
         .resolved_file_path("/site/nested/a.bin")
@@ -75,7 +99,7 @@ fn open_under_root_rejects_intermediate_symlink_escape_after_preload() {
         &cached,
         Some(exyonq_mod_static::sendfile::OpenUnderRoot {
             canonical_root: service.canonical_root(),
-            root_dir_fd: service.root_dir_fd(),
+            root_dir_fd: service.root_dir_fd().expect("dir roots carry a dirfd"),
         }),
         0,
     )
@@ -102,9 +126,21 @@ fn missing_and_traversal_still_fail() {
     fs::create_dir_all(&root).expect("mkdir");
     fs::write(root.join("ok.txt"), b"ok").expect("ok");
 
-    let mut service =
-        StaticRoot::new_with_preload_limits(&root, "/site", None, PreloadLimits::DEFAULT)
-            .expect("root");
+    let mut service = StaticRoot::new_with_preload_limits(
+        &root,
+        "/site",
+        None,
+        PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            exact: false,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
+    )
+    .expect("root");
     service.preload_tree().expect("preload");
 
     assert!(service.resolve_live_file_path("/site/missing.txt").is_err());
@@ -141,4 +177,41 @@ fn o_nofollow_rejects_directory_symlink_after_canonicalize_path() {
             || err.kind() == std::io::ErrorKind::Other,
         "unexpected err {err:?}"
     );
+}
+
+/// EXY-03: `location =` + `alias` to a regular file — the empty remainder must
+/// resolve to the file itself, not `root.join("")` (trailing slash → ENOTDIR
+/// on Linux → 500). Regression for the remote Linux exact-alias 500.
+#[test]
+fn file_root_exact_match_resolves_file_without_trailing_join() {
+    let dir = tempdir().expect("tempdir");
+    let file = dir.path().join("exact.txt");
+    fs::write(&file, b"exact-alias-body").expect("write");
+
+    let service = StaticRoot::new_with_preload_limits(
+        &file,
+        "/exact",
+        None,
+        PreloadLimits::DEFAULT,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: true,
+            exact: true,
+            dir_redirect: false,
+            redirect_policy: DirRedirectPolicy::default(),
+            listen_port: None,
+        },
+    )
+    .expect("file root");
+
+    let path = service
+        .resolve_live_file_path("/exact")
+        .expect("exact file resolves");
+    assert!(path.ends_with("exact.txt"));
+    let bytes = fs::read(&path).expect("resolved file readable");
+    assert_eq!(bytes, b"exact-alias-body");
+
+    // Route-level `exact` matching rejects /exactx and /exact/ upstream; the
+    // live resolve only asserts the verbatim remainder under the route prefix.
+    assert!(service.resolve_live_file_path("/exactx").is_err());
 }

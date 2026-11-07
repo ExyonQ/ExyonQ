@@ -397,6 +397,13 @@ async fn write_response_head<C: AsyncWrite + Unpin>(
         wire.extend_from_slice(reason);
     }
     wire.extend_from_slice(b"\r\n");
+    // Server: exyonq unless the upstream already sent one — same rule as nginx.
+    if !passthrough
+        .iter()
+        .any(|(name, _)| name.as_ref().eq_ignore_ascii_case(b"server"))
+    {
+        wire.extend_from_slice(b"Server: exyonq\r\n");
+    }
     for (name, value) in passthrough {
         wire.extend_from_slice(name);
         wire.extend_from_slice(b": ");

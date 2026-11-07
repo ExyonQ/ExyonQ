@@ -16,6 +16,7 @@ Usage:
 Modes (pick one; default --integrity-only):
   --integrity-only
   --verify-artifact-signature
+  --verify-artifact-signature-ssh
   --verify-tag
   --verify-oci
   --all
@@ -27,6 +28,11 @@ Artifact signature:
   --cosign-key PATH
   --cosign-bundle PATH
   --cosign-signature PATH
+
+SSH artifact signature:
+  --ssh-allowed-signers PATH   (defaults to versioned security/signing trust root)
+  --ssh-signature PATH         (defaults to SHA256SUMS.txt.sig)
+  --ssh-principal NAME         (defaults to exyonq-release)
 
 Tag verification:
   --git-repo PATH
@@ -47,6 +53,9 @@ MODE="integrity"
 COSIGN_KEY=""
 COSIGN_BUNDLE=""
 COSIGN_SIG=""
+SSH_ALLOWED_SIGNERS="$SCRIPT_DIR/../../security/signing/exyonq-release-artifact-signers"
+SSH_SIG=""
+SSH_PRINCIPAL="exyonq-release"
 GIT_REPO=""
 TAG=""
 ALLOWED_SIGNERS=""
@@ -58,12 +67,16 @@ while [[ $# -gt 0 ]]; do
     --bundle-root) p14sign_require_arg --bundle-root "${2:-}"; BUNDLE_ROOT="$2"; shift 2 ;;
     --integrity-only) MODE="integrity"; shift ;;
     --verify-artifact-signature) MODE="artifact"; shift ;;
+    --verify-artifact-signature-ssh) MODE="artifact-ssh"; shift ;;
     --verify-tag) MODE="tag"; shift ;;
     --verify-oci) MODE="oci"; shift ;;
     --all) MODE="all"; shift ;;
     --cosign-key) p14sign_require_arg --cosign-key "${2:-}"; COSIGN_KEY="$2"; shift 2 ;;
     --cosign-bundle) p14sign_require_arg --cosign-bundle "${2:-}"; COSIGN_BUNDLE="$2"; shift 2 ;;
     --cosign-signature) p14sign_require_arg --cosign-signature "${2:-}"; COSIGN_SIG="$2"; shift 2 ;;
+    --ssh-allowed-signers) p14sign_require_arg --ssh-allowed-signers "${2:-}"; SSH_ALLOWED_SIGNERS="$2"; shift 2 ;;
+    --ssh-signature) p14sign_require_arg --ssh-signature "${2:-}"; SSH_SIG="$2"; shift 2 ;;
+    --ssh-principal) p14sign_require_arg --ssh-principal "${2:-}"; SSH_PRINCIPAL="$2"; shift 2 ;;
     --git-repo) p14sign_require_arg --git-repo "${2:-}"; GIT_REPO="$2"; shift 2 ;;
     --tag) p14sign_require_arg --tag "${2:-}"; TAG="$2"; shift 2 ;;
     --allowed-signers) p14sign_require_arg --allowed-signers "${2:-}"; ALLOWED_SIGNERS="$2"; shift 2 ;;
@@ -137,6 +150,18 @@ run_artifact() {
   bash "$SCRIPT_DIR/verify-cosign-blob.sh" "${args[@]}"
 }
 
+run_artifact_ssh() {
+  local sig="${SSH_SIG:-$SUMS.sig}"
+  p14sign_require_arg --ssh-allowed-signers "$SSH_ALLOWED_SIGNERS"
+  [[ -f "$SSH_ALLOWED_SIGNERS" ]] || p14sign_die "SSH allowed-signers not found: $SSH_ALLOWED_SIGNERS"
+  [[ -f "$sig" ]] || p14sign_die "SSH artifact signature not found: $sig"
+  bash "$SCRIPT_DIR/verify-ssh-signature.sh" \
+    --checksums "$SUMS" \
+    --allowed-signers "$SSH_ALLOWED_SIGNERS" \
+    --signature "$sig" \
+    --principal "$SSH_PRINCIPAL"
+}
+
 run_tag() {
   p14sign_require_arg --git-repo "$GIT_REPO"
   p14sign_require_arg --tag "${TAG:-$GIT_TAG}"
@@ -158,6 +183,7 @@ run_oci() {
 
 case "$MODE" in
   artifact) run_artifact; AUTH=YES ;;
+  artifact-ssh) run_artifact_ssh; AUTH=YES ;;
   tag) run_tag; AUTH=YES ;;
   oci) run_oci; AUTH=YES ;;
   all)

@@ -60,15 +60,23 @@ fn redirect_config() -> AppConfig {
             }),
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         }],
         upstreams: HashMap::from([(
             "backend".into(),
@@ -123,6 +131,8 @@ async fn acme_unknown_token_falls_through_to_redirect() {
 
     let response = serve_http3_request(
         ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),

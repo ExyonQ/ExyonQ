@@ -53,6 +53,7 @@ fn test_fcgi_request() -> FcgiDispatchRequest {
         document_root: "/var/www".into(),
         server_name: "localhost".into(),
         server_port: 80,
+        scheme: "http".into(),
         remote_addr: "127.0.0.1".into(),
         server_protocol: "HTTP/1.1".into(),
         content_type: None,

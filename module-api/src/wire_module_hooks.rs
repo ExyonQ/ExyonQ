@@ -105,12 +105,23 @@ pub fn wire_record_exchange_labeled(
     }
 }
 
+/// AUDIT-D1: per-request route gate consulted by the proxy wire keep-alive
+/// loop. The implementation is composition-owned (route match + feature
+/// flags are not module state): it returns an opaque route token while the
+/// route owning `path`+`host` stays wire-compatible, `None` when the request
+/// must leave the wire path (different route, unrouteable path, or a route
+/// that requires full dispatch). The connection pins the first request's
+/// token; a mismatch ends the admission (fail closed → the client reconnects
+/// through full dispatch, same contract as the LA-001 Host-switch close).
+pub type WireRouteGate = dyn Fn(&str, Option<&str>) -> Option<u64> + Send + Sync;
+
 /// HTTP/1.1 429 wire for Cap055 deny (Connection: close — fail closed).
 pub fn rate_limit_reject_wire(retry_after_secs: u64) -> Vec<u8> {
     let retry = retry_after_secs.max(1);
     let body = b"rate limit exceeded";
     format!(
         "HTTP/1.1 429 Too Many Requests\r\n\
+         Server: exyonq\r\n\
          Retry-After: {retry}\r\n\
          Content-Type: text/plain; charset=utf-8\r\n\
          Content-Length: {}\r\n\
