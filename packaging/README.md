@@ -165,6 +165,11 @@ OCI publish encodes the canonical contract explicitly for both images:
 - `docker` job: `ghcr.io/exyonq/exyonq:<version>`
 - `docker-wordpress` job: `ghcr.io/exyonq/exyonq-wordpress:<version>`,
   built from the just-published server image and the same version tag
+- `dockerhub-mirror` job: digest copy of both published GHCR indexes to
+  `docker.io/exyonq/exyonq:<version>` and
+  `docker.io/exyonq/exyonq-wordpress:<version>`; the mirrored index digest must
+  equal the GHCR one. Requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+  repository secrets and fails closed without them.
 - platforms: `linux/amd64,linux/arm64` (multiarch index)
 - provenance: `mode=max`
 - SBOM attestation: enabled

@@ -540,8 +540,72 @@ jobs:
           tags: |
             ghcr.io/exyonq/exyonq-wordpress:${{ needs.docker.outputs.version }}
 
+  dockerhub-mirror:
+    # AGENTS.md §9: the Docker Hub mirror is part of the image contract, not a
+    # manual afterthought. 0.9.1 shipped GHCR-only because this step did not
+    # exist. Copy the exact GHCR index digests (no rebuild, no local retagging)
+    # so both registries resolve to the same index, and fail closed when the
+    # Hub credential is missing instead of leaving a GHCR-only release.
+    needs: [docker, docker-wordpress]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require Docker Hub credential
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HUB_USER}" ] || [ -z "${HUB_TOKEN}" ]; then
+            echo "ERROR: repository secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required" >&2
+            echo "ERROR: the Docker Hub mirror is part of the release contract; GHCR-only is not a release" >&2
+            exit 1
+          fi
+          echo "DOCKERHUB_CREDENTIAL=present"
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Mirror both GHCR indexes to Docker Hub
+        env:
+          VERSION: ${{ needs.docker.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERSION}" ]; then
+            echo "ERROR: empty version from the docker job" >&2
+            exit 1
+          fi
+          index_digest() {
+            docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])'
+          }
+          for name in exyonq exyonq-wordpress; do
+            src="ghcr.io/exyonq/${name}:${VERSION}"
+            dst="docker.io/exyonq/${name}:${VERSION}"
+            digest="$(index_digest "$src")"
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: ${src} did not resolve to a sha256 index digest" >&2
+              exit 1
+            fi
+            docker buildx imagetools create -t "$dst" "ghcr.io/exyonq/${name}@${digest}"
+            mirrored="$(index_digest "$dst")"
+            if [ "$mirrored" != "$digest" ]; then
+              echo "ERROR: ${dst} index ${mirrored} differs from GHCR ${digest}" >&2
+              exit 1
+            fi
+            echo "DOCKERHUB_MIRROR=${name}:${VERSION}:VERIFIED@${digest}"
+            if docker buildx imagetools inspect "docker.io/exyonq/${name}:latest" >/dev/null 2>&1; then
+              echo "ERROR: docker.io/exyonq/${name}:latest exists; the contract forbids :latest" >&2
+              exit 1
+            fi
+            echo "DOCKERHUB_LATEST=${name}:ABSENT"
+          done
+
   github-release:
-    needs: [security-release, build, checksums, package-linux, docker, docker-wordpress, compliance-artifacts]
+    needs: [security-release, build, checksums, package-linux, docker, docker-wordpress, dockerhub-mirror, compliance-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write
