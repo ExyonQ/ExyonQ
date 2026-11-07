@@ -121,9 +121,23 @@ future uploads are denied.
 
 ## 7. Docker Hub
 
-`release.yml` pushes GHCR only. The Docker Hub mirror is a separate manual step
-performed from the GHCR digest (AGENTS.md §9); it is not blocked by this ACL and
-cannot run before the GHCR push succeeds.
+`release.yml` mirrors both images to Docker Hub in the `dockerhub-mirror` job,
+which runs after `docker` and `docker-wordpress` and is a dependency of
+`github-release`. It copies the published GHCR index digest (no rebuild), so the
+Hub and GHCR indexes are identical, and it **fails closed** when the
+`DOCKERHUB_USERNAME` or `DOCKERHUB_TOKEN` repository secret is missing: a
+GHCR-only publication is not a release (AGENTS.md §9). The mirror is not blocked
+by the GHCR ACL and cannot run before the GHCR push succeeds.
+
+Manual fallback for a release published before this job existed:
+
+```bash
+docker buildx imagetools create -t docker.io/exyonq/exyonq:<version> \
+  ghcr.io/exyonq/exyonq@sha256:<ghcr-index-digest>
+docker buildx imagetools create -t docker.io/exyonq/exyonq-wordpress:<version> \
+  ghcr.io/exyonq/exyonq-wordpress@sha256:<ghcr-index-digest>
+docker buildx imagetools inspect docker.io/exyonq/exyonq:<version>  # must match GHCR
+```
 
 ## 8. Recorded verification (0.9.1)
 
