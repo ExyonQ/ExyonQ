@@ -11,14 +11,18 @@
 #   artifact-integrity.sh hash   <binary>
 #   artifact-integrity.sh record <state.tsv> <label> <binary>
 #   artifact-integrity.sh verify <state.tsv> <label> <binary>
-#   artifact-integrity.sh log    <state.tsv> <label> <log>
+#   artifact-integrity.sh log    <state.tsv> <label> <log> [hash_field]
+#
+# hash_field defaults to binary_sha256. Use compat_sha256 for exyonq-compat so
+# one E2E log can bind both artifacts without confusing their hashes.
 #
 # Exit codes: 0 match, 1 usage/state error, 2 missing artifact/record,
-# 3 drift (hash changed), 4 log has no or mismatched binary_sha256.
+# 3 drift (hash changed), 4 log has no or mismatched hash for the expected
+# field.
 set -uo pipefail
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -87,8 +91,12 @@ case "$cmd" in
     fi
     ;;
   log)
-    [[ $# -eq 4 ]] || usage
-    state=$2 label=$3 log=$4
+    [[ $# -eq 4 || $# -eq 5 ]] || usage
+    state=$2 label=$3 log=$4 field=${5:-binary_sha256}
+    if [[ ! "$field" =~ ^[a-z][a-z0-9_]*$ ]]; then
+      echo "ARTIFACT_LOG_FIELD_INVALID field=$field" >&2
+      exit 1
+    fi
     expected=$(recorded_hash "$state" "$label")
     if [[ -z "$expected" ]]; then
       echo "ARTIFACT_NO_RECORD label=$label state=$state" >&2
@@ -102,15 +110,15 @@ case "$cmd" in
     while IFS= read -r actual; do
       seen=$((seen + 1))
       if [[ "$actual" != "$expected" ]]; then
-        echo "ARTIFACT_LOG_DRIFT label=$label expected=$expected actual=$actual log=$log" >&2
+        echo "ARTIFACT_LOG_DRIFT label=$label field=$field expected=$expected actual=$actual log=$log" >&2
         exit 3
       fi
-    done < <(sed -n 's/.*binary_sha256=\([0-9a-f]\{64\}\).*/\1/p' "$log")
+    done < <(sed -n "s/.*${field}=\([0-9a-f]\{64\}\).*/\1/p" "$log")
     if [[ $seen -eq 0 ]]; then
-      echo "ARTIFACT_LOG_UNBOUND label=$label log=$log" >&2
+      echo "ARTIFACT_LOG_UNBOUND label=$label field=$field log=$log" >&2
       exit 4
     fi
-    echo "ARTIFACT_LOG_BOUND label=$label sha256=$expected occurrences=$seen log=$log"
+    echo "ARTIFACT_LOG_BOUND label=$label field=$field sha256=$expected occurrences=$seen log=$log"
     ;;
   *)
     usage

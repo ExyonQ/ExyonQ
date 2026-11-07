@@ -122,6 +122,7 @@ echo "binary=$BIN"
 echo "binary_sha256=$(hash_file "$BIN")"
 "$BIN" --version
 echo "compat=$COMPAT"
+# artifact-integrity.sh binds this line to exyonq-compat.
 echo "compat_sha256=$(hash_file "$COMPAT")"
 
 cat >"$RUN/ols.conf" <<'EOF'
