@@ -46,6 +46,12 @@ if [[ "$actual_commit" != "$EXPECTED_CRS_COMMIT" ]]; then
 fi
 
 WORK="$(mktemp -d "$ROOT/target/ol05-waf-metrics.XXXXXX")"
+# Unix-socket chmod is not supported on some container bind mounts (for
+# example a macOS checkout mounted into Wolfi). Keep the control socket in a
+# local writable directory; the HTTP fixture and config can stay under WORK.
+SOCKET_DIR="${OL05_SOCKET_DIR:-${TMPDIR:-/tmp}}"
+CONTROL_SOCKET="$SOCKET_DIR/exyonq-ol05-metrics.$$.sock"
+rm -f "$CONTROL_SOCKET"
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 ORIGIN_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 EXY_PID=""
@@ -53,6 +59,7 @@ ORIGIN_PID=""
 cleanup() {
     [[ -n "$EXY_PID" ]] && kill "$EXY_PID" 2>/dev/null || true
     [[ -n "$ORIGIN_PID" ]] && kill "$ORIGIN_PID" 2>/dev/null || true
+    rm -f "$CONTROL_SOCKET"
     wait 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -139,7 +146,7 @@ EOF
 
 "$EXY" validate -c "$WORK/exy.toml"
 RUST_LOG="${RUST_LOG:-exyonq_waf=warn}" \
-    EXYONQ_CONTROL_SOCKET="$WORK/control.sock" \
+    EXYONQ_CONTROL_SOCKET="$CONTROL_SOCKET" \
     "$EXY" serve -c "$WORK/exy.toml" >"$WORK/exyonq.log" 2>&1 &
 EXY_PID=$!
 

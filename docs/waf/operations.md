@@ -76,9 +76,9 @@ Documented from current integrated code — not copied from obsolete package not
   not full ModSecurity parity (not every operator/phase/action is represented).
 - No ML / anomaly scoring engine.
 - No response-phase (H6) detectors or hooks.
-- External providers are limited to reCAPTCHA v2 checkbox and hCaptcha; reCAPTCHA v3
-  is not implemented. Provider verification needs OS CA roots (fail-closed without
-  them).
+- External providers are reCAPTCHA v2 checkbox, reCAPTCHA v3 score-based and
+  hCaptcha. The positive v3 provider E2E needs a real v3 key and is **NOT
+  EXECUTED**; provider verification needs OS CA roots (fail-closed without them).
 - Abuse cardinality is a single global policy only.
 - Cap015 dual-Linux production matrix **not** executed yet.
 
@@ -139,6 +139,20 @@ probes passed; `FILES`/`XML` was 11/11 with `failures=0`. The measured binary
 was `0a7536…`. The run, logs and SHA-256 manifest are recorded in
 [`ol05-evidence-20261105.md`](./ol05-evidence-20261105.md). This is local
 execution, not GitHub-hosted CI.
+
+La revalidación final del 2026-11-06T19:52Z sobre HEAD `ed778ee` volvió a
+ejecutar el entry point con el binario
+`0623c037964e59ed6e16c3007595bc4ae6cee54cab53f2aa02a63e2ce932433e` y terminó
+`OL05_VERIFY=PASS`: bloque `0/4628` con 33 exclusiones, dry-run `0/4628`
+(`would_block=5947`, `violations_942100=52`), métricas block/detection-only
+PASS y `FILES`/`XML` 11/11. Evidencia:
+`.exyonq-local/evidence/ol05-verify-final-20261106T195239Z/`. El run de CI
+`42242829711` es Linux sobre `3870648`; no es una ejecución de este HEAD.
+Las métricas block/detection-only también pasaron en Linux/Wolfi `aarch64` con
+el binario `03461ef7…` (`RESULT=PASS`; `942100=1` block, `942100=2`
+detection-only); el primer intento falló por el socket de control en el bind
+mount y se corrigió únicamente el harness. Evidencia:
+`.exyonq-local/evidence/ol05-wolfi-fixed-20261106T195213Z/`.
 
 The first pass compares decisions against ModSecurity; the second is the real
 monitor pass and requires no `403`/`429`, a `942100` hit and the `949110`
