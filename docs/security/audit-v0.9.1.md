@@ -34,17 +34,22 @@ requirements of this release.
 | `cargo deny check` | pass | `ci.yml` `supply-chain` (advisories/bans/sources) |
 | Security functional tests | pass | `security-tests` on the same Security run |
 | Private-material-zero | pass | publication scan, history scan, selftest and publication-hook regression on the same Security run |
-| AP-04 / OL-03 / OL-04 | pass | real local E2E: AP-04 **30/30**, OL-03 **25/25**, OL-04 **11/11**; evidence indexed in `docs/releases/0.9.1-requirements-evidence.md` |
+| AP-04 / OL-03 / OL-04 | pass | real local E2E: AP-04 **30/30**, OL-03 **25/25**, OL-04 **13/13 (97 assertions)**; regression rerun 2026-11-06T21:45Z; evidence indexed in `docs/releases/0.9.1-requirements-evidence.md` |
 | OL-05 local | pass | `OL05_VERIFY=PASS`; CRS v4.25.0, corpus SHA-256 `1fb44865…`, real oracle digest; details in `docs/waf/ol05-evidence-20261105.md` |
 | Docker Scout (local arm64 review) | pass | server and WordPress local images: 0 Critical / 0 High / 0 Medium / 0 Low; final multiarch digests pending post-publish scan |
 | WordPress image review (local arm64) | pass | Wolfi base, PHP 8.5.12, `www-data`, installer endpoint HTTP `200`; full installer/login E2E on the final published digest not executed here |
 | Nightly fuzz / Miri | not executed | not re-run for this release increment; not claimed green |
 | Veyra Proof / rust-ai-audit / CodeGraph | not executed | audit-stack legs were not run in this release-document increment; reported as NOT EXECUTED, not as pass |
-| F6-WP-04 / DoD F6 | open | technical gate PASS on the 0.9.0 tree; editorial/production closure and part of the F6 DoD remain open; not claimed closed |
+| F6-WP-04 / DoD F6 | open | technical gate PASS on the 0.9.0 tree; editorial/production closure and part of the F6 DoD remain open; the 0.9.1 release workflow `42247244600` failed to push the image to GHCR (`permission_denied: write_package`), so no published digest exists and the authorized production copy is not available; not claimed closed |
 
 ## Blockers
 
-None.
+- **F6-WP-04 publication/closure:** the `v0.9.1` release workflow built the
+  server image but GHCR denied the push with
+  `permission_denied: write_package`; `docker-wordpress` was skipped. No
+  published 0.9.1 image or digest exists, and the authorized production copy
+  was not available in the checkout. This is outside the four 0.9.1
+  requirements and is not counted as their failure.
 
 ## Findings (open)
 
@@ -56,7 +61,7 @@ None.
 | --- | --- | --- |
 | AP-04 | — | External JWT/OAuth endpoint with internal-header isolation; 30/30 local E2E |
 | OL-03 | — | Per-client connection throttle migrated and compared against OLS; 25/25 local E2E |
-| OL-04 | — | Native/reCAPTCHA/hCaptcha challenge and no-JS fallback; 11/11 local E2E |
+| OL-04 | — | Native/reCAPTCHA v2/v3/hCaptcha challenge, no-JS fallback and v3 fail-closed; 13/13 (97 assertions) local E2E; positive v3 **NOT EXECUTED** (needs a real v3 key) |
 | OL-05 | — | Real OWASP CRS differential and dry-run in GitHub Actions; ruled |
 
 ## Waivers
@@ -98,7 +103,9 @@ None.
   external audits were not run for this release increment. They are NOT
   EXECUTED, not PASS.
 - F6-WP-04 editorial/production closure and the remaining F6 DoD items are
-  outside this release's four requirements and are still open.
+  outside this release's four requirements and are still open. The 0.9.1
+  release workflow built the server image but GHCR rejected the push; there is
+  no published digest, and no authorized production copy was available.
 
 ## Sign-off
 
