@@ -13,6 +13,14 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+EVIDENCE="${E2E_EV:-$ROOT/.exyonq-local/evidence/f6wp04-$(date -u +%Y%m%dT%H%M%SZ)}"
+blocked() {
+  local reason="$1"
+  mkdir -p "$EVIDENCE" 2>/dev/null || true
+  printf 'RESULT=BLOCKED %s\n' "$reason" | tee "$EVIDENCE/blocked.txt"
+  printf 'EVIDENCE=%s\n' "$EVIDENCE"
+  exit 3
+}
 BIN="${EXYONQ_BIN:-$ROOT/target/debug/exyonq}"
 WP_SOURCE="${WP_SOURCE_DIR:-/var/www/blog}"
 WP_DUMP="${WP_DB_DUMP:-}"
@@ -20,24 +28,22 @@ PROD_URL="${PROD_BASE_URL:-https://blog.exyonq.org}"
 WP_CLI="${WP_CLI:-wp}"
 PHP_FPM_BIN="${PHP_FPM_BIN:-php-fpm8.5}"
 DB_IMAGE="${DB_IMAGE:-mariadb:10.11}"
+LOCAL_PROD="${F6WP04_LOCAL_PROD:-0}"
+NGINX_BIN="${NGINX_BIN:-nginx}"
 
 for t in curl openssl python3 docker "$WP_CLI" "$PHP_FPM_BIN"; do
   if ! command -v "$t" >/dev/null 2>&1; then
-    echo "RESULT=BLOCKED missing=$t"
-    exit 3
+    blocked "missing=$t"
   fi
 done
 if [[ ! -x "$BIN" ]]; then
-  echo "RESULT=BLOCKED missing=exyonq-binary path=$BIN"
-  exit 3
+  blocked "missing=exyonq-binary path=$BIN"
 fi
 if [[ ! -d "$WP_SOURCE" ]]; then
-  echo "RESULT=BLOCKED missing=wordpress-source path=$WP_SOURCE"
-  exit 3
+  blocked "missing=wordpress-source path=$WP_SOURCE"
 fi
 if [[ -z "$WP_DUMP" || ! -f "$WP_DUMP" ]]; then
-  echo "RESULT=BLOCKED missing=wordpress-db-dump (set WP_DB_DUMP)"
-  exit 3
+  blocked "missing=wordpress-db-dump (set WP_DB_DUMP)"
 fi
 
 pick_port() {
@@ -52,12 +58,20 @@ PY
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/exyonq-f6wp04.XXXXXX")"
 DOC="$TMP/www"
-SOCK="$TMP/php-fpm.sock"
+# The local-production harness runs inside Docker on macOS. PHP-FPM chown()s
+# its listening socket, which returns EINVAL on a host bind mount. Keep that
+# socket on the container tmpfs; MariaDB's socket must stay on the bind mount
+# because the disposable DB is a separate container. Linux external runs keep
+# the socket beside the other ephemeral files unless an override is supplied.
+SOCK_DIR="${F6WP04_FPM_SOCK_DIR:-$TMP}"
+if [[ "${LOCAL_PROD:-0}" == "1" && -z "${F6WP04_FPM_SOCK_DIR:-}" ]]; then
+  SOCK_DIR="/dev/shm/exyonq-f6wp04-$$"
+fi
+SOCK="$SOCK_DIR/php-fpm.sock"
 FPM_CFG="$TMP/php-fpm.conf"
 CFG="$TMP/exyonq.toml"
 CERT="$TMP/cert.pem"
 KEY="$TMP/key.pem"
-EVIDENCE="${E2E_EV:-$ROOT/.exyonq-local/evidence/f6wp04-$(date -u +%Y%m%dT%H%M%SZ)}"
 PORT="$(pick_port)"
 DB_NAME="f6wp04"
 DB_USER="f6wp04"
@@ -67,17 +81,20 @@ ADMIN_PASS="$(openssl rand -hex 16)"
 DB_CID=""
 FPM_PID=""
 EX_PID=""
-mkdir -p "$EVIDENCE" "$DOC" "$TMP/db-socket"
+NGINX_PID=""
+mkdir -p "$EVIDENCE" "$DOC" "$TMP/db-socket" "$SOCK_DIR"
 chmod 777 "$TMP/db-socket"
+chmod 755 "$SOCK_DIR"
 LOG="$EVIDENCE/setup.log"
 : >"$LOG"
 
 cleanup() {
   [[ -n "${EX_PID:-}" ]] && kill "$EX_PID" 2>/dev/null || true
+  [[ -n "${NGINX_PID:-}" ]] && kill "$NGINX_PID" 2>/dev/null || true
   [[ -n "${FPM_PID:-}" ]] && kill "$FPM_PID" 2>/dev/null || true
   if [[ -n "${DB_CID:-}" ]]; then docker stop "$DB_CID" >/dev/null 2>&1 || true; fi
   wait 2>/dev/null || true
-  rm -rf "$TMP"
+  rm -rf "$TMP" "$SOCK_DIR"
 }
 trap cleanup EXIT
 
@@ -115,11 +132,21 @@ echo "starting disposable MariaDB" | tee -a "$LOG"
 if ! docker image inspect "$DB_IMAGE" >/dev/null 2>&1; then
   docker pull "$DB_IMAGE" >>"$LOG" 2>&1 || fail "cannot pull $DB_IMAGE"
 fi
+# PHP 8.5 mysqli in Wolfi requires TLS from the disposable DB. Use an
+# ephemeral self-signed certificate on the throwaway server only.
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 2 \
+  -subj "/CN=localhost" \
+  -keyout "$TMP/db-socket/db-key.pem" -out "$TMP/db-socket/db-cert.pem" \
+  >/dev/null 2>&1 || fail "ephemeral DB TLS cert failed"
+chmod 644 "$TMP/db-socket/db-key.pem" "$TMP/db-socket/db-cert.pem"
 DB_CID="$(docker run -d --rm --name "f6wp04-db-$$" \
   -e "MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=yes" \
   -e "MARIADB_DATABASE=$DB_NAME" \
   -v "$TMP/db-socket:/run/mysqld" \
-  "$DB_IMAGE")"
+  "$DB_IMAGE" \
+  --ssl-cert=/run/mysqld/db-cert.pem \
+  --ssl-key=/run/mysqld/db-key.pem \
+  --ssl-ca=/run/mysqld/db-cert.pem)"
 for _ in $(seq 1 90); do
   if docker exec "$DB_CID" mariadb-admin ping -uroot --silent >/dev/null 2>&1; then
     break
@@ -187,7 +214,10 @@ FPM_GROUP="$(id -gn)"
 if [[ "$(id -u)" == "0" ]]; then
   FPM_USER="${FPM_USER_OVERRIDE:-www-data}"
   FPM_GROUP="${FPM_GROUP_OVERRIDE:-www-data}"
-  chown -R "$FPM_USER:$FPM_GROUP" "$DOC" "$TMP"
+  # A Unix socket must not be chowned through a bind mount: macOS returns
+  # EINVAL for it. The socket is already world-accessible; chown every other
+  # file/directory (including $DOC) so PHP-FPM can read the tree.
+  find "$TMP" -not -type s -exec chown "$FPM_USER:$FPM_GROUP" {} +
 fi
 cat >"$FPM_CFG" <<EOF
 [global]
@@ -210,6 +240,58 @@ EOF
 FPM_PID=$!
 for _ in $(seq 1 100); do [[ -S "$SOCK" ]] && break; sleep 0.1; done
 [[ -S "$SOCK" ]] || fail "php-fpm socket missing"
+
+PROD_CURL=(curl -sS -L --compressed)
+if [[ "$LOCAL_PROD" == "1" ]]; then
+  # Local production oracle: real nginx + the same PHP-FPM/WordPress copy.
+  # This is opt-in; the normal gate still expects an external production URL.
+  [[ "$PROD_URL" == "https://blog.exyonq.org" ]] \
+    || fail "F6WP04_LOCAL_PROD requires PROD_BASE_URL=https://blog.exyonq.org"
+  command -v "$NGINX_BIN" >/dev/null 2>&1 || fail "nginx binary missing for local production"
+  PROD_CONF="$TMP/nginx.conf"
+  cat >"$PROD_CONF" <<EOF
+user root;
+worker_processes 1;
+pid $TMP/nginx.pid;
+error_log $TMP/nginx.log;
+events { worker_connections 64; }
+http {
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
+  access_log $TMP/nginx-access.log;
+  server {
+    listen 127.0.0.1:443 ssl;
+    server_name blog.exyonq.org;
+    ssl_certificate $CERT;
+    ssl_certificate_key $KEY;
+    root $DOC;
+    index index.php;
+    location = /wp-config.php { return 403; }
+    location / { try_files \$uri \$uri/ /index.php?\$args; }
+    location ~ \.php\$ {
+      include /etc/nginx/fastcgi_params;
+      fastcgi_pass unix:$SOCK;
+      fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+      fastcgi_param HTTPS on;
+    }
+  }
+}
+EOF
+  "$NGINX_BIN" -t -c "$PROD_CONF" >>"$LOG" 2>&1 || fail "local nginx config invalid"
+  "$NGINX_BIN" -c "$PROD_CONF" -g "daemon off;" >"$TMP/nginx.out" 2>&1 &
+  NGINX_PID=$!
+  PROD_READY=0
+  for _ in $(seq 1 120); do
+    PROD_CODE="$(curl -k -sS --max-time 5 --resolve blog.exyonq.org:443:127.0.0.1 \
+      -o /dev/null -w '%{http_code}' https://blog.exyonq.org/ 2>/dev/null || true)"
+    if [[ "$PROD_CODE" == "200" ]]; then PROD_READY=1; break; fi
+    kill -0 "$NGINX_PID" 2>/dev/null || fail "local nginx exited (last HTTP=$PROD_CODE)"
+    sleep 0.25
+  done
+  [[ "$PROD_READY" == "1" ]] || fail "local nginx readiness timeout (last HTTP=$PROD_CODE)"
+  PROD_CURL=(curl -sS -L --compressed --resolve "blog.exyonq.org:443:127.0.0.1" --cacert "$CERT")
+  echo "LOCAL_PROD=nginx https://blog.exyonq.org (127.0.0.1:443)" | tee -a "$LOG"
+fi
 
 cat >"$CFG" <<EOF
 config_version = 2
@@ -278,7 +360,7 @@ checkout_timeout_ms = 5000
 enabled = false
 EOF
 
-EXYONQ_CONTROL_SOCKET="$TMP/control.sock" \
+EXYONQ_CONTROL_SOCKET="$SOCK_DIR/control.sock" \
   "$BIN" serve --config "$CFG" >"$TMP/exyonq.log" 2>&1 &
 EX_PID=$!
 CURL=(curl -k -sS --max-time 30 --resolve "blog.exyonq.org:${PORT}:127.0.0.1" -H 'Host: blog.exyonq.org')
@@ -373,7 +455,7 @@ echo "PASS disposable admin login -> $DASH_CODE" | tee -a "$LOG"
   "https://blog.exyonq.org:${PORT}/" >/dev/null
 grep -Fqi 'content-encoding: br' "$TMP/cand-br.headers" || fail "candidate did not return br"
 "${CURL[@]}" --compressed -o "$TMP/candidate.html" "https://blog.exyonq.org:${PORT}/" >/dev/null
-curl -sS -L --compressed --max-time 30 "$PROD_URL" -o "$TMP/production.html" \
+"${PROD_CURL[@]}" --max-time 30 "$PROD_URL" -o "$TMP/production.html" \
   || fail "production fetch failed"
 if cmp -s "$TMP/candidate.html" "$TMP/production.html"; then
   echo "PASS HTML byte-identical to production" | tee -a "$LOG"
@@ -394,7 +476,7 @@ fi
 # HEAD has no body and often no Content-Length. Measure a real GET and keep
 # the production encoding separate: the candidate must negotiate br, while
 # production may be served by nginx with a different encoding policy.
-PROD_BR_BYTES="$(curl -sS -L -H 'Accept-Encoding: br' --max-time 30 \
+PROD_BR_BYTES="$("${PROD_CURL[@]}" -H 'Accept-Encoding: br' --max-time 30 \
   -D "$TMP/prod-br.headers" -o "$TMP/prod.br" -w '%{size_download}' "$PROD_URL" \
   || fail "production brotli fetch failed")"
 PROD_ENC="$(tr -d '\r' <"$TMP/prod-br.headers" | awk 'tolower($1)=="content-encoding:"{print $2; exit}')"

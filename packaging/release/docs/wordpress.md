@@ -177,18 +177,18 @@ without nginx, and records the HTTP, Brotli and concurrency results.
 
 `packaging/release/conf/wordpress.toml` turns `full_page_cache` on. Anonymous HTML is stored
 for 300 seconds, at most 4 MB per object, 64 MB and 10000 entries in
-namespace 4. A request that carries a cookie is not stored. The WordPress
-image loads the purge plugin as a must-use plugin. When a post is
-published, the plugin sends `purge site` on
-`/run/exyonq/cache-purge.sock`. A comment purges that post's URL. A menu
-change purges the tag `menu`. A URL that is not in the cache does not
-empty the site.
+namespace 4. A request that carries a cookie is not stored. The WordPress image ships the purge plugin at `wp-content/plugins/exyonq-cache`.
+It is a normal plugin: activate it under Plugins (single-site). The image does
+not install a must-use plugin. When a post is published, the active plugin
+sends `purge site` on `/run/exyonq/cache-purge.sock`. A comment purges that
+post's URL. A menu change purges the tag `menu`. A URL that is not in the cache
+does not empty the site.
 
 ExyonQ opens that socket only when the cache is enabled and
-`EXYONQ_CACHE_PURGE_SOCKET` is set. The entrypoint sets the path. ExyonQ
-then writes `/run/exyonq/cache-purge.token` (mode 0600) and
-`/run/exyonq/cache-purge.sock.sites`. The plugin reads those files. It
-does not invent the site id. The plain server image does not run this cache.
+`EXYONQ_CACHE_PURGE_SOCKET` is set. The entrypoint sets the path and a
+persistent `EXYONQ_CACHE_PURGE_TOKEN` in `wp-config.php`; the plugin reads that
+constant. The token survives a container restart. The plugin does not invent
+the site id. The plain server image does not run this cache.
 
 ## Containers
 
