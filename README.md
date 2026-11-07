@@ -8,7 +8,9 @@ This repository is the public product source tree (compile / maintain). Internal
 
 Public releases are published on [GitHub Releases](https://github.com/ExyonQ/ExyonQ/releases/latest) and in GHCR as versioned images (`ghcr.io/exyonq/exyonq`, `ghcr.io/exyonq/exyonq-wordpress`); Docker Hub mirrors use the same version tags. No `:latest` tag is published. A local worktree may diverge; do not treat its HEAD as a published tag.
 
-## What's in this release line
+This README intentionally does not pin a release number; the `releases/latest` link above is the authoritative current release.
+
+## What's in the 0.9.x line
 
 - External authentication with fail-closed JWT handling, plus user/zone rate limits
 - Client throttling for static and dynamic requests, inbound/outbound bandwidth, and hard/soft connection limits with OLS-compatible close/ban behavior
