@@ -37,7 +37,7 @@ arc-swap.workspace = true
 ipnetwork.workspace = true
 serde_json.workspace = true
 sha1 = "0.10"
-bcrypt = "0.18"
+bcrypt = "0.19"
 base64 = "0.22"
 subtle = "2.6"
 
@@ -48,7 +48,7 @@ exyonq-linux-ffi = { path = "../crates/exyonq-linux-ffi" }
 [dev-dependencies]
 tempfile = "3"
 sha1 = "0.10"
-bcrypt = "0.18"
+bcrypt = "0.19"
 base64 = "0.22"
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 exyonq-mod-static = { workspace = true, features = ["test-utils"] }
