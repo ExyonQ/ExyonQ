@@ -25,7 +25,7 @@ use exyonq_config_cli::{
     CheckOptions, DumpIrFormat, ExplainRequest, FormatMode, FormatRequest,
     OutputFormat as ConfigOut, ProfileCliInputs, ReloadDiffOptions,
 };
-use exyonq_config_ir::redact_secrets;
+use exyonq_config_ir::{redact_secrets, AppConfig, CONFIG_VERSION_V1, CONFIG_VERSION_V2};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -350,6 +350,27 @@ enum ConfigCommand {
         /// IR body format when printing/writing config.
         #[arg(long, value_enum, default_value_t = CliOutputFormat::Toml)]
         config_format: CliOutputFormat,
+    },
+    /// Migrate a v1 IR config to `config_version = 2` (in place or to `--output`).
+    ///
+    /// Only the top-level `config_version` line changes: comments, key order and
+    /// every other byte are preserved. In-place rewrites keep `<config>.v1.bak`
+    /// unless `--no-backup` is passed. Rollback: stop the server, restore the
+    /// backup and validate it.
+    Migrate {
+        /// Config file to migrate.
+        #[arg(short, long)]
+        config: PathBuf,
+        /// Destination path (default: rewrite `--config` in place).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Report whether migration is needed; writes nothing. Exits 1 while the
+        /// file is still v1, so CI can fail on drift.
+        #[arg(long)]
+        check: bool,
+        /// Do not keep `<config>.v1.bak` before an in-place rewrite.
+        #[arg(long)]
+        no_backup: bool,
     },
     /// `.htaccess` overlay UX (offline; no publish from check/explain/compile --dry-run).
     Htaccess {
@@ -685,8 +706,153 @@ fn run_config(command: ConfigCommand) -> ExitCode {
             format,
             config_format,
         ),
+        ConfigCommand::Migrate {
+            config,
+            output,
+            check,
+            no_backup,
+        } => run_config_migrate(config, output, check, no_backup),
         ConfigCommand::Htaccess { command } => run_htaccess(command),
     }
+}
+
+fn run_config_migrate(
+    config: PathBuf,
+    output: Option<PathBuf>,
+    check: bool,
+    no_backup: bool,
+) -> ExitCode {
+    let raw = match std::fs::read_to_string(&config) {
+        Ok(raw) => raw,
+        Err(err) => {
+            eprintln!("exyonqctl config migrate: read {}: {err}", config.display());
+            return ExitCode::from(2);
+        }
+    };
+    let current = match AppConfig::parse_str(&raw) {
+        Ok(cfg) => cfg.config_version,
+        Err(err) => {
+            eprintln!(
+                "exyonqctl config migrate: {} is not a valid config: {}",
+                config.display(),
+                redact_secrets(&format!("{err:#}"))
+            );
+            return ExitCode::from(1);
+        }
+    };
+
+    if current != CONFIG_VERSION_V1 {
+        if check {
+            println!("MIGRATION=NOT_NEEDED config_version={current}");
+        } else if let Some(out) = output {
+            if let Err(err) = write_config_atomic(&out, raw.as_bytes()) {
+                eprintln!("exyonqctl config migrate: write {}: {err}", out.display());
+                return ExitCode::from(2);
+            }
+            println!(
+                "copied {} -> {} (config_version={current}, no migration needed)",
+                config.display(),
+                out.display()
+            );
+        } else {
+            println!("config_version={current}; nothing to do");
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    if check {
+        println!("MIGRATION=NEEDED config_version=1 -> 2");
+        return ExitCode::from(1);
+    }
+
+    let migrated = match migrate_config_text_v1_to_v2(&raw) {
+        Ok(migrated) => migrated,
+        Err(err) => {
+            eprintln!("exyonqctl config migrate: {err}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let destination = output.clone().unwrap_or_else(|| config.clone());
+    if destination == config && !no_backup {
+        let backup = backup_path(&config);
+        if backup.exists() {
+            eprintln!(
+                "exyonqctl config migrate: backup {} already exists; remove it or pass --no-backup",
+                backup.display()
+            );
+            return ExitCode::from(1);
+        }
+        if let Err(err) = std::fs::copy(&config, &backup) {
+            eprintln!(
+                "exyonqctl config migrate: backup {}: {err}",
+                backup.display()
+            );
+            return ExitCode::from(1);
+        }
+        println!("backup {}", backup.display());
+    }
+    if let Err(err) = write_config_atomic(&destination, migrated.as_bytes()) {
+        eprintln!(
+            "exyonqctl config migrate: write {}: {err}",
+            destination.display()
+        );
+        return ExitCode::from(2);
+    }
+    println!(
+        "migrated {} -> {} (config_version 1 -> 2)",
+        config.display(),
+        destination.display()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Rewrite the top-level `config_version` line and nothing else.
+///
+/// v1 and v2 differ only in `include` support, so a textual rewrite preserves
+/// comments, key order and every value; re-rendering the IR would drop them.
+/// The result is parsed again to prove it is a valid `config_version = 2` file.
+fn migrate_config_text_v1_to_v2(raw: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len() + 2);
+    let mut replaced = false;
+    for line in raw.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if !replaced && trimmed.starts_with("config_version") && trimmed.contains('=') {
+            out.push_str("config_version = 2");
+            if line.ends_with("\r\n") {
+                out.push_str("\r\n");
+            } else if line.ends_with('\n') {
+                out.push('\n');
+            }
+            replaced = true;
+            continue;
+        }
+        out.push_str(line);
+    }
+    if !replaced {
+        return Err("config has no top-level config_version line".into());
+    }
+    let parsed = AppConfig::parse_str(&out).map_err(|err| redact_secrets(&format!("{err:#}")))?;
+    if parsed.config_version != CONFIG_VERSION_V2 {
+        return Err("migration did not produce config_version = 2".into());
+    }
+    Ok(out)
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".v1.bak");
+    PathBuf::from(name)
+}
+
+/// Write next to the destination and rename, so a failed write never truncates
+/// the live config.
+fn write_config_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp_name = path.as_os_str().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = PathBuf::from(tmp_name);
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
 }
 
 fn run_config_reload(
