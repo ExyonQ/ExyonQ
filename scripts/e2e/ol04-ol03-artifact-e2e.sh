@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # OL-04 and OL-03 real E2E bound to one artifact hash.
 #
-# Order: record hash -> unit tests -> verify hash -> OL-04 E2E -> verify hash
-# and log hash -> OL-03 E2E -> verify hash and log hash -> SHA256SUMS.
+# Order: record hashes -> unit tests -> verify hashes -> OL-04 E2E -> verify
+# hashes and the exyonq log hash -> OL-03 E2E -> verify hashes and both log
+# hashes -> SHA256SUMS.
 # A binary replaced by a rebuild between any two stages fails the run with
 # ARTIFACT_DRIFT instead of producing evidence against the wrong artifact.
 set -uo pipefail
@@ -100,6 +101,9 @@ echo "== integrity after OL-03 =="
 "$GUARD" verify "$STATE" exyonq "$BIN" | tee -a "$RUN/integrity.log" || FAIL=1
 "$GUARD" verify "$STATE" exyonq-compat "$COMPAT" | tee -a "$RUN/integrity.log" || FAIL=1
 "$GUARD" log "$STATE" exyonq "$RUN/ol03-console.log" | tee -a "$RUN/integrity.log" || FAIL=1
+# OL-03 is the E2E that executes exyonq-compat, so its log carries the
+# compat_sha256 line that must be bound to the recorded compat artifact.
+"$GUARD" log "$STATE" exyonq-compat "$RUN/ol03-console.log" compat_sha256 | tee -a "$RUN/integrity.log" || FAIL=1
 
 {
   printf '%s  %s\n' "$(hash_file "$BIN")" "exyonq ($(uname -m), built on this host)"
