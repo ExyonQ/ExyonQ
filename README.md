@@ -4,32 +4,43 @@ ExyonQ is a modular HTTP server and reverse proxy written in Rust: static files,
 
 ExyonQ includes migration tools and aims to progressively expand compatibility with Apache, NGINX, and OpenLiteSpeed configurations. Refer to the documentation for details on the scope of each importer.
 
-This repository is a **clean source publication** of the product tree (compile / maintain). Internal benchmark campaigns and raw evidence packs are intentionally not included; methodology notes and summary dashboards live under `docs/benchmarks/`.
+This repository is the public product source tree (compile / maintain). Internal benchmark campaigns and raw evidence packs are intentionally not included; methodology notes and summary dashboards live under `docs/benchmarks/`.
 
-Lab integration tree. Public product release: **v0.8.0** on [exyonq-github](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0) (`ghcr.io/exyonq/exyonq:0.8.0`, `ghcr.io/exyonq/exyonq-wordpress:0.8.0`, `exyonq/exyonq:0.8.0` on Docker Hub — no `:latest`). This lab worktree may diverge; do not treat lab HEAD as the published tag.
+Public releases are published on [GitHub Releases](https://github.com/ExyonQ/ExyonQ/releases/latest) and in GHCR as versioned images (`ghcr.io/exyonq/exyonq`, `ghcr.io/exyonq/exyonq-wordpress`); Docker Hub mirrors use the same version tags. No `:latest` tag is published. A local worktree may diverge; do not treat its HEAD as a published tag.
 
-## What's in 0.8.0
+This README intentionally does not pin a release number; the `releases/latest` link above is the authoritative current release.
 
-- ACME bootstrap from zero: starts without a certificate on disk, answers HTTP-01 on the cleartext listener, installs the issued certificate without a restart
-- TLS listeners fail closed while certificate material is pending
-- Route response headers on the wire (`[[route.response_headers]]`, e.g. HSTS)
-- Multi-listen: every `[[server]].listen` address is bound and served
-- Full-page cache with direct purge
-- Security: zstd RUSTSEC-2026-0391..0406 resolved; Docker Scout reports **0 critical / 0 high / 0 medium** on both images and both architectures
+## What's in the 0.9.x line
 
-Full notes: [v0.8.0 release](https://github.com/ExyonQ/ExyonQ/releases/tag/v0.8.0).
+- External authentication with fail-closed JWT handling, plus user/zone rate limits
+- Client throttling for static and dynamic requests, inbound/outbound bandwidth, and hard/soft connection limits with OLS-compatible close/ban behavior
+- Human challenge support: native proof-of-work, monitor mode, reCAPTCHA and hCaptcha, with provider failures denied closed
+- WAF with OWASP CRS import and real-corpus differential/dry-run tooling, per-rule metrics, body inspection (`crs`/`multipart`/`xml`), and bounded buffering
+- Proxy cache keys with vary/bypass semantics, `stale-if-error`, and purge by tag/URL/namespace via `exyonqctl`
+- `expires`/`cache_headers` runtime application and route `add_header` with inheritance and denylist
+- Response body transforms: `gunzip`, `sub_filter`, `mirror`, and `slice`
+- OpenLiteSpeed parity: private-cookie cache denial and nonce-safe FPC hard-deny prefixes
+- ACME HTTP-01 across processes with a filesystem-shared challenge store
+- NGINX `root`/`alias` semantics, directory-redirect flags, and `alias` + `fastcgi_pass` dispatch
+- WordPress image on PHP **8.5.12** FPM (Wolfi `php-8.5-fpm`)
+- Supply chain: cargo-auditable embedded SBOM and `cargo audit`
+
+Full release notes live under [`docs/release/`](docs/release/), with the running history in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Get it
 
+Set `VERSION` to the release you want to run:
+
 ```bash
-docker pull ghcr.io/exyonq/exyonq:0.8.0
-docker pull ghcr.io/exyonq/exyonq-wordpress:0.8.0
+VERSION=<release-version>
+docker pull "ghcr.io/exyonq/exyonq:${VERSION}"
+docker pull "ghcr.io/exyonq/exyonq-wordpress:${VERSION}"
 # Docker Hub mirror:
-docker pull exyonq/exyonq:0.8.0
-docker pull exyonq/exyonq-wordpress:0.8.0
+docker pull "exyonq/exyonq:${VERSION}"
+docker pull "exyonq/exyonq-wordpress:${VERSION}"
 ```
 
-Release assets on GitHub: `exyonq-v0.8.0-linux-{amd64,arm64}` binaries + `SHA256SUMS`.
+Release assets on GitHub use the same version identity: `exyonq-${VERSION}-linux-{amd64,arm64}.tar.gz` (versioned layout), `exyonq-linux-{amd64,arm64}.tar.gz` (flat), `.deb`/`.rpm` packages, `SHA256SUMS.txt`, `release-manifest.json`, `sbom.cdx.json`, and `THIRD_PARTY_NOTICES.md`. Linux binaries are built with `cargo auditable`; verify the embedded SBOM with `cargo audit bin`.
 
 ## Build
 
