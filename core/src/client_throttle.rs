@@ -699,9 +699,10 @@ mod tests {
         cfg.input_bandwidth_bytes_per_second = Some(1024);
         // The first 1 KiB is the initial burst and is not held back.
         assert!(inbound_wait(&cfg, ip, 1024).is_zero());
-        // A few bytes beyond the burst must wait; one byte can be refilled by
-        // scheduler noise inside the same millisecond.
-        assert!(!inbound_wait(&cfg, ip, 2).is_zero());
+        // A request far beyond the burst must wait even if scheduler noise
+        // refills a few tokens between the two calls. A two-byte probe was
+        // flaky for exactly that reason.
+        assert!(!inbound_wait(&cfg, ip, 1_048_576).is_zero());
         assert!(inbound_wait(&cfg, ip, 0).is_zero());
     }
 

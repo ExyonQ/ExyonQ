@@ -195,6 +195,12 @@ check('challenge page is no-store', True, headers.get('cache-control') == 'no-st
 
 if MODE in ('native', 'monitor'):
     check('native page has no external script', True, '<script src=' not in html)
+elif MODE == 'recaptcha-v3':
+    check('provider page loads expected v3 script', True, 'www.google.com/recaptcha/api.js?render=' in html)
+    check('provider page carries configured site key', True, SITE_KEY in html)
+    check('provider page executes expected action', True, 'action: "challenge"' in html)
+    check('provider page has no v2 widget', True, 'g-recaptcha' not in html)
+    check('provider page waits for provider token', True, 'await waitForProviderToken()' in html)
 else:
     script, widget = PROVIDERS[MODE]
     check('provider page loads expected widget script', True, script in html)
@@ -273,13 +279,15 @@ MONITOR_CFG="$RUN/monitor.toml"
 RECAPTCHA_CFG="$RUN/recaptcha.toml"
 BAD_RECAPTCHA_CFG="$RUN/bad-recaptcha.toml"
 HCAPTCHA_CFG="$RUN/hcaptcha.toml"
+V3_RECAPTCHA_CFG="$RUN/recaptcha-v3.toml"
 write_config "$NATIVE_CFG" native
 write_config "$MONITOR_CFG" native '' '' monitor
 write_config "$RECAPTCHA_CFG" recaptcha 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI OL04_RECAPTCHA_SECRET
 write_config "$BAD_RECAPTCHA_CFG" recaptcha 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI OL04_BAD_RECAPTCHA_SECRET
 write_config "$HCAPTCHA_CFG" hcaptcha 10000000-ffff-ffff-ffff-000000000001 OL04_HCAPTCHA_SECRET
+write_config "$V3_RECAPTCHA_CFG" recaptcha_v3 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI OL04_RECAPTCHA_SECRET
 
-for phase in native monitor recaptcha bad-recaptcha hcaptcha; do
+for phase in native monitor recaptcha recaptcha-v3 bad-recaptcha hcaptcha; do
   validate_cfg "$phase" "$RUN/$phase.toml"
 done
 
@@ -311,12 +319,16 @@ run_client() {
   check "OL-04 $phase assertions" 0 "$rc"
 }
 
-for phase in native monitor recaptcha hcaptcha; do
+for phase in native monitor recaptcha recaptcha-v3 hcaptcha; do
   start_server "$phase" "$RUN/$phase.toml"
   case "$phase" in
     native) run_client native native '' 1 ;;
     monitor) run_client monitor native '' 1 ;;
     recaptcha) run_client recaptcha recaptcha test-token 1 ;;
+    # Google's official v2 test key accepts the token but omits v3 score/action.
+    # This real provider call must fail closed; a positive v3 token needs a real
+    # v3 key and is covered by the response-contract unit test, not invented here.
+    recaptcha-v3) run_client recaptcha-v3 recaptcha-v3 test-token 0 ;;
     hcaptcha) run_client hcaptcha hcaptcha 10000000-aaaa-bbbb-cccc-000000000001 1 ;;
   esac
 done

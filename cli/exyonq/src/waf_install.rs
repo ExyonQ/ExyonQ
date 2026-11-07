@@ -66,6 +66,7 @@ fn challenge_provider(config: &AppConfig) -> Option<ChallengeProvider> {
         WafCaptchaProvider::Native => None,
         WafCaptchaProvider::Recaptcha => Some(ChallengeProvider::recaptcha(site_key)),
         WafCaptchaProvider::Hcaptcha => Some(ChallengeProvider::hcaptcha(site_key)),
+        WafCaptchaProvider::RecaptchaV3 => Some(ChallengeProvider::recaptcha_v3(site_key)),
     }
 }
 

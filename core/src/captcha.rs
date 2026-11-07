@@ -33,6 +33,8 @@ use std::time::Duration;
 
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 16 * 1024;
 const MAX_PROVIDER_TOKEN_BYTES: usize = 4096;
+const RECAPTCHA_V3_ACTION: &str = "challenge";
+const RECAPTCHA_V3_MIN_SCORE: f64 = 0.5;
 
 type ProviderClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 static PROVIDER_CLIENT: OnceLock<Result<ProviderClient, String>> = OnceLock::new();
@@ -109,7 +111,9 @@ fn percent_encode(value: &str) -> String {
 
 fn provider_endpoint(abuse: &WafAbuseConfig) -> &str {
     abuse.verify_url.as_deref().unwrap_or(match abuse.provider {
-        WafCaptchaProvider::Recaptcha => "https://www.google.com/recaptcha/api/siteverify",
+        WafCaptchaProvider::Recaptcha | WafCaptchaProvider::RecaptchaV3 => {
+            "https://www.google.com/recaptcha/api/siteverify"
+        }
         WafCaptchaProvider::Hcaptcha => "https://hcaptcha.com/siteverify",
         WafCaptchaProvider::Native => "",
     })
@@ -176,11 +180,36 @@ pub(crate) async fn verify_provider(
     }
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| "provider response is not JSON")?;
-    if value.get("success").and_then(serde_json::Value::as_bool) == Some(true) {
-        Ok(())
-    } else {
-        Err("provider rejected the token".into())
+    validate_provider_response(abuse.provider, &value)
+}
+
+fn validate_provider_response(
+    provider: WafCaptchaProvider,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if value.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err("provider rejected the token".into());
     }
+    if provider != WafCaptchaProvider::RecaptchaV3 {
+        return Ok(());
+    }
+    let action = value
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if action != RECAPTCHA_V3_ACTION {
+        return Err("v3 action does not match the challenge action".into());
+    }
+    let Some(score) = value.get("score").and_then(serde_json::Value::as_f64) else {
+        return Err("v3 score is missing".into());
+    };
+    if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+        return Err("v3 score is outside the valid range".into());
+    }
+    if score < RECAPTCHA_V3_MIN_SCORE {
+        return Err("v3 score is below the minimum".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -199,5 +228,36 @@ mod tests {
     #[test]
     fn percent_encoding_never_leaves_delimiters() {
         assert_eq!(percent_encode("a b&c=d"), "a%20b%26c%3Dd");
+    }
+
+    #[test]
+    fn v3_requires_success_action_and_score() {
+        let accepted = serde_json::json!({
+            "success": true,
+            "score": 0.7,
+            "action": "challenge"
+        });
+        assert!(validate_provider_response(WafCaptchaProvider::RecaptchaV3, &accepted).is_ok());
+
+        for rejected in [
+            serde_json::json!({"success": true, "action": "challenge"}),
+            serde_json::json!({"success": true, "score": 0.7}),
+            serde_json::json!({"success": true, "score": 0.7, "action": "login"}),
+            serde_json::json!({"success": true, "score": 0.3, "action": "challenge"}),
+            serde_json::json!({"success": true, "score": 1.1, "action": "challenge"}),
+            serde_json::json!({"success": false, "score": 0.9, "action": "challenge"}),
+        ] {
+            assert!(
+                validate_provider_response(WafCaptchaProvider::RecaptchaV3, &rejected).is_err(),
+                "unexpected acceptance: {rejected}"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_response_does_not_require_v3_fields() {
+        let value = serde_json::json!({"success": true});
+        assert!(validate_provider_response(WafCaptchaProvider::Recaptcha, &value).is_ok());
+        assert!(validate_provider_response(WafCaptchaProvider::Hcaptcha, &value).is_ok());
     }
 }
