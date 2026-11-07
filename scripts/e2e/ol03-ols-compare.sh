@@ -3,8 +3,8 @@
 #
 # Preconditions:
 #   - Docker is available and the configured OLS container exists.
-#   - The oracle image is litespeedtech/openlitespeed:latest and its server
-#     listens on OLS_PORT (host mapping).
+#   - The oracle image is pinned by digest and its server listens on OLS_PORT
+#     (host mapping). A container started from a mutable tag is rejected.
 #   - The oracle has /usr/local/lsws/Example/html/big256.bin, 262144 bytes.
 # The script restarts the oracle before every scenario because OLS keeps the
 # soft-limit marker and bans in process state.
@@ -14,6 +14,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="${EXYONQ_BIN:-$ROOT/target/debug/exyonq}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN="${OL03_OLS_RUN_DIR:-$ROOT/.exyonq-local/evidence/ol03/ols-compare-$STAMP}"
+OLS_IMAGE_DIGEST="sha256:91ca324386be3fe8cd91591112dbdd8e41af48cccbe4a48e3e8673a2921c8504"
+OLS_IMAGE="${OLS_IMAGE:-litespeedtech/openlitespeed@$OLS_IMAGE_DIGEST}"
 OLS_CONTAINER="${OLS_CONTAINER:-eq-ols-oracle}"
 OLS_PORT="${OLS_PORT:-19080}"
 EXY_PORT="${EXY_PORT:-19390}"
@@ -84,6 +86,27 @@ wait_ols_http() {
   return 1
 }
 
+verify_ols_pin() {
+  local configured image_id digests
+  configured="$(docker inspect --format '{{.Config.Image}}' "$OLS_CONTAINER" 2>/dev/null)" || {
+    echo "FAIL OLS container $OLS_CONTAINER does not exist" >&2
+    exit 1
+  }
+  if [[ "$configured" != *"@$OLS_IMAGE_DIGEST" ]]; then
+    echo "FAIL OLS container $OLS_CONTAINER was not started from the pinned digest" >&2
+    echo "FAIL expected image suffix @$OLS_IMAGE_DIGEST, got Config.Image=$configured" >&2
+    exit 1
+  fi
+  image_id="$(docker inspect --format '{{.Image}}' "$OLS_CONTAINER")"
+  digests="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id" 2>/dev/null || true)"
+  if ! grep -Fq "@$OLS_IMAGE_DIGEST" <<<"$digests"; then
+    echo "FAIL OLS container $OLS_CONTAINER image does not report digest $OLS_IMAGE_DIGEST" >&2
+    exit 1
+  fi
+  echo "ols_image=$configured"
+  echo "ols_digest=$OLS_IMAGE_DIGEST"
+}
+
 start_exy() {
   local scenario=$1
   EXYONQ_CONTROL_SOCKET="/tmp/eq-ol03-$$-$scenario.sock" \
@@ -111,6 +134,11 @@ start_ols() {
     docker logs "$OLS_CONTAINER" >&2 || true
     exit 1
   }
+  # OLS starts its bandwidth refill window at container startup. Wait one
+  # window so the sample begins from the same full-token state as the ExyonQ
+  # bucket, instead of measuring an arbitrary timer phase. No rate assertion
+  # is relaxed.
+  sleep 1.05
 }
 
 cat >"$RUN/exyonq.toml" <<EOF
@@ -140,6 +168,7 @@ echo "binary=$BIN"
 echo "binary_sha256=$(hash_file "$BIN")"
 "$BIN" --version
 echo "ols_container=$OLS_CONTAINER"
+echo "ols_image=$OLS_IMAGE"
 echo "ols_port=$OLS_PORT"
 echo "exy_port=$EXY_PORT"
 
@@ -148,6 +177,7 @@ echo "validate_status=0"
 
 # Start once to verify the oracle configuration; each scenario restarts it.
 docker start "$OLS_CONTAINER" >/dev/null
+verify_ols_pin
 wait_ols_http "$OLS_PORT" || {
   echo "FAIL OLS $OLS_CONTAINER did not answer HTTP on $OLS_PORT" >&2
   docker logs "$OLS_CONTAINER" >&2 || true
