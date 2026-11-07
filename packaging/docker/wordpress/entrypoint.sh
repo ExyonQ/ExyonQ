@@ -11,8 +11,8 @@ EXYONQ_WP_DB_DIR="$(dirname "$EXYONQ_WP_DB_PATH")"
 # The image runs as www-data; keep the ownership fix-ups for root callers
 # (for example an operator overriding --user 0) without failing as non-root.
 chown_if_root() { [ "$(id -u)" = "0" ] && chown "$@" || true; }
-mkdir -p /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/mu-plugins
-chown_if_root www-data:www-data /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/mu-plugins
+mkdir -p /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/plugins
+chown_if_root www-data:www-data /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/plugins
 chmod 0750 /run/exyonq
 
 # The SQLite plugin writes 'DENY FROM ALL' here only when the file is missing;
@@ -38,23 +38,24 @@ if [ ! -f /var/www/html/wp-config.php ] || ! grep -q "DB_PATH" /var/www/html/wp-
   fi
 fi
 
-if [ ! -f /var/www/html/wp-content/mu-plugins/exyonq-cache.php ]; then
-  cat > /var/www/html/wp-content/mu-plugins/exyonq-cache.php << 'EOF'
-<?php
-/**
- * Plugin Name: ExyonQ Cache
- * Description: Invalida la caché de página de ExyonQ al publicar.
- * Version: 0.2.0
- * Author: ExyonQ
- */
-require_once __DIR__ . '/exyonq-cache/exyonq-cache.php';
-EOF
-  chown_if_root www-data:www-data /var/www/html/wp-content/mu-plugins/exyonq-cache.php
+# The purge token must survive container restarts: the plugin reads the same
+# value from wp-config.php. Regenerating it per boot left the plugin with a
+# stale token and made every purge fail with unauthenticated.
+EXYONQ_CACHE_PURGE_SOCKET=/run/exyonq/cache-purge.sock
+if [ -f /var/www/html/wp-config.php ]; then
+  EXYONQ_CACHE_PURGE_TOKEN="$(sed -n "s/^define( 'EXYONQ_CACHE_PURGE_TOKEN', '\([^']*\)' );$/\1/p" /var/www/html/wp-config.php | head -n 1)"
+else
+  EXYONQ_CACHE_PURGE_TOKEN=""
 fi
-
-export EXYONQ_CACHE_PURGE_SOCKET=/run/exyonq/cache-purge.sock
-# Token de purge por arranque: compartido entre ExyonQ (env) y el mu-plugin (wp-config define).
-export EXYONQ_CACHE_PURGE_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+if [ -z "$EXYONQ_CACHE_PURGE_TOKEN" ]; then
+  EXYONQ_CACHE_PURGE_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+export EXYONQ_CACHE_PURGE_SOCKET EXYONQ_CACHE_PURGE_TOKEN
+if [ -f /var/www/html/wp-config.php ] && ! grep -q "EXYONQ_CACHE_PURGE_TOKEN" /var/www/html/wp-config.php; then
+  # Upgrade a pre-existing config that predates the purge constants.
+  sed -i "1a define( 'EXYONQ_CACHE_PURGE_TOKEN', '${EXYONQ_CACHE_PURGE_TOKEN}' );" /var/www/html/wp-config.php
+  chown_if_root www-data:www-data /var/www/html/wp-config.php
+fi
 # site_id = stable_fpc_site_id("wordpress") — debe coincidir con [[route]] name="wordpress"
 # en packaging/release/conf/wordpress.toml.
 EXYONQ_WP_SITE_ID=18218855368947783640

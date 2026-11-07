@@ -23,10 +23,10 @@ RUN curl -fsSL https://wordpress.org/latest.tar.gz | tar -xz -C /tmp \
     && cp -a /tmp/wordpress/. /staging/ \
     && unzip -q /tmp/sqlite.zip -d /staging/wp-content/plugins \
     && cp /staging/wp-content/plugins/sqlite-database-integration/db.copy /staging/wp-content/db.php
-COPY integrations/wordpress/exyonq-cache/ /staging/wp-content/mu-plugins/exyonq-cache/
-COPY packaging/docker/wordpress/mu-plugins/exyonq-cache.php /staging/wp-content/mu-plugins/exyonq-cache.php
+# The cache invalidation client is a normal plugin, not a must-use plugin.
+COPY integrations/wordpress/exyonq-cache/ /staging/wp-content/plugins/exyonq-cache/
 COPY packaging/docker/wordpress/wordpress.htaccess /staging/.htaccess
-RUN rm -rf /staging/wp-content/mu-plugins/exyonq-cache/tests \
+RUN rm -rf /staging/wp-content/plugins/exyonq-cache/tests \
     && find /staging -name .htaccess ! -path /staging/.htaccess -delete
 
 # Wolfi php-8.5 ships PHP-FPM 8.5.12. Extensions are Wolfi packages (intl, gd,
