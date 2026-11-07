@@ -263,10 +263,11 @@ change in product behaviour.
 
 ### Still open
 
-- Native Linux amd64/arm64 lab hosts (Netcup/Oracle) were not used: no access
-  from this workstation. The Linux arm64 run above is a container on a real
-  aarch64 Linux kernel, not a native lab host; Linux amd64 is **NOT EXECUTED**,
-  because an emulated run would make the timing assertions meaningless.
+- Native Linux amd64/arm64 lab hosts (Netcup/Oracle) were not used for the
+  2026-11-04/05 runs: no access from this workstation then. The Linux arm64 run
+  above is a container on a real aarch64 Linux kernel, not a native lab host;
+  Linux amd64 was **NOT EXECUTED** at 2026-11-04. Native amd64 and arm64 were
+  used on 2026-11-07; see *Native Linux OLS comparison* below.
 - A side-by-side differential against a running OpenLiteSpeed binary was **NOT
   EXECUTED at 2026-11-04**. It was executed against OLS 1.9.4 on 2026-11-05;
   the result is below and supersedes this limitation for the tested surfaces.
@@ -425,9 +426,70 @@ Darwin arm64. `target/debug/exyonq`
   uses a load beyond scheduler refill; the previous 2-byte probe could pass by
   refill and was replaced without changing product behaviour. Logs and hashes
   are in `.exyonq-local/evidence/ol03/ol03-checks-20261106T202146Z/`.
-- Linux arm64 was not re-run in this increment; the 2026-11-05 Linux result is
-  historical. The current criterion is exercised on the real Darwin binary and
-  the real OLS 1.9.4 oracle.
+- Linux arm64 was not re-run in the 2026-11-06 increment; the 2026-11-05 Linux
+  result is historical. Native Linux amd64/arm64 were re-run on 2026-11-07 and
+  both passed; see *Native Linux OLS comparison* below.
+
+### Native Linux OLS comparison (2026-11-07)
+
+The comparison was re-run on two native Linux hosts, not Docker Desktop:
+Netcup amd64 and Oracle arm64. The source was the clean archive of
+`4956073b23e47f1e23ce38791e03854c9df09f07` (SHA-256
+`24431ecfc19d81f887abb46cf088cb30530224f080ae6c7c9adefbf62eb55c8f`), built
+with Rust 1.99.1 and
+`EXYONQ_SOURCE_REVISION=4956073b23e47f1e23ce38791e03854c9df09f07 cargo build
+--locked -p exyonq --bin exyonq`. The archive has no `.git`, so `source_tag=` is
+empty by construction; the source revision is embedded and was checked in both
+binaries. Binaries: Netcup amd64
+`dfbb356318d1c963f92edc860ef0664666d6879d7cf56d778decf82e02344e86`, Oracle
+arm64 `eecc469c2d80b32f7c20ce6a4bf0b05766cf4d89b1bb1b743be0c4e2a68e8fb3`.
+
+The oracle container `eq-ols-oracle` on both hosts was started from
+`litespeedtech/openlitespeed@sha256:91ca324386be3fe8cd91591112dbdd8e41af48cccbe4a48e3e8673a2921c8504`
+(OLS 1.9.4, build 2026-10-28, `httpdWorkers 1`). Its `httpd_config.conf` SHA-256
+was `14d3ee9c077e34696083f09f9f13a203e1f31dece87594148d7a92b614ed9f39` on both
+hosts, with `soft=1 hard=2 grace=2 ban=3 out=32768 in=32768`. The served file
+was 262144 bytes. The container was restarted before each scenario; the harness
+waited for HTTP and then one 1.05 s refill window (see below).
+
+| Host | Case | OLS 1.9.4 | ExyonQ | Observable result |
+| --- | --- | --- | --- | --- |
+| Netcup amd64 | single | 6.919001 s | 7.015121 s | 262144 body bytes, first data 0.001/0.003 s |
+| Netcup amd64 | A+B | 15.296047 s | 15.381545 s | both 262144; A 6.972 s, B 15.296 s vs A 11.020 s, B 15.381 s |
+| Netcup amd64 | A+B+C | 1.305978 s | 1.359340 s | C closed with no frame; A 32508/B 32508 vs A 32768/B 11605, both <262144 |
+| Netcup amd64 | soft | 15.040105 s | 15.226310 s | both 262144; A 7.017 s, B 15.040 s vs A 9.019 s, B 15.226 s |
+| Oracle arm64 | single | 7.012344 s | 7.010038 s | 262144 body bytes, first data 0.001/0.002 s |
+| Oracle arm64 | A+B | 15.282152 s | 15.375877 s | both 262144; A 6.967 s, B 15.282 s vs A 11.016 s, B 15.376 s |
+| Oracle arm64 | A+B+C | 1.306709 s | 1.357862 s | C closed with no frame; A 32508/B 32508 vs A 32768/B 11619, both <262144 |
+| Oracle arm64 | soft | 15.226922 s | 15.220866 s | both 262144; A 7.014 s, B 15.227 s vs A 9.014 s, B 15.221 s |
+
+Both hosts exited 0 with `RESULT=PASS OL-03 OLS COMPARISON`. The final run IDs
+are `native-ols-20261107T021850Z-amd64` and
+`native-ols-20261107T021850Z-arm64`; the local copies are
+`native-ols-20261107T021850Z/amd64-netcup` and
+`native-ols-20261107T021850Z/arm64-oracle`. The local `SHA256SUMS` manifest
+verifies all 64 files and has SHA-256
+`5238932c9ba3595657cc0ce473e8db6aea49b1a225b29becc33b4e44813b3cf8`.
+The console and summary artifacts are:
+
+| Host | `console.log` SHA-256 | `summary.json` SHA-256 |
+| --- | --- | --- |
+| Netcup amd64 | `9e789cc1c7c0f57198257d9cb9675bf62f4b7f7ee6f0c6ce6e1b0633bdd45387` | `6b1caa9ca2d02c1688199a51fb015dc105b7b83f5bb6649f04330daa39e20379` |
+| Oracle arm64 | `502512a32d2427b05a5ea1b3c0814b8b994682c6354aa97e43cedcc642aff36f` | `067f36aa898d0136a8d8cdbc58c97442357c6549c41482826f9ebff88d3ff195` |
+
+The first native attempt at `native-ols-20261107T020404Z` failed only the
+single-stream elapsed assertion on both hosts: Netcup OLS 7.921727 s / Exy
+7.011975 s and Oracle OLS 7.913741 s / Exy 7.010416 s, with 262144 body bytes
+in all four samples. The probe saw nine OLS data events against eight for
+ExyonQ, while both first-data times were immediate; the sample had started in
+an arbitrary OLS refill phase. The harness now sleeps 1.05 s after the OLS HTTP
+readiness check before each scenario; the 0.8 s assertion is unchanged. The
+final run above passed. The superseded run is retained (amd64 console
+`a30b8fdaefecdd10ab3602c8166a324161486d7a3fe530f032ea655985a45150`, summary
+`2a406b3fb6364be0a5d0fe38a403928eb619175e8af3f8ddf2931d32928ca433`; arm64
+console `5d614ff36a795cd59d9ef8e1438a1927dd91964bc0346b79a98dedabc05d9486`,
+summary `fdd39195aeab537c7e0dcd4c499ce25cd799790325d11f53b0d7338458b2616d`)
+and is not reported as PASS.
 
 ### Audit stack (2026-11-04)
 

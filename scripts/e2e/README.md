@@ -18,7 +18,7 @@ operational smoke category in this workspace (FORBIDDEN).
 | `ap04-e2e.sh` | AP-04: external auth subrequest, real HS256 JWT and opaque bearer-token checks, decisions, timeout, static bypass, user propagation | C+ (controlled HTTP auth peer) |
 | `fastcgi-php-fpm-e2e.sh` | FastCGI + real PHP-FPM | C+ |
 | `ol03-full-e2e.sh` | OL-03: OLS `perClientConnLimit` translation + static/dyn RPS, in/out bandwidth, soft/hard, blockBadReq; runs on Darwin and Linux | C+ |
-| `ol03-ols-compare.sh` | OL-03 live comparison against the `eq-ols-oracle` OLS 1.9.4 container: single, A+B, A+B+C and soft-grace raw-TCP scenarios | E2E (external oracle) |
+| `ol03-ols-compare.sh` | OL-03 live comparison against the pinned `litespeedtech/openlitespeed@sha256:91ca324386be3fe8cd91591112dbdd8e41af48cccbe4a48e3e8673a2921c8504` OLS 1.9.4 oracle: single, A+B, A+B+C and soft-grace raw-TCP scenarios | E2E (external oracle) |
 | `ol04-challenge-e2e.sh` | OL-04: native/monitor/reCAPTCHA v2/hCaptcha challenge, no-JS fallback, replay, forged MAC/grant and fail-closed provider rejection | C+ |
 | `ol04-ol03-artifact-e2e.sh` | OL-04 + OL-03 under one artifact hash: records both binaries, runs focused tests, re-hashes after tests and after each E2E, and rejects a log whose `binary_sha256` or `compat_sha256` differs (`scripts/gates/artifact-integrity.sh`) | C+ |
 | `ws-real-apps-e2e.sh` | Real Home Assistant auth handshake and authenticated n8n push/run frames through ExyonQ (requires running apps and `N8N_COOKIE_FILE`) | E2E |
@@ -37,6 +37,12 @@ the runner, and fails on `ARTIFACT_DRIFT`, `ARTIFACT_LOG_UNBOUND` or
 `ARTIFACT_LOG_DRIFT`; the evidence directory is uploaded even on failure. The
 OL-03 log binds `binary_sha256` for `exyonq` and `compat_sha256` for
 `exyonq-compat`.
+
+A second CI job is configured to run `scripts/e2e/ols-oracle-ci.sh`, which pulls the
+OpenLiteSpeed oracle only by the digest above and starts it with the fixture
+configuration in `scripts/e2e/fixtures/ols-oracle/`. The comparison rejects a
+container whose `Config.Image` does not contain that digest, so a future
+`:latest` change cannot silently become the measured oracle.
 
 Before the runner, the job runs
 `scripts/gates/artifact-integrity-negative-control.sh`. It records a copy of

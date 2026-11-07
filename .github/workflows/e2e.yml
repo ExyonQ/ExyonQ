@@ -50,3 +50,33 @@ jobs:
           path: ${{ runner.temp }}/ol04-ol03-e2e
           if-no-files-found: warn
           retention-days: 14
+
+  ol03-ols-comparison:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Build OL-03 comparison binary
+        run: cargo build -p exyonq --bin exyonq --locked
+      - name: Run OL-03 against pinned OpenLiteSpeed oracle
+        env:
+          OLS_IMAGE: litespeedtech/openlitespeed@sha256:91ca324386be3fe8cd91591112dbdd8e41af48cccbe4a48e3e8673a2921c8504
+          OLS_CONTAINER: eq-ols-oracle
+          OLS_PORT: "19080"
+          OL03_OLS_RUN_DIR: ${{ runner.temp }}/ol03-ols-compare
+        run: bash scripts/e2e/ols-oracle-ci.sh
+      - name: Upload OL-03 comparison evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ol03-ols-compare-evidence
+          path: ${{ runner.temp }}/ol03-ols-compare
+          if-no-files-found: warn
+          retention-days: 14
