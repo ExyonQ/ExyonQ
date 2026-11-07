@@ -50,7 +50,7 @@ burst = 20
 | `mode` | string | `"off"` | `off` \| `rate_limit` \| `challenge` | Abuse gate mode |
 | `requests_per_second` | u32 | `10` | `>= 1` when mode ≠ `off` | Token bucket refill |
 | `burst` | u32 | `20` | `>= 1` when mode ≠ `off` | Token bucket capacity |
-| `provider` | string | `"native"` | `native` \| `recaptcha` \| `hcaptcha` | Challenge widget/provider |
+| `provider` | string | `"native"` | `native` \| `recaptcha` \| `recaptcha_v3` \| `hcaptcha` | Challenge widget/provider |
 | `site_key` | string? | none | Required for non-native provider | Public widget site key |
 | `secret_env` | string? | none | Required for non-native provider | Env var holding the provider secret |
 | `verify_url` | string? | provider default | Absolute `http(s)` URI | Provider siteverify endpoint |
@@ -68,15 +68,19 @@ configured Challenge/429. It is evaluated once per request.
 ### CAPTCHA providers
 
 `provider = "native"` keeps the self-hosted HMAC-PoW page. `recaptcha` uses the
-reCAPTCHA v2 checkbox widget; `hcaptcha` uses hCaptcha. Both require `site_key`
-and `secret_env`; the secret is read from that environment variable at verification
+reCAPTCHA v2 checkbox widget; `recaptcha_v3` uses reCAPTCHA v3 score-based mode;
+`hcaptcha` uses hCaptcha. All three external providers require `site_key` and
+`secret_env`; the secret is read from that environment variable at verification
 time and must never be put in TOML. `verify_url` defaults to the provider’s
 siteverify endpoint and may be HTTP only for local tests.
 
-A provider page still performs the native PoW, waits for the widget token, and the
-server validates HMAC/PoW/replay before calling the provider. Provider failure,
-timeout, non-200 or malformed JSON returns `403` without a grant cookie. reCAPTCHA
-v3 is not implemented.
+A provider page still performs the native PoW and the server validates
+HMAC/PoW/replay before calling the provider. reCAPTCHA v2 and hCaptcha wait for the
+widget token; reCAPTCHA v3 loads `api.js?render=<site_key>` and calls
+`grecaptcha.execute(site_key, {action: "challenge"})`. For v3 the server requires
+`success`, action exactly `challenge`, and a score of at least `0.5`; a missing
+score/action, score below the threshold or malformed response returns `403`
+without a grant cookie. Provider failure, timeout or non-200 is also fail-closed.
 
 ```toml
 [waf.abuse]

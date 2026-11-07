@@ -57,12 +57,14 @@ bypasses an independent signature Block.
 
 ## Challenge providers and no-JS
 
-- Native HMAC-PoW remains the default; `provider = "recaptcha"` (v2 checkbox) and
-  `provider = "hcaptcha"` are supported with `site_key` + `secret_env`.
+- Native HMAC-PoW remains the default; `provider = "recaptcha"` (v2 checkbox),
+  `provider = "recaptcha_v3"` (score-based) and `provider = "hcaptcha"` are
+  supported with `site_key` + `secret_env`.
 - Provider verification is server-side, bounded (5 s, 16 KiB), HTTPS with OS trust
   roots, and fail-closed. Secrets come from the named environment variable and are
-  never logged.
-- reCAPTCHA v3 is not implemented.
+  never logged. v3 requires success, action `challenge` and score `>= 0.5`.
+- The positive v3 provider E2E with a real v3 key is **NOT EXECUTED**; the official
+  test key is a v2 key and does not return v3 score/action.
 - With JavaScript disabled, the 403 page shows an explicit `<noscript>` message and
   does not grant a cookie, redirect, or alternate access.
 

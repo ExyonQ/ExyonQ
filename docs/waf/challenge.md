@@ -15,7 +15,7 @@ are **obsolete**.
 | Field | Implementation |
 | --- | --- |
 | Protocol | HMAC-SHA256 authenticated challenge + browser PoW + grant cookie |
-| Providers | `native` (default), reCAPTCHA v2 checkbox, hCaptcha; reCAPTCHA v3 is not implemented |
+| Providers | `native` (default), reCAPTCHA v2 checkbox, reCAPTCHA v3 score-based, hCaptcha |
 | Crypto crates | `hmac` 0.13, `sha2` 0.11 |
 | Key | 32 bytes from OsRng, or `EXYONQ_WAF_CHALLENGE_KEY_FILE` (exactly 32 raw bytes) |
 | Challenge TTL | 60 seconds |
@@ -41,7 +41,10 @@ page that:
 The native page uses **inline JS only** — no external CDN, no `eval`, no third-party
 scripts. With `provider = "recaptcha"` or `"hcaptcha"`, the same page loads the
 provider’s official widget script, waits for the widget token (bounded poll), and
-still performs the native PoW. A provider token is never accepted by itself.
+still performs the native PoW. With `provider = "recaptcha_v3"`, it loads
+`api.js?render=<site_key>` and calls
+`grecaptcha.execute(site_key, {action: "challenge"})`; there is no widget. A
+provider token is never accepted by itself.
 
 Responses include `Cache-Control: no-store`.
 
@@ -74,8 +77,11 @@ resolved client identity.
 3. Server checks HMAC (constant-time compare), expiry, PoW, and replay set first.
 4. For an external provider, the server then verifies `provider_token` against the
    configured `verify_url` with a bounded HTTPS `POST` (5 s, 16 KiB response).
-5. A missing/empty secret, provider rejection, timeout, non-200 response or malformed
-   JSON is fail-closed (`403`); no grant cookie is issued.
+   For `recaptcha_v3`, the JSON must contain `success: true`, action exactly
+   `challenge`, and a finite score in `0.0..=1.0` of at least `0.5`.
+5. A missing/empty secret, provider rejection, missing or low v3 score, wrong v3
+   action, timeout, non-200 response or malformed JSON is fail-closed (`403`); no
+   grant cookie is issued.
 6. Success: set grant cookie; JSON `{"ok":true}` or `302` to a same-origin
    relative `return_to` path.
 
@@ -109,11 +115,11 @@ Criterion, literal from `Roadmap 0.9.1` (OL-04, line 56):
 | Criterion surface | Result | Evidence |
 | --- | --- | --- |
 | Challenge real funcionando | PASS | native 16/16 and `monitor` 16/16 over real HTTP: PoW solved by the client, HMAC challenge, grant cookie (HttpOnly/SameSite=Lax/Max-Age=300), forged MAC 403, replay 403, tampered grant 403 |
-| Configuración por despliegue | PASS | `[waf.abuse]` + `EXYONQ_WAF_CHALLENGE_KEY_FILE` (exactly 32 bytes); five configs validated; a provider without `site_key`/`secret_env` is rejected by `exyonq validate` (exit 1) |
+| Configuración por despliegue | PASS | `[waf.abuse]` + `EXYONQ_WAF_CHALLENGE_KEY_FILE` (exactly 32 bytes); six configs validated in the v3 run; a provider without `site_key`/`secret_env` is rejected by `exyonq validate` (exit 1) |
 | Fallback sin JS | PASS | every page carries `<noscript>`; the native page has no external `<script src>`; a client without JS stays at 403 with no cookie and no redirect |
 | Native Linux amd64 | PASS | Netcup, `exyonq` `7052c6564a4597d64c52a0db7458343561fe5e4084a6932bb82853920de3a883`: 83/83, `RESULT=PASS OL-04`, exit 0 (`netcup-native-20261104T233527Z.log`, SHA-256 `6b3a26248c059f50f5d53bccfa8d4c782112f50d644be01176a6d76edf0e32ab`) |
 | Native Linux arm64 | PASS | Oracle, `exyonq` `2fd2085c0c0ef333a667098a8cb0186577d2f93eed3856e329603f6866e296a5`: 83/83, `RESULT=PASS OL-04`, exit 0 (`oracle-native-20261104T233532Z.log`, SHA-256 `2a3b0e7e990d37ad16636e4a307162959591da1cb6bcc3864e34d8e560b410f1`) |
-| External providers | PASS | reCAPTCHA v2 19/19 and hCaptcha 19/19 against the real `siteverify` endpoints with the vendors' official test keys; invalid secret 13/13 fails closed 403 with no grant |
+| External providers | PASS | reCAPTCHA v2 19/19 and hCaptcha 19/19 against the real `siteverify` endpoints with the vendors' official test keys; reCAPTCHA v3 page **14/14** with real Google `siteverify` and fail-closed rejection (official v2 test key lacks score/action); invalid secret 13/13 fails closed 403 with no grant. Positive v3 token **NOT EXECUTED** (needs a real v3 key) |
 
 ### Runs
 
@@ -143,6 +149,83 @@ Provider connectivity was verified independently before the runs: a real
 `POST` to `https://www.google.com/recaptcha/api/siteverify` and to
 `https://hcaptcha.com/siteverify` with the official test keys returned HTTP 200
 and `"success": true`.
+
+### Current revalidation (2026-11-06)
+
+Darwin arm64, `target/debug/exyonq` SHA-256
+`9e300afca652bd8f74bda11fc4a0568578f94ba863e392efa7435ad60db19010`
+(`source_revision=ed778ee`, `source_tag=v0.9.1`), harness SHA-256
+`6f4b3117c7e712b575b3717aad0fc4000bc955cd55c923db62e4a30a41610a47`:
+
+```bash
+bash scripts/e2e/ol04-challenge-e2e.sh
+```
+
+native 16/16, monitor 16/16, reCAPTCHA 19/19, hCaptcha 19/19, invalid-secret
+13/13 (83 checks), `pass=11 fail=0`, `RESULT=PASS OL-04`, exit 0. Log
+`.exyonq-local/evidence/ol04/current-20261106T203803Z/console.log`, SHA-256
+`b026bd01dc24a92aed557b7591352b8cc4465bdcbb578043564a54bf96aed792`.
+
+The run validates five deployment configs, the 32-byte key file, environment-only
+provider secrets, both provider pages, the native PoW/grant path, forged MAC,
+tampered grant, replay rejection and the explicit `<noscript>` path. No product
+change was required; this is a revalidation of the implementation above, not a
+new challenge protocol. The Linux native runs remain historical evidence and
+were not re-executed in this Darwin run.
+
+### reCAPTCHA v3 revalidation (2026-11-06T21:31Z)
+
+The v3 implementation adds a fourth external-provider path. Darwin arm64,
+`target/debug/exyonq` SHA-256
+`c03f7c1da91a01ee11cb5bd26b2fd2028f52c17e0a36f8881829999d0e7632cf`, harness
+SHA-256 `a5e2fb702d5d4d065def31067a1d92e625c9c7c832b043458df1560597710007`:
+
+**97/97** checks (native 16, monitor 16, reCAPTCHA v2 19, reCAPTCHA v3 14,
+hCaptcha 19, invalid-secret 13), `pass=13 fail=0`, `RESULT=PASS OL-04`, exit 0.
+Log `.exyonq-local/evidence/ol04/v3-20261106T213141Z/console.log`, SHA-256
+`21de7a25a6f3d3e59ded984302d5de1349dd77bc45bafd0282fdb7b7080eb567`.
+
+The v3 page is fetched from the real server: it carries
+`api.js?render=<site_key>`, the configured site key, action `challenge`, no v2
+widget and the explicit `<noscript>`. The client still solves the native PoW and
+posts the provider token to the real Google `siteverify` endpoint. Because the
+official test key is a v2 key and its response has no v3 `score`/`action`, the
+provider response is rejected fail-closed with `403` and no grant. That is the
+contract under test; a **positive v3 token is NOT EXECUTED** because it requires
+a real v3 key/secret, not a test-key bypass. The accepted score/action and the
+missing-low-wrong-score cases are covered by
+`core/src/captcha.rs::tests::v3_requires_success_action_and_score`; no fake
+endpoint or injected response is used.
+
+**Regression rerun (2026-11-06T21:45Z).** After the shared-crate v3 change,
+the final binary was exercised again: **97/97** checks, `pass=13 fail=0`, exit 0,
+with the v3 phase still **14/14** fail-closed. Log
+`.exyonq-local/evidence/regression-20261106T214536Z/ol04-console.log`, SHA-256
+`095ff1c08d887f9bb45eebbc099aa161150a8b6f0b1926c895731f8f21e451fa`; same
+`c03f7c1d…` binary. AP-04 30/30, OL-03 full 25/25, OLS 4/4 and OL-05 PASS were
+re-run in the same regression. The positive v3 token remains **NOT EXECUTED**.
+
+### Native Linux matrix re-run (2026-11-07)
+
+OL-04 was re-executed on the two native Linux hosts from this tree at HEAD
+`ed778eec4b9d305a959d2968d26f276f7723225e` plus the uncommitted v3 changes
+(product diff `git diff -- '*.rs' '*.toml' 'Cargo.lock'` SHA-256
+`e4716e71d3b17ce25e9acbf314483fb71708cb974ec0fc338f710ebcbf19490b`), with the
+binary built on each host using Rust 1.99.1. The runner
+`scripts/e2e/ol04-ol03-artifact-e2e.sh` records the binary hash, runs the focused
+unit tests, re-hashes the binary, runs the E2E, and checks both the post-run
+binary hash and the `binary_sha256=` line embedded in the E2E log; a rebuild
+between stages fails with `ARTIFACT_DRIFT`.
+
+| Host | `exyonq` SHA-256 | OL-04 result | Log SHA-256 |
+| --- | --- | --- | --- |
+| Netcup, Linux amd64 (native) | `19b5a06906a9c6de279cff6a6e1fc377e849ac4f14bca24de1d65400d828e965` | native 16, monitor 16, reCAPTCHA v2 19, reCAPTCHA v3 14, hCaptcha 19, invalid-secret 13 = **97/97**, `pass=13 fail=0`, `RESULT=PASS OL-04`, exit 0 | `.exyonq-local/evidence/ol04-close-20261107/amd64-netcup/ol04-console.log` `90ac685f6b992ad88e0b683624d81e34dc13623cd42108cfda503d3d2c55f3cb` |
+| Oracle, Linux arm64 (native) | `744a56fe04faf5ab697ffbf897f5eedeebabfc456b826ef9bfd8d9c6a3a99303` | native 16, monitor 16, reCAPTCHA v2 19, reCAPTCHA v3 14, hCaptcha 19, invalid-secret 13 = **97/97**, `pass=13 fail=0`, `RESULT=PASS OL-04`, exit 0 | `.exyonq-local/evidence/ol04-close-20261107/arm64-oracle/ol04-console.log` `2d874681489eeb1e69539379fcb409cdc5ba758a41e94a94b38459228d965a3e` |
+
+Both logs embed the matching binary hash and the guard reported
+`ARTIFACT_MATCH` and `ARTIFACT_LOG_BOUND` before and after the E2E. Evidence is
+local-only under `.exyonq-local/evidence/ol04-close-20261107/`; `SHA256SUMS`
+covers every file. The positive v3 token remains **NOT EXECUTED**.
 
 ### Harness finding (fixed)
 
@@ -174,18 +257,22 @@ Not claimed as parity, recorded against `src/main/httpserver.cpp:4658`
   rewrite-rule environment variable; ExyonQ activates it on the `[waf.abuse]`
   quota gate only.
 - OpenLiteSpeed's default `recaptchaType` is *reCAPTCHA Invisible*; ExyonQ renders
-  the v2 checkbox widget (and hCaptcha) and always runs the native PoW.
+  the v2 checkbox, exposes v3 score-based mode as an explicit provider, supports
+  hCaptcha, and always runs the native PoW.
 - OpenLiteSpeed exposes `recaptchaMaxTries`, `recaptchaAllowedRobotHits` and a
   bot whitelist; ExyonQ does not implement those knobs.
 
 ### Limits
 
-Linux was executed natively on 2026-11-04, over SSH with the binary built on
-each host: Netcup amd64 (`7052c656…`, log `6b3a2624…`) and Oracle arm64
-(`2fd2085c…`, log `2a3b0e7e…`), 83/83 and `RESULT=PASS OL-04` on both. The
-earlier Wolfi container run remains historical evidence, not a substitute for
-these native runs. Providers were exercised with official test keys, not
-production accounts. reCAPTCHA v3 is not implemented or claimed; `maxTries` and
+Linux was executed natively on 2026-11-04 (83/83, historical) and re-executed
+on 2026-11-07 from this tree: Netcup amd64 (`19b5a069…`, log `90ac685f…`) and
+Oracle arm64 (`744a56fe…`, log `2d874681…`), 97/97 and `RESULT=PASS OL-04` on
+both. The 2026-11-04 runs remain historical; the 2026-11-07 matrix is the
+current evidence. The earlier Wolfi container run remains historical evidence,
+not a substitute for these native runs. Providers were exercised with official test keys, not
+production accounts. reCAPTCHA v3 is implemented with a fixed action/score
+contract; its positive provider E2E is **NOT EXECUTED** because no real v3 key is
+available, while the real test-key response is rejected fail-closed. `maxTries` and
 whitelist are declared OLS differentials, not part of the 0.9.1 criterion.
 
 ### Audit stack (2026-11-04, §8)

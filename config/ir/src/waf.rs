@@ -174,6 +174,7 @@ pub enum WafCaptchaProvider {
     Native,
     Recaptcha,
     Hcaptcha,
+    RecaptchaV3,
 }
 
 fn is_native_provider(provider: &WafCaptchaProvider) -> bool {
@@ -619,6 +620,22 @@ secret_env = "RECAPTCHA_SECRET"
         );
         let config: AppConfig = input.parse().expect("provider config");
         assert_eq!(config.waf.abuse.provider, WafCaptchaProvider::Recaptcha);
+    }
+
+    #[test]
+    fn recaptcha_v3_provider_parses() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.abuse]
+mode = "challenge"
+provider = "recaptcha_v3"
+site_key = "public-v3-key"
+secret_env = "RECAPTCHA_V3_SECRET"
+"#
+        );
+        let config: AppConfig = input.parse().expect("v3 provider config");
+        assert_eq!(config.waf.abuse.provider, WafCaptchaProvider::RecaptchaV3);
     }
 
     #[test]

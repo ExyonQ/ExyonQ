@@ -20,6 +20,7 @@ operational smoke category in this workspace (FORBIDDEN).
 | `ol03-full-e2e.sh` | OL-03: OLS `perClientConnLimit` translation + static/dyn RPS, in/out bandwidth, soft/hard, blockBadReq; runs on Darwin and Linux | C+ |
 | `ol03-ols-compare.sh` | OL-03 live comparison against the `eq-ols-oracle` OLS 1.9.4 container: single, A+B, A+B+C and soft-grace raw-TCP scenarios | E2E (external oracle) |
 | `ol04-challenge-e2e.sh` | OL-04: native/monitor/reCAPTCHA v2/hCaptcha challenge, no-JS fallback, replay, forged MAC/grant and fail-closed provider rejection | C+ |
+| `ol04-ol03-artifact-e2e.sh` | OL-04 + OL-03 under one artifact hash: records the binary, runs focused tests, re-hashes after tests and after each E2E, and rejects a log whose `binary_sha256` differs (`scripts/gates/artifact-integrity.sh`) | C+ |
 | `ws-real-apps-e2e.sh` | Real Home Assistant auth handshake and authenticated n8n push/run frames through ExyonQ (requires running apps and `N8N_COOKIE_FILE`) | E2E |
 | `ol05-waf-metrics-e2e.sh` | OL-05/Q-10: real CRS 942100 hit, per-rule Prometheus counter, block and detection-only modes | C+ |
 | `f6-wp02-saturation-e2e.sh` | FastCGI saturation envelope (16 vs 40, 20 concurrent, per-pool metrics); Linux required | C+ |

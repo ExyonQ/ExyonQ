@@ -53,6 +53,7 @@ pub struct ChallengeProvider {
 pub enum ChallengeProviderKind {
     Recaptcha,
     Hcaptcha,
+    RecaptchaV3,
 }
 
 impl ChallengeProvider {
@@ -66,6 +67,13 @@ impl ChallengeProvider {
     pub fn hcaptcha(site_key: impl Into<String>) -> Self {
         Self {
             kind: ChallengeProviderKind::Hcaptcha,
+            site_key: site_key.into(),
+        }
+    }
+
+    pub fn recaptcha_v3(site_key: impl Into<String>) -> Self {
+        Self {
+            kind: ChallengeProviderKind::RecaptchaV3,
             site_key: site_key.into(),
         }
     }
@@ -419,9 +427,11 @@ fn render_challenge_html(
     let (provider_script, provider_widget, provider_token_js) = match provider {
         Some(provider) => {
             let site_key = html_attr(&provider.site_key);
+            let site_key_js = js_string(&provider.site_key);
             match provider.kind {
                 ChallengeProviderKind::Recaptcha => (
-                    "<script src=\"https://www.google.com/recaptcha/api.js\" async defer></script>",
+                    "<script src=\"https://www.google.com/recaptcha/api.js\" async defer></script>"
+                        .to_string(),
                     format!("<div class=\"g-recaptcha\" data-sitekey=\"{site_key}\"></div>"),
                     r#"function waitForProviderToken() {
   return new Promise((resolve, reject) => {
@@ -432,10 +442,11 @@ fn render_challenge_html(
       if (Date.now() - started > 120000) { clearInterval(timer); reject(new Error("provider timeout")); }
     }, 250);
   });
-}"#,
+}"#.to_string(),
                 ),
                 ChallengeProviderKind::Hcaptcha => (
-                    "<script src=\"https://js.hcaptcha.com/1/api.js\" async defer></script>",
+                    "<script src=\"https://js.hcaptcha.com/1/api.js\" async defer></script>"
+                        .to_string(),
                     format!("<div class=\"h-captcha\" data-sitekey=\"{site_key}\"></div>"),
                     r#"function waitForProviderToken() {
   return new Promise((resolve, reject) => {
@@ -446,14 +457,37 @@ fn render_challenge_html(
       if (Date.now() - started > 120000) { clearInterval(timer); reject(new Error("provider timeout")); }
     }, 250);
   });
-}"#,
+}"#.to_string(),
+                ),
+                ChallengeProviderKind::RecaptchaV3 => (
+                    format!(
+                        "<script src=\"https://www.google.com/recaptcha/api.js?render={site_key}\" async defer></script>"
+                    ),
+                    String::new(),
+                    format!(
+                        r#"function waitForProviderToken() {{
+  return new Promise((resolve, reject) => {{
+    const timer = setTimeout(() => reject(new Error("provider timeout")), 120000);
+    if (!window.grecaptcha || !window.grecaptcha.ready) {{
+      clearTimeout(timer);
+      reject(new Error("provider unavailable"));
+      return;
+    }}
+    grecaptcha.ready(() => {{
+      grecaptcha.execute({site_key_js}, {{action: "challenge"}})
+        .then((token) => {{ clearTimeout(timer); resolve(token); }},
+              (error) => {{ clearTimeout(timer); reject(error); }});
+    }});
+  }});
+}}"#
+                    ),
                 ),
             }
         }
         None => (
-            "",
             String::new(),
-            "function waitForProviderToken() { return Promise.resolve(\"\"); }",
+            String::new(),
+            "function waitForProviderToken() { return Promise.resolve(\"\"); }".to_string(),
         ),
     };
     format!(
@@ -857,6 +891,30 @@ mod tests {
             assert!(html.contains("await waitForProviderToken()"));
             assert!(html.contains("<noscript>"));
         }
+    }
+
+    #[test]
+    fn recaptcha_v3_page_uses_render_and_challenge_action() {
+        let s = ChallengeService::with_provider(
+            [9u8; 32],
+            8,
+            Some(ChallengeProvider::recaptcha_v3("test-v3-key")),
+        );
+        let issue = s.issue(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Some("provider.test"),
+            "/",
+            1,
+        );
+        let html = String::from_utf8(issue.body).expect("utf8 v3 page");
+        assert!(html.contains("www.google.com/recaptcha/api.js?render=test-v3-key"));
+        assert!(html.contains("grecaptcha.execute"));
+        assert!(html.contains("action: \"challenge\""));
+        assert!(!html.contains("g-recaptcha"));
+        assert!(!html.contains("data-sitekey="));
+        assert!(html.contains("await waitForProviderToken()"));
+        assert!(html.contains("<noscript>"));
+        assert_eq!(issue.status, 403);
     }
 
     #[test]
