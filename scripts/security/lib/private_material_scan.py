@@ -175,7 +175,12 @@ def extract_c_strings(data: bytes) -> bytes:
     return bytes(out)
 
 
-def scan_file(path: Path, findings: List[Tuple[str, str, str]], origin: str) -> None:
+def scan_file(
+    path: Path,
+    findings: List[Tuple[str, str, str]],
+    origin: str,
+    display: Optional[str] = None,
+) -> None:
     if not path.is_file() or path.is_symlink():
         return
     name = path.name
@@ -196,8 +201,9 @@ def scan_file(path: Path, findings: List[Tuple[str, str, str]], origin: str) -> 
     ):
         hits = hits or ["SUSPICIOUS_PRIVATE_BASENAME"]
 
+    shown = display if display is not None else str(path)
     for h in hits:
-        findings.append((origin, str(path), h))
+        findings.append((origin, shown, h))
 
 
 def extract_archive(archive: Path, dest: Path) -> bool:
@@ -363,6 +369,91 @@ def git_ls_files(repo: Path, staged_only: bool = False) -> List[Path]:
     return paths
 
 
+def git_publication_files(repo: Path) -> List[Path]:
+    """Return the files a normal `git add -A` + push would publish.
+
+    This deliberately includes tracked paths (working tree) and untracked,
+    non-ignored paths. Ignored paths are local-only by construction and must
+    never be part of a publication review.
+    """
+    out = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--deduplicate",
+        ]
+    )
+    paths: List[Path] = []
+    for raw in out.split(b"\0"):
+        if not raw:
+            continue
+        rel = raw.decode("utf-8", errors="surrogateescape")
+        paths.append(repo / rel)
+    return paths
+
+
+def git_index_entries(repo: Path) -> List[Tuple[str, str, int, str]]:
+    """Return (mode, blob_sha, stage, relative_path) from the index."""
+    out = subprocess.check_output(["git", "-C", str(repo), "ls-files", "-s", "-z"])
+    entries: List[Tuple[str, str, int, str]] = []
+    for raw in out.split(b"\0"):
+        if not raw or b"\t" not in raw:
+            continue
+        meta, rel_raw = raw.split(b"\t", 1)
+        parts = meta.split(b" ")
+        if len(parts) != 3:
+            continue
+        entries.append(
+            (
+                parts[0].decode("ascii", errors="replace"),
+                parts[1].decode("ascii", errors="replace"),
+                int(parts[2].decode("ascii", errors="replace")),
+                rel_raw.decode("utf-8", errors="surrogateescape"),
+            )
+        )
+    return entries
+
+
+def scan_index_entry(
+    repo: Path,
+    mode: str,
+    blob_sha: str,
+    stage: int,
+    rel: str,
+    findings: List[Tuple[str, str, str]],
+) -> None:
+    logical = str(repo / rel)
+    if stage != 0:
+        findings.append(("publication-index", logical, "UNMERGED_INDEX_ENTRY"))
+        return
+    if mode == "120000":
+        findings.append(("publication-index", logical, "SYMLINK_IN_PUBLICATION_SET"))
+        return
+    if mode == "160000":
+        # Gitlink: the commit object is published, not a file body.
+        return
+    try:
+        data = subprocess.check_output(["git", "-C", str(repo), "cat-file", "blob", blob_sha])
+    except subprocess.CalledProcessError:
+        findings.append(("publication-index", logical, "INDEX_BLOB_UNREADABLE"))
+        return
+    with tempfile.TemporaryDirectory(prefix="exyonq-pmz-index-") as td:
+        path = Path(td) / Path(rel).name
+        path.write_bytes(data)
+        if is_archive(path):
+            with tempfile.TemporaryDirectory(prefix="exyonq-pmz-index-arch-") as atd:
+                atd_path = Path(atd)
+                if extract_archive(path, atd_path):
+                    scan_tree(atd_path, findings, f"publication-index-archive:{logical}")
+        scan_file(path, findings, f"publication-index:{rel}")
+
+
 def git_diff_files(repo: Path, base: str) -> List[Path]:
     out = subprocess.check_output(
         ["git", "-C", str(repo), "diff", "--name-only", "-z", f"{base}...HEAD"]
@@ -404,21 +495,25 @@ def cmd_tree(args: argparse.Namespace) -> int:
 def cmd_git_index(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     findings: List[Tuple[str, str, str]] = []
-    for path in git_ls_files(repo, staged_only=True):
-        if path.is_file():
-            if is_archive(path):
-                with tempfile.TemporaryDirectory(prefix="exyonq-pmz-idx-") as td:
-                    td_path = Path(td)
-                    if extract_archive(path, td_path):
-                        scan_tree(td_path, findings, f"index-archive:{path}")
-                scan_file(path, findings, "index")
-            else:
-                scan_file(path, findings, "index")
-    # Also scan unstaged tracked? Index mode = staged only for pre-commit.
+    staged = {str(path) for path in git_ls_files(repo, staged_only=True)}
+    entries = [
+        entry
+        for entry in git_index_entries(repo)
+        if str(repo / entry[3]) in staged
+    ]
+    print(f"INDEX_FILES={len(entries)}")
+    for mode, blob_sha, stage, rel in entries:
+        scan_index_entry(repo, mode, blob_sha, stage, rel, findings)
     return report_and_exit(findings)
 
 
 def cmd_git_tree(args: argparse.Namespace) -> int:
+    if not getattr(args, "allow_blind_scan", False):
+        eprint(
+            "ERROR: git-tree is blind to untracked files and staged blobs; "
+            "use --publication. --allow-blind-scan is diagnostic-only."
+        )
+        return 2
     repo = Path(args.repo).resolve()
     findings: List[Tuple[str, str, str]] = []
     for path in git_ls_files(repo, staged_only=False):
@@ -443,6 +538,164 @@ def cmd_git_diff(args: argparse.Namespace) -> int:
         if path.is_file():
             scan_file(path, findings, f"diff:{base}")
     return report_and_exit(findings)
+
+
+def cmd_git_publication(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    findings: List[Tuple[str, str, str]] = []
+    paths = git_publication_files(repo)
+    print(f"PUBLICATION_FILES={len(paths)}")
+    index_entries = git_index_entries(repo)
+    print(f"PUBLICATION_INDEX_FILES={len(index_entries)}")
+    for mode, blob_sha, stage, rel in index_entries:
+        scan_index_entry(repo, mode, blob_sha, stage, rel, findings)
+    for path in paths:
+        if path.is_symlink():
+            findings.append(("publication", str(path), "SYMLINK_IN_PUBLICATION_SET"))
+            continue
+        if not path.is_file():
+            # A tracked deletion is not content in the publication set.
+            continue
+        if is_archive(path):
+            with tempfile.TemporaryDirectory(prefix="exyonq-pmz-pub-") as td:
+                td_path = Path(td)
+                if extract_archive(path, td_path):
+                    scan_tree(td_path, findings, f"publication-archive:{path}")
+            scan_file(path, findings, "publication")
+        else:
+            scan_file(path, findings, "publication")
+    return report_and_exit(findings)
+
+
+def git_history_blobs(repo: Path) -> Tuple[List[str], dict[str, Tuple[str, str]]]:
+    """Return all reachable commits and one (commit, path) per unique blob."""
+    commits = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-list", "--all"], text=True
+    ).splitlines()
+    blobs: dict[str, Tuple[str, str]] = {}
+    for commit in commits:
+        out = subprocess.check_output(
+            ["git", "-C", str(repo), "ls-tree", "-r", "-z", "--full-tree", commit]
+        )
+        for raw in out.split(b"\0"):
+            if not raw or b"\t" not in raw:
+                continue
+            meta, rel_raw = raw.split(b"\t", 1)
+            parts = meta.split(b" ")
+            if len(parts) != 3 or parts[1] != b"blob":
+                continue
+            sha = parts[2].decode("ascii", errors="replace")
+            rel = rel_raw.decode("utf-8", errors="surrogateescape")
+            blobs.setdefault(sha, (commit, rel))
+    return commits, blobs
+
+
+def history_pem_is_pattern_source(data: bytes) -> bool:
+    """True when PEM headers are only a grep/regex definition, not key material."""
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    key_lines = [line for line in text.splitlines() if "PRIVATE KEY" in line]
+    if not key_lines:
+        return False
+    return all("^-----BEGIN" in line or "grep -qE" in line for line in key_lines)
+
+
+def history_bearer_is_noncredential(data: bytes) -> bool:
+    """True for placeholder or explicit redaction/test fixtures, never a real token."""
+    tokens = re.findall(
+        br"(?i)authorization\s*[:=]\s*bearer\s+(\S+)", data
+    )
+    if not tokens:
+        return False
+    markers = (b"redact", b"test", b"example", b"dummy", b"fake", b"placeholder")
+    for token in tokens:
+        lowered = token.lower()
+        if any(marker in lowered for marker in markers):
+            continue
+        if b"metrics" in lowered and b"token" in lowered:
+            continue
+        if b"secret" in lowered and b"token" in lowered:
+            continue
+        return False
+    return True
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    raw_findings: List[Tuple[str, str, str]] = []
+    blob_data: dict[str, bytes] = {}
+    commits, blobs = git_history_blobs(repo)
+    print(f"HISTORY_COMMITS={len(commits)}")
+    print(f"HISTORY_BLOBS={len(blobs)}")
+    for blob_sha, (commit, rel) in blobs.items():
+        try:
+            data = subprocess.check_output(
+                ["git", "-C", str(repo), "cat-file", "blob", blob_sha]
+            )
+        except subprocess.CalledProcessError:
+            raw_findings.append(("history", f"{commit}:{rel}", "HISTORY_BLOB_UNREADABLE"))
+            continue
+        with tempfile.TemporaryDirectory(prefix="exyonq-pmz-history-") as td:
+            path = Path(td) / Path(rel).name
+            path.write_bytes(data)
+            display = f"{commit}:{rel}"
+            blob_data[display] = data
+            if is_archive(path):
+                before = len(raw_findings)
+                with tempfile.TemporaryDirectory(prefix="exyonq-pmz-history-arch-") as atd:
+                    atd_path = Path(atd)
+                    if extract_archive(path, atd_path):
+                        scan_tree(atd_path, raw_findings, f"history-archive:{display}")
+                for i in range(before, len(raw_findings)):
+                    origin, _temp_path, rule = raw_findings[i]
+                    raw_findings[i] = (origin, display, rule)
+            scan_file(path, raw_findings, f"history:{display}", display=display)
+
+    false_counts: dict[str, int] = {
+        "PATTERN_SOURCE": 0,
+        "TEST_OR_PLACEHOLDER": 0,
+    }
+    findings: List[Tuple[str, str, str]] = []
+    for origin, path, rule in raw_findings:
+        data = blob_data.get(path, b"")
+        if rule in {
+            "PEM_PRIVATE_KEY",
+            "PEM_RSA_PRIVATE_KEY",
+            "PEM_EC_PRIVATE_KEY",
+            "PEM_DSA_PRIVATE_KEY",
+            "OPENSSH_PRIVATE_KEY",
+            "PGP_PRIVATE_KEY",
+        } and history_pem_is_pattern_source(data):
+            false_counts["PATTERN_SOURCE"] += 1
+            print(f"HISTORY_NON_CREDENTIAL_HIT=PATTERN_SOURCE:{rule}:{path}")
+            continue
+        if rule == "BEARER_TOKEN" and history_bearer_is_noncredential(data):
+            false_counts["TEST_OR_PLACEHOLDER"] += 1
+            print(f"HISTORY_NON_CREDENTIAL_HIT=TEST_OR_PLACEHOLDER:{rule}:{path}")
+            continue
+        findings.append((origin, path, rule))
+
+    print(f"RULE_ID={RULE_ID}")
+    print(f"FAIL_MODE={FAIL_MODE}")
+    print(f"HISTORY_RAW_FINDINGS={len(raw_findings)}")
+    print(f"HISTORY_FALSE_POSITIVES={sum(false_counts.values())}")
+    print(f"HISTORY_PATTERN_SOURCE_HITS={false_counts['PATTERN_SOURCE']}")
+    print(f"HISTORY_TEST_OR_PLACEHOLDER_HITS={false_counts['TEST_OR_PLACEHOLDER']}")
+    print(f"PRIVATE_MATERIAL_FINDINGS={len(findings)}")
+    for origin, path, rule in findings:
+        eprint(f"ERROR: {RULE_ID}: {rule}: {path} (via {origin})")
+    if findings:
+        eprint("HISTORY_EXPOSURE=YES")
+        eprint("HISTORY_ROTATION_REQUIRED=YES")
+        eprint("PRIVATE_MATERIAL_GATE=FAIL")
+        eprint("HISTORY_REWRITE_AUTHORIZED=NO")
+        return 1
+    print("HISTORY_EXPOSURE=NO")
+    print("HISTORY_ROTATION_REQUIRED=NO")
+    print("PRIVATE_MATERIAL_GATE=PASS")
+    return 0
 
 
 def cmd_archive(args: argparse.Namespace) -> int:
@@ -484,12 +737,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     gt = sub.add_parser("git-tree")
     gt.add_argument("--repo", default=".")
+    gt.add_argument("--allow-blind-scan", action="store_true")
     gt.set_defaults(func=cmd_git_tree)
 
     gd = sub.add_parser("git-diff")
     gd.add_argument("--repo", default=".")
     gd.add_argument("--base", default="origin/main")
     gd.set_defaults(func=cmd_git_diff)
+
+    gp = sub.add_parser("git-publication")
+    gp.add_argument("--repo", default=".")
+    gp.set_defaults(func=cmd_git_publication)
+
+    gh = sub.add_parser("history")
+    gh.add_argument("--repo", default=".")
+    gh.set_defaults(func=cmd_history)
 
     a = sub.add_parser("archive")
     a.add_argument("--archive", required=True)

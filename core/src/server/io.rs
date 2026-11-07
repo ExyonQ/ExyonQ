@@ -530,10 +530,9 @@ mod tests {
 
         #[test]
         fn read_until_headers_blocking_times_out_as_empty() {
-            let prev = std::env::var("EXYONQ_READ_TIMEOUT_MS").ok();
-            crate::server::reset_header_read_timeout_cache_for_tests();
-            std::env::set_var("EXYONQ_READ_TIMEOUT_MS", "50");
-            crate::server::reset_header_read_timeout_cache_for_tests();
+            // The timeout under test is the socket's own read timeout — the
+            // process-global EXYONQ_READ_TIMEOUT_MS cache is not consulted
+            // here, so mutating it would only pollute concurrent tests.
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
             let addr = listener.local_addr().expect("addr");
             let client = thread::spawn(move || {
@@ -548,11 +547,6 @@ mod tests {
             assert!(head.is_empty());
             assert!(rest.is_empty());
             client.join().expect("join");
-            match prev {
-                Some(v) => std::env::set_var("EXYONQ_READ_TIMEOUT_MS", v),
-                None => std::env::remove_var("EXYONQ_READ_TIMEOUT_MS"),
-            }
-            crate::server::reset_header_read_timeout_cache_for_tests();
         }
 
         #[test]

@@ -54,7 +54,9 @@ pub enum ConfigError {
     #[error("route `{route}` references unknown upstream: {upstream}")]
     UnknownUpstream { route: String, upstream: String },
 
-    #[error("route `{route}` must define upstream, root, redirect, rewrite, or fastcgi")]
+    #[error(
+        "route `{route}` must define upstream, root, redirect, rewrite, fastcgi, or an unconditional deny-all access policy"
+    )]
     RouteWithoutAction { route: String },
 
     #[error("route `{route}` defines conflicting actions (only one of upstream, root, redirect, rewrite, fastcgi)")]

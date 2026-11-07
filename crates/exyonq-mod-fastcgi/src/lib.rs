@@ -79,7 +79,9 @@ pub use conn_pool::{
     DEFAULT_FCGI_IDLE_TIMEOUT,
 };
 #[cfg(unix)]
-pub use diagnostics::{endpoint_display, format_saturation_message, SaturationKind};
+pub use diagnostics::{
+    endpoint_display, format_concurrency_message, format_saturation_message, SaturationKind,
+};
 pub use encode::{
     append_length, decode_forward_response, decode_forward_response_with_stderr,
     encode_begin_request_frame, encode_begin_request_frame_with_flags, encode_params_body,

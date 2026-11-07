@@ -17,8 +17,11 @@
 
 mod acme_http01_adapter;
 mod auth_basic;
+mod auth_external;
 pub mod cache_purge_port;
+mod captcha;
 mod certificate_publication_port;
+mod client_throttle;
 pub mod config;
 pub mod contract_service_registry;
 pub mod coordinating_purge_port;
@@ -47,6 +50,7 @@ mod sub_filter;
 pub mod waf;
 mod waf_body;
 mod waf_metrics;
+mod worker_memory;
 mod zone_ratelimit;
 
 /// TLS runtime (KD4.5 — implementation in `exyonq-mod-tls`).
@@ -63,6 +67,7 @@ pub use waf::{
     WAF_CHALLENGE_VERIFY_PATH,
 };
 pub use waf_metrics::append_waf_prometheus;
+pub use worker_memory::append_worker_memory_prometheus;
 
 /// Exposed for fuzz targets and tests.
 pub fn find_header_end(buf: &[u8]) -> Option<usize> {
@@ -143,6 +148,9 @@ pub use htaccess_probes::CoreHtaccessProbes;
 pub use htaccess_runtime_registry::{
     clear_htaccess_runtime_for_tests, HtaccessDispatchAdjustment, HtaccessRuntimeTestGuard,
 };
-pub use htaccess_runtime_registry::{htaccess_adjust_route, register_htaccess_runtime_service};
+pub use htaccess_runtime_registry::{
+    htaccess_access_policy, htaccess_adjust_route, htaccess_auth_policy,
+    register_htaccess_runtime_service,
+};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

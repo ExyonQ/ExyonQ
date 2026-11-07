@@ -76,6 +76,109 @@ pub(crate) fn file_parts(content_type: &str, body: &[u8]) -> Option<Vec<FilePart
     Some(parts)
 }
 
+/// Every raw header line of every multipart part, in order. CRS exposes these
+/// as `MULTIPART_PART_HEADERS` (922140/922150/922110).
+pub(crate) fn part_header_lines(content_type: &str, body: &[u8]) -> Vec<String> {
+    let lower = content_type.to_ascii_lowercase();
+    if !lower.starts_with("multipart/form-data") {
+        return Vec::new();
+    }
+    let Some(boundary) = boundary_of(content_type) else {
+        return Vec::new();
+    };
+    let delimiter = format!("--{boundary}").into_bytes();
+    let mut headers = Vec::new();
+    let mut rest = body;
+    while let Some(pos) = find(rest, &delimiter) {
+        rest = &rest[pos + delimiter.len()..];
+        if rest.starts_with(b"--") {
+            break;
+        }
+        rest = rest.strip_prefix(b"\r\n").unwrap_or(rest);
+        let Some(head_end) = find(rest, b"\r\n\r\n") else {
+            break;
+        };
+        if head_end > MAX_PART_HEADER_BYTES {
+            break;
+        }
+        let head = &rest[..head_end];
+        for line in String::from_utf8_lossy(head).split("\r\n") {
+            let line = line.trim_end_matches('\r');
+            if !line.is_empty() {
+                headers.push(line.to_string());
+                if headers.len() >= MAX_PARTS * 8 {
+                    return headers;
+                }
+            }
+        }
+        let payload = &rest[head_end + 4..];
+        let next = find(payload, &delimiter).unwrap_or(payload.len());
+        rest = &payload[next..];
+    }
+    headers
+}
+
+/// ModSecurity's `MULTIPART_STRICT_ERROR` check (modsecurity.conf rule
+/// 200003): a multipart body that fails strict validation is rejected with
+/// 400. The regression corpus intentionally carries LF-only bodies, exactly
+/// the `LF` flag ModSecurity reports, so parity requires the same rejection.
+pub(crate) fn strict_error(content_type: &str, body: &[u8]) -> Option<&'static str> {
+    let lower = content_type.to_ascii_lowercase();
+    if !lower.starts_with("multipart/form-data") {
+        return None;
+    }
+    let Some(boundary) = boundary_of(content_type) else {
+        return Some("multipart body without a valid boundary");
+    };
+    let delimiter = format!("--{boundary}").into_bytes();
+    let next_delimiter = [b"\r\n".as_slice(), delimiter.as_slice()].concat();
+    let mut rest = body;
+    while let Some(pos) = find(rest, &delimiter) {
+        rest = &rest[pos + delimiter.len()..];
+        if let Some(tail) = rest.strip_prefix(b"--") {
+            if tail.starts_with(b"\n") {
+                return Some("multipart body has a bare LF line ending");
+            }
+            if tail.starts_with(b"\r") && !tail.starts_with(b"\r\n") {
+                return Some("multipart body has a bare CR line ending");
+            }
+            return None;
+        }
+        if !rest.starts_with(b"\r\n") {
+            return Some(if rest.starts_with(b"\n") {
+                "multipart body has a bare LF line ending"
+            } else if rest.starts_with(b"\r") {
+                "multipart body has a bare CR line ending"
+            } else {
+                "multipart boundary is not followed by CRLF"
+            });
+        }
+        rest = &rest[2..];
+        let Some(head_end) = find(rest, b"\r\n\r\n") else {
+            return Some("multipart part headers are not CRLF terminated");
+        };
+        if let Some(reason) = bare_line_ending(&rest[..head_end]) {
+            return Some(reason);
+        }
+        let payload = &rest[head_end + 4..];
+        let next = find(payload, &next_delimiter)?;
+        rest = &payload[next + 2..];
+    }
+    None
+}
+
+fn bare_line_ending(bytes: &[u8]) -> Option<&'static str> {
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' && (index == 0 || bytes[index - 1] != b'\r') {
+            return Some("multipart body has a bare LF line ending");
+        }
+        if *byte == b'\r' && bytes.get(index + 1) != Some(&b'\n') {
+            return Some("multipart body has a bare CR line ending");
+        }
+    }
+    None
+}
+
 fn parse_part_header(head: &[u8], size: usize) -> Option<FilePart> {
     let text = String::from_utf8_lossy(head);
     let mut field = None;
@@ -195,6 +298,27 @@ mod tests {
     fn non_multipart_and_missing_boundary_are_none() {
         assert!(file_parts("application/x-www-form-urlencoded", b"a=b").is_none());
         assert!(file_parts("multipart/form-data", b"--x--").is_none());
+    }
+
+    #[test]
+    fn strict_multipart_rejects_bare_lf_and_accepts_crlf() {
+        let lf = b"--b\nContent-Disposition: form-data; name=\"f\"\n\nv\n--b--\n";
+        assert!(strict_error("multipart/form-data; boundary=b", lf).is_some());
+        let crlf = b"--b\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nv\r\n--b--\r\n";
+        assert!(strict_error("multipart/form-data; boundary=b", crlf).is_none());
+    }
+
+    #[test]
+    fn strict_multipart_validates_closing_delimiter_line_ending() {
+        assert!(strict_error("multipart/form-data; boundary=b", b"--b--\n").is_some());
+        assert!(strict_error("multipart/form-data; boundary=b", b"--b--\r\n").is_none());
+    }
+
+    #[test]
+    fn strict_multipart_accepts_binary_payload_line_bytes() {
+        let payload: Vec<u8> = (0..=255).collect();
+        let raw = body("XyZ", &[("blob", Some("data.bin"), &payload)]);
+        assert!(strict_error("multipart/form-data; boundary=XyZ", &raw).is_none());
     }
 
     #[test]

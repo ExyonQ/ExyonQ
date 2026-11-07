@@ -48,9 +48,32 @@ pub struct ModulesConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthRouteConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub realm: String,
     /// htpasswd file path.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_file: String,
+    /// AP-04: external authorization endpoint (`auth_request`-style).
+    /// Mutually exclusive with the htpasswd fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_request: Option<AuthRequestConfig>,
+}
+
+/// AP-04: external authorization subrequest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthRequestConfig {
+    /// Absolute `http://` URL called with `GET`. The shared client stack is
+    /// HTTP-only in v1, so an `https://` endpoint is rejected at config load
+    /// instead of failing closed on every request.
+    pub endpoint: String,
+    /// Hard upper bound for the auth subrequest; default 2 s.
+    #[serde(default = "default_auth_request_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+fn default_auth_request_timeout_ms() -> u32 {
+    2_000
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,15 +90,58 @@ impl AuthConfig {
 
     pub fn validate(&self) -> Result<(), crate::ConfigError> {
         for (route, cfg) in &self.routes {
-            if cfg.realm.trim().is_empty() {
-                return Err(crate::ConfigError::Parse(format!(
-                    "modules.auth.routes.{route}: empty realm"
-                )));
-            }
-            if cfg.user_file.trim().is_empty() {
-                return Err(crate::ConfigError::Parse(format!(
-                    "modules.auth.routes.{route}: empty user_file"
-                )));
+            let has_basic = !cfg.realm.trim().is_empty() || !cfg.user_file.trim().is_empty();
+            match (&cfg.auth_request, has_basic) {
+                (Some(request), false) => {
+                    let uri: hyper::Uri = request.endpoint.parse().map_err(|_| {
+                        crate::ConfigError::Parse(format!(
+                            "modules.auth.routes.{route}.auth_request.endpoint must be an absolute http:// URI"
+                        ))
+                    })?;
+                    if !matches!(uri.scheme_str(), Some("http"))
+                        || uri.authority().is_none()
+                        || uri.host().is_none()
+                        || uri
+                            .authority()
+                            .is_some_and(|authority| authority.as_str().contains('@'))
+                    {
+                        return Err(crate::ConfigError::Parse(format!(
+                            "modules.auth.routes.{route}.auth_request.endpoint must be an absolute http:// URI without userinfo"
+                        )));
+                    }
+                    if uri.path().is_empty() {
+                        return Err(crate::ConfigError::Parse(format!(
+                            "modules.auth.routes.{route}.auth_request.endpoint needs a path"
+                        )));
+                    }
+                    if !(1..=30_000).contains(&request.timeout_ms) {
+                        return Err(crate::ConfigError::Parse(format!(
+                            "modules.auth.routes.{route}.auth_request.timeout_ms must be 1..=30000"
+                        )));
+                    }
+                }
+                (Some(_), true) => {
+                    return Err(crate::ConfigError::Parse(format!(
+                        "modules.auth.routes.{route}: auth_request cannot be combined with realm/user_file"
+                    )));
+                }
+                (None, true) => {
+                    if cfg.realm.trim().is_empty() {
+                        return Err(crate::ConfigError::Parse(format!(
+                            "modules.auth.routes.{route}: empty realm"
+                        )));
+                    }
+                    if cfg.user_file.trim().is_empty() {
+                        return Err(crate::ConfigError::Parse(format!(
+                            "modules.auth.routes.{route}: empty user_file"
+                        )));
+                    }
+                }
+                (None, false) => {
+                    return Err(crate::ConfigError::Parse(format!(
+                        "modules.auth.routes.{route}: needs realm/user_file or auth_request.endpoint"
+                    )));
+                }
             }
         }
         Ok(())
@@ -395,9 +461,85 @@ pub struct RateLimitConfig {
     /// 0.5: route name → zone name (`limit_req zone=...`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub routes: std::collections::BTreeMap<String, String>,
+    /// Per-route nginx `limit_req` options. Kept separate from `routes` so
+    /// older zone-only TOML remains loadable.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub route_options: std::collections::BTreeMap<String, RateLimitRouteOptions>,
+    /// Multiple `limit_req` directives for one route. Imported nginx configs
+    /// use this map; `routes` + `route_options` remain the single-limit form.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub route_limits: std::collections::BTreeMap<String, RateLimitRoutePolicy>,
+    /// OL-03: OpenLiteSpeed-style per-client throttling. Independent from
+    /// nginx `limit_req` zones; applies to every route when enabled.
+    #[serde(default, skip_serializing_if = "ClientThrottleConfig::is_default")]
+    pub client: ClientThrottleConfig,
 }
 
-/// 0.5: one `limit_req_zone` (key is `ip`, `host`, or `header:<name>`).
+/// OL-03: complete per-client throttling policy.
+///
+/// Mirrors the OpenLiteSpeed `perClientConnLimit` block (WebAdmin labels it
+/// "Per Client Throttling"): `softLimit`, `hardLimit`, `outBandwidth`,
+/// `inBandwidth`, `staticReqPerSec`, `dynReqPerSec`, `gracePeriod`,
+/// `banPeriod` and `blockBadReq`. ExyonQ counts HTTP requests, not TCP flows,
+/// and reports throttling as `429` instead of closing the socket.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientThrottleConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// OpenLiteSpeed `softLimit`: concurrent requests allowed to exceed the
+    /// soft ceiling only for `grace_seconds` before a ban is armed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_connections_per_ip: Option<u32>,
+    /// OpenLiteSpeed `hardLimit`: concurrent requests rejected immediately at
+    /// this ceiling (never delayed by the grace window).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_connections_per_ip: Option<u32>,
+    /// OpenLiteSpeed `outBandwidth`: response-body bytes per second per IP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth_bytes_per_second: Option<u64>,
+    /// OpenLiteSpeed `inBandwidth`: request-body bytes per second per IP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_bandwidth_bytes_per_second: Option<u64>,
+    /// OpenLiteSpeed `staticReqPerSec`: static requests per second per IP.
+    /// The excess is deferred to the next one-second window, not rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_requests_per_second: Option<u32>,
+    /// OpenLiteSpeed `dynReqPerSec`: dynamic (proxy/FastCGI) requests per
+    /// second per IP. The excess is deferred, not rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_requests_per_second: Option<u32>,
+    /// OpenLiteSpeed `blockBadReq`: ban clients that repeatedly send
+    /// malformed HTTP requests during `ban_seconds`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub block_bad_req: bool,
+    /// OpenLiteSpeed `banPeriod`: how long a soft-limit or malformed-request
+    /// offender stays banned. Required when `block_bad_req` is enabled.
+    #[serde(default)]
+    pub ban_seconds: u64,
+    /// OpenLiteSpeed `gracePeriod`: how long the soft limit may be exceeded
+    /// before `ban_seconds` is armed.
+    #[serde(default)]
+    pub grace_seconds: u64,
+}
+
+impl ClientThrottleConfig {
+    pub fn is_default(&self) -> bool {
+        !self.enabled
+            && self.soft_connections_per_ip.is_none()
+            && self.max_connections_per_ip.is_none()
+            && self.bandwidth_bytes_per_second.is_none()
+            && self.input_bandwidth_bytes_per_second.is_none()
+            && self.static_requests_per_second.is_none()
+            && self.dynamic_requests_per_second.is_none()
+            && !self.block_bad_req
+            && self.ban_seconds == 0
+            && self.grace_seconds == 0
+    }
+}
+
+/// 0.5: one `limit_req_zone` (key is `ip`, `host`, `route`, `user`,
+/// `header:<name>`, or `cookie:<name>`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RateLimitZoneConfig {
@@ -408,6 +550,47 @@ pub struct RateLimitZoneConfig {
     pub burst: u32,
 }
 
+/// Per-route nginx `limit_req` policy. `burst` and `delay` are parsed values;
+/// `None` means the zone default for `burst` and nginx's default `delay=0`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitRouteOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burst: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<u32>,
+    #[serde(default)]
+    pub nodelay: bool,
+}
+
+/// A complete nginx `limit_req` policy for one route. The settings mirror the
+/// `limit_req_status`, `limit_req_dry_run` and `limit_req_log_level` directives
+/// inherited by the location that declares the limits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitRoutePolicy {
+    pub limits: Vec<RateLimitLimit>,
+    #[serde(default = "default_rate_limit_status")]
+    pub status: u16,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default = "default_rate_limit_log_level")]
+    pub log_level: String,
+}
+
+/// One `limit_req zone=...` binding inside a route policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitLimit {
+    pub zone: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burst: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<u32>,
+    #[serde(default)]
+    pub nodelay: bool,
+}
+
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
@@ -416,6 +599,9 @@ impl Default for RateLimitConfig {
             burst: default_burst(),
             zones: std::collections::BTreeMap::new(),
             routes: std::collections::BTreeMap::new(),
+            route_options: std::collections::BTreeMap::new(),
+            route_limits: std::collections::BTreeMap::new(),
+            client: ClientThrottleConfig::default(),
         }
     }
 }
@@ -448,4 +634,79 @@ fn default_rps() -> u32 {
 
 fn default_burst() -> u32 {
     200
+}
+
+fn default_rate_limit_status() -> u16 {
+    429
+}
+
+fn default_rate_limit_log_level() -> String {
+    "error".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn external_auth_is_exclusive_and_validated() {
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            "api".to_string(),
+            AuthRouteConfig {
+                realm: String::new(),
+                user_file: String::new(),
+                auth_request: Some(AuthRequestConfig {
+                    endpoint: "http://127.0.0.1:9000/verify".into(),
+                    timeout_ms: 2_000,
+                }),
+            },
+        );
+        AuthConfig { routes }.validate().expect("external auth");
+
+        let mut config = AuthConfig {
+            routes: BTreeMap::new(),
+        };
+        config.routes.insert(
+            "api".into(),
+            AuthRouteConfig {
+                realm: "basic".into(),
+                user_file: "/tmp/users".into(),
+                auth_request: Some(AuthRequestConfig {
+                    endpoint: "http://127.0.0.1:9000/verify".into(),
+                    timeout_ms: 2_000,
+                }),
+            },
+        );
+        assert!(config.validate().is_err(), "mechanisms must not combine");
+    }
+
+    #[test]
+    fn external_auth_rejects_relative_and_unknown_scheme() {
+        for endpoint in [
+            "/verify",
+            "ftp://127.0.0.1/verify",
+            "http:///verify",
+            "https://127.0.0.1/verify",
+            "http://user:pass@127.0.0.1/verify",
+        ] {
+            let mut routes = BTreeMap::new();
+            routes.insert(
+                "api".to_string(),
+                AuthRouteConfig {
+                    realm: String::new(),
+                    user_file: String::new(),
+                    auth_request: Some(AuthRequestConfig {
+                        endpoint: endpoint.into(),
+                        timeout_ms: 2_000,
+                    }),
+                },
+            );
+            assert!(
+                AuthConfig { routes }.validate().is_err(),
+                "{endpoint} must fail closed"
+            );
+        }
+    }
 }

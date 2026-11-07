@@ -29,6 +29,11 @@ pub struct HyperHandoff {
     pub prefetched: Option<(Bytes, Bytes)>,
     pub generation: GenerationView,
     pub token: ConnectionLifecycleToken,
+    /// OL-03 connection-level slot; moved to the spawned connection task.
+    /// Consumed by the Linux epoll executor; other hosts hand off through
+    /// `serve_hyper`, so the field is intentionally unused there.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) client_guard: Option<crate::client_throttle::ClientGuard>,
 }
 
 impl HyperHandoff {
@@ -45,7 +50,17 @@ impl HyperHandoff {
             prefetched,
             generation: generation.into(),
             token,
+            client_guard: None,
         }
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn with_client_guard(
+        mut self,
+        guard: Option<crate::client_throttle::ClientGuard>,
+    ) -> Self {
+        self.client_guard = guard;
+        self
     }
 }
 

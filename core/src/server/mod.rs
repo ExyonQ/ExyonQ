@@ -152,12 +152,18 @@ fn accept_workers() -> usize {
     crate::server::runtime_parallelism::resolve_accept_workers()
 }
 
+// The guard is a distinct ownership parameter: it must be moved into the
+// connection task, not reconstructed from shared state.
+#[allow(clippy::too_many_arguments)]
 async fn serve_hyper<S>(
     mut stream: S,
     shared: reload::SharedServerState,
     proxy_client: ProxyClient,
     x_forwarded_for: HeaderValue,
     ops: Arc<LifecycleState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
+    client_guard: Option<crate::client_throttle::ClientGuard>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -174,7 +180,33 @@ async fn serve_hyper<S>(
         let _ = stream.shutdown().await;
         return;
     };
+    // OL-03: one slot per TCP/QUIC connection, held across every request on
+    // this transport. A refused connection is closed without a response.
+    let _client_guard = match client_guard {
+        Some(guard) => Some(guard),
+        None => {
+            let state = reload::read_state(&shared);
+            let ip = handler::client_ip_from_xff(Some(&x_forwarded_for));
+            match crate::client_throttle::acquire_connection(
+                &state.config.modules.ratelimit.client,
+                ip,
+            ) {
+                Ok(guard) => guard,
+                Err(decision) => {
+                    tracing::debug!(?decision, %ip, "per-client connection limit refused connection");
+                    return;
+                }
+            }
+        }
+    };
     let io = TokioIo::new(stream);
+    let bad_req_ip = handler::client_ip_from_xff(Some(&x_forwarded_for));
+    let bad_req_cfg = reload::read_state(&shared)
+        .config
+        .modules
+        .ratelimit
+        .client
+        .clone();
     let ops_for_service = Arc::clone(&ops);
     // Cap057 LA-CAP057-002: refresh live SharedServerState per request (mirror H3).
     // Accept-time Arc pin made FPC HITs survive reload disable / live purge on keep-alive.
@@ -192,6 +224,8 @@ async fn serve_hyper<S>(
             let mut response = serve_connection(
                 ConnectionContext {
                     state: conn_state,
+                    scheme,
+                    local_port,
                     proxy_client,
                     x_forwarded_for,
                     ops,
@@ -211,6 +245,15 @@ async fn serve_hyper<S>(
     let mut builder = ServerBuilder::new(TokioExecutor::new());
     builder.http1().keep_alive(true);
     if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
+        // OL-03 blockBadReq: Hyper rejects malformed request lines before the
+        // service is invoked. Count protocol-parse failures (never incomplete
+        // client disconnects) toward the per-IP ban.
+        let parse_error = err
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_parse);
+        if parse_error {
+            crate::client_throttle::note_bad_request(&bad_req_cfg, bad_req_ip);
+        }
         warn!(%err, "connection error");
     }
 }
@@ -220,6 +263,8 @@ fn wire_dispatch_ctx(
     proxy_client: ProxyClient,
     x_forwarded_for: HeaderValue,
     ops: Arc<LifecycleState>,
+    scheme: &'static str,
+    local_port: Option<u16>,
 ) -> WireDispatchContext {
     let state = reload::read_state(&shared);
     let pinned_generation = state.generation;
@@ -230,6 +275,9 @@ fn wire_dispatch_ctx(
         x_forwarded_for,
         ops,
         pinned_generation,
+        scheme,
+        local_port,
+        client_guard: None,
     }
 }
 
@@ -316,6 +364,8 @@ async fn accept_loop(
                             proxy_client,
                             x_forwarded_for,
                             ops_conn.clone(),
+                            "https",
+                            local_addr.map(|a| a.port()),
                         );
                         // Wire-cheap modules (ratelimit/metrics) keep Cap067/wire;
                         // compression (or h2 / drain) still forces Hyper.
@@ -331,6 +381,9 @@ async fn accept_loop(
                                 ctx.proxy_client,
                                 ctx.x_forwarded_for,
                                 ops_conn,
+                                "https",
+                                local_addr.map(|a| a.port()),
+                                None,
                             )
                             .await;
                         }
@@ -341,7 +394,14 @@ async fn accept_loop(
             }
             dispatch_tcp(
                 stream,
-                wire_dispatch_ctx(conn_state, proxy_client, x_forwarded_for, ops_conn),
+                wire_dispatch_ctx(
+                    conn_state,
+                    proxy_client,
+                    x_forwarded_for,
+                    ops_conn,
+                    "http",
+                    local_addr.map(|a| a.port()),
+                ),
             )
             .await;
         });
@@ -429,6 +489,26 @@ async fn read_proxy_header_inner(
 
 /// Run on an explicit listen address (used in tests).
 pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
+    run_on_impl(listen, None, config).await
+}
+
+/// `run_on` over a pre-bound listener (tests only): keeping the socket bound
+/// removes the bind→drop→rebind window where a parallel `bind(:0)` can steal
+/// the port and route the client to a foreign test server.
+#[cfg(test)]
+pub(crate) async fn run_on_with_listener(
+    listen: SocketAddr,
+    listener: TcpListener,
+    config: AppConfig,
+) -> anyhow::Result<()> {
+    run_on_impl(listen, Some(listener), config).await
+}
+
+async fn run_on_impl(
+    listen: SocketAddr,
+    first_listener: Option<TcpListener>,
+    config: AppConfig,
+) -> anyhow::Result<()> {
     let proxy_client = build_incoming_client();
     let mut config = config;
     config = discovery_overlay::apply_env_discovery_overlay(config);
@@ -687,7 +767,15 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
         }
     }
 
-    let workers = accept_workers();
+    let workers = if first_listener.is_some() {
+        // Test path: the pre-bound listener is the single accept worker.
+        1
+    } else {
+        accept_workers()
+    };
+    // Expose the actual primary accept-pool geometry on /metrics. The
+    // appender reads /proc at scrape time; this only records the real count.
+    crate::worker_memory::set_server_worker_count(workers);
     let tls_on_listen = shared_tls.snapshot().is_some();
     #[cfg(target_os = "linux")]
     let use_io_uring = io_uring_start::io_uring_env_enabled(tls_on_listen);
@@ -833,9 +921,13 @@ pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()>
     }
 
     let mut tasks = Vec::with_capacity(workers);
+    let mut first_listener = first_listener;
     let proxy_protocol_config = config.primary_server().proxy_protocol.clone();
     for _ in 0..workers {
-        let listener = bind_tuned(listen).await?;
+        let listener = match first_listener.take() {
+            Some(l) => l,
+            None => bind_tuned(listen).await?,
+        };
         let state = reload::SharedServerState::clone(&shared);
         let proxy_client = proxy_client.clone();
         let acceptor = Some(shared_tls.clone());

@@ -21,7 +21,8 @@ use exyonq_module_api::htaccess_runtime::{
     HtaccessRuntimeService,
 };
 use exyonq_module_api::{
-    join_directory_index_uri, lookup_overlay, validate_directory_index_candidate,
+    join_directory_index_uri, lookup_overlay, lookup_overlay_access, lookup_overlay_auth,
+    validate_directory_index_candidate, CompiledAccessPolicy, CompiledBasicAuth,
     CompiledFrontController, OverlayLookupResult, VhostOverlay, MAX_DIRECTORY_INDEX_CANDIDATES,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -60,6 +61,16 @@ impl HtaccessOverlaySource for crate::store::OverlayPublisher {
 }
 
 impl HtaccessRuntimeService for HtaccessRuntime {
+    fn auth_policy(&self, site_id: &str, request_path: &str) -> Option<CompiledBasicAuth> {
+        let overlay = self.overlay_source.overlay_for_site(site_id)?;
+        lookup_overlay_auth(request_path, &overlay)
+    }
+
+    fn access_policy(&self, site_id: &str, request_path: &str) -> Option<CompiledAccessPolicy> {
+        let overlay = self.overlay_source.overlay_for_site(site_id)?;
+        lookup_overlay_access(request_path, &overlay)
+    }
+
     fn evaluate_route(
         &self,
         request: &HtaccessRouteEvaluationRequest,
@@ -476,6 +487,8 @@ mod tests {
                 rewrite_redirects: Arc::from([]),
                 indexes_disabled: false,
                 front_controller: None,
+                auth: None,
+                access: None,
             }]),
         });
         let mut map = HashMap::new();

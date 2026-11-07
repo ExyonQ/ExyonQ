@@ -310,6 +310,8 @@ async fn security_http3_rejects_post() {
 
     let response = serve_http3_request(
         ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -788,6 +790,8 @@ async fn security_secint001_h3_proxy_get_with_upstream() {
                     .body(body.clone())
                     .unwrap();
                 let ctx = ConnectionContext {
+                    scheme: "http",
+                    local_port: None,
                     state: reload::read_state(&shared),
                     proxy_client: proxy_client.clone(),
                     x_forwarded_for: HeaderValue::from_static("203.0.113.9"),

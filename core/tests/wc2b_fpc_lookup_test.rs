@@ -81,6 +81,7 @@ fn insert_hit(cache: &ResponseCache, parts: CacheKeyParts, body: &'static [u8]) 
         None,
         ns,
         Arc::from([]),
+        None,
         NamespaceMetrics::NONE,
     );
 }

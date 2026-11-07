@@ -214,6 +214,41 @@ pub fn fpc_cookie_bypass(
     Some(BypassReason::CookiePresent)
 }
 
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Decode one path segment's `%XX` escapes (single decode, matching what the
+/// upstream does). `None` on malformed escapes or decoded bytes that change
+/// path semantics — separators, dots, control bytes — fail closed like the
+/// raw rejections in [`fpc_canonicalize_path`].
+fn percent_decode_segment(seg: &str) -> Option<String> {
+    let bytes = seg.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = hex_val(*bytes.get(i + 1)?)?;
+            let lo = hex_val(*bytes.get(i + 2)?)?;
+            let b = hi * 16 + lo;
+            if b == b'/' || b == b'\\' || b == b'.' || b < 0x20 || b == 0x7f {
+                return None;
+            }
+            out.push(b);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// Canonicalize path for FPC policy. `None` → treat as unsafe (`BypassReason::UnsafePath`).
 ///
 /// Rejects `..` segments and percent-encoded path separators / dots that could hide
@@ -233,14 +268,19 @@ pub fn fpc_canonicalize_path(path: &str) -> Option<String> {
         if seg.is_empty() {
             continue;
         }
+        // AUDIT-D8: decode `%XX` before the dot/traversal checks — encoded
+        // literal letters (`/wp-%61dmin/` → `/wp-admin/`) previously stayed
+        // opaque and dodged the private-path bypass, letting admin paths be
+        // cached.
+        let seg = percent_decode_segment(seg)?;
         if seg == "." {
             continue;
         }
-        if seg == ".." || seg.eq_ignore_ascii_case("%2e%2e") {
+        if seg == ".." {
             return None;
         }
         out.push('/');
-        out.push_str(seg);
+        out.push_str(&seg);
     }
     if out.is_empty() {
         Some("/".into())
@@ -1374,6 +1414,48 @@ mod tests {
         assert_eq!(
             fpc_path_query_bypass("/%2fwp-admin/", ""),
             Some(BypassReason::UnsafePath)
+        );
+        // AUDIT-D8: percent-encoded letters decode once before the bypass
+        // match — `/wp-%61dmin/` previously stayed opaque and cached admin
+        // paths.
+        assert_eq!(
+            fpc_path_query_bypass("/wp-%61dmin/plugins.php", ""),
+            Some(BypassReason::WpAdmin)
+        );
+        assert_eq!(
+            fpc_path_query_bypass("/%57%50-%41dmin/", ""),
+            Some(BypassReason::WpAdmin)
+        );
+        assert_eq!(
+            fpc_path_query_bypass("/wp-%6cogin.php", ""),
+            Some(BypassReason::WpLogin)
+        );
+        // Unsafe raw encodings still reject (encoded separator/dot/casefold).
+        assert_eq!(
+            fpc_path_query_bypass("/a%2fb/", ""),
+            Some(BypassReason::UnsafePath)
+        );
+        assert_eq!(
+            fpc_path_query_bypass("/%2e%2e/etc", ""),
+            Some(BypassReason::UnsafePath)
+        );
+        assert_eq!(
+            fpc_path_query_bypass("/a%5cb", ""),
+            Some(BypassReason::UnsafePath)
+        );
+        // Malformed escapes fail closed too.
+        assert_eq!(
+            fpc_path_query_bypass("/wp-%6gmin/", ""),
+            Some(BypassReason::UnsafePath)
+        );
+        assert_eq!(
+            fpc_path_query_bypass("/wp-%6", ""),
+            Some(BypassReason::UnsafePath)
+        );
+        // Legitimate encoded characters still decode and cache.
+        assert_eq!(
+            fpc_canonicalize_path("/caf%C3%A9/menu"),
+            Some("/caf\u{e9}/menu".into())
         );
         assert_eq!(
             fpc_query_decision("utm_source=x", &[]),

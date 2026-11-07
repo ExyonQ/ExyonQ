@@ -234,6 +234,8 @@ timeout_ms = 5000
         .expect("state");
     ProxyHarness {
         ctx: Arc::new(ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
@@ -574,6 +576,8 @@ async fn new_runtime_generation_forces_proxy_miss() {
         .await
         .expect("state gen2");
     let ctx = Arc::new(ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: harness.ctx.x_forwarded_for.clone(),

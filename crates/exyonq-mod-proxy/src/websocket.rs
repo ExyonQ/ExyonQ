@@ -17,13 +17,13 @@
 
 use crate::hyper_client::{get_empty_body_client, ProxyClient};
 use crate::hyper_forward::{bad_gateway, bad_request, gateway_timeout, ProxyHyperMetrics};
-use crate::request_headers_safe_for_proxy;
 use crate::upstream_target::UpstreamTarget;
+use crate::{merge_cookie_header_map, request_headers_safe_for_proxy};
 use http_body_util::{combinators::BoxBody, BodyExt, Empty};
 use hyper::body::Incoming;
 use hyper::header::{
-    HeaderValue, CONNECTION, HOST, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION,
-    UPGRADE,
+    HeaderValue, CONNECTION, HOST, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_EXTENSIONS,
+    SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_VERSION, UPGRADE,
 };
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -72,6 +72,11 @@ pub fn is_websocket_upgrade(headers: &hyper::HeaderMap) -> bool {
 fn ws_forward_headers(req_headers: &hyper::HeaderMap) -> hyper::HeaderMap {
     let mut out = req_headers.clone();
     crate::headers::strip_hop_by_hop_headers(&mut out);
+    // The upstream Host is appended once by `forward_websocket` from the
+    // selected target. Keeping the client Host here would append a second
+    // value (Hyper's Builder::header appends) and break strict origins such as
+    // Home Assistant with HTTP 400 duplicate Host.
+    out.remove(HOST);
     for name in [
         "x-forwarded-for",
         "x-forwarded-proto",
@@ -125,7 +130,10 @@ pub async fn forward_websocket(
     let mut upstream_builder = Request::builder()
         .method(req.method())
         .uri(upstream.uri_for(&path_and_query));
-    let forward_headers = ws_forward_headers(req.headers());
+    // EXY-11: fold repeated `Cookie` lines before forwarding (RFC 6265 §5.4).
+    let mut client_headers = req.headers().clone();
+    merge_cookie_header_map(&mut client_headers);
+    let forward_headers = ws_forward_headers(&client_headers);
     for (name, value) in forward_headers.iter() {
         upstream_builder = upstream_builder.header(name, value);
     }
@@ -191,6 +199,20 @@ pub async fn forward_websocket(
         return bad_gateway();
     };
 
+    // The tunnel is transparent at frame level, so a negotiated extension
+    // (for example permessage-deflate) remains end-to-end between the client
+    // and the upstream. Copy the upstream's selection into the 101 we return;
+    // dropping it would leave the client decoding compressed frames as plain
+    // WebSocket payloads (HA 2026.11 is one concrete case).
+    let upstream_extensions = upstream_response
+        .headers()
+        .get(SEC_WEBSOCKET_EXTENSIONS)
+        .cloned();
+    let upstream_protocol = upstream_response
+        .headers()
+        .get(SEC_WEBSOCKET_PROTOCOL)
+        .cloned();
+
     let (upstream_parts, upstream_body) = upstream_response.into_parts();
     drop(upstream_body);
     let mut upstream_response = Response::from_parts(upstream_parts, Empty::<bytes::Bytes>::new());
@@ -230,6 +252,12 @@ pub async fn forward_websocket(
     res.headers_mut()
         .insert(CONNECTION, HeaderValue::from_static("upgrade"));
     res.headers_mut().insert(SEC_WEBSOCKET_ACCEPT, accept_hv);
+    if let Some(value) = upstream_extensions {
+        res.headers_mut().insert(SEC_WEBSOCKET_EXTENSIONS, value);
+    }
+    if let Some(value) = upstream_protocol {
+        res.headers_mut().insert(SEC_WEBSOCKET_PROTOCOL, value);
+    }
     res
 }
 
@@ -351,6 +379,13 @@ mod tests {
     }
 
     async fn spawn_ws_echo_upstream(coalesce_frame: bool) -> u16 {
+        spawn_ws_echo_upstream_with_headers(coalesce_frame, "").await
+    }
+
+    async fn spawn_ws_echo_upstream_with_headers(
+        coalesce_frame: bool,
+        extra_headers: &'static str,
+    ) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -379,7 +414,7 @@ mod tests {
                         .unwrap_or_default();
                     let accept = ws_accept(&key);
                     let resp = format!(
-                        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+                        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n{extra_headers}\r\n"
                     );
                     if coalesce_frame {
                         let mut out = resp.into_bytes();
@@ -404,9 +439,7 @@ mod tests {
         port
     }
 
-    async fn proxy_ws_echo(payload: &str, coalesce: bool) -> String {
-        let upstream_port = spawn_ws_echo_upstream(coalesce).await;
-
+    async fn spawn_ws_proxy(upstream_port: u16) -> u16 {
         let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_port = proxy_listener.local_addr().unwrap().port();
         let desc = UpstreamDescriptor {
@@ -447,6 +480,46 @@ mod tests {
                 });
             }
         });
+        proxy_port
+    }
+
+    #[tokio::test]
+    async fn handshake_preserves_upstream_negotiation_headers() {
+        let upstream_port = spawn_ws_echo_upstream_with_headers(
+            false,
+            "Sec-WebSocket-Extensions: permessage-deflate\r\nSec-WebSocket-Protocol: chat\r\n",
+        )
+        .await;
+        let proxy_port = spawn_ws_proxy(upstream_port).await;
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
+            .await
+            .unwrap();
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let req = format!(
+            "GET /api/ws-echo HTTP/1.1\r\nHost: 127.0.0.1:{proxy_port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Extensions: permessage-deflate\r\nSec-WebSocket-Protocol: chat\r\n\r\n"
+        );
+        stream.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = stream.read(&mut buf).await.unwrap();
+        let response = String::from_utf8_lossy(&buf[..n]);
+        assert!(response.contains("101"), "expected 101, got {response}");
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains("sec-websocket-extensions: permessage-deflate"),
+            "upstream extension negotiation was dropped: {response}"
+        );
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains("sec-websocket-protocol: chat"),
+            "upstream subprotocol negotiation was dropped: {response}"
+        );
+    }
+
+    async fn proxy_ws_echo(payload: &str, coalesce: bool) -> String {
+        let upstream_port = spawn_ws_echo_upstream(coalesce).await;
+        let proxy_port = spawn_ws_proxy(upstream_port).await;
 
         let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
             .await
@@ -486,6 +559,7 @@ mod tests {
         req_headers.insert(SEC_WEBSOCKET_KEY, HeaderValue::from_static("abc123"));
         req_headers.insert(SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13"));
         req_headers.insert("x-custom", HeaderValue::from_static("keep"));
+        req_headers.insert(HOST, HeaderValue::from_static("client.example:8080"));
 
         let out = super::ws_forward_headers(&req_headers);
         for name in [
@@ -498,6 +572,10 @@ mod tests {
             assert!(!out.contains_key(name), "leaked {name}");
         }
         assert_eq!(out.get("x-custom").unwrap(), "keep");
+        assert!(
+            !out.contains_key(HOST),
+            "client Host must be replaced by target"
+        );
         assert_eq!(out.get(UPGRADE).unwrap(), "websocket");
         assert_eq!(out.get(CONNECTION).unwrap(), "Upgrade");
         assert_eq!(out.get(SEC_WEBSOCKET_KEY).unwrap(), "abc123");

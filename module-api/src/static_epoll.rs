@@ -82,11 +82,13 @@ pub fn interest_sending_parked() -> u32 {
 #[cfg(target_os = "linux")]
 pub struct StaticEpollFsmHooks {
     pub is_head_wire_request: fn(head: &[u8]) -> bool,
-    pub match_sendfile_asset: fn(site_slot: u32, head: &[u8]) -> Option<SendfileHandle>,
+    pub match_sendfile_asset:
+        fn(site_slot: u32, head: &[u8], local_port: Option<u16>) -> Option<SendfileHandle>,
     /// Cap067 miss terminal: Cap004-classified HTTP wire (404/403) when match returned
     /// `None` for an eligible sendfile GET/HEAD. `None` = genuine Hyper fallback still
     /// required (ineligible / mechanism off). Never re-enter epoll sendfile via NeedHyper.
-    pub sendfile_miss_http_wire: fn(site_slot: u32, head: &[u8]) -> Option<bytes::Bytes>,
+    pub sendfile_miss_http_wire:
+        fn(site_slot: u32, head: &[u8], local_port: Option<u16>) -> Option<bytes::Bytes>,
     /// `head` is the full HTTP/1 request head (Cap019 may select a byte range).
     pub begin_sendfile_session:
         fn(fd: RawFd, head: &[u8], asset: SendfileHandle) -> Result<StaticEpollSession, ()>,
@@ -116,13 +118,21 @@ pub fn is_head_wire_request(head: &[u8]) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandle> {
-    (fsm().match_sendfile_asset)(site_slot, head)
+pub fn match_sendfile_asset(
+    site_slot: u32,
+    head: &[u8],
+    local_port: Option<u16>,
+) -> Option<SendfileHandle> {
+    (fsm().match_sendfile_asset)(site_slot, head, local_port)
 }
 
 #[cfg(target_os = "linux")]
-pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Bytes> {
-    (fsm().sendfile_miss_http_wire)(site_slot, head)
+pub fn sendfile_miss_http_wire(
+    site_slot: u32,
+    head: &[u8],
+    local_port: Option<u16>,
+) -> Option<bytes::Bytes> {
+    (fsm().sendfile_miss_http_wire)(site_slot, head, local_port)
 }
 
 #[cfg(target_os = "linux")]

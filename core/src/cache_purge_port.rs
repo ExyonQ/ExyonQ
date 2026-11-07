@@ -17,8 +17,8 @@
 
 use crate::reload::{self, SharedServerState};
 use exyonq_cache::{
-    build_storage_cache_key, normalize_host, note_fpc_purge_rejected, note_fpc_purge_request,
-    note_fpc_purge_success, CacheKeyParts,
+    normalize_host, note_fpc_purge_rejected, note_fpc_purge_request, note_fpc_purge_success,
+    CacheKeyParts,
 };
 use exyonq_module_api::cache_purge::{CachePurgeOp, CachePurgeOutcome, CachePurgePort};
 use exyonq_module_api::{fpc_canonicalize_path, fpc_query_decision};
@@ -163,7 +163,17 @@ impl CoreCachePurgePort {
                         "invalid_key",
                     );
                 };
-                let canon_query = match fpc_query_decision(&query, &[]) {
+                // AUDIT-D5: resolve the same compiled `key.query` allowlist
+                // the lookup used — `&[]` made any functional-param URL
+                // unpurgeable (`?p=1` → invalid_key while the entry existed).
+                let key_query: Vec<&str> = state
+                    .snapshot
+                    .full_page_cache
+                    .key_query
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                let canon_query = match fpc_query_decision(&query, &key_query) {
                     exyonq_module_api::FpcQueryDecision::Eligible { canonical } => canonical,
                     exyonq_module_api::FpcQueryDecision::Bypass(_) => {
                         note_fpc_purge_rejected("invalid_key");
@@ -175,7 +185,7 @@ impl CoreCachePurgePort {
                         );
                     }
                 };
-                let key = build_storage_cache_key(CacheKeyParts {
+                let parts = CacheKeyParts {
                     range: String::new(),
                     site_id,
                     namespace: state.snapshot.full_page_cache.namespace,
@@ -190,8 +200,12 @@ impl CoreCachePurgePort {
                     query: canon_query,
                     content_encoding: "identity".into(),
                     vary: String::new(),
-                });
-                let stats = cache.invalidate_key(&key);
+                };
+                // AUDIT-D5: `vary: ""` + exact-key invalidate only ever
+                // matched unvarianted entries — Vary/coding/range variants
+                // survived every purge. The URL group kills them wholesale.
+                let group = exyonq_cache::url_group(&parts);
+                let stats = cache.invalidate_url_group(group);
                 let us = started.elapsed().as_micros() as u64;
                 // Cap057 LA-CAP057-003: purge.url must not report operator success when
                 // zero live entries were removed (wrong scheme/host/key → no-op).

@@ -290,10 +290,24 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
     if let Some(fastcgi) = &route.fastcgi {
         map.insert("fastcgi".into(), serde_json::Value::String(fastcgi.clone()));
     }
+    if let Some(fc) = &route.front_controller {
+        map.insert(
+            "front_controller".into(),
+            serde_json::Value::String(fc.clone()),
+        );
+    }
     if route.htaccess == crate::HtaccessMode::Overlay {
         map.insert(
             "htaccess".into(),
             serde_json::Value::String("overlay".into()),
+        );
+    }
+    // AP-05: access is runtime-effective; a reload that changes only ACL must
+    // not be canonicalized as a no-op.
+    if let Some(access) = &route.access {
+        map.insert(
+            "access".into(),
+            serde_json::to_value(access).expect("access serialize"),
         );
     }
     // Cap048: route.cache binds a named cache_policy at request time.

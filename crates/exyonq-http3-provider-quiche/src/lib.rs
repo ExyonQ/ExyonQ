@@ -308,7 +308,8 @@ where
             if (client.conn.is_in_early_data() || client.conn.is_established())
                 && client._lease.is_none()
             {
-                match lifecycle.try_enter_connection() {
+                let peer_ip = client.peer.ip().to_string();
+                match lifecycle.try_enter_connection_for(&peer_ip) {
                     Ok(lease) => client._lease = Some(lease),
                     Err(_) => {
                         DIAG.handshake_rejects.fetch_add(1, Ordering::Relaxed);

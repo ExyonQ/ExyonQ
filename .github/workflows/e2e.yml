@@ -1,0 +1,52 @@
+name: E2E artifact-bound
+
+on:
+  push:
+    branches: [main, 'release/**']
+  pull_request:
+    branches: [main, 'release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  ol04-ol03-artifact:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Build E2E binaries
+        run: |
+          set -euo pipefail
+          cargo build -p exyonq --bin exyonq --locked
+          cargo build -p exyonq-compat-cli --bin exyonq-compat --locked
+      - name: Artifact-integrity negative control
+        run: bash scripts/gates/artifact-integrity-negative-control.sh
+      - name: Run artifact-bound OL-04/OL-03 E2E
+        env:
+          OL04_OL03_RUN_DIR: ${{ runner.temp }}/ol04-ol03-e2e
+        run: bash scripts/e2e/ol04-ol03-artifact-e2e.sh
+      - name: Upload E2E evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ol04-ol03-artifact-evidence
+          path: ${{ runner.temp }}/ol04-ol03-e2e
+          if-no-files-found: warn
+          retention-days: 14

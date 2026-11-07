@@ -44,7 +44,32 @@ pub fn analyze_predictive(cfg: &AppConfig) -> Vec<Diagnostic> {
     upstreams_without_health(cfg, &mut out);
     unused_maps(cfg, &mut out);
     fpc_nonce_window(cfg, &mut out);
+    inapplicable_route_fields(cfg, &mut out);
     out
+}
+
+/// EXY-LINT-0008: `front_controller` only has an effect on `fastcgi` routes —
+/// anywhere else it is silently ignored, so say so.
+fn inapplicable_route_fields(cfg: &AppConfig, out: &mut Vec<Diagnostic>) {
+    for route in &cfg.routes {
+        if route.front_controller.is_some() && route.fastcgi.is_none() {
+            out.push(
+                Diagnostic::warning(
+                    DiagnosticCode::LintInapplicableRouteField,
+                    format!(
+                        "route `{}` sets `front_controller` but is not a `fastcgi` route",
+                        route.name
+                    ),
+                )
+                .with_field(format!("route.{}.front_controller", route.name))
+                .with_cause("front_controller only applies to FastCGI script dispatch")
+                .with_suggestion(
+                    "add `fastcgi` pointing at a `[[fcgi_pool]]` or remove `front_controller`"
+                        .to_string(),
+                ),
+            );
+        }
+    }
 }
 
 fn fpc_nonce_window(cfg: &AppConfig, out: &mut Vec<Diagnostic>) {
@@ -351,6 +376,46 @@ mod tests {
 
     fn parse(toml: &str) -> AppConfig {
         AppConfig::parse_str(toml).expect("fixture must parse")
+    }
+
+    #[test]
+    fn front_controller_on_non_fastcgi_route_warns_0008() {
+        let cfg = parse(
+            r#"
+config_version = 2
+
+[[server]]
+listen = "127.0.0.1:18081"
+routes = ["site", "php"]
+
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www"
+front_controller = "index.php"
+
+[[route]]
+name = "php"
+match = { path = "/app" }
+fastcgi = "pool"
+front_controller = "index.php"
+
+[[fcgi_pool]]
+name = "pool"
+address = "127.0.0.1:9000"
+document_root = "/var/www"
+"#,
+        );
+        let diags = analyze_predictive(&cfg);
+        let hits: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == DiagnosticCode::LintInapplicableRouteField)
+            .collect();
+        assert_eq!(hits.len(), 1, "{diags:?}");
+        assert!(
+            hits[0].message.contains("site"),
+            "warning must name the offending route: {hits:?}"
+        );
     }
 
     #[test]

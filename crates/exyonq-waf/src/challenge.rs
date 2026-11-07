@@ -38,6 +38,45 @@ pub struct ChallengeService {
     key: [u8; 32],
     difficulty: u32,
     replay: Mutex<ReplayCache>,
+    provider: Option<ChallengeProvider>,
+}
+
+/// OL-04: external provider page metadata. The secret never lives here; the
+/// composition root verifies the provider token server-side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChallengeProvider {
+    pub kind: ChallengeProviderKind,
+    pub site_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChallengeProviderKind {
+    Recaptcha,
+    Hcaptcha,
+    RecaptchaV3,
+}
+
+impl ChallengeProvider {
+    pub fn recaptcha(site_key: impl Into<String>) -> Self {
+        Self {
+            kind: ChallengeProviderKind::Recaptcha,
+            site_key: site_key.into(),
+        }
+    }
+
+    pub fn hcaptcha(site_key: impl Into<String>) -> Self {
+        Self {
+            kind: ChallengeProviderKind::Hcaptcha,
+            site_key: site_key.into(),
+        }
+    }
+
+    pub fn recaptcha_v3(site_key: impl Into<String>) -> Self {
+        Self {
+            kind: ChallengeProviderKind::RecaptchaV3,
+            site_key: site_key.into(),
+        }
+    }
 }
 
 struct ReplayCache {
@@ -71,15 +110,30 @@ impl ReplayCache {
 impl ChallengeService {
     /// Load key from `EXYONQ_WAF_CHALLENGE_KEY_FILE` (32 raw bytes) or OsRng.
     pub fn from_env_or_random() -> Result<Self, String> {
+        Self::from_env_or_random_with_provider(None)
+    }
+
+    pub fn from_env_or_random_with_provider(
+        provider: Option<ChallengeProvider>,
+    ) -> Result<Self, String> {
         let key = load_challenge_key()?;
-        Ok(Self::with_key(key, DEFAULT_DIFFICULTY))
+        Ok(Self::with_provider(key, DEFAULT_DIFFICULTY, provider))
     }
 
     pub fn with_key(key: [u8; 32], difficulty: u32) -> Self {
+        Self::with_provider(key, difficulty, None)
+    }
+
+    pub fn with_provider(
+        key: [u8; 32],
+        difficulty: u32,
+        provider: Option<ChallengeProvider>,
+    ) -> Self {
         Self {
             key,
             difficulty: difficulty.clamp(1, 28),
             replay: Mutex::new(ReplayCache::new()),
+            provider,
         }
     }
 
@@ -91,6 +145,7 @@ impl ChallengeService {
     }
 
     fn hmac_hex(&self, msg: &[u8]) -> String {
+        // HMAC-SHA256 accepts a key of any length; `key` is a fixed [u8; 32].
         let mut mac = HmacSha256::new_from_slice(&self.key).expect("HMAC key length");
         mac.update(msg);
         hex_encode(&mac.finalize().into_bytes())
@@ -132,13 +187,25 @@ impl ChallengeService {
         let host = host.unwrap_or("");
         let expires = Self::now_unix().saturating_add(CHALLENGE_TTL_SECS);
         let mut id_bytes = [0u8; 16];
-        getrandom::fill(&mut id_bytes).expect("getrandom for challenge_id");
+        if getrandom::fill(&mut id_bytes).is_err() {
+            return ChallengeIssue {
+                status: 500,
+                content_type: "text/plain; charset=utf-8",
+                body: b"challenge unavailable\n".to_vec(),
+            };
+        }
         let challenge_id = hex_encode(&id_bytes);
         let mac = self.hmac_hex(
             Self::challenge_mac_msg(&challenge_id, client_ip, host, expires, self.difficulty)
                 .as_bytes(),
         );
-        let body = render_challenge_html(&challenge_id, &mac, expires, self.difficulty);
+        let body = render_challenge_html(
+            &challenge_id,
+            &mac,
+            expires,
+            self.difficulty,
+            self.provider.as_ref(),
+        );
         ChallengeIssue {
             status: 403,
             content_type: "text/html; charset=utf-8",
@@ -191,7 +258,9 @@ impl ChallengeService {
             return fail();
         }
         {
-            let mut replay = self.replay.lock().expect("challenge replay lock");
+            let Ok(mut replay) = self.replay.lock() else {
+                return fail();
+            };
             if !replay.insert_if_new(challenge_id) {
                 return fail();
             }
@@ -347,8 +416,80 @@ fn leading_zero_bits(digest: &[u8]) -> u32 {
     bits
 }
 
-fn render_challenge_html(challenge_id: &str, mac: &str, expires: u64, difficulty: u32) -> String {
+fn render_challenge_html(
+    challenge_id: &str,
+    mac: &str,
+    expires: u64,
+    difficulty: u32,
+    provider: Option<&ChallengeProvider>,
+) -> String {
     // Inline JS only — no CDN, no eval. PoW via SubtleCrypto SHA-256.
+    let (provider_script, provider_widget, provider_token_js) = match provider {
+        Some(provider) => {
+            let site_key = html_attr(&provider.site_key);
+            let site_key_js = js_string(&provider.site_key);
+            match provider.kind {
+                ChallengeProviderKind::Recaptcha => (
+                    "<script src=\"https://www.google.com/recaptcha/api.js\" async defer></script>"
+                        .to_string(),
+                    format!("<div class=\"g-recaptcha\" data-sitekey=\"{site_key}\"></div>"),
+                    r#"function waitForProviderToken() {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const token = (window.grecaptcha && grecaptcha.getResponse()) || "";
+      if (token) { clearInterval(timer); resolve(token); return; }
+      if (Date.now() - started > 120000) { clearInterval(timer); reject(new Error("provider timeout")); }
+    }, 250);
+  });
+}"#.to_string(),
+                ),
+                ChallengeProviderKind::Hcaptcha => (
+                    "<script src=\"https://js.hcaptcha.com/1/api.js\" async defer></script>"
+                        .to_string(),
+                    format!("<div class=\"h-captcha\" data-sitekey=\"{site_key}\"></div>"),
+                    r#"function waitForProviderToken() {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const token = (window.hcaptcha && hcaptcha.getResponse()) || "";
+      if (token) { clearInterval(timer); resolve(token); return; }
+      if (Date.now() - started > 120000) { clearInterval(timer); reject(new Error("provider timeout")); }
+    }, 250);
+  });
+}"#.to_string(),
+                ),
+                ChallengeProviderKind::RecaptchaV3 => (
+                    format!(
+                        "<script src=\"https://www.google.com/recaptcha/api.js?render={site_key}\" async defer></script>"
+                    ),
+                    String::new(),
+                    format!(
+                        r#"function waitForProviderToken() {{
+  return new Promise((resolve, reject) => {{
+    const timer = setTimeout(() => reject(new Error("provider timeout")), 120000);
+    if (!window.grecaptcha || !window.grecaptcha.ready) {{
+      clearTimeout(timer);
+      reject(new Error("provider unavailable"));
+      return;
+    }}
+    grecaptcha.ready(() => {{
+      grecaptcha.execute({site_key_js}, {{action: "challenge"}})
+        .then((token) => {{ clearTimeout(timer); resolve(token); }},
+              (error) => {{ clearTimeout(timer); reject(error); }});
+    }});
+  }});
+}}"#
+                    ),
+                ),
+            }
+        }
+        None => (
+            String::new(),
+            String::new(),
+            "function waitForProviderToken() { return Promise.resolve(\"\"); }".to_string(),
+        ),
+    };
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
@@ -356,9 +497,15 @@ fn render_challenge_html(challenge_id: &str, mac: &str, expires: u64, difficulty
 <meta charset="utf-8">
 <meta http-equiv="Cache-Control" content="no-store">
 <title>Challenge</title>
+{provider_script}
 </head>
 <body>
 <p>Verifying your browser…</p>
+<noscript>
+<p>JavaScript is required to complete this security check.</p>
+<p>Enable JavaScript and reload. Access is not granted without solving the proof-of-work challenge.</p>
+</noscript>
+{provider_widget}
 <script>
 (async function () {{
   const challengeId = {cid};
@@ -366,6 +513,8 @@ fn render_challenge_html(challenge_id: &str, mac: &str, expires: u64, difficulty
   const expires = {expires};
   const difficulty = {difficulty};
   const verifyPath = {path};
+  {provider_token_js}
+  const providerToken = await waitForProviderToken();
   function hex(buf) {{
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
   }}
@@ -395,6 +544,7 @@ fn render_challenge_html(challenge_id: &str, mac: &str, expires: u64, difficulty
     mac: mac,
     expires: String(expires),
     difficulty: String(difficulty),
+    provider_token: providerToken,
     return_to: location.pathname + location.search
   }});
   const resp = await fetch(verifyPath, {{
@@ -417,7 +567,18 @@ fn render_challenge_html(challenge_id: &str, mac: &str, expires: u64, difficulty
         expires = expires,
         difficulty = difficulty,
         path = js_string(VERIFY_PATH),
+        provider_script = provider_script,
+        provider_widget = provider_widget,
+        provider_token_js = provider_token_js,
     )
+}
+
+fn html_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn js_string(s: &str) -> String {
@@ -653,6 +814,44 @@ mod tests {
     }
 
     #[test]
+    fn forged_or_mismatched_grant_is_rejected() {
+        let s = svc();
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10));
+        let host = "grant.test";
+        let cookie = |token: &str| format!("{COOKIE_NAME}={token}");
+
+        // Tampered MAC.
+        assert!(!s.grant_allows(
+            ip,
+            Some(host),
+            Some(cookie("v1.9999999999.16.0.deadbeef").as_bytes()),
+            1
+        ));
+
+        let expires = ChallengeService::now_unix() + 300;
+
+        // A MAC minted for another host does not authorise this host.
+        let other_host_mac =
+            s.hmac_hex(ChallengeService::grant_mac_msg(ip, "other.test", expires, 8, 1).as_bytes());
+        let token = format!("v1.{expires}.8.1.{other_host_mac}");
+        assert!(!s.grant_allows(ip, Some(host), Some(cookie(&token).as_bytes()), 1));
+
+        // A MAC minted for another client IP does not authorise this IP.
+        let other_ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11));
+        let other_ip_mac =
+            s.hmac_hex(ChallengeService::grant_mac_msg(other_ip, host, expires, 8, 1).as_bytes());
+        let token = format!("v1.{expires}.8.1.{other_ip_mac}");
+        assert!(!s.grant_allows(ip, Some(host), Some(cookie(&token).as_bytes()), 1));
+
+        // An expired grant is rejected even with a correct MAC.
+        let past = ChallengeService::now_unix().saturating_sub(1);
+        let expired_mac =
+            s.hmac_hex(ChallengeService::grant_mac_msg(ip, host, past, 8, 1).as_bytes());
+        let token = format!("v1.{past}.8.1.{expired_mac}");
+        assert!(!s.grant_allows(ip, Some(host), Some(cookie(&token).as_bytes()), 1));
+    }
+
+    #[test]
     fn grant_survives_generation_bump() {
         let s = svc();
         let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9));
@@ -662,6 +861,94 @@ mod tests {
         let token = format!("v1.{expires}.8.1.{mac}");
         let cookie = format!("{COOKIE_NAME}={token}");
         assert!(s.grant_allows(ip, Some(host), Some(cookie.as_bytes()), 2));
+    }
+
+    #[test]
+    fn provider_pages_render_widget_and_wait_for_token() {
+        for (provider, script, widget) in [
+            (
+                ChallengeProvider::recaptcha("test-site-key"),
+                "www.google.com/recaptcha/api.js",
+                "g-recaptcha",
+            ),
+            (
+                ChallengeProvider::hcaptcha("test-site-key"),
+                "js.hcaptcha.com/1/api.js",
+                "h-captcha",
+            ),
+        ] {
+            let s = ChallengeService::with_provider([9u8; 32], 8, Some(provider));
+            let issue = s.issue(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                Some("provider.test"),
+                "/",
+                1,
+            );
+            let html = String::from_utf8(issue.body).expect("utf8 provider page");
+            assert!(html.contains(script));
+            assert!(html.contains(widget));
+            assert!(html.contains("data-sitekey=\"test-site-key\""));
+            assert!(html.contains("await waitForProviderToken()"));
+            assert!(html.contains("<noscript>"));
+        }
+    }
+
+    #[test]
+    fn recaptcha_v3_page_uses_render_and_challenge_action() {
+        let s = ChallengeService::with_provider(
+            [9u8; 32],
+            8,
+            Some(ChallengeProvider::recaptcha_v3("test-v3-key")),
+        );
+        let issue = s.issue(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Some("provider.test"),
+            "/",
+            1,
+        );
+        let html = String::from_utf8(issue.body).expect("utf8 v3 page");
+        assert!(html.contains("www.google.com/recaptcha/api.js?render=test-v3-key"));
+        assert!(html.contains("grecaptcha.execute"));
+        assert!(html.contains("action: \"challenge\""));
+        assert!(!html.contains("g-recaptcha"));
+        assert!(!html.contains("data-sitekey="));
+        assert!(html.contains("await waitForProviderToken()"));
+        assert!(html.contains("<noscript>"));
+        assert_eq!(issue.status, 403);
+    }
+
+    #[test]
+    fn provider_page_escapes_site_key() {
+        let s = ChallengeService::with_provider(
+            [9u8; 32],
+            8,
+            Some(ChallengeProvider::recaptcha("\"><script>alert(1)</script>")),
+        );
+        let issue = s.issue(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Some("provider.test"),
+            "/",
+            1,
+        );
+        let html = String::from_utf8(issue.body).expect("utf8 provider page");
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn native_page_has_explicit_no_js_fallback() {
+        let s = svc();
+        let issue = s.issue(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Some("fallback.test"),
+            "/",
+            1,
+        );
+        let html = String::from_utf8(issue.body).expect("utf8 challenge page");
+        assert!(html.contains("<noscript>"));
+        assert!(html.contains("JavaScript is required"));
+        assert!(!html.contains("<script src="));
+        assert_eq!(issue.status, 403);
     }
 
     #[test]

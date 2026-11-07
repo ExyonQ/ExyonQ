@@ -1,0 +1,895 @@
+{
+  "exclusions": [
+    {
+      "case": "CRS-920100-t14: Invalid HTTP Request Line (920100) - Test 3 from old modsec regressions",
+      "rule": 920100,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 400,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 400/hits=0; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[22] name='CRS-920100-t14: Invalid HTTP Request Line (920100) - Test 3 from old modsec regressions' rule=920100 test=14",
+        "fixture=REQUEST-920-PROTOCOL-ENFORCEMENT/920100.yaml#14 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=400/0",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:23",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-920290-t1: ",
+      "rule": 920290,
+      "crs_expectation": {
+        "status": 400,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 400,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 400/hits=0; CRS fixture expects 400/0.",
+      "reason": "Both engines deny the request and the origin is not reached; Exy's HTTP parser and ModSecurity's request parser assign different 4xx statuses.",
+      "classification": "both_deny_parser_status_difference",
+      "evidence": [
+        "corpus[164] name='CRS-920290-t1: ' rule=920290 test=1",
+        "fixture=REQUEST-920-PROTOCOL-ENFORCEMENT/920290.yaml#1 expectation=400/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=400/0",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:165",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-920470-t17: Status Page Test - Illegal Content-Type header: 'text/xml; blah' where blah isn't a valid parameter for this header field",
+      "rule": 920470,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 400,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 400/hits=0; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[271] name=\"CRS-920470-t17: Status Page Test - Illegal Content-Type header: 'text/xml; blah' where blah isn't a valid parameter for this header field\" rule=920470 test=17",
+        "fixture=REQUEST-920-PROTOCOL-ENFORCEMENT/920470.yaml#17 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=400/0",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:272",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-921210-t1: HTTP Parameter Pollution via bogus chars after parameter array name",
+      "rule": 921210,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[488] name='CRS-921210-t1: HTTP Parameter Pollution via bogus chars after parameter array name' rule=921210 test=1",
+        "fixture=REQUEST-921-PROTOCOL-ATTACK/921210.yaml#1 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:489",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-930120-t10: YM9WT5NU\nFalse positive test\n",
+      "rule": 930120,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 200/1.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[591] name='CRS-930120-t10: YM9WT5NU\\nFalse positive test\\n' rule=930120 test=10",
+        "fixture=REQUEST-930-APPLICATION-ATTACK-LFI/930120.yaml#10 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:592",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-930120-t11: False positive test.\nDon't match `.env`\n",
+      "rule": 930120,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 200/1.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[592] name=\"CRS-930120-t11: False positive test.\\nDon't match `.env`\\n\" rule=930120 test=11",
+        "fixture=REQUEST-930-APPLICATION-ATTACK-LFI/930120.yaml#11 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:593",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-932240-t9: Unix Command Injection - python version bypass test",
+      "rule": 932240,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[1332] name='CRS-932240-t9: Unix Command Injection - python version bypass test' rule=932240 test=9",
+        "fixture=REQUEST-932-APPLICATION-ATTACK-RCE/932240.yaml#9 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:1333",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-932240-t14: Process subtition '<()' WAF evasion (mid command)",
+      "rule": 932240,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[1337] name=\"CRS-932240-t14: Process subtition '<()' WAF evasion (mid command)\" rule=932240 test=14",
+        "fixture=REQUEST-932-APPLICATION-ATTACK-RCE/932240.yaml#14 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:1338",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-932240-t15: Process subtition '>()' WAF evasion (mid command)",
+      "rule": 932240,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[1338] name=\"CRS-932240-t15: Process subtition '>()' WAF evasion (mid command)\" rule=932240 test=15",
+        "fixture=REQUEST-932-APPLICATION-ATTACK-RCE/932240.yaml#15 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:1339",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-932371-t1: Windows Command Injection: at command injection scheduling a command",
+      "rule": 932371,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[1522] name='CRS-932371-t1: Windows Command Injection: at command injection scheduling a command' rule=932371 test=1",
+        "fixture=REQUEST-932-APPLICATION-ATTACK-RCE/932371.yaml#1 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:1523",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933100-t31: Legitimate XML declaration should NOT match\ndecoded payload: <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+      "rule": 933100,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 200,
+        "hits": 1
+      },
+      "modsecurity": {
+        "status": 403,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 403/hits=0; CRS fixture expects 200/1.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1582] name='CRS-933100-t31: Legitimate XML declaration should NOT match\\ndecoded payload: <?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n' rule=933100 test=31",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933100.yaml#31 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=403/0",
+        "exyonq=observed=200/1",
+        "gate=ol05-gate-final3.log:1583",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933100-t32: Legitimate XML declaration with tab after xml should NOT match\ndecoded payload: <?xml\tversion=\"1.0\"?>\n",
+      "rule": 933100,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 200,
+        "hits": 1
+      },
+      "modsecurity": {
+        "status": 403,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 403/hits=0; CRS fixture expects 200/1.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1583] name='CRS-933100-t32: Legitimate XML declaration with tab after xml should NOT match\\ndecoded payload: <?xml\\tversion=\"1.0\"?>\\n' rule=933100 test=32",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933100.yaml#32 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=403/0",
+        "exyonq=observed=200/1",
+        "gate=ol05-gate-final3.log:1584",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933100-t37: Legitimate XML payload\ndecoded payload: <?xml version=\"1.0\" encoding=\"UTF-8\"?><order><id>12345</id></order>\n",
+      "rule": 933100,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 200,
+        "hits": 1
+      },
+      "modsecurity": {
+        "status": 403,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 403/hits=0; CRS fixture expects 200/1.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1588] name='CRS-933100-t37: Legitimate XML payload\\ndecoded payload: <?xml version=\"1.0\" encoding=\"UTF-8\"?><order><id>12345</id></order>\\n' rule=933100 test=37",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933100.yaml#37 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=403/0",
+        "exyonq=observed=200/1",
+        "gate=ol05-gate-final3.log:1589",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933100-t59: Negative test: Legitimate XML with namespace\ndecoded payload: <?xml-stylesheet type=\"text/xsl\" href=\"style.xsl\"?>\n",
+      "rule": 933100,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 200,
+        "hits": 1
+      },
+      "modsecurity": {
+        "status": 403,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 403/hits=0; CRS fixture expects 200/1.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1610] name='CRS-933100-t59: Negative test: Legitimate XML with namespace\\ndecoded payload: <?xml-stylesheet type=\"text/xsl\" href=\"style.xsl\"?>\\n' rule=933100 test=59",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933100.yaml#59 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=403/0",
+        "exyonq=observed=200/1",
+        "gate=ol05-gate-final3.log:1611",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933100-t60: Negative test: Legitimate XML declaration with standalone\ndecoded payload: <?xml version=\"1.0\" standalone=\"yes\"?>\n",
+      "rule": 933100,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 200,
+        "hits": 1
+      },
+      "modsecurity": {
+        "status": 403,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 403/hits=0; CRS fixture expects 200/1.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1611] name='CRS-933100-t60: Negative test: Legitimate XML declaration with standalone\\ndecoded payload: <?xml version=\"1.0\" standalone=\"yes\"?>\\n' rule=933100 test=60",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933100.yaml#60 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=403/0",
+        "exyonq=observed=200/1",
+        "gate=ol05-gate-final3.log:1612",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t3: PHP .php upload in X_Filename",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1644] name='CRS-933110-t3: PHP .php upload in X_Filename' rule=933110 test=3",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#3 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1645",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t13: PHP php5... upload in X_Filename",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1654] name='CRS-933110-t13: PHP php5... upload in X_Filename' rule=933110 test=13",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#13 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1655",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t14: PHP .php. upload in X_Filename",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1655] name='CRS-933110-t14: PHP .php. upload in X_Filename' rule=933110 test=14",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#14 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1656",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t20: PHP .php upload",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1661] name='CRS-933110-t20: PHP .php upload' rule=933110 test=20",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#20 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1662",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t21: PHP .php5... upload",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1662] name='CRS-933110-t21: PHP .php5... upload' rule=933110 test=21",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#21 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1663",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t22: PHP .php. upload",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1663] name='CRS-933110-t22: PHP .php. upload' rule=933110 test=22",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#22 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1664",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t24: PHP .phar upload",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1665] name='CRS-933110-t24: PHP .phar upload' rule=933110 test=24",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#24 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1666",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t25: PHP .phps upload",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1666] name='CRS-933110-t25: PHP .phps upload' rule=933110 test=25",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#25 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1667",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t26: PHP .pht upload",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1667] name='CRS-933110-t26: PHP .pht upload' rule=933110 test=26",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#26 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1668",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933110-t27: PHP .phpt upload",
+      "rule": 933110,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1668] name='CRS-933110-t27: PHP .phpt upload' rule=933110 test=27",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933110.yaml#27 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1669",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933220-t2: Should block: sess_ pattern with Unix path via X_Filename",
+      "rule": 933220,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1932] name='CRS-933220-t2: Should block: sess_ pattern with Unix path via X_Filename' rule=933220 test=2",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933220.yaml#2 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1933",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-933220-t4: Should block: sess_ pattern via X.Filename",
+      "rule": 933220,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[1934] name='CRS-933220-t4: Should block: sess_ pattern via X.Filename' rule=933220 test=4",
+        "fixture=REQUEST-933-APPLICATION-ATTACK-PHP/933220.yaml#4 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:1935",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-934160-t1: Normal text false positive test",
+      "rule": 934160,
+      "crs_expectation": {
+        "status": 200,
+        "hits": 1
+      },
+      "exyonq": {
+        "status": 200,
+        "hits": 1
+      },
+      "modsecurity": {
+        "status": 403,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 403/hits=0; CRS fixture expects 200/1.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[2121] name='CRS-934160-t1: Normal text false positive test' rule=934160 test=1",
+        "fixture=REQUEST-934-APPLICATION-ATTACK-GENERIC/934160.yaml#1 expectation=200/1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=403/0",
+        "exyonq=observed=200/1",
+        "gate=ol05-gate-final3.log:2122",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-942130-t9: SQL Injection Attack: SQL Tautology using MySQL NULL-safe operator <=>",
+      "rule": 942130,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 400,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy rejects the request target at the HTTP parser before WAF inspection; ModSecurity forwards it. No origin request is made.",
+      "classification": "exy_parser_rejects_reference_forwards",
+      "evidence": [
+        "corpus[2471] name='CRS-942130-t9: SQL Injection Attack: SQL Tautology using MySQL NULL-safe operator <=>' rule=942130 test=9",
+        "fixture=REQUEST-942-APPLICATION-ATTACK-SQLI/942130.yaml#9 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=400/0",
+        "gate=ol05-gate-final3.log:2472",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-944140-t3: Java script uploads",
+      "rule": 944140,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[3949] name='CRS-944140-t3: Java script uploads' rule=944140 test=3",
+        "fixture=REQUEST-944-APPLICATION-ATTACK-JAVA/944140.yaml#3 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:3950",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-944140-t8: Java script uploads",
+      "rule": 944140,
+      "crs_expectation": {
+        "status": 403,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 200,
+        "hits": 1
+      },
+      "reference_behavior": "ModSecurity v3 + CRS v4.25.0 returned 200/hits=1; CRS fixture expects 403/0.",
+      "reason": "Exy matches the CRS fixture; ModSecurity returns a different status, so the exact differential cannot be satisfied by Exy.",
+      "classification": "reference_diverges_from_crs_fixture",
+      "evidence": [
+        "corpus[3954] name='CRS-944140-t8: Java script uploads' rule=944140 test=8",
+        "fixture=REQUEST-944-APPLICATION-ATTACK-JAVA/944140.yaml#8 expectation=403/0",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=200/1",
+        "exyonq=observed=403/0",
+        "gate=ol05-gate-final3.log:3955",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-920100-t15: Test as described in http://www.client9.com/article/five-interesting-injection-attacks/",
+      "rule": 920100,
+      "crs_expectation": {
+        "status": 400,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 400,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity/nginx rejects the malformed request line with 400 before CRS; Exy's wire WAF blocks the same request with 403.",
+      "reason": "Both implementations deny the request; only the parser-level status (400 vs 403) differs. No request is forwarded.",
+      "classification": "both_deny_parser_status_difference",
+      "evidence": [
+        "corpus CRS-920100-t15 rule=920100 test=15",
+        "fixture=REQUEST-920-PROTOCOL-ENFORCEMENT/920100.yaml#15",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=400/0",
+        "exyonq=observed=403/0 in ol05-gate-clean1.log",
+        "gate=ol05-gate-clean1.log",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    },
+    {
+      "case": "CRS-920160-t1: Non digit Content-Length without content-type",
+      "rule": 920160,
+      "crs_expectation": {
+        "status": 400,
+        "hits": 0
+      },
+      "exyonq": {
+        "status": 403,
+        "hits": 0
+      },
+      "modsecurity": {
+        "status": 400,
+        "hits": 0
+      },
+      "reference_behavior": "ModSecurity/nginx rejects the non-numeric Content-Length with 400 before CRS; Exy's wire WAF blocks it with 403.",
+      "reason": "Both implementations deny the request; only the parser-level status (400 vs 403) differs. No request is forwarded.",
+      "classification": "both_deny_parser_status_difference",
+      "evidence": [
+        "corpus CRS-920160-t1 rule=920160 test=1",
+        "fixture=REQUEST-920-PROTOCOL-ENFORCEMENT/920160.yaml#1",
+        "reference=ModSecurity v3 + CRS v4.25.0 observed=400/0",
+        "exyonq=observed=403/0 in ol05-gate-clean1.log",
+        "gate=ol05-gate-clean1.log",
+        "command=EXYONQ_CRS_DIR=<crs-v4.25.0> bash scripts/gates/crs-diff-gate.sh"
+      ]
+    }
+  ]
+}

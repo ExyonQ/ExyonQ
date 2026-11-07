@@ -269,10 +269,9 @@ impl CompressionModule {
                     Self::apply_not_acceptable(obs, is_head);
                     Ok(())
                 }
-                NegotiateOutcome::Identity | NegotiateOutcome::Encode(_) => {
-                    Self::ensure_vary_accept_encoding(obs.headers_mut());
-                    Ok(())
-                }
+                // No Vary: the representation never differs by Accept-Encoding,
+                // so emitting it would only split intermediary caches (EXY-04).
+                NegotiateOutcome::Identity | NegotiateOutcome::Encode(_) => Ok(()),
             };
         }
 
@@ -586,6 +585,25 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert!(vary.to_ascii_lowercase().contains("accept-encoding"));
+    }
+
+    #[tokio::test]
+    async fn non_compressible_mime_does_not_emit_vary() {
+        let module = CompressionModule::new(1);
+        let req = Request::builder()
+            .header(ACCEPT_ENCODING, "br")
+            .body(Body::from(bytes::Bytes::new()))
+            .unwrap();
+        let resp = Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "image/avif")
+            .body(Body::from("not an image but non-compressible"))
+            .unwrap();
+        let resp = apply_on_response(&module, &req, resp).await;
+        assert!(
+            resp.headers().get(VARY).is_none(),
+            "EXY-04: no Vary for image/avif"
+        );
     }
 
     #[tokio::test]

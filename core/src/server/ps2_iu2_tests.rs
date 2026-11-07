@@ -82,6 +82,10 @@ fn unblock_worker_accepts(addr: std::net::SocketAddr, count: usize) {
 #[test]
 fn ps2_iu2_workers_survive_idle_header_read_timeout() {
     crate::kernel::test_hooks::ensure_wire_hooks_installed();
+    // The env+process-lifetime-cache window below must not leak into tests that
+    // resolve `header_read_timeout()` mid-run — hold the shared gate so
+    // predicate/serve helpers serialized on it cannot observe 80ms.
+    let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
     let prev = std::env::var("EXYONQ_READ_TIMEOUT_MS").ok();
     crate::server::reset_header_read_timeout_cache_for_tests();
     std::env::set_var("EXYONQ_READ_TIMEOUT_MS", "80");

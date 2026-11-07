@@ -27,13 +27,21 @@ pub fn static_error_outcome(err: StaticError) -> StaticDispatchOutcome {
     match err {
         StaticError::NotFound => StaticDispatchOutcome {
             status: 404,
-            headers: Vec::new(),
+            // EXY-16: never let a plain 404 be labelled as a binary download.
+            headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
             body: StaticDispatchBody::Inline(b"not found".to_vec()),
         },
         StaticError::PathTraversal => StaticDispatchOutcome {
             status: 403,
             headers: Vec::new(),
             body: StaticDispatchBody::Inline(b"forbidden".to_vec()),
+        },
+        // H-01: opaque not-found response — no sensitive file name, size or
+        // existence is disclosed on the static surface.
+        StaticError::SensitivePath => StaticDispatchOutcome {
+            status: 404,
+            headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+            body: StaticDispatchBody::Inline(b"not found".to_vec()),
         },
         StaticError::BudgetExceeded => StaticDispatchOutcome {
             // Transport-agnostic refuse-to-materialize signal. Protocol adapters

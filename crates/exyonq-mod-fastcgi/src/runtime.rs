@@ -67,6 +67,12 @@ struct FcgiRuntimeState {
     generation: u64,
     executor: ActiveExecutor,
     semaphores: HashMap<u32, Arc<Semaphore>>,
+    /// Config names for saturation diagnostics (pool_id → name).
+    pool_names: HashMap<u32, String>,
+    /// Configured logical concurrency for saturation diagnostics.
+    pool_limits: HashMap<u32, u32>,
+    /// Stable per-pool Prometheus counters.
+    pool_metrics: HashMap<u32, Arc<metrics::FcgiPoolMetrics>>,
     /// Present when executor is a module ConnPool owner (for quiescence / retire).
     module_executor: Option<Arc<FcgiModuleExecutor>>,
 }
@@ -97,6 +103,9 @@ impl ActiveExecutor {
 impl FcgiRuntimeState {
     fn from_registration(registration: FcgiRuntimeRegistration) -> Result<Self, FcgiRegisterError> {
         let mut semaphores = HashMap::new();
+        let mut pool_names = HashMap::new();
+        let mut pool_limits = HashMap::new();
+        let mut pool_metrics = HashMap::new();
         for (pool_id, capacity) in registration.pool_capacities {
             if capacity == 0 {
                 return Err(FcgiRegisterError::InvalidCapacity);
@@ -104,14 +113,25 @@ impl FcgiRuntimeState {
             semaphores
                 .entry(pool_id)
                 .or_insert_with(|| Arc::new(Semaphore::new(capacity)));
+            let name = pool_names
+                .entry(pool_id)
+                .or_insert_with(|| format!("pool_{pool_id}"));
+            pool_metrics.insert(pool_id, metrics::pool_metrics(name));
+            pool_limits.insert(pool_id, capacity.min(u32::MAX as usize) as u32);
         }
         if semaphores.is_empty() {
             semaphores.insert(0, Arc::new(Semaphore::new(DEFAULT_FCGI_MAX_CONCURRENCY)));
+            pool_names.insert(0, "pool_0".into());
+            pool_limits.insert(0, DEFAULT_FCGI_MAX_CONCURRENCY as u32);
+            pool_metrics.insert(0, metrics::pool_metrics("pool_0"));
         }
         Ok(Self {
             generation: 0,
             executor: ActiveExecutor::External(registration.executor),
             semaphores,
+            pool_names,
+            pool_limits,
+            pool_metrics,
             module_executor: None,
         })
     }
@@ -119,6 +139,9 @@ impl FcgiRuntimeState {
     fn from_compiled(generation: u64, slots: &[FcgiCompiledSlot]) -> Result<Self, FcgiBindError> {
         let module = Arc::new(FcgiModuleExecutor::from_compiled_slots(generation, slots)?);
         let mut semaphores = HashMap::new();
+        let mut pool_names = HashMap::new();
+        let mut pool_limits = HashMap::new();
+        let mut pool_metrics = HashMap::new();
         for slot in slots {
             if slot.max_concurrency == 0 {
                 return Err(FcgiBindError::InvalidCapacity {
@@ -129,11 +152,17 @@ impl FcgiRuntimeState {
                 slot.pool_id,
                 Arc::new(Semaphore::new(slot.max_concurrency as usize)),
             );
+            pool_names.insert(slot.pool_id, slot.name.clone());
+            pool_limits.insert(slot.pool_id, slot.max_concurrency);
+            pool_metrics.insert(slot.pool_id, metrics::pool_metrics(&slot.name));
         }
         Ok(Self {
             generation,
             executor: ActiveExecutor::Module(Arc::clone(&module)),
             semaphores,
+            pool_names,
+            pool_limits,
+            pool_metrics,
             module_executor: Some(module),
         })
     }
@@ -145,8 +174,21 @@ impl FcgiRuntimeState {
             generation,
             executor: ActiveExecutor::Module(Arc::clone(&module)),
             semaphores: HashMap::new(),
+            pool_names: HashMap::new(),
+            pool_limits: HashMap::new(),
+            pool_metrics: HashMap::new(),
             module_executor: Some(module),
         }
+    }
+
+    fn pool_metric(&self, pool_id: u32) -> Option<Arc<metrics::FcgiPoolMetrics>> {
+        self.pool_metrics.get(&pool_id).cloned()
+    }
+
+    fn pool_name_and_limit(&self, pool_id: u32) -> Option<(&str, u32)> {
+        let name = self.pool_names.get(&pool_id)?;
+        let limit = *self.pool_limits.get(&pool_id)?;
+        Some((name.as_str(), limit))
     }
 
     fn try_acquire(&self, pool_id: u32) -> Result<OwnedSemaphorePermit, FcgiDispatchOutcome> {
@@ -169,18 +211,26 @@ impl FcgiRuntimeState {
 
 // EmptyExecutor removed — empty generations use FcgiModuleExecutor with zero slots.
 
-struct InflightGuard;
+struct InflightGuard {
+    pool: Option<Arc<metrics::FcgiPoolMetrics>>,
+}
 
 impl InflightGuard {
-    fn enter() -> Self {
+    fn enter(pool: Option<Arc<metrics::FcgiPoolMetrics>>) -> Self {
         metrics::note_fcgi_inflight_acquire();
-        Self
+        if let Some(metric) = pool.as_ref() {
+            metric.inflight_acquire();
+        }
+        Self { pool }
     }
 }
 
 impl Drop for InflightGuard {
     fn drop(&mut self) {
         metrics::note_fcgi_inflight_release();
+        if let Some(metric) = self.pool.as_ref() {
+            metric.inflight_release();
+        }
     }
 }
 
@@ -265,10 +315,24 @@ impl FcgiRuntime {
 
     async fn run_delegate(&self, request: FcgiDispatchRequest) -> FcgiDispatchOutcome {
         let state = self.load_active();
+        let pool_metric = state.pool_metric(request.pool_id);
         let permit = match state.try_acquire(request.pool_id) {
             Ok(permit) => permit,
             Err(FcgiDispatchOutcome::ServiceUnavailable) => {
                 metrics::note_fcgi_saturation_rejection();
+                if let Some(metric) = pool_metric.as_ref() {
+                    metric.note_saturation_rejection();
+                }
+                if let Some((pool, max_concurrency)) = state.pool_name_and_limit(request.pool_id) {
+                    let msg = crate::diagnostics::format_concurrency_message(pool, max_concurrency);
+                    tracing::warn!(
+                        target: "exyonq::fcgi",
+                        pool = %pool,
+                        timeout_kind = "concurrency",
+                        max_concurrency,
+                        "{msg}"
+                    );
+                }
                 return FcgiDispatchOutcome::ServiceUnavailable;
             }
             Err(other) => return other,
@@ -277,8 +341,9 @@ impl FcgiRuntime {
         let executor = state.executor.clone();
         let abort_gate = crate::request_abort::AbortGate::new();
         let abort_for_task = std::sync::Arc::clone(&abort_gate);
+        let inflight_metric = pool_metric.clone();
         let task = tokio::task::spawn_blocking(move || {
-            let _inflight = InflightGuard::enter();
+            let _inflight = InflightGuard::enter(inflight_metric);
             let _abort_scope = crate::request_abort::AbortScope::enter(abort_for_task);
             executor.dispatch(&request)
         });
@@ -300,7 +365,8 @@ impl FcgiRuntime {
 #[async_trait]
 impl FcgiDispatchService for FcgiRuntime {
     async fn dispatch(&self, request: FcgiDispatchRequest) -> MaterializedBackendOutcome {
-        map_dispatch_outcome(self.run_delegate(request).await)
+        let pool_metric = self.load_active().pool_metric(request.pool_id);
+        map_dispatch_outcome(self.run_delegate(request).await, pool_metric.as_deref())
     }
 
     fn metrics(&self) -> FcgiMetricsSnapshot {
@@ -368,27 +434,45 @@ fn delegate_timeout_budget() -> Duration {
     FCGI_DELEGATE_TIMEOUT
 }
 
-fn map_dispatch_outcome(outcome: FcgiDispatchOutcome) -> MaterializedBackendOutcome {
+fn map_dispatch_outcome(
+    outcome: FcgiDispatchOutcome,
+    pool_metric: Option<&metrics::FcgiPoolMetrics>,
+) -> MaterializedBackendOutcome {
     match outcome {
         FcgiDispatchOutcome::NotRegistered => {
             metrics::note_fcgi_response_501();
+            if let Some(metric) = pool_metric {
+                metric.note_response(501);
+            }
             error_outcome(501, "not implemented")
         }
         FcgiDispatchOutcome::ServiceUnavailable => {
             metrics::note_fcgi_response_503();
+            if let Some(metric) = pool_metric {
+                metric.note_response(503);
+            }
             error_outcome(503, "service unavailable")
         }
         FcgiDispatchOutcome::BadGateway => {
             metrics::note_fcgi_response_502();
+            if let Some(metric) = pool_metric {
+                metric.note_response(502);
+            }
             error_outcome(502, "bad gateway")
         }
         FcgiDispatchOutcome::GatewayTimeout => {
             metrics::note_fcgi_response_504();
+            if let Some(metric) = pool_metric {
+                metric.note_response(504);
+            }
             error_outcome(504, "gateway timeout")
         }
         FcgiDispatchOutcome::Success(response) => {
             if response.status == 200 {
                 metrics::note_fcgi_response_200();
+                if let Some(metric) = pool_metric {
+                    metric.note_response(200);
+                }
             }
             MaterializedBackendOutcome {
                 status: response.status,
@@ -448,6 +532,7 @@ mod tests {
             document_root: "/var/www".into(),
             server_name: "localhost".into(),
             server_port: 80,
+            scheme: "http".into(),
             remote_addr: "127.0.0.1".into(),
             server_protocol: "HTTP/1.1".into(),
             content_type: None,

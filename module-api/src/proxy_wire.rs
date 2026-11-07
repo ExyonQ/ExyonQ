@@ -125,6 +125,7 @@ pub struct ProxyWireAsyncHooks {
         head: bytes::Bytes,
         rest: bytes::Bytes,
         real_ip: Option<crate::real_ip::RealIpTrust>,
+        route_gate: Option<std::sync::Arc<crate::wire_module_hooks::WireRouteGate>>,
     ) -> ProxyWireServeFuture,
 }
 
@@ -151,6 +152,7 @@ pub fn serve_proxy_wire(
     head: bytes::Bytes,
     rest: bytes::Bytes,
     real_ip: Option<crate::real_ip::RealIpTrust>,
+    route_gate: Option<std::sync::Arc<crate::wire_module_hooks::WireRouteGate>>,
 ) -> ProxyWireServeFuture {
     (async_hooks().serve_proxy_wire)(
         cluster_id,
@@ -162,5 +164,6 @@ pub fn serve_proxy_wire(
         head,
         rest,
         real_ip,
+        route_gate,
     )
 }

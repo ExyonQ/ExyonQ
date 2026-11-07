@@ -22,6 +22,7 @@ use exyonq_module_api::htaccess_runtime::{
     HtaccessRegisterError, HtaccessRouteBackend, HtaccessRouteEvaluationOutcome,
     HtaccessRouteEvaluationRequest, HtaccessRuntimeService,
 };
+use exyonq_module_api::{CompiledAccessPolicy, CompiledBasicAuth};
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -149,6 +150,16 @@ pub fn htaccess_adjust_route(
             fcgi_script_uri,
         },
     })
+}
+
+/// Compiled `.htaccess` Basic Auth policy for the original request path.
+pub fn htaccess_auth_policy(site_id: &str, path: &str) -> Option<CompiledBasicAuth> {
+    resolve_service()?.auth_policy(site_id, path)
+}
+
+/// AP-05: compiled access policy inherited by a request path.
+pub fn htaccess_access_policy(site_id: &str, path: &str) -> Option<CompiledAccessPolicy> {
+    resolve_service()?.access_policy(site_id, path)
 }
 
 pub fn build_htaccess_route_backend(

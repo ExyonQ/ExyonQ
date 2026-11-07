@@ -1,7 +1,13 @@
 # ExyonQ official release tag allowed signers (SSH)
 # STATUS=ACTIVE_LOCAL_NOT_YET_PUBLISHED
-# KEY_ID=EXYONQ_RELEASE_TAG_SSH_V1
-# ACTIVATED_AT=2026-07-27T13:23:01Z
+# ACTIVE_KEY_ID=EXYONQ_RELEASE_TAG_SSH_V2
+# ACTIVE_ACTIVATED_AT=2026-11-05T19:55:33Z
+# SUPERSEDED_KEY_ID=EXYONQ_RELEASE_TAG_SSH_V1
 # DO_NOT_TREAT_AS_SOLE_REMOTE_TRUST_ROOT
 # PUBLICATION_STATUS=LOCAL_ACTIVATION_ONLY
+
+# ACTIVE — use for new annotated release tags.
+exyonq-release namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF7FWC4Y5Tnjx9JddqozPcB3snIym5c9X/BwxDguezz8 info@exyonq.org
+
+# HISTORICAL — superseded; retained so tags signed before rotation remain verifiable.
 exyonq-release namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINbfNACP4m79etHGrcQYGoJREIBOV6tLyhxv41g5BMq+ ExyonQ Official Release Tag Signing v1

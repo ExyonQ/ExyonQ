@@ -169,6 +169,8 @@ pub struct FcgiDispatchRequest {
     pub document_root: String,
     pub server_name: String,
     pub server_port: u16,
+    /// Connection scheme (`http` or `https`) for CGI `REQUEST_SCHEME`/`HTTPS`.
+    pub scheme: String,
     pub remote_addr: String,
     pub server_protocol: String,
     pub content_type: Option<String>,

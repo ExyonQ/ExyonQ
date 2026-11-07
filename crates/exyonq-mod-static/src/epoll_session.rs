@@ -176,6 +176,16 @@ pub(crate) fn runtime_for_hooks() -> Arc<StaticRuntime> {
 }
 
 fn request_host_from_head(head: &[u8]) -> Option<String> {
+    host_header_from_head(head).map(|host| strip_host_port(&host).to_string())
+}
+
+/// Raw `Host` header with port intact — the authority an absolute redirect
+/// target must echo back to the client.
+fn request_authority_from_head(head: &[u8]) -> Option<String> {
+    host_header_from_head(head)
+}
+
+fn host_header_from_head(head: &[u8]) -> Option<String> {
     for line in head.split(|&b| b == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.len() >= 5 && line[..5].eq_ignore_ascii_case(b"host:") {
@@ -184,7 +194,7 @@ fn request_host_from_head(head: &[u8]) -> Option<String> {
                 value = &value[1..];
             }
             let host = std::str::from_utf8(value).ok()?;
-            return Some(strip_host_port(host).to_string());
+            return Some(host.to_string());
         }
     }
     None
@@ -203,7 +213,11 @@ fn strip_host_port(host: &str) -> &str {
     }
 }
 
-pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandle> {
+pub fn match_sendfile_asset(
+    site_slot: u32,
+    head: &[u8],
+    local_port: Option<u16>,
+) -> Option<SendfileHandle> {
     // The accept pin is not the route. `slot_for_request_path` chooses the root.
     let _ = site_slot;
     // Cap067: capability-based resolve — never filename/bench allowlists.
@@ -222,6 +236,28 @@ pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandl
         let generation = rt.generation();
         let site_slot = rt.slot_for_request_path(path, request_host_from_head(head).as_deref())?;
         let root = rt.root_for_slot_public(site_slot).ok()?;
+
+        // H-01: sendfile must not handle a sensitive path even if an old FD
+        // cache entry or a direct caller reaches this function.
+        if root.ensure_request_allowed(path).is_err() {
+            return None;
+        }
+
+        // EXY-03: directory-without-slash on a dir_redirect route must not be
+        // sendfile-served — the miss path emits the NGINX-style 301. Wire path
+        // is plaintext-only (sendfile cannot run under TLS) so http is right.
+        if root
+            .dir_redirect_location(
+                path,
+                request_authority_from_head(head).as_deref(),
+                "http",
+                crate::wire_eligibility::request_query_from_head(head),
+                local_port,
+            )
+            .is_some()
+        {
+            return None;
+        }
 
         // A large-file sendfile hit must not skip the 406 the miss path emits.
         if wanted_coding.is_none()
@@ -250,7 +286,7 @@ pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandl
         let prepared = root.prepared_wire(path);
         let open_root = crate::sendfile::OpenUnderRoot {
             canonical_root: root.canonical_root(),
-            root_dir_fd: root.root_dir_fd(),
+            root_dir_fd: root.root_dir_fd().expect("dir roots carry a dirfd"),
         };
 
         // ADR-046 A1: sync compress-once → sendfile coded FD (no hot-path zlib).
@@ -393,7 +429,11 @@ pub fn match_sendfile_asset(site_slot: u32, head: &[u8]) -> Option<SendfileHandl
 ///
 /// Security: PathTraversal → 403; containment/open failures → 404. Never discloses
 /// out-of-root secret bytes. Does not reopen a less-restrictive Hyper static path.
-pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Bytes> {
+pub fn sendfile_miss_http_wire(
+    site_slot: u32,
+    head: &[u8],
+    local_port: Option<u16>,
+) -> Option<bytes::Bytes> {
     let _ = site_slot;
     if !crate::sendfile_fsm::epoll_sendfile_enabled() {
         return None;
@@ -433,11 +473,34 @@ pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Byt
         let Ok(root) = rt.root_for_slot_public(site_slot) else {
             return Some(not_found(client_close));
         };
+        // H-01: never let the wire/sendfile path serve a sensitive name. This
+        // check precedes the FD cache, so a previously cached descriptor cannot
+        // bypass the policy after a reload.
+        match root.ensure_request_allowed(path) {
+            Ok(()) => {}
+            Err(crate::StaticError::PathTraversal) => return Some(forbidden(client_close)),
+            Err(_) => return Some(not_found(client_close)),
+        }
+        // EXY-03: NGINX-style 301 for directory-without-slash on imported
+        // routes, emitted on the wire path to preserve sendfile eligibility.
+        if let Some(location) = root.dir_redirect_location(
+            path,
+            request_authority_from_head(head).as_deref(),
+            "http",
+            crate::wire_eligibility::request_query_from_head(head),
+            local_port,
+        ) {
+            return Some(crate::wire::dir_redirect_wire(
+                &location,
+                client_close,
+                head_only,
+            ));
+        }
         match root.resolved_file_path(path) {
             Err(crate::StaticError::PathTraversal) => Some(forbidden(client_close)),
-            Err(crate::StaticError::NotFound) | Err(crate::StaticError::BudgetExceeded) => {
-                Some(not_found(client_close))
-            }
+            Err(crate::StaticError::SensitivePath)
+            | Err(crate::StaticError::NotFound)
+            | Err(crate::StaticError::BudgetExceeded) => Some(not_found(client_close)),
             Err(crate::StaticError::Io(_)) => {
                 // Do not leak IO detail on the static surface.
                 Some(not_found(client_close))
@@ -458,7 +521,7 @@ pub fn sendfile_miss_http_wire(site_slot: u32, head: &[u8]) -> Option<bytes::Byt
                 }
                 let open_root = crate::sendfile::OpenUnderRoot {
                     canonical_root: root.canonical_root(),
-                    root_dir_fd: root.root_dir_fd(),
+                    root_dir_fd: root.root_dir_fd().expect("dir roots carry a dirfd"),
                 };
                 // OLS keeps files ≤ maxCachedFileSize (4096) in RAM and writes them.
                 // P1 is 1 KiB, below sendfile, so this path used to open+read every request.
@@ -1048,6 +1111,14 @@ mod ownership_tests {
             "/",
             None,
             crate::PreloadLimits::DEFAULT,
+            crate::root::StaticRootRouteOpts {
+                join_uri: false,
+                literal: false,
+                exact: false,
+                dir_redirect: false,
+                redirect_policy: crate::root::DirRedirectPolicy::default(),
+                listen_port: None,
+            },
         )
         .expect("root");
         let rt = Arc::new(StaticRuntime::new());
@@ -1056,10 +1127,11 @@ mod ownership_tests {
 
         let head = b"GET /large.bin HTTP/1.1\r\nHost: t\r\n\r\n";
         assert!(
-            match_sendfile_asset(0, b"GET /missing.bin HTTP/1.1\r\nHost: t\r\n\r\n").is_none(),
+            match_sendfile_asset(0, b"GET /missing.bin HTTP/1.1\r\nHost: t\r\n\r\n", None)
+                .is_none(),
             "fallback must not create a session"
         );
-        let released = match_sendfile_asset(0, head).expect("match for release");
+        let released = match_sendfile_asset(0, head, None).expect("match for release");
         assert_eq!(
             exyonq_module_api::static_dispatch::StaticDispatchService::metrics(rt.as_ref())
                 .sendfile_engagements,
@@ -1078,7 +1150,7 @@ mod ownership_tests {
             "failed begin must not count an engagement"
         );
 
-        let handle = match_sendfile_asset(0, head).expect("match for session");
+        let handle = match_sendfile_asset(0, head, None).expect("match for session");
         let session = begin_sendfile_session(7, head, handle).expect("session insert");
         assert_eq!(
             exyonq_module_api::static_dispatch::StaticDispatchService::metrics(rt.as_ref())
@@ -1106,6 +1178,14 @@ mod ownership_tests {
             "/",
             None,
             crate::PreloadLimits::DEFAULT,
+            crate::root::StaticRootRouteOpts {
+                join_uri: false,
+                literal: false,
+                exact: false,
+                dir_redirect: false,
+                redirect_policy: crate::root::DirRedirectPolicy::default(),
+                listen_port: None,
+            },
         )
         .expect("root");
         let rt = Arc::new(StaticRuntime::new());
@@ -1113,7 +1193,7 @@ mod ownership_tests {
         pin_runtime(Arc::clone(&rt));
 
         let missing = b"GET /missing.bin HTTP/1.1\r\nHost: t\r\n\r\n";
-        let miss_wire = sendfile_miss_http_wire(0, missing).expect("missing terminal");
+        let miss_wire = sendfile_miss_http_wire(0, missing, None).expect("missing terminal");
         assert!(
             miss_wire.starts_with(b"HTTP/1.1 404 "),
             "missing path must be HTTP 404, got {:?}",
@@ -1121,7 +1201,7 @@ mod ownership_tests {
         );
 
         let trav = b"GET /../outside HTTP/1.1\r\nHost: t\r\n\r\n";
-        let trav_wire = sendfile_miss_http_wire(0, trav).expect("traversal terminal");
+        let trav_wire = sendfile_miss_http_wire(0, trav, None).expect("traversal terminal");
         assert!(
             trav_wire.starts_with(b"HTTP/1.1 403 "),
             "path traversal must be HTTP 403, got {:?}",
@@ -1129,12 +1209,12 @@ mod ownership_tests {
         );
 
         assert!(
-            match_sendfile_asset(0, missing).is_none(),
+            match_sendfile_asset(0, missing, None).is_none(),
             "missing must not issue sendfile handle"
         );
 
         let head_miss = b"HEAD /missing.bin HTTP/1.1\r\nHost: t\r\n\r\n";
-        let head_wire = sendfile_miss_http_wire(0, head_miss).expect("HEAD missing terminal");
+        let head_wire = sendfile_miss_http_wire(0, head_miss, None).expect("HEAD missing terminal");
         assert!(
             head_wire.starts_with(b"HTTP/1.1 404 "),
             "HEAD missing must be HTTP 404"
@@ -1169,6 +1249,14 @@ mod ownership_tests {
             "/",
             None,
             crate::PreloadLimits::DEFAULT,
+            crate::root::StaticRootRouteOpts {
+                join_uri: false,
+                literal: false,
+                exact: false,
+                dir_redirect: false,
+                redirect_policy: crate::root::DirRedirectPolicy::default(),
+                listen_port: None,
+            },
         )
         .expect("root");
         let rt = Arc::new(StaticRuntime::new());
@@ -1176,7 +1264,7 @@ mod ownership_tests {
         pin_runtime(Arc::clone(&rt));
 
         let head = b"GET /escape.link HTTP/1.1\r\nHost: t\r\n\r\n";
-        let wire = sendfile_miss_http_wire(0, head).expect("symlink miss terminal");
+        let wire = sendfile_miss_http_wire(0, head, None).expect("symlink miss terminal");
         let text = std::str::from_utf8(&wire).unwrap_or("");
         assert!(
             wire.starts_with(b"HTTP/1.1 403 ") || wire.starts_with(b"HTTP/1.1 404 "),
@@ -1206,6 +1294,14 @@ mod ownership_tests {
             "/",
             None,
             crate::PreloadLimits::DEFAULT,
+            crate::root::StaticRootRouteOpts {
+                join_uri: false,
+                literal: false,
+                exact: false,
+                dir_redirect: false,
+                redirect_policy: crate::root::DirRedirectPolicy::default(),
+                listen_port: None,
+            },
         )
         .expect("root");
         let rt = Arc::new(StaticRuntime::new());
@@ -1213,14 +1309,14 @@ mod ownership_tests {
         pin_runtime(Arc::clone(&rt));
 
         let head = b"GET /1k.bin HTTP/1.1\r\nHost: t\r\n\r\n";
-        let first = sendfile_miss_http_wire(0, head).expect("first");
-        let second = sendfile_miss_http_wire(0, head).expect("second");
+        let first = sendfile_miss_http_wire(0, head, None).expect("first");
+        let second = sendfile_miss_http_wire(0, head, None).expect("second");
         assert_eq!(first, second);
         assert!(first.ends_with(&[b'A'; 16]));
 
         std::thread::sleep(SMALL_WIRE_REVALIDATE + Duration::from_millis(2));
         std::fs::write(&file, vec![b'B'; 1024]).expect("rewrite");
-        let third = sendfile_miss_http_wire(0, head).expect("rewritten");
+        let third = sendfile_miss_http_wire(0, head, None).expect("rewritten");
         assert!(
             third.ends_with(&[b'B'; 16]),
             "a replaced small file must show up after the memory-cache interval"

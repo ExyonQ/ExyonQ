@@ -47,6 +47,9 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
             resolver.resolve(&FastcgiScriptResolutionRequest {
                 uri_path: candidate_uri.to_string(),
                 pool_document_root: Some(Path::new(document_root).to_path_buf()),
+                script_root: None,
+                script_name_uri: None,
+                front_controller: None,
                 generation: 0,
                 purpose: FastcgiScriptResolutionPurpose::Probe,
             }),
@@ -64,6 +67,9 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
         match resolver.resolve(&FastcgiScriptResolutionRequest {
             uri_path: child_uri.to_string(),
             pool_document_root: Some(Path::new(document_root).to_path_buf()),
+            script_root: None,
+            script_name_uri: None,
+            front_controller: None,
             generation: 0,
             purpose: FastcgiScriptResolutionPurpose::Probe,
         }) {
@@ -85,6 +91,9 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
         match resolver.resolve(&FastcgiScriptResolutionRequest {
             uri_path: uri_path.to_string(),
             pool_document_root: Some(Path::new(document_root).to_path_buf()),
+            script_root: None,
+            script_name_uri: None,
+            front_controller: None,
             generation: 0,
             purpose: FastcgiScriptResolutionPurpose::Probe,
         }) {
@@ -102,6 +111,9 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
             resolver.resolve(&FastcgiScriptResolutionRequest {
                 uri_path: uri_path.to_string(),
                 pool_document_root: Some(Path::new(document_root).to_path_buf()),
+                script_root: None,
+                script_name_uri: None,
+                front_controller: None,
                 generation: 0,
                 purpose: FastcgiScriptResolutionPurpose::Probe,
             }),

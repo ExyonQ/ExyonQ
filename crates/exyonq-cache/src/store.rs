@@ -41,6 +41,10 @@ pub struct CachedEntry {
     route_idx: usize,
     runtime_generation: u64,
     invalidation_tags: Arc<[String]>,
+    /// AUDIT-D5: URL-level group ([`crate::key::url_group`]) — every variant
+    /// of one URL shares it so `purge.url` can kill all `Vary`/coding/range
+    /// variants without their exact keys. `None` = ungrouped insert.
+    url_group: Option<u64>,
 }
 
 impl CachedEntry {
@@ -62,6 +66,8 @@ struct ResponseCacheInner {
     entries: HashMap<CacheKey, Arc<CachedEntry>>,
     tag_index: HashMap<String, Vec<CacheKey>>,
     route_generation_index: HashMap<(usize, u64), Vec<CacheKey>>,
+    /// AUDIT-D5: URL-group → keys (all `Vary`/coding/range variants of a URL).
+    url_groups: HashMap<u64, Vec<CacheKey>>,
     site_bytes: HashMap<u64, usize>,
     fifo: VecDeque<CacheKey>,
     total_bytes: usize,
@@ -123,6 +129,7 @@ impl ResponseCache {
                 entries: HashMap::new(),
                 tag_index: HashMap::new(),
                 route_generation_index: HashMap::new(),
+                url_groups: HashMap::new(),
                 site_bytes: HashMap::new(),
                 fifo: VecDeque::new(),
                 total_bytes: 0,
@@ -276,6 +283,7 @@ impl ResponseCache {
         static_identity: Option<StaticResourceIdentitySnapshot>,
         namespace: CacheNamespace,
         invalidation_tags: Arc<[String]>,
+        url_group: Option<u64>,
         metrics: NamespaceMetrics,
     ) {
         let object_bytes = body.len()
@@ -297,6 +305,7 @@ impl ResponseCache {
             route_idx,
             runtime_generation,
             invalidation_tags,
+            url_group,
         });
 
         let mut inner = self.inner.write().expect("cache write");
@@ -380,6 +389,16 @@ impl ResponseCache {
                 })
                 .map(|(key, _)| key.clone())
                 .collect()
+        };
+        self.purge_keys(&keys)
+    }
+
+    /// AUDIT-D5: hard-delete every variant of one URL — all `Vary`/coding/
+    /// range variants sharing `group` ([`crate::key::url_group`]). Idempotent.
+    pub fn invalidate_url_group(&self, group: u64) -> PurgeStats {
+        let keys: Vec<CacheKey> = {
+            let inner = self.inner.read().expect("cache read");
+            inner.url_groups.get(&group).cloned().unwrap_or_default()
         };
         self.purge_keys(&keys)
     }
@@ -475,6 +494,7 @@ impl ResponseCache {
         inner.entries.clear();
         inner.tag_index.clear();
         inner.route_generation_index.clear();
+        inner.url_groups.clear();
         inner.site_bytes.clear();
         inner.fifo.clear();
         inner.total_bytes = 0;
@@ -520,6 +540,9 @@ fn index_entry(inner: &mut ResponseCacheInner, key: &CacheKey, entry: &CachedEnt
         .entry((entry.route_idx, entry.runtime_generation))
         .or_default()
         .push(key.clone());
+    if let Some(group) = entry.url_group {
+        inner.url_groups.entry(group).or_default().push(key.clone());
+    }
     for tag in entry.invalidation_tags.iter() {
         inner
             .tag_index
@@ -554,6 +577,14 @@ fn detach_entry(inner: &mut ResponseCacheInner, key: &CacheKey) -> Option<Arc<Ca
             keys.retain(|k| k != key);
             if keys.is_empty() {
                 inner.tag_index.remove(tag);
+            }
+        }
+    }
+    if let Some(group) = entry.url_group {
+        if let Some(keys) = inner.url_groups.get_mut(&group) {
+            keys.retain(|k| k != key);
+            if keys.is_empty() {
+                inner.url_groups.remove(&group);
             }
         }
     }
@@ -723,6 +754,7 @@ mod tests {
             None,
             CacheNamespace::new(1),
             Arc::from([]),
+            None,
             NamespaceMetrics::NONE,
         );
     }
@@ -845,6 +877,7 @@ mod tests {
             None,
             CacheNamespace::new(4),
             std::sync::Arc::from(vec!["blog".to_string()]),
+            None,
             NamespaceMetrics::NONE,
         );
         insert_plain(&cache, 1, "/other", b"other", Duration::from_secs(60));
@@ -872,6 +905,7 @@ mod tests {
                 None,
                 CacheNamespace::new(4),
                 std::sync::Arc::from(vec!["blog".to_string()]),
+                None,
                 NamespaceMetrics::NONE,
             );
         }

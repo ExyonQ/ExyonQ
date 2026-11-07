@@ -8,9 +8,34 @@
     create 0640 exyonq exyonq
     sharedscripts
     postrotate
-        # Prefer control-plane reload over SIGHUP when the daemon is running.
-        if [ -S /run/exyonq/control.sock ]; then
-            /usr/bin/exyonqctl reload --socket /run/exyonq/control.sock >/dev/null 2>&1 || true
-        fi
+        # Reload each live server through the control socket and config it
+        # actually exported. systemd puts both variables in the process
+        # environment; fall back to the serve `-c/--config` argument for
+        # older launchers. Never guess a config: a reload can apply the
+        # wrong file to another unit.
+        seen=" "
+        for proc in /proc/[0-9]*; do
+            [ -r "$proc/environ" ] || continue
+            [ "$(cat "$proc/comm" 2>/dev/null)" = "exyonq" ] || continue
+            sock=$(tr '\0' '\n' < "$proc/environ" 2>/dev/null |
+                sed -n 's/^EXYONQ_CONTROL_SOCKET=//p' | head -n 1)
+            cfg=$(tr '\0' '\n' < "$proc/environ" 2>/dev/null |
+                sed -n 's/^EXYONQ_CONFIG=//p' | head -n 1)
+            if [ -z "$cfg" ]; then
+                cfg=$(tr '\0' '\n' < "$proc/cmdline" 2>/dev/null |
+                    awk 'prev == "-c" || prev == "--config" { print; exit }
+                         /^--config=/ { sub(/^--config=/, ""); print; exit }
+                         /^-c.+/ { sub(/^-c/, ""); print; exit }
+                         { prev = $0 }')
+            fi
+            [ -n "$sock" ] && [ -n "$cfg" ] && [ -S "$sock" ] && [ -f "$cfg" ] || continue
+            key="$sock|$cfg"
+            case "$seen" in *" $key "*) continue ;; esac
+            seen="$seen$key "
+            /usr/bin/exyonqctl reload --config "$cfg" --socket "$sock" >/dev/null 2>&1 || true
+        done
+        # No path-only fallback: without the process's config, a reload could
+        # apply the wrong file. A launcher that hides both variables from
+        # /proc is outside this contract and needs its own logrotate stanza.
     endscript
 }

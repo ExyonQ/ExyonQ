@@ -50,7 +50,7 @@ Vocabulary:
 | Integrity triad selftest | PASS | this remediation | Darwin local | `scripts/gates/*-integrity*` + data-provenance | GRC-R5D | scripts/gates | CURRENT | YES (gate machinery) |
 | MRC-LET SUB-LET-PROTOCOL-WRITE-MISC | CLOSED_FIXED | `57255f20…` (fix) @ `41d41fbd…` | Netcup amd64 + Oracle arm64 | `wire_waf_reject_*` + dual-Linux harness | `20260819T032226Z` | `.exyonq-local/tmp/sub-let-protocol-write-misc-20260819T032226Z/` ; [mrc-let-current-state.md](../integrity/mrc-let-current-state.md) | CURRENT | YES |
 | MRC-LET SUB-LET-WS-WRITE | CLOSED_TEST_ONLY | `41d41fbd…` (no product mutation) | — (read-only audit) | inventory rebind + product-path check | 2026-08-19 | [mrc-let-current-state.md](../integrity/mrc-let-current-state.md) | CURRENT | YES (classification only) |
-| PMZ scanner | PASS | this remediation | Darwin local | `scan-private-material.sh --git-tree` | GRC-R5E | scripts/security | CURRENT | YES |
+| PMZ scanner | PASS | this remediation | Darwin local | `scan-private-material.sh --publication` | GRC-R5E | scripts/security | CURRENT | YES |
 | Release-audit infra | PASS (system) | this remediation | Darwin local | `verify-release-audit.sh --dry-run-infra` | GRC-R5C | scripts + docs/security | CURRENT | YES — **not** v0.4.3 audit approval |
 | V044 Phase 8 completeness + adversarial | **P8-C** MUST_FIX `P8-STATIC-FIFO-001` | `d9485666…` (ambient CFD; binary `6d9bc14d…`) | Netcup amd64 | Phase 8 raw-socket + TOCTOU + FIFO | `20260901T181000Z` | `.exyonq-local/evidence/phase8-completeness-adversarial-security/20260901T181000Z/` ; [phase8 binder](../v044-phase8-completeness-and-adversarial-security.md) | CURRENT | YES — **defect terminal, not a phase close** |
 

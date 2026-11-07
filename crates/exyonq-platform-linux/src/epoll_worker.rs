@@ -57,11 +57,11 @@ const MSG_NOSIGNAL: i32 = 0x4000;
 /// Terminal 503 for a sendfile registration that fails after the fd left the Tokio side
 /// (async `EPOLL_CTL_ADD` failure). Best-effort write + close — never a silent drop.
 const DRAINING_RESPONSE: &[u8] =
-    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\ndraining";
+    b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\ndraining";
 
-const SENDFILE_TERMINAL_503: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
+const SENDFILE_TERMINAL_503: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
 /// HEAD begin-reject: same Content-Length, zero body (HTTP/1.1 HEAD).
-const SENDFILE_TERMINAL_503_HEAD: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\n";
+const SENDFILE_TERMINAL_503_HEAD: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\n";
 
 fn interest_reading() -> u32 {
     static_epoll::interest_reading()
@@ -922,6 +922,31 @@ fn inline_wire_with_request_id(wire: bytes::Bytes, head: &[u8], started: Instant
     bytes::Bytes::from(out)
 }
 
+/// EXY-03: local port the connection was accepted on — NGINX
+/// `port_in_redirect` semantics emit the *listener* port, not the
+/// client-authority port. `getsockname` works for accept4 and dup'd
+/// (Tokio-transferred) fds alike.
+fn conn_local_port(fd: RawFd) -> Option<u16> {
+    // SAFETY: getsockname only reads into `addr`; `len` is initialized to the
+    // buffer size and updated on success.
+    unsafe {
+        let mut addr: libc::sockaddr_storage = std::mem::zeroed();
+        let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        if libc::getsockname(fd, &mut addr as *mut _ as *mut libc::sockaddr, &mut len) != 0 {
+            return None;
+        }
+        match addr.ss_family as i32 {
+            libc::AF_INET => Some(u16::from_be(
+                (*(&addr as *const _ as *const libc::sockaddr_in)).sin_port,
+            )),
+            libc::AF_INET6 => Some(u16::from_be(
+                (*(&addr as *const _ as *const libc::sockaddr_in6)).sin6_port,
+            )),
+            _ => None,
+        }
+    }
+}
+
 fn response_status_from_wire(response: &[u8]) -> Option<u16> {
     let line_end = response
         .windows(2)
@@ -1537,9 +1562,10 @@ fn sendfile_read_and_serve(
         let Some(c) = conns.get(&fd) else {
             return ReadServe::Closed;
         };
+        let local_port = conn_local_port(fd);
         c.attachment
             .static_site_slot()
-            .and_then(|slot| static_epoll::match_sendfile_asset(slot, &head_owned))
+            .and_then(|slot| static_epoll::match_sendfile_asset(slot, &head_owned, local_port))
     };
 
     let Some(asset_handle) = asset_handle else {
@@ -1548,7 +1574,9 @@ fn sendfile_read_and_serve(
         // Cap067 and hangs (0 response bytes). Cap004-classified wire instead.
         let site_slot = conns.get(&fd).and_then(|c| c.attachment.static_site_slot());
         if let Some(slot) = site_slot {
-            if let Some(wire) = static_epoll::sendfile_miss_http_wire(slot, &head_owned) {
+            let local_port = conn_local_port(fd);
+            if let Some(wire) = static_epoll::sendfile_miss_http_wire(slot, &head_owned, local_port)
+            {
                 static_epoll::note_sendfile_fallback();
                 let Some(peer) = conns.get(&fd).map(|c| c.peer) else {
                     return ReadServe::Closed;

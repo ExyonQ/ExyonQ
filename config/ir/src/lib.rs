@@ -15,6 +15,7 @@
  */
 //! ExyonQ configuration IR (versioned TOML schema).
 
+mod access;
 mod canonical;
 mod diagnostic;
 mod endpoint_set;
@@ -30,6 +31,11 @@ mod static_preload;
 mod upstream_health;
 mod waf;
 
+pub use access::{
+    access_day_index, parse_hhmm, parse_network, RouteAccessConfig, RouteAccessEffect,
+    RouteAccessRule, RouteAccessSchedule, MAX_ACCESS_METHODS, MAX_ACCESS_NETWORKS,
+    MAX_ACCESS_RULES,
+};
 pub use canonical::{canonical_json, fingerprint, IrFingerprint};
 pub use diagnostic::{
     offset_to_position, redact_secrets, render_human, sort_diagnostics, span_from_byte_range,
@@ -53,8 +59,9 @@ pub use logging::{
     OtelLoggingConfig, OtlpProtocol, SyslogLoggingConfig,
 };
 pub use modules::{
-    AuthConfig, AuthRouteConfig, CompressionConfig, GunzipConfig, MetricsConfig, MirrorConfig,
-    MirrorRouteConfig, ModulesConfig, RateLimitConfig, RateLimitZoneConfig, RealIpConfig,
+    AuthConfig, AuthRequestConfig, AuthRouteConfig, ClientThrottleConfig, CompressionConfig,
+    GunzipConfig, MetricsConfig, MirrorConfig, MirrorRouteConfig, ModulesConfig, RateLimitConfig,
+    RateLimitLimit, RateLimitRouteOptions, RateLimitRoutePolicy, RateLimitZoneConfig, RealIpConfig,
     SliceConfig, SliceRouteConfig, SubFilterConfig, SubFilterRouteConfig, SubFilterRule,
 };
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
@@ -69,9 +76,10 @@ pub use static_preload::{
 };
 pub use upstream_health::UpstreamHealthCheckConfig;
 pub use waf::{
-    WafAbuseConfig, WafAbuseMode, WafBuiltinToggles, WafConfig, WafCustomRuleConfig,
-    WafDetectorModeIr, WafEngineIr, WafExclusionConfig, WafFailPolicyIr, WafIpFilterConfig,
-    WafModeIr, WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr, WafRulesetConfig,
+    WafAbuseConfig, WafAbuseMode, WafBuiltinToggles, WafCaptchaProvider, WafConfig,
+    WafCustomRuleConfig, WafDetectorModeIr, WafEngineIr, WafExclusionConfig, WafFailPolicyIr,
+    WafIpFilterConfig, WafModeIr, WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr,
+    WafRulesetConfig,
 };
 
 use modules::ModulesConfig as RawModulesConfig;
@@ -314,8 +322,26 @@ pub struct RouteConfig {
     pub rewrite: Option<RewriteConfig>,
     #[serde(default)]
     pub fastcgi: Option<String>,
+    /// EXY-03: NGINX `alias` + `fastcgi_pass`. Filesystem script root for this
+    /// route when the NGINX location used `alias` — resolution joins
+    /// `fastcgi_script_root + (URI − match.path)` instead of
+    /// `pool.document_root + URI`. `SCRIPT_NAME` stays the full request URI.
+    #[serde(default)]
+    pub fastcgi_script_root: Option<PathBuf>,
+    /// EXY-10: front-controller fallback for `fastcgi` routes (NGINX
+    /// `try_files $uri $uri/ /index.php?$args` semantics). When the URI does
+    /// not resolve to a file under the script/document root: a URI that names
+    /// an existing directory resolves `<dir>/<name>` (index semantics);
+    /// anything else resolves `<root>/<name>` with `PATH_INFO` = request URI
+    /// (WordPress pretty permalinks, framework routers). `REQUEST_URI` stays
+    /// the original request. Without it, an unresolved URI is a 404.
+    #[serde(default)]
+    pub front_controller: Option<String>,
     #[serde(default)]
     pub htaccess: HtaccessMode,
+    /// AP-05: declarative IP/method/UTC-schedule access policy.
+    #[serde(default)]
+    pub access: Option<RouteAccessConfig>,
     #[serde(default)]
     pub cache: Option<String>,
     /// NG-16: invalidation tags for entries served by this route
@@ -348,6 +374,48 @@ pub struct RouteConfig {
     /// `[modules.gunzip] enabled`.
     #[serde(default)]
     pub gunzip: Option<bool>,
+    /// How `root` maps a request URI to a file (EXY-03). Default `alias`
+    /// preserves historical native semantics; `nginx` joins the full URI
+    /// under `root` exactly like the NGINX `root` directive.
+    #[serde(default)]
+    pub root_mode: RootMode,
+    /// When the resolved static target is a directory and the request URI has
+    /// no trailing `/`, answer `301` to `URI/` (NGINX-style) instead of
+    /// serving the index directly. Only the NGINX importer sets this; native
+    /// configs keep the direct-index behaviour.
+    #[serde(default)]
+    pub dir_redirect: bool,
+    /// EXY-03: NGINX `absolute_redirect`. `true` (default) emits an absolute
+    /// `Location` (`scheme://authority/path/`); `false` emits the relative
+    /// `path/` form. Only meaningful with `dir_redirect`.
+    #[serde(default = "default_true")]
+    pub dir_redirect_absolute: bool,
+    /// EXY-03: NGINX `port_in_redirect`. `true` (default) emits the listener
+    /// port in `Location` unless it is the scheme default (80/443); `false`
+    /// never emits a port. Only meaningful with `dir_redirect`.
+    #[serde(default = "default_true")]
+    pub dir_redirect_port: bool,
+    /// EXY-03: NGINX `server_name_in_redirect`. When set, this fixed host name
+    /// replaces the request `Host`/`:authority` in the emitted `Location`
+    /// (the importer writes the server's primary `server_name` here).
+    /// Only meaningful with `dir_redirect`.
+    #[serde(default)]
+    pub dir_redirect_host: Option<String>,
+}
+
+/// `route.root` path-mapping mode (EXY-03). Names describe the resolution
+/// semantics, not another product's directive names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RootMode {
+    /// Join the URI *remainder* after the matched `match.path` prefix under
+    /// `root`: `root + (URI − prefix)` — historical ExyonQ; equivalent to
+    /// NGINX `alias`.
+    #[default]
+    Remainder,
+    /// Join the *full* request URI under `root`: `root + URI` — equivalent
+    /// to NGINX `root` / Apache `DocumentRoot`.
+    FullUri,
 }
 
 /// F3-R20: one response-location rewrite rule (`ProxyPassReverse` /
@@ -409,8 +477,16 @@ impl CacheHeadersConfig {
     }
 
     /// `Cache-Control` value for a content-type, if configured.
+    ///
+    /// `max_age = 0` is the explicit no-cache spelling: Apache's `A0`
+    /// (`ExpiresByType … A0`) is a legal directive, and HTML needs
+    /// revalidation rather than a one-second stale window. `immutable` is
+    /// rejected at validation with `max_age = 0`.
     pub fn cache_control_for(&self, content_type: &str) -> Option<String> {
         let h = self.lookup(content_type)?;
+        if h.max_age == 0 {
+            return Some("no-cache".to_string());
+        }
         let mut v = format!("public, max-age={}", h.max_age);
         if h.immutable {
             v.push_str(", immutable");
@@ -670,6 +746,25 @@ pub struct RouteMatch {
     /// Exact value when set; if omitted with `header`, require present non-empty.
     #[serde(default)]
     pub header_value: Option<String>,
+    /// NGINX literal-prefix matching for `path` (EXY-03): `path` matches any
+    /// URI starting with the pattern verbatim — `/assets` also matches
+    /// `/assets-extra`. Default `false` keeps native segment-boundary
+    /// matching (`/assets` does not match `/assets-extra`). Only the NGINX
+    /// importer sets this; native configs are unaffected.
+    #[serde(default)]
+    pub literal: bool,
+    /// NGINX `location =` exact matching (EXY-03): `path` matches only when it
+    /// equals the request URI verbatim — `/exact` matches `/exact` only, never
+    /// `/exact/` or `/exactx`. Default `false` keeps native prefix matching.
+    /// Only the NGINX importer sets this.
+    #[serde(default)]
+    pub exact: bool,
+    /// NGINX `listen` port scoping (EXY-03): when set, the route only matches
+    /// requests accepted on that listener port — the importer stamps it from
+    /// the owning `server { listen }` so per-server routes sharing a path do
+    /// not collide. `None` = any listener (native default).
+    #[serde(default)]
+    pub listen_port: Option<u16>,
 }
 
 impl RouteMatch {
@@ -1242,7 +1337,11 @@ impl AppConfig {
             validate_route_match(&route.r#match)?;
             validate_route_cache(route, &cache_policies)?;
             validate_route_cache_headers(route)?;
+            validate_route_root_mode(route)?;
             validate_route_actions(route)?;
+            if let Some(access) = &route.access {
+                access.validate(&route.name)?;
+            }
             validate_htaccess_overlay(route, &pools_fcgi)?;
             validate_proxy_set_headers(route, &maps)?;
             validate_response_headers(route)?;
@@ -1375,20 +1474,240 @@ impl AppConfig {
 }
 
 fn validate_ratelimit_config(rl: &RateLimitConfig) -> Result<(), ConfigError> {
-    if !rl.enabled {
-        return Ok(());
+    if rl.enabled {
+        if rl.requests_per_second == 0 {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.requests_per_second must be >= 1 when enabled".into(),
+            ));
+        }
+        if rl.burst == 0 {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.burst must be >= 1 when enabled".into(),
+            ));
+        }
     }
-    if rl.requests_per_second == 0 {
-        return Err(ConfigError::Parse(
-            "modules.ratelimit.requests_per_second must be >= 1 when enabled".into(),
-        ));
+
+    if rl.client.enabled {
+        let client = &rl.client;
+        let configured = client.soft_connections_per_ip.is_some()
+            || client.max_connections_per_ip.is_some()
+            || client.bandwidth_bytes_per_second.is_some()
+            || client.input_bandwidth_bytes_per_second.is_some()
+            || client.static_requests_per_second.is_some()
+            || client.dynamic_requests_per_second.is_some()
+            || client.block_bad_req;
+        if !configured {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.client needs at least one limit (soft/hard connections, in/out bandwidth, static/dynamic requests, or block_bad_req)"
+                    .into(),
+            ));
+        }
+        if client.soft_connections_per_ip == Some(0) {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.client.soft_connections_per_ip must be >= 1".into(),
+            ));
+        }
+        if client.max_connections_per_ip == Some(0) {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.client.max_connections_per_ip must be >= 1".into(),
+            ));
+        }
+        // OpenLiteSpeed accepts any soft/hard pair and enforces the hard limit
+        // first. Keep the same shape so an imported OLS block with soft > hard
+        // (or an explicit hard-only limit whose omitted soft defaults to
+        // INT_MAX) remains migratable. Runtime checks hard before soft;
+        // block_bad_req can still use ban_seconds.
+        if client.soft_connections_per_ip.is_some() && client.max_connections_per_ip.is_none() {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.client.soft_connections_per_ip requires max_connections_per_ip"
+                    .into(),
+            ));
+        }
+        if client.soft_connections_per_ip.is_none()
+            && client.ban_seconds > 0
+            && !client.block_bad_req
+        {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.client.ban_seconds requires soft_connections_per_ip or block_bad_req"
+                    .into(),
+            ));
+        }
+        if client.block_bad_req && client.ban_seconds == 0 {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.client.block_bad_req requires ban_seconds >= 1".into(),
+            ));
+        }
+        for (name, rate) in [
+            (
+                "bandwidth_bytes_per_second",
+                client.bandwidth_bytes_per_second,
+            ),
+            (
+                "input_bandwidth_bytes_per_second",
+                client.input_bandwidth_bytes_per_second,
+            ),
+        ] {
+            if rate.is_some_and(|rate| rate < 1024) {
+                return Err(ConfigError::Parse(format!(
+                    "modules.ratelimit.client.{name} must be >= 1024 (0 disables the limit)"
+                )));
+            }
+        }
+        for (name, rate) in [
+            (
+                "static_requests_per_second",
+                client.static_requests_per_second,
+            ),
+            (
+                "dynamic_requests_per_second",
+                client.dynamic_requests_per_second,
+            ),
+        ] {
+            if rate == Some(0) {
+                return Err(ConfigError::Parse(format!(
+                    "modules.ratelimit.client.{name} must be >= 1"
+                )));
+            }
+        }
     }
-    if rl.burst == 0 {
-        return Err(ConfigError::Parse(
-            "modules.ratelimit.burst must be >= 1 when enabled".into(),
-        ));
+
+    // Zone limits are independent of the legacy global IP limiter. Validate
+    // them even when `enabled = false`, which is how imported nginx zone-only
+    // configurations avoid enabling the global limiter.
+    for (name, zone) in &rl.zones {
+        if name.trim().is_empty() {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.zones name must not be empty".into(),
+            ));
+        }
+        if zone.requests_per_second == 0 {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.zones.{name}.requests_per_second must be >= 1"
+            )));
+        }
+        if zone.burst == 0 {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.zones.{name}.burst must be >= 1"
+            )));
+        }
+        if !valid_ratelimit_key(&zone.key) {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.zones.{name}.key must be ip, host, route, user, header:<name>, cookie:<name>, or expr:<nginx expression>"
+            )));
+        }
+    }
+    for (route, zone) in &rl.routes {
+        if route.trim().is_empty() {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.routes route name must not be empty".into(),
+            ));
+        }
+        if !rl.zones.contains_key(zone) {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.routes.{route} references unknown zone `{zone}`"
+            )));
+        }
+    }
+    for (route, options) in &rl.route_options {
+        if !rl.routes.contains_key(route) {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.route_options.{route} has no matching routes entry"
+            )));
+        }
+        if options.nodelay && options.delay.is_some() {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.route_options.{route} cannot combine nodelay with delay"
+            )));
+        }
+    }
+    for (route, policy) in &rl.route_limits {
+        if route.trim().is_empty() {
+            return Err(ConfigError::Parse(
+                "modules.ratelimit.route_limits route name must not be empty".into(),
+            ));
+        }
+        if policy.limits.is_empty() {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.route_limits.{route}.limits must not be empty"
+            )));
+        }
+        if !(400..=599).contains(&policy.status) {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.route_limits.{route}.status must be in 400..=599"
+            )));
+        }
+        if !matches!(
+            policy.log_level.as_str(),
+            "info" | "notice" | "warn" | "error"
+        ) {
+            return Err(ConfigError::Parse(format!(
+                "modules.ratelimit.route_limits.{route}.log_level must be info, notice, warn or error"
+            )));
+        }
+        for (i, limit) in policy.limits.iter().enumerate() {
+            if !rl.zones.contains_key(&limit.zone) {
+                return Err(ConfigError::Parse(format!(
+                    "modules.ratelimit.route_limits.{route}.limits[{i}] references unknown zone `{}`",
+                    limit.zone
+                )));
+            }
+            if limit.nodelay && limit.delay.is_some() {
+                return Err(ConfigError::Parse(format!(
+                    "modules.ratelimit.route_limits.{route}.limits[{i}] cannot combine nodelay with delay"
+                )));
+            }
+        }
     }
     Ok(())
+}
+
+fn valid_ratelimit_key(key: &str) -> bool {
+    if matches!(key, "ip" | "host" | "route" | "user") {
+        return true;
+    }
+    if let Some(expr) = key.strip_prefix("expr:") {
+        return !expr.trim().is_empty() && valid_ratelimit_expression(expr);
+    }
+    let Some(name) = key
+        .strip_prefix("header:")
+        .or_else(|| key.strip_prefix("cookie:"))
+    else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Accept nginx variable templates (`$remote_addr$uri`, `${host}`) plus literal
+/// text. Names are validated syntactically; the runtime maps known variables and
+/// treats an unknown variable as nginx's empty string.
+fn valid_ratelimit_expression(expr: &str) -> bool {
+    let bytes = expr.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let braced = bytes.get(i) == Some(&b'{');
+        if braced {
+            i += 1;
+        }
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        if i == start || (braced && bytes.get(i) != Some(&b'}')) {
+            return false;
+        }
+        if braced {
+            i += 1;
+        }
+    }
+    true
 }
 
 fn listen_is_loopback(listen: &str) -> bool {
@@ -1498,14 +1817,32 @@ fn validate_route_cache_headers(route: &RouteConfig) -> Result<(), ConfigError> 
                 route.name
             )));
         }
-        if hdr.max_age == 0 || hdr.max_age > CacheHeadersConfig::MAX_AGE_LIMIT {
+        if hdr.max_age > CacheHeadersConfig::MAX_AGE_LIMIT {
             return Err(ConfigError::Parse(format!(
-                "route `{}`: cache_headers.by_mime[`{mime}`].max_age must be 1..={}, got {}",
+                "route `{}`: cache_headers.by_mime[`{mime}`].max_age must be 0..={}, got {}",
                 route.name,
                 CacheHeadersConfig::MAX_AGE_LIMIT,
                 hdr.max_age
             )));
         }
+        if hdr.max_age == 0 && hdr.immutable {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: cache_headers.by_mime[`{mime}`] cannot be immutable with max_age = 0",
+                route.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `root_mode` only means something next to `root`; setting it on a route with
+/// no filesystem root is a config error (EXY-03), not a silent no-op.
+fn validate_route_root_mode(route: &RouteConfig) -> Result<(), ConfigError> {
+    if route.root_mode != RootMode::default() && route.root.is_none() {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: root_mode requires `root` to be set",
+            route.name
+        )));
     }
     Ok(())
 }
@@ -1548,6 +1885,15 @@ fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
         actions += 1;
     }
     if actions == 0 {
+        // F6-WP-01: an unconditional deny-all ACL is a complete terminal. It
+        // rejects every request before static/FastCGI/auth and needs no backend.
+        if route
+            .access
+            .as_ref()
+            .is_some_and(RouteAccessConfig::denies_all)
+        {
+            return Ok(());
+        }
         return Err(ConfigError::RouteWithoutAction {
             route: route.name.clone(),
         });
@@ -3110,6 +3456,46 @@ target = "http://127.0.0.1:9000"
     }
 
     #[test]
+    fn accepts_unconditional_deny_all_route_without_backend() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["wp-config-deny"]
+
+[[route]]
+name = "wp-config-deny"
+match = { path = "/wp-config.php", exact = true }
+access = { deny = ["all"] }
+"#;
+        let config: AppConfig = input.parse().expect("deny-all route");
+        assert!(config.routes[0].r#match.exact);
+        assert!(config.routes[0]
+            .access
+            .as_ref()
+            .is_some_and(RouteAccessConfig::denies_all));
+    }
+
+    #[test]
+    fn rejects_conditional_access_without_backend() {
+        let input = r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["deny"]
+
+[[route]]
+name = "deny"
+match = { path = "/wp-config.php", exact = true }
+access = { deny = ["all"], methods = ["GET"] }
+"#;
+        let err = input.parse::<AppConfig>().expect_err("conditional access");
+        assert!(err.to_string().contains("unconditional deny-all"));
+    }
+
+    #[test]
     fn accepts_suffix_and_regex_match() {
         let input = r#"
 config_version = 1
@@ -3808,6 +4194,79 @@ fastcgi = "missing"
             }
         }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn client_throttle_soft_hard_and_ban_are_validated() {
+        fn parse(block: &str) -> Result<AppConfig, crate::ConfigError> {
+            let raw = format!(
+                "config_version = 1\n\
+                 [modules.ratelimit.client]\n\
+                 enabled = true\n\
+                 {block}\n\
+                 [[server]]\n\
+                 listen = \"127.0.0.1:8080\"\n\
+                 routes = [\"api\"]\n\
+                 [[route]]\n\
+                 name = \"api\"\n\
+                 match = {{ path = \"/api/\" }}\n\
+                 upstream = \"backend\"\n\
+                 [[upstream]]\n\
+                 name = \"backend\"\n\
+                 target = \"http://127.0.0.1:9\"\n"
+            );
+            raw.parse()
+        }
+
+        parse("soft_connections_per_ip = 1\nmax_connections_per_ip = 2\ngrace_seconds = 1\nban_seconds = 2")
+            .expect("soft/hard with grace ban");
+        parse("soft_connections_per_ip = 2\nmax_connections_per_ip = 1")
+            .expect("OpenLiteSpeed accepts soft above hard; the hard check wins");
+        assert!(
+            parse("soft_connections_per_ip = 1").is_err(),
+            "soft without hard must fail closed"
+        );
+        assert!(
+            parse("max_connections_per_ip = 1\nban_seconds = 2").is_err(),
+            "ban without soft must fail closed"
+        );
+        // OpenLiteSpeed's own defaults are soft == hard (10000/10000) with a
+        // banPeriod; the hard ceiling wins, while block_bad_req can still use
+        // the same ban. Equality must therefore be accepted.
+        parse("soft_connections_per_ip = 1\nmax_connections_per_ip = 1\nban_seconds = 2")
+            .expect("soft equal to hard is an OLS-compatible shape");
+        assert!(
+            parse("block_bad_req = true\nban_seconds = 0").is_err(),
+            "block_bad_req without a ban duration must fail closed"
+        );
+        parse("block_bad_req = true\nban_seconds = 1")
+            .expect("block_bad_req with a ban duration is valid");
+    }
+
+    /// OL-03: the new client-throttle block must not perturb the canonical IR
+    /// when it is absent or carries only its defaults. `Default` must use the
+    /// same values as the serde defaults, otherwise `skip_serializing_if`
+    /// never fires and every fingerprint changes.
+    #[test]
+    fn client_throttle_absent_and_default_fingerprints_match() {
+        let raw = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/api/" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9"
+"#;
+        let absent: AppConfig = raw.parse().expect("absent client throttle");
+        let mut defaulted = absent.clone();
+        defaulted.modules.ratelimit.client = crate::ClientThrottleConfig::default();
+        assert_eq!(fingerprint(&absent), fingerprint(&defaulted));
+        assert!(!canonical_json(&absent).contains("\"client\""));
     }
 
     #[test]
@@ -4781,7 +5240,7 @@ max_age = 3600
     }
 
     #[test]
-    fn cache_headers_zero_max_age_rejected() {
+    fn cache_headers_zero_max_age_means_no_cache() {
         let toml = r#"
 config_version = 1
 [[server]]
@@ -4794,8 +5253,35 @@ root = "/var/www"
 [route.cache_headers.by_mime."text/css"]
 max_age = 0
 "#;
+        let cfg = AppConfig::parse_str(toml).expect("max_age = 0 is valid");
+        let site = cfg.routes.iter().find(|r| r.name == "site").unwrap();
+        let ch = site.cache_headers.as_ref().expect("cache_headers");
+        assert_eq!(
+            ch.cache_control_for("text/css").as_deref(),
+            Some("no-cache")
+        );
+    }
+
+    #[test]
+    fn cache_headers_zero_max_age_cannot_be_immutable() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/var/www"
+[route.cache_headers.by_mime."text/css"]
+max_age = 0
+immutable = true
+"#;
         let err = AppConfig::parse_str(toml).unwrap_err().to_string();
-        assert!(err.contains("max_age"), "{err}");
+        assert!(
+            err.contains("immutable") && err.contains("max_age = 0"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -5677,5 +6163,123 @@ protocols = ["TLSv1.3"]
         ));
         let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
         assert!(err.contains("tls.protocols"), "{err}");
+    }
+
+    #[test]
+    fn ng19_ratelimit_validates_zone_keys_and_route_references() {
+        let mut cfg = crate::RateLimitConfig::default();
+        cfg.zones.insert(
+            "z".into(),
+            crate::RateLimitZoneConfig {
+                key: "cookie:session".into(),
+                requests_per_second: 2,
+                burst: 3,
+            },
+        );
+        cfg.routes.insert("r".into(), "z".into());
+        validate_ratelimit_config(&cfg).expect("valid zone-only config");
+
+        cfg.zones.get_mut("z").unwrap().key = "user".into();
+        validate_ratelimit_config(&cfg).expect("$remote_user key is valid");
+
+        cfg.zones.get_mut("z").unwrap().key = "header:".into();
+        let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("key"), "{err}");
+
+        cfg.zones.get_mut("z").unwrap().key = "route".into();
+        cfg.routes.insert("r".into(), "missing".into());
+        let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("unknown zone"), "{err}");
+    }
+
+    #[test]
+    fn ng19_ratelimit_validates_route_options() {
+        let mut cfg = crate::RateLimitConfig::default();
+        cfg.zones.insert(
+            "z".into(),
+            crate::RateLimitZoneConfig {
+                key: "ip".into(),
+                requests_per_second: 1,
+                burst: 1,
+            },
+        );
+        cfg.routes.insert("r".into(), "z".into());
+        cfg.route_options.insert(
+            "r".into(),
+            crate::RateLimitRouteOptions {
+                burst: Some(0),
+                delay: Some(0),
+                nodelay: false,
+            },
+        );
+        validate_ratelimit_config(&cfg).expect("valid route options");
+
+        cfg.route_options.get_mut("r").unwrap().nodelay = true;
+        let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("cannot combine nodelay"), "{err}");
+
+        cfg.route_options.clear();
+        cfg.route_options.insert(
+            "missing".into(),
+            crate::RateLimitRouteOptions {
+                burst: Some(1),
+                delay: None,
+                nodelay: true,
+            },
+        );
+        let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("no matching routes"), "{err}");
+    }
+
+    #[test]
+    fn ng19_ratelimit_rejects_zero_zone_rate() {
+        let mut cfg = crate::RateLimitConfig::default();
+        cfg.zones.insert(
+            "z".into(),
+            crate::RateLimitZoneConfig {
+                key: "ip".into(),
+                requests_per_second: 0,
+                burst: 1,
+            },
+        );
+        let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("requests_per_second"), "{err}");
+    }
+
+    #[test]
+    fn ng19_ratelimit_accepts_expressions_and_multiple_limits() {
+        let mut cfg = crate::RateLimitConfig::default();
+        cfg.zones.insert(
+            "z".into(),
+            crate::RateLimitZoneConfig {
+                key: "expr:$remote_addr$uri".into(),
+                requests_per_second: 2,
+                burst: 1,
+            },
+        );
+        cfg.route_limits.insert(
+            "r".into(),
+            crate::RateLimitRoutePolicy {
+                limits: vec![crate::RateLimitLimit {
+                    zone: "z".into(),
+                    burst: Some(3),
+                    delay: Some(1),
+                    nodelay: false,
+                }],
+                status: 503,
+                dry_run: true,
+                log_level: "warn".into(),
+            },
+        );
+        validate_ratelimit_config(&cfg).expect("expression and policy are valid");
+
+        cfg.route_limits.get_mut("r").unwrap().status = 200;
+        let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("400..=599"), "{err}");
+
+        cfg.route_limits.get_mut("r").unwrap().status = 503;
+        cfg.zones.get_mut("z").unwrap().key = "expr:$remote_addr$".into();
+        let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("expr:<nginx expression>"), "{err}");
     }
 }

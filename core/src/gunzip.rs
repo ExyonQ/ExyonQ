@@ -368,7 +368,8 @@ impl Body for GunzipBody {
                 );
             }
             if this.inner_done {
-                let before = this.out.len();
+                let in_len = this.decoder.input.len();
+                let state = this.decoder.state;
                 if this.decoder.pump(&mut this.out).is_err() {
                     this.error = Some(Box::new(GunzipError("invalid gzip stream")));
                     continue;
@@ -380,7 +381,13 @@ impl Body for GunzipBody {
                     this.done = true;
                     continue;
                 }
-                if this.decoder.input.is_empty() && before == this.out.len() {
+                // AUDIT-D3: upstream EOF with residual undecodable input — a
+                // pump that neither consumed input nor advanced state is a
+                // truncated stream, not data still to arrive. The old check
+                // required `input.is_empty()` (and `before` was always 0
+                // anyway), so a truncated header or 1–7-byte trailer spun
+                // here forever inside one poll_frame (worker starvation).
+                if this.decoder.input.len() == in_len && this.decoder.state == state {
                     this.error = Some(Box::new(GunzipError("truncated gzip stream")));
                 }
                 continue;
@@ -453,6 +460,73 @@ mod tests {
         Full::new(Bytes::from(data))
             .map_err(|never| match never {})
             .boxed()
+    }
+
+    /// AUDIT-D3: collect with a hard deadline on a multi-thread runtime — a
+    /// no-progress spin inside `poll_frame` starves a current_thread runtime
+    /// so the timeout could never fire; with 2 workers it does.
+    fn collect_timed(body: GunzipBody) -> Result<(Vec<u8>, Option<String>), &'static str> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let fut = async move {
+                let mut out = Vec::new();
+                let mut err = None;
+                let mut body = std::pin::pin!(body);
+                while let Some(frame) =
+                    std::future::poll_fn(|cx| body.as_mut().poll_frame(cx)).await
+                {
+                    match frame {
+                        Ok(frame) => {
+                            if let Ok(data) = frame.into_data() {
+                                out.extend_from_slice(&data);
+                            }
+                        }
+                        Err(e) => {
+                            err = Some(e.to_string());
+                            break;
+                        }
+                    }
+                }
+                (out, err)
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(10), fut)
+                .await
+                .map_err(|_| "poll_frame spun past deadline (livelock)")
+        })
+    }
+
+    #[test]
+    fn truncated_member_errors_without_hanging() {
+        // AUDIT-D3: upstream EOF mid-deflate — decoder keeps residual input
+        // and makes no progress; must error, never spin inside one poll.
+        let wire = gzip(&b"payload-body".repeat(512));
+        let truncated = wire[..wire.len() * 3 / 4].to_vec();
+        let (_, err) =
+            collect_timed(GunzipBody::new(boxed(truncated), 4096)).expect("must not livelock");
+        assert!(err.is_some(), "truncated stream must surface an error");
+    }
+
+    #[test]
+    fn truncated_trailer_errors_without_hanging() {
+        // AUDIT-D3: deflate complete, EOF inside the 8-byte trailer — the old
+        // `input.is_empty()` condition never fired on 1–7 residual bytes.
+        let wire = gzip(&b"payload-body".repeat(128));
+        let truncated = wire[..wire.len() - 3].to_vec();
+        let (_, err) =
+            collect_timed(GunzipBody::new(boxed(truncated), 4096)).expect("must not livelock");
+        assert!(err.is_some(), "partial trailer must surface an error");
+    }
+
+    #[test]
+    fn empty_upstream_errors_without_hanging() {
+        // EOF with zero input: empty body is not a valid gzip stream.
+        let (_, err) =
+            collect_timed(GunzipBody::new(boxed(Vec::new()), 4096)).expect("must not livelock");
+        assert!(err.is_some(), "empty stream must surface an error");
     }
 
     #[test]
