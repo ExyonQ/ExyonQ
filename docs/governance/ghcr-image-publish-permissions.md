@@ -137,9 +137,28 @@ WORDPRESS  = ghcr.io/exyonq/exyonq-wordpress:0.9.1@sha256:36d595d64cba38df5628b2
 LATEST     = 404 on both repositories
 ARTIFACT   = arm64 image reports exyonq 0.9.1 / source_tag=v0.9.1 / source_revision=ed778ee…
 PREFLIGHT  = 202/WRITABLE on both with a write token; 403 at exchange with a token lacking package access
+PREFLIGHT_RUN = 42403720738 (workflow_dispatch) -> job success in 4 s
 ```
 
 Both indexes are `application/vnd.oci.image.index.v1+json` with
 `linux/amd64` and `linux/arm64` plus attestation manifests. Full commands and
 results: `docs/releases/0.9.1-ghcr-publication.md`. The Docker Hub mirror and a
 manifest that binds these digests remain open items.
+
+### Executed in GitHub Actions
+
+Run [`42403720738`](https://github.com/ExyonQ/ExyonQ/actions/runs/42403720738)
+(`workflow_dispatch` on `ci/ghcr-push-preflight`): the `ghcr push permission`
+job was **success** in 4 seconds (18:56:05Z to 18:56:09Z). Log:
+
+```text
+18:56:06.952Z GHCR_PUSH_PERMISSION=exyonq/exyonq:WRITABLE
+18:56:07.333Z GHCR_PUSH_PERMISSION=exyonq/exyonq-wordpress:WRITABLE
+```
+
+The run as a whole is `failure` by design: `security-release` rejects any ref
+that is not `refs/tags/v*`, so `Resolve version` exits 1 and `compliance`,
+`docker`, `docker-wordpress` and `github-release` stay `skipped`. Nothing was
+built, pushed or released. This is the mounted proof that the probe runs in
+Actions and that a denied ACL stops the pipeline before the multi-arch build;
+the `403` branch was exercised locally against the same script.
