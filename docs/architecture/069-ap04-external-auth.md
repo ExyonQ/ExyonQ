@@ -181,6 +181,26 @@ resource-server introspection pattern. The native Linux matrix and the
 Linux-only `scripts/e2e/ap04-ol03-e2e.sh` were not executed on this Darwin host.
 AP-04 originates in `COMPAT_NGINX`; AP-03, not AP-04, covers Apache Basic auth.
 
+## Revalidation 2026-11-06
+
+On HEAD `ed778eec4b9d305a959d2968d26f276f7723225e` the tracked E2E was
+rerun against the current Darwin arm64 binary
+`0623c037964e59ed6e16c3007595bc4ae6cee54cab53f2aa02a63e2ce932433e`
+(`source_revision=ed778ee`, `source_tag=v0.9.1`) after
+`cargo build -p exyonq --bin exyonq --locked` exited `0`. The result was
+**30/30 PASS**, `RESULT=PASS AP-04`, exit `0`; the log is
+`.exyonq-local/evidence/ap04/ap04-e2e-final-20261106T200501Z/console.log`
+(SHA-256 `679e405bcda18ecc5c1ab84c4ff39482c39a13fb15a9d98b4f3d5faefbf55ccf`).
+Focused tests passed 2/2 (`exyonq-config-ir`) and 5/5 (`exyonq-core`); the
+full library suites passed 183/183 and 242/242; Clippy (`-D warnings`) and
+`cargo fmt --all -- --check` exited `0`. The run directory also contains the
+build, test, Clippy, fmt and validation logs with `SHA256SUMS.txt`.
+
+This revalidation is Darwin arm64 with a controlled auth peer, not a native
+Linux matrix or a production identity provider. The endpoint remains
+HTTP-only, the OAuth browser/code flow remains out of scope, and a relative
+nginx `auth_request` location still requires the documented manual migration.
+
 ## Limits
 
 - HTTP endpoints only; TLS client connections are out of scope for the v1
