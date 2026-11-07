@@ -13,6 +13,7 @@ TRACKING = force-tracked under /docs/governance/** (see .gitignore exceptions)
 | [benchmark-integrity.md](benchmark-integrity.md) | Benchmark integrity policy |
 | [data-provenance.md](data-provenance.md) | Data provenance policy |
 | [signing-readiness.md](signing-readiness.md) | Signing design readiness (no production sign) |
+| [ghcr-image-publish-permissions.md](ghcr-image-publish-permissions.md) | GHCR package Actions ACL — why `write_package` is denied and how the release push is re-verified |
 | [enforcement-matrix.md](enforcement-matrix.md) | Policy ↔ enforcement map |
 | [exceptions/](exceptions/) | Release waiver register (minimal) |
 | [evidence/INDEX.md](evidence/INDEX.md) | Evidence binder |

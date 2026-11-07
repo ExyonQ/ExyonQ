@@ -384,8 +384,52 @@ jobs:
             bundle/SHA256SUMS.txt
             bundle/release-manifest.json
             bundle/artifacts/*
+  ghcr-preflight:
+    # `permissions: packages: write` does not grant write on an existing
+    # package: its "Manage Actions access" ACL must grant this repository
+    # Write. Creating an upload session proves that in seconds, in parallel
+    # with security-release; the session is never completed, so nothing is
+    # published. See docs/governance/ghcr-image-publish-permissions.md.
+    name: ghcr push permission
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Probe GHCR upload permission
+        env:
+          ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for repo in exyonq/exyonq exyonq/exyonq-wordpress; do
+            if ! body="$(printf 'user = "%s:%s"\n' "$ACTOR" "$GHCR_TOKEN" \
+              | curl -fsS --config - \
+                  "https://ghcr.io/token?service=ghcr.io&scope=repository:${repo}:pull,push")"; then
+              echo "ERROR: cannot obtain a GHCR push token for ${repo}" >&2
+              echo "ERROR: check Manage Actions access for the package (Role: Write)" >&2
+              exit 1
+            fi
+            bearer="$(printf '%s' "$body" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))')"
+            if [ -z "$bearer" ]; then
+              echo "ERROR: empty GHCR token for ${repo}" >&2
+              exit 1
+            fi
+            code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer ${bearer}" \
+              "https://ghcr.io/v2/${repo}/blobs/uploads/")"
+            if [ "$code" != "202" ]; then
+              echo "ERROR: GHCR push denied for ${repo} (HTTP ${code})" >&2
+              echo "ERROR: grant ExyonQ/ExyonQ Role Write on package ${repo#exyonq/} in Manage Actions access" >&2
+              echo "ERROR: see docs/governance/ghcr-image-publish-permissions.md" >&2
+              exit 1
+            fi
+            echo "GHCR_PUSH_PERMISSION=${repo}:WRITABLE"
+          done
+
   docker:
-    needs: compliance-artifacts
+    needs: [compliance-artifacts, ghcr-preflight]
     runs-on: ubuntu-latest
     permissions:
       packages: write
