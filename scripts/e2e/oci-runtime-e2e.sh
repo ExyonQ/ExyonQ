@@ -22,6 +22,8 @@ esac
 # Soak hosts may have incomplete .git (missing objects/); do not require git.
 REV="${EXYONQ_GIT_REVISION:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
 [[ -n "$REV" ]] || REV="unknown"
+VERSION="${EXYONQ_VERSION:-$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$ROOT/Cargo.toml" | head -n 1)}"
+[[ -n "$VERSION" ]] || { echo "FAIL: cannot determine workspace version"; exit 1; }
 EV="${E2E_EV:-$ROOT/.exyonq-local/tmp/e2e-oci/oci-${ARCH}}"
 mkdir -p "$EV"
 TMP="$(mktemp -d)"
@@ -39,10 +41,9 @@ name = "site"
 match = { path = "/site" }
 root = "/var/www/exyonq"
 index = "index.html"
-[modules.metrics]
-enabled = true
-health_path = "/health"
 EOF
+# The container runs as nonroot (65532); the mktemp directory is 0700.
+chmod -R a+rX "$TMP"
 
 HOST_PORT="$(e2e_pick_port)"
 CID=""
@@ -56,7 +57,7 @@ echo "oci-runtime-e2e: building $TAG plat=$PLAT rev=$REV"
 set +e
 docker buildx build -f "$ROOT/packaging/docker/Dockerfile" \
   --platform "$PLAT" --load \
-  --build-arg EXYONQ_VERSION=0.4.11 \
+  --build-arg "EXYONQ_VERSION=$VERSION" \
   --build-arg "EXYONQ_GIT_REVISION=$REV" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t "$TAG" "$ROOT" >"$EV/build.log" 2>&1
@@ -94,8 +95,8 @@ VER="$(docker exec "$CID" exyonq --version 2>/dev/null || true)"
 echo "VERSION=$VER" | tee "$EV/version.txt"
 [[ -n "$VER" ]] && e2e_record_pass "exyonq --version in container" || e2e_record_fail "version empty"
 
-USER="$(docker exec "$CID" id -u 2>/dev/null || true)"
-[[ "$USER" == "10001" ]] && e2e_record_pass "runs as uid 10001" || e2e_record_fail "uid=$USER"
+USER_CFG="$(docker inspect "$CID" --format '{{.Config.User}}' 2>/dev/null || true)"
+[[ "$USER_CFG" == "nonroot" ]] && e2e_record_pass "runs as nonroot (distroless uid 65532)" || e2e_record_fail "user=$USER_CFG"
 
 docker stop "$CID" >/dev/null
 CID=""

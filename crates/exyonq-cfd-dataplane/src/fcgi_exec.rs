@@ -451,6 +451,13 @@ pub fn format_client_response(
     let wire_body: &[u8] = if bodyless { &[] } else { body };
     let mut out = Vec::with_capacity(256 + wire_body.len());
     out.extend_from_slice(format!("HTTP/1.1 {status} {reason}\r\n").as_bytes());
+    // Server: exyonq unless the app already sent one — same rule as nginx.
+    if !headers
+        .iter()
+        .any(|(n, _)| n.eq_ignore_ascii_case("server"))
+    {
+        out.extend_from_slice(b"Server: exyonq\r\n");
+    }
     for (n, v) in headers {
         if n.eq_ignore_ascii_case("content-length") {
             continue;

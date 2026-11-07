@@ -48,6 +48,116 @@ fn has_entry(
 }
 
 #[test]
+fn ap05_allow_deny_maps_to_route_access() {
+    let src = r#"
+http {
+    server {
+        listen 8080;
+        root /srv;
+        location /private/ {
+            allow 10.0.0.0/8;
+            deny all;
+        }
+    }
+}
+"#;
+    let output =
+        migrate_source("access.conf", src, &MigrateOptions::default()).expect("migrate access");
+    let cfg = AppConfig::parse_str(&output.config).expect("parse access config");
+    let route = cfg
+        .routes
+        .iter()
+        .find(|route| route.r#match.path == "/private/")
+        .expect("private route");
+    let access = route.access.as_ref().expect("access policy");
+    assert!(access.allow.is_empty());
+    assert!(access.deny.is_empty());
+    assert_eq!(access.rules.len(), 2);
+    assert_eq!(
+        access.rules[0].effect,
+        exyonq_config_ir::RouteAccessEffect::Allow
+    );
+    assert_eq!(access.rules[0].source, "10.0.0.0/8");
+    assert_eq!(
+        access.rules[1].effect,
+        exyonq_config_ir::RouteAccessEffect::Deny
+    );
+    assert_eq!(access.rules[1].source, "all");
+}
+
+#[test]
+fn ap05_exact_deny_all_without_backend_is_widened_to_boundary() {
+    let src = r#"
+http {
+    server {
+        listen 8080;
+        location = /wp-config.php {
+            deny all;
+        }
+    }
+}
+"#;
+    let output = migrate_source("wp-config-deny.conf", src, &MigrateOptions::default())
+        .expect("migrate exact deny");
+    let cfg = AppConfig::parse_str(&output.config).expect("parse exact deny config");
+    let route = cfg
+        .routes
+        .iter()
+        .find(|route| route.r#match.path == "/wp-config.php")
+        .expect("wp-config deny route");
+    assert!(
+        !route.r#match.exact,
+        "exact deny-all must widen to a path-boundary prefix"
+    );
+    assert!(route
+        .access
+        .as_ref()
+        .is_some_and(exyonq_config_ir::RouteAccessConfig::denies_all));
+    assert!(route.upstream.is_none());
+    assert!(route.root.is_none());
+    assert!(route.fastcgi.is_none());
+    assert!(route.redirect.is_none());
+    assert!(output.report.entries.iter().any(|entry| {
+        entry.directive == "deny"
+            && entry.status == NginxCompatStatus::Partial
+            && entry.message.contains("widened")
+    }));
+}
+
+#[test]
+fn ap05_nginx_allow_deny_preserves_source_order() {
+    let src = r#"
+http {
+    server {
+        listen 8080;
+        root /srv;
+        location /ordered/ {
+            allow 10.0.0.0/8;
+            deny 10.1.0.0/16;
+            allow all;
+        }
+    }
+}
+"#;
+    let output =
+        migrate_source("access-order.conf", src, &MigrateOptions::default()).expect("migrate");
+    let cfg = AppConfig::parse_str(&output.config).expect("parse access config");
+    let route = cfg
+        .routes
+        .iter()
+        .find(|route| route.r#match.path == "/ordered/")
+        .expect("ordered route");
+    let rules = &route.access.as_ref().expect("access policy").rules;
+    assert_eq!(rules.len(), 3);
+    assert_eq!(rules[0].source, "10.0.0.0/8");
+    assert_eq!(rules[1].source, "10.1.0.0/16");
+    assert_eq!(rules[2].source, "all");
+    assert!(!output.report.entries.iter().any(|e| {
+        e.directive == "allow" && e.status == exyonq_compat_nginx::NginxCompatStatus::Partial
+    }));
+}
+
+#[test]
 fn tier2b_exact_and_prefix_precedence_risk() {
     let (toml, report) = migrate_fixture("tier2b-exact-prefix.conf");
     let cfg = AppConfig::parse_str(&toml).expect("parse");
@@ -661,6 +771,22 @@ fn ng05_auth_basic_maps_realm_and_file() {
 }
 
 #[test]
+fn ng05_auth_basic_without_user_file_fails_closed() {
+    let (toml, report) = migrate_fixture("ng18/auth-basic-missing-file.conf");
+    assert!(
+        !toml.contains("[modules.auth.routes"),
+        "auth route must not be emitted without a user file: {toml}"
+    );
+    assert!(
+        report
+            .entries
+            .iter()
+            .any(|e| e.directive == "auth_basic" && e.status == NginxCompatStatus::Error),
+        "missing auth_basic_user_file must be a reported error: {report:?}"
+    );
+}
+
+#[test]
 fn ng05_limit_req_zone_importer() {
     let (toml, report) = migrate_fixture("ng18/limit-req.conf");
     let cfg = AppConfig::parse_str(&toml).expect("parse");
@@ -676,10 +802,158 @@ fn ng05_limit_req_zone_importer() {
             .map(String::as_str),
         Some("one")
     );
+    let options = cfg
+        .modules
+        .ratelimit
+        .route_options
+        .get("srv1_loc1")
+        .expect("route_options");
+    assert_eq!(options.burst, Some(5));
+    assert!(options.nodelay);
     assert!(report
         .entries
         .iter()
         .any(|e| e.directive == "limit_req_zone" && e.status == NginxCompatStatus::Supported));
+}
+
+#[test]
+fn ng19_limit_zone_cookie_does_not_enable_global_limiter() {
+    let (toml, report) = migrate_fixture("ng18/limit-req-cookie.conf");
+    let cfg = AppConfig::parse_str(&toml).expect("parse cookie zone");
+    assert!(
+        !cfg.modules.ratelimit.enabled,
+        "zone-only import must not enable the legacy global limiter"
+    );
+    let zone = cfg
+        .modules
+        .ratelimit
+        .zones
+        .get("cookie")
+        .expect("cookie zone");
+    assert_eq!(zone.key, "cookie:session");
+    assert_eq!(zone.requests_per_second, 10);
+    assert_eq!(zone.burst, 2);
+    assert_eq!(
+        cfg.modules
+            .ratelimit
+            .routes
+            .get("srv1_loc1")
+            .map(String::as_str),
+        Some("cookie")
+    );
+    let options = cfg
+        .modules
+        .ratelimit
+        .route_options
+        .get("srv1_loc1")
+        .expect("route_options");
+    assert_eq!(options.burst, Some(2));
+    assert!(options.nodelay);
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| { e.directive == "limit_req" && e.status == NginxCompatStatus::Supported }));
+}
+
+#[test]
+fn ng19_limit_req_without_nodelay_maps_delay_zero() {
+    let src = r#"
+http {
+    limit_req_zone $binary_remote_addr zone=one:10m rate=1r/s;
+    server {
+        listen 80;
+        server_name delay.example;
+        location / {
+            limit_req zone=one burst=5;
+            proxy_pass http://127.0.0.1:9000;
+        }
+    }
+}
+"#;
+    let output =
+        migrate_source("limit-delay.conf", src, &MigrateOptions::default()).expect("migrate");
+    let cfg = AppConfig::parse_str(&output.config).expect("parse delay config");
+    let options = cfg
+        .modules
+        .ratelimit
+        .route_options
+        .get("srv1_loc1")
+        .expect("route_options");
+    assert_eq!(options.burst, Some(5));
+    assert_eq!(options.delay, None);
+    assert!(!options.nodelay, "delay=0 is nginx default, not nodelay");
+    assert!(output
+        .report
+        .entries
+        .iter()
+        .any(|e| { e.directive == "limit_req" && e.status == NginxCompatStatus::Supported }));
+}
+
+#[test]
+fn ng19_limit_req_delay_threshold_maps_supported() {
+    let src = r#"
+http {
+    limit_req_zone $binary_remote_addr zone=one:10m rate=1r/s;
+    server {
+        listen 80;
+        server_name delay-threshold.example;
+        location / {
+            limit_req zone=one burst=5 delay=3;
+            proxy_pass http://127.0.0.1:9000;
+        }
+    }
+}
+"#;
+    let output = migrate_source(
+        "limit-delay-threshold.conf",
+        src,
+        &MigrateOptions::default(),
+    )
+    .expect("migrate");
+    let cfg = AppConfig::parse_str(&output.config).expect("parse delay threshold config");
+    let options = cfg
+        .modules
+        .ratelimit
+        .route_options
+        .get("srv1_loc1")
+        .expect("route_options");
+    assert_eq!(options.burst, Some(5));
+    assert_eq!(options.delay, Some(3));
+    assert!(!options.nodelay);
+    assert!(output
+        .report
+        .entries
+        .iter()
+        .any(|e| { e.directive == "limit_req" && e.status == NginxCompatStatus::Supported }));
+}
+
+#[test]
+fn ng19_limit_req_remote_user_maps_user_key() {
+    let src = r#"
+http {
+    limit_req_zone $remote_user zone=users:10m rate=1r/s;
+    server {
+        listen 80;
+        server_name users.example;
+        location / {
+            limit_req zone=users burst=1 nodelay;
+            proxy_pass http://127.0.0.1:9000;
+        }
+    }
+}
+"#;
+    let (config_toml, report) = migrate_source("limit-user.conf", src, &MigrateOptions::default())
+        .map(|output| (output.config, output.report))
+        .expect("migrate");
+    let cfg = AppConfig::parse_str(&config_toml).expect("parse user zone");
+    assert_eq!(
+        cfg.modules.ratelimit.zones.get("users").unwrap().key,
+        "user"
+    );
+    assert!(report
+        .entries
+        .iter()
+        .any(|e| { e.directive == "limit_req_zone" && e.status == NginxCompatStatus::Supported }));
 }
 
 #[test]
@@ -730,4 +1004,46 @@ fn tier2b_expires_epoch_and_modified_are_reported_not_dropped() {
             .count(),
         2
     );
+}
+
+#[test]
+fn ng19_multiple_limits_status_dry_run_and_expression_import() {
+    let src = r#"
+http {
+    limit_req_zone $binary_remote_addr$uri zone=combo:10m rate=2r/s;
+    server {
+        listen 80;
+        server_name combo.example;
+        location / {
+            root /srv/www;
+            limit_req zone=combo burst=3;
+            limit_req zone=combo burst=1 nodelay;
+            limit_req_status 503;
+            limit_req_dry_run on;
+            limit_req_log_level warn;
+        }
+    }
+}
+"#;
+    let output =
+        migrate_source("ng19-multi.conf", src, &MigrateOptions::default()).expect("migrate");
+    let cfg = AppConfig::parse_str(&output.config).expect("parse multi-limit config");
+    let zone = cfg.modules.ratelimit.zones.get("combo").expect("zone");
+    assert_eq!(zone.key, "expr:$binary_remote_addr$uri");
+    let (_route_name, policy) = cfg
+        .modules
+        .ratelimit
+        .route_limits
+        .iter()
+        .next()
+        .expect("route policy");
+    assert_eq!(policy.limits.len(), 2);
+    assert_eq!(policy.status, 503);
+    assert!(policy.dry_run);
+    assert_eq!(policy.log_level, "warn");
+    assert_eq!(policy.limits[0].burst, Some(3));
+    assert!(policy.limits[1].nodelay);
+    assert!(output.report.entries.iter().any(|e| {
+        e.directive == "limit_req_status" && e.status == NginxCompatStatus::Supported
+    }));
 }

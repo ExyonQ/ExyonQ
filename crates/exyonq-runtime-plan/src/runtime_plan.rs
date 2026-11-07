@@ -27,6 +27,7 @@ use exyonq_config_ir::{
 };
 use exyonq_module_api::proxy_dispatch::ProxyCompiledSlot;
 use exyonq_module_api::static_dispatch::StaticCompiledSlot;
+use exyonq_module_api::CompiledAccessPolicy;
 use exyonq_module_api::CompiledCachePolicy;
 use exyonq_module_pipeline::CrossCuttingPipeline;
 use std::collections::hash_map::DefaultHasher;
@@ -143,6 +144,8 @@ pub struct RuntimeSnapshot {
     pub full_page_cache: CompiledFullPageCache,
     /// Parallel to IR routes: compiled Cap035/NG-02 rewrite engines (ADR-048).
     pub route_rewrites: Box<[Option<exyonq_module_api::CompiledRewrite>]>,
+    /// AP-05: compiled access policy parallel to IR routes.
+    pub route_access: Box<[Option<CompiledAccessPolicy>]>,
 }
 
 /// Compiled `[full_page_cache]` (WC2B).
@@ -379,10 +382,22 @@ impl RuntimeSnapshot {
             .find(|b| b.route_idx == route_idx)
     }
 
+    /// AP-05: compiled access policy for `route_idx`.
+    #[inline]
+    pub fn route_access_policy(&self, route_idx: usize) -> Option<&CompiledAccessPolicy> {
+        self.route_access.get(route_idx)?.as_ref()
+    }
+
     pub fn cache_policy_for_route(&self, route_idx: usize) -> Option<&CompiledCachePolicy> {
         let slot = *self.route_cache_policy_ids.get(route_idx)?;
         let slot = slot? as usize;
         self.cache_policies.get(slot)
+    }
+
+    /// ADR-048: compiled rewrite rule/literal for `route_idx`, if configured.
+    #[inline]
+    pub fn route_rewrite(&self, route_idx: usize) -> Option<&exyonq_module_api::CompiledRewrite> {
+        self.route_rewrites.get(route_idx)?.as_ref()
     }
 }
 
@@ -497,6 +512,14 @@ pub fn compile_runtime_plan_from_ir(
                 index_file: route.index.clone(),
                 route_name: route.name.clone(),
                 route_host: route.r#match.host.clone(),
+                join_uri: matches!(route.root_mode, exyonq_config_ir::RootMode::FullUri),
+                literal: route.r#match.literal,
+                dir_redirect: route.dir_redirect,
+                exact: route.r#match.exact,
+                dir_redirect_absolute: route.dir_redirect_absolute,
+                dir_redirect_port: route.dir_redirect_port,
+                dir_redirect_host: route.dir_redirect_host.clone(),
+                listen_port: route.r#match.listen_port,
                 preload_max_file_bytes: config.static_section.preload.max_file_bytes,
                 preload_max_total_bytes: config.static_section.preload.max_total_bytes,
                 preload_max_entries: config.static_section.preload.max_entries,
@@ -509,7 +532,7 @@ pub fn compile_runtime_plan_from_ir(
     {
         use crate::router::normalize_route_host;
         use std::collections::HashMap;
-        let mut seen: HashMap<(String, String, String), String> = HashMap::new();
+        let mut seen: HashMap<(String, String, String, Option<u16>), String> = HashMap::new();
         for route in &config.routes {
             let host_key = route
                 .r#match
@@ -523,7 +546,9 @@ pub fn compile_runtime_plan_from_ir(
                 .map(|k| format!("{k:?}"))
                 .unwrap_or_else(|| "invalid".into());
             let pattern = route.r#match.pattern_key().unwrap_or("").to_string();
-            let key = (host_key, kind, pattern);
+            // EXY-03: listener scope is part of route identity — NGINX serves
+            // per-server identical paths (e.g. `/` roots) on distinct ports.
+            let key = (host_key, kind, pattern, route.r#match.listen_port);
             if let Some(prev) = seen.insert(key, route.name.clone()) {
                 anyhow::bail!(
                     "duplicate route match identity host={:?} pattern={:?} (routes {prev} and {})",
@@ -579,6 +604,19 @@ pub fn compile_runtime_plan_from_ir(
     let (cache_policies, route_cache_policy_ids) = compile_cache_policies(&config);
     let full_page_cache = compile_full_page_cache(&config);
     let route_rewrites = compile_route_rewrites(&config)?;
+    let route_access = config
+        .routes
+        .iter()
+        .map(|route| {
+            route
+                .access
+                .as_ref()
+                .map(CompiledAccessPolicy::compile)
+                .transpose()
+                .map_err(|err| anyhow::anyhow!("route `{}`: {err}", route.name))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_boxed_slice();
     if full_page_cache.enabled {
         tracing::info!(
             enabled = true,
@@ -610,6 +648,7 @@ pub fn compile_runtime_plan_from_ir(
         route_cache_policy_ids,
         full_page_cache,
         route_rewrites,
+        route_access,
     };
 
     Ok(Arc::new(plan))
@@ -868,15 +907,23 @@ mod tests {
             redirect: None,
             rewrite: None,
             fastcgi: None,
+            fastcgi_script_root: None,
             htaccess: Default::default(),
+            access: None,
             cache: None,
             fallback_rewrite: None,
             try_uri: None,
             try_uri_dir: None,
+            front_controller: None,
             proxy_set_headers: Vec::new(),
             cache_headers: None,
             response_headers: Vec::new(),
             location_rewrite: Vec::new(),
+            root_mode: Default::default(),
+            dir_redirect: false,
+            dir_redirect_absolute: true,
+            dir_redirect_port: true,
+            dir_redirect_host: None,
         }
     }
 

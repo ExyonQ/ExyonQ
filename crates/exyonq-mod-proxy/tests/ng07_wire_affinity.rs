@@ -125,6 +125,51 @@ async fn read_until(stream: &mut tokio::io::DuplexStream, needle: &[u8]) -> Vec<
     out
 }
 
+/// Read one complete response using its `Content-Length`, so a status-line
+/// `OK` cannot be mistaken for the body and leave the body queued for the
+/// next request.
+async fn read_response(stream: &mut tokio::io::DuplexStream) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 8192];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(head_end) = out.windows(4).position(|w| w == b"\r\n\r\n") {
+            let body_start = head_end + 4;
+            let head = std::str::from_utf8(&out[..head_end]).expect("response head utf8");
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .expect("response Content-Length");
+            let want = body_start + content_length;
+            while out.len() < want {
+                let n = tokio::time::timeout_at(deadline, stream.read(&mut buf))
+                    .await
+                    .expect("read deadline")
+                    .expect("read");
+                if n == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+            out.truncate(want.min(out.len()));
+            return out;
+        }
+        let n = tokio::time::timeout_at(deadline, stream.read(&mut buf))
+            .await
+            .expect("read deadline")
+            .expect("read");
+        if n == 0 {
+            return out;
+        }
+        out.extend_from_slice(&buf[..n]);
+    }
+}
+
 #[tokio::test]
 async fn keepalive_cookie_pins_re_resolve_per_request() {
     let _serial = runtime_lock().await;
@@ -276,17 +321,29 @@ async fn keepalive_pin_dropped_when_peer_banned() {
     });
 
     // r1 pins whichever endpoint WRR picks first — discover it from hits.
-    let r1 = read_until(&mut client, b"OK").await;
+    let r1 = read_response(&mut client).await;
     assert!(
         String::from_utf8_lossy(&r1).starts_with("HTTP/1.1 200"),
         "r1"
     );
-    let (pinned_port, pinned_hits, pinned_task, pinned_tag) = if hits_a.load(Ordering::Relaxed) == 1
-    {
-        (port_a, hits_a.clone(), a_task, "BACKEND_A_OK")
-    } else {
-        (port_b, hits_b.clone(), b_task, "BACKEND_B_OK")
-    };
+    let (pinned_port, pinned_hits, pinned_task, pinned_tag, live_tag) =
+        if hits_a.load(Ordering::Relaxed) == 1 {
+            (
+                port_a,
+                hits_a.clone(),
+                a_task,
+                "BACKEND_A_OK",
+                "BACKEND_B_OK",
+            )
+        } else {
+            (
+                port_b,
+                hits_b.clone(),
+                b_task,
+                "BACKEND_B_OK",
+                "BACKEND_A_OK",
+            )
+        };
 
     // Kill the pinned backend, then r2: the doomed attempt bans the peer and
     // the failover must serve from the live member.
@@ -305,12 +362,16 @@ async fn keepalive_pin_dropped_when_peer_banned() {
         .write_all(b"GET /api/r2 HTTP/1.1\r\nHost: x\r\n\r\n")
         .await
         .expect("write r2");
-    let r2 = read_until(&mut client, b"OK").await;
+    let r2 = read_response(&mut client).await;
     let r2_head = String::from_utf8_lossy(&r2)
         .chars()
         .take(200)
         .collect::<String>();
     assert!(r2_head.starts_with("HTTP/1.1 200"), "r2: {r2_head}");
+    assert!(
+        String::from_utf8_lossy(&r2).contains(live_tag),
+        "r2 must fail over to {live_tag}, got: {r2_head}"
+    );
 
     // Revive the (banned) pinned backend on the same port.
     let mut revived = None;
@@ -354,10 +415,14 @@ async fn keepalive_pin_dropped_when_peer_banned() {
         .write_all(b"GET /api/r3 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
         .await
         .expect("write r3");
-    let r3 = read_until(&mut client, b"OK").await;
+    let r3 = read_response(&mut client).await;
     assert!(
         String::from_utf8_lossy(&r3).starts_with("HTTP/1.1 200"),
         "r3"
+    );
+    assert!(
+        String::from_utf8_lossy(&r3).contains(live_tag),
+        "r3 must stay on {live_tag}"
     );
     let status = server_task.await.expect("join").expect("serve");
     assert_eq!(status, 200);

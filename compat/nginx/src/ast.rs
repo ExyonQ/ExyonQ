@@ -87,6 +87,14 @@ pub struct ParsedServer {
     pub auth: Option<ParsedAuth>,
     /// 0.5: server-scope `limit_req` default.
     pub limit_req: Option<ParsedLimitReq>,
+    /// All server-scope `limit_req` directives (nginx allows more than one).
+    pub limit_reqs: Vec<ParsedLimitReq>,
+    /// Server-scope `limit_req_dry_run`.
+    pub limit_req_dry_run: Option<bool>,
+    /// Server-scope `limit_req_status`.
+    pub limit_req_status: Option<u16>,
+    /// Server-scope `limit_req_log_level`.
+    pub limit_req_log_level: Option<String>,
 }
 
 /// NG-18 Phase C: nginx `sub_filter*` directives at one scope.
@@ -133,6 +141,8 @@ pub struct ParsedLimitZone {
 pub struct ParsedLimitReq {
     pub zone: String,
     pub burst: u32,
+    pub nodelay: bool,
+    pub delay: Option<u32>,
 }
 
 /// NG-07: nginx upstream load-balancing method (`least_conn`, `ip_hash`,
@@ -187,6 +197,14 @@ pub struct AnalyzedConfig {
     pub limit_zones_http: std::collections::BTreeMap<String, ParsedLimitZone>,
     /// 0.5: http-scope `limit_req` default.
     pub limit_req_http: Option<ParsedLimitReq>,
+    /// All http-scope `limit_req` directives.
+    pub limit_reqs_http: Vec<ParsedLimitReq>,
+    /// http-scope `limit_req_dry_run`.
+    pub limit_req_dry_run_http: Option<bool>,
+    /// http-scope `limit_req_status`.
+    pub limit_req_status_http: Option<u16>,
+    /// http-scope `limit_req_log_level`.
+    pub limit_req_log_level_http: Option<String>,
 }
 
 /// Nginx `map` block reduced to IR-friendly fields (Exact only).

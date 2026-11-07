@@ -4,9 +4,9 @@
 
 | Version   | Supported |
 | --- | --- |
-| 0.7.x     | Yes (current release) |
-| 0.6.x     | Security fixes only until superseded |
-| < 0.6     | No |
+| 0.9.x     | Yes (current release) |
+| 0.8.x     | Security fixes only until superseded |
+| < 0.8     | No |
 
 ## Current audit
 
@@ -24,16 +24,17 @@ cargo xtask security pre-release --version X.Y.Z
 
 Until a release audit is owner-authorized and signed off for a given version, that version remains unpublished.
 
-For **v0.7.0**:
+For **v0.9.1**:
 
 ```text
-CURRENT_RELEASE_AUDIT = docs/security/audit-v0.7.0.md
-PUBLIC_RELEASE = v0.7.0
+CURRENT_RELEASE_AUDIT = docs/security/audit-v0.9.1.md
+PUBLIC_RELEASE = v0.9.1
 RELEASE_AUTHORITY = exyonq-github
 WAIVERS = NONE
-CARGO_AUDIT = 0 vulnerabilities (516 crates scanned, 2026-10-24)
+CARGO_AUDIT = 0 vulnerabilities (security.yml deps-audit, 2026-11-06)
 CARGO_DENY = advisories/bans/licenses/sources PASS
-DOCKER_SCOUT = 0 critical / 0 high / 0 medium (exyonq + exyonq-wordpress, amd64 + arm64)
+CI = ci.yml 42242829709 PASS; security.yml 42242829750 PASS; crs-diff 42242829711 PASS
+DOCKER_SCOUT = local arm64: 0 critical / 0 high / 0 medium / 0 low; final multiarch digests pending
 ```
 
 Canonical security SoT index: [`docs/security/README.md`](docs/security/README.md).

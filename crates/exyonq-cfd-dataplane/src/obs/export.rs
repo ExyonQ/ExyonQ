@@ -230,7 +230,7 @@ fn serve_one_metrics(mut stream: TcpStream, hub: &ObsHub) {
     let _ = stream.read(&mut buf);
     let body = hub.render_openmetrics();
     let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/openmetrics-text; version=1.0.0; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 200 OK\r\nServer: exyonq\r\nContent-Type: application/openmetrics-text; version=1.0.0; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     );

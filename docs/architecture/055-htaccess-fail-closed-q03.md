@@ -7,7 +7,7 @@
 
 ## Context
 
-QUEJAS_APACHE §2.2 / QUEJAS_OLS §2.1: operators believe `Require all denied` / `Header` / `Expires` in `.htaccess` are enforced. ExyonQ overlay only executes rewrite/redirect/`DirectoryIndex`/`Options -Indexes`. Unknown lines were recorded as `unknown:` diagnostics while the overlay **still published** — silent security gap.
+QUEJAS_APACHE §2.2 / QUEJAS_OLS §2.1: operators believe `Require all denied` / `Header` / `Expires` in `.htaccess` are enforced. At the time of the incident, the overlay only executed rewrite/redirect/`DirectoryIndex`/`Options -Indexes`; unknown lines were recorded as `unknown:` diagnostics while the overlay **still published** — a silent security gap. AP-05 now adds the narrowly scoped `Require ip/method` ACL described below; `Header`/`Expires` and legacy ordering directives remain fail-closed.
 
 ## Decision
 
@@ -15,7 +15,9 @@ QUEJAS_APACHE §2.2 / QUEJAS_OLS §2.1: operators believe `Require all denied` /
 
 | Class | Code | Directives (case-insensitive) | Publish |
 | --- | --- | --- | --- |
-| Forbidden (security/auth/ACL) | `EXY-HTACCESS-0003` | `Require`, `Deny`, `Allow`, `Order`, `Satisfy`, `AuthType`, `AuthUserFile`, `AuthName`, `AuthGroupFile`, `AllowOverride`, `php_value`, `php_flag` | **No** — compile error |
+| Forbidden (security/ACL) | `EXY-HTACCESS-0003` | `Deny`, `Allow`, `Order`, `Satisfy`, `AuthGroupFile`, `AllowOverride`, `php_value`, `php_flag` | **No** — compile error |
+| Basic auth overlay | `EXY-HTACCESS-0003` for incomplete/unsupported auth | `AuthType Basic`, `AuthName`, `AuthUserFile`, `Require valid-user` | **Yes** — compiled per directory |
+| Route/overlay ACL (AP-05) | `EXY-HTACCESS-0003` for malformed/unsupported ACL | `Require ip`, `Require method`, `Require all granted/denied`, `Require not ip` | **Yes** — compiled per directory; evaluated before content |
 | Unsupported (headers/expires/containers) | `EXY-HTACCESS-0002` | `Header`, `ExpiresActive`, `ExpiresByType`, `ExpiresDefault`; container openers `<FilesMatch>`, `<Files>`, `<Directory>`, `<IfModule>`, `<Limit>`, `<LimitExcept>` | **No** — compile error |
 
 Every error line includes **file:line**, stable code, and an **exact alternative** (WAF/`[[route]] access`, app headers, F5 `cache_headers`, or move rule to IR).

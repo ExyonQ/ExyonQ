@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+use crate::{CompiledAccessPolicy, CompiledBasicAuth};
+
 /// Register-once errors for composition-root htaccess runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HtaccessRegisterError {
@@ -116,6 +118,12 @@ pub trait HtaccessOverlaySource: Send + Sync {
 
 /// Runtime overlay policy service (module-owned implementation).
 pub trait HtaccessRuntimeService: Send + Sync {
+    /// Compiled Basic Auth policy inherited by `request_path`, if any.
+    fn auth_policy(&self, site_id: &str, request_path: &str) -> Option<CompiledBasicAuth>;
+
+    /// AP-05 access policy inherited by `request_path`, if any.
+    fn access_policy(&self, site_id: &str, request_path: &str) -> Option<CompiledAccessPolicy>;
+
     fn evaluate_route(
         &self,
         request: &HtaccessRouteEvaluationRequest,

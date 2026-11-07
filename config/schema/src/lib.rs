@@ -15,6 +15,8 @@
  */
 //! JSON Schema for ExyonQ IR v1/v2.
 
+#![recursion_limit = "256"]
+
 use exyonq_config_ir::{
     deterministic_endpoint_id, AdminEndpointState, Endpoint, EndpointFailoverPolicy,
     EndpointSelectionPolicy, CONFIG_VERSION_V1, CONFIG_VERSION_V2,
@@ -105,12 +107,61 @@ pub fn ir_json_schema() -> serde_json::Value {
                         "required": ["path"],
                         "properties": {
                             "path": { "type": "string", "pattern": "^/" },
-                            "host": { "type": "string" }
+                            "host": { "type": "string" },
+                            "exact": { "type": "boolean" },
+                            "literal": { "type": "boolean" },
+                            "listen_port": { "type": "integer", "minimum": 1, "maximum": 65535 }
                         }
                     },
                     "upstream": { "type": "string" },
                     "root": { "type": "string" },
                     "index": { "type": "string" },
+                    "access": {
+                        "type": "object",
+                        "properties": {
+                            "allow": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "maxItems": exyonq_config_ir::MAX_ACCESS_NETWORKS
+                            },
+                            "deny": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "maxItems": exyonq_config_ir::MAX_ACCESS_NETWORKS
+                            },
+                            "rules": {
+                                "type": "array",
+                                "maxItems": exyonq_config_ir::MAX_ACCESS_RULES,
+                                "items": {
+                                    "type": "object",
+                                    "required": ["effect", "source"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "effect": { "enum": ["allow", "deny"] },
+                                        "source": { "type": "string" }
+                                    }
+                                }
+                            },
+                            "methods": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "maxItems": exyonq_config_ir::MAX_ACCESS_METHODS
+                            },
+                            "schedule": {
+                                "type": "object",
+                                "required": ["start", "end"],
+                                "properties": {
+                                    "days": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "maxItems": 7
+                                    },
+                                    "start": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$" },
+                                    "end": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$" }
+                                }
+                            }
+                        }
+                    },
                     "redirect": {
                         "type": "object",
                         "required": ["location"],
@@ -215,7 +266,60 @@ pub fn ir_json_schema() -> serde_json::Value {
                         "properties": {
                             "enabled": { "type": "boolean" },
                             "requests_per_second": { "type": "integer" },
-                            "burst": { "type": "integer" }
+                            "burst": { "type": "integer" },
+                            "zones": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "properties": {
+                                        "key": { "type": "string" },
+                                        "requests_per_second": { "type": "integer" },
+                                        "burst": { "type": "integer" }
+                                    },
+                                    "required": ["key"]
+                                }
+                            },
+                            "routes": {
+                                "type": "object",
+                                "additionalProperties": { "type": "string" }
+                            },
+                            "route_options": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "properties": {
+                                        "burst": { "type": "integer", "minimum": 0 },
+                                        "delay": { "type": "integer", "minimum": 0 },
+                                        "nodelay": { "type": "boolean" }
+                                    }
+                                }
+                            },
+                            "route_limits": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "required": ["limits"],
+                                    "properties": {
+                                        "limits": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "items": {
+                                                "type": "object",
+                                                "required": ["zone"],
+                                                "properties": {
+                                                    "zone": { "type": "string" },
+                                                    "burst": { "type": "integer", "minimum": 0 },
+                                                    "delay": { "type": "integer", "minimum": 0 },
+                                                    "nodelay": { "type": "boolean" }
+                                                }
+                                            }
+                                        },
+                                        "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+                                        "dry_run": { "type": "boolean" },
+                                        "log_level": { "enum": ["info", "notice", "warn", "error"] }
+                                    }
+                                }
+                            }
                         }
                     },
                     "real_ip": {
@@ -336,6 +440,41 @@ fn render_toml(
         }
         if let Some(index) = &route.index {
             out.push_str(&format!("index = {index:?}\n"));
+        }
+        if let Some(access) = &route.access {
+            out.push_str("access = {");
+            let mut parts = Vec::new();
+            if !access.allow.is_empty() {
+                parts.push(format!("allow = {:?}", access.allow));
+            }
+            if !access.deny.is_empty() {
+                parts.push(format!("deny = {:?}", access.deny));
+            }
+            if !access.rules.is_empty() {
+                let rules = access
+                    .rules
+                    .iter()
+                    .map(|rule| {
+                        let effect = match rule.effect {
+                            exyonq_config_ir::RouteAccessEffect::Allow => "allow",
+                            exyonq_config_ir::RouteAccessEffect::Deny => "deny",
+                        };
+                        format!("{{ effect = {effect:?}, source = {:?} }}", rule.source)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                parts.push(format!("rules = [{rules}]"));
+            }
+            if !access.methods.is_empty() {
+                parts.push(format!("methods = {:?}", access.methods));
+            }
+            if let Some(schedule) = &access.schedule {
+                parts.push(format!(
+                    "schedule = {{ days = {:?}, start = {:?}, end = {:?} }}",
+                    schedule.days, schedule.start, schedule.end
+                ));
+            }
+            out.push_str(&format!(" {} }}\n", parts.join(", ")));
         }
         for lr in &route.location_rewrite {
             out.push_str("[[route.location_rewrite]]\n");
@@ -582,6 +721,61 @@ endpoints = [ { address = "10.0.0.2", port = 8080 } ]
         assert_eq!(hc.expect_status, vec![200, 204]);
         assert_eq!(hc.expect_body.as_deref(), Some("READY"));
         assert_eq!(hc.expect_header.as_deref(), Some("X-Health: pass"));
+    }
+
+    #[test]
+    fn render_keeps_route_access() {
+        let input = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/srv"
+access = { allow = ["10.0.0.0/8"], deny = ["10.1.0.0/16"], methods = ["GET"], schedule = { days = ["mon"], start = "22:00", end = "02:00" } }
+"#;
+        let cfg = exyonq_config_ir::AppConfig::parse_str(input).unwrap();
+        let out = render_toml(&cfg).unwrap();
+        assert!(out.contains("access = {"), "access preserved: {out}");
+        let cfg2 = exyonq_config_ir::AppConfig::parse_str(&out).unwrap();
+        let access = cfg2.routes[0].access.as_ref().expect("access roundtrip");
+        assert_eq!(access.allow, vec!["10.0.0.0/8"]);
+        assert_eq!(access.deny, vec!["10.1.0.0/16"]);
+        assert_eq!(access.methods, vec!["GET"]);
+        let schedule = access.schedule.as_ref().expect("schedule roundtrip");
+        assert_eq!(schedule.days, vec!["mon"]);
+        assert_eq!(schedule.start, "22:00");
+        assert_eq!(schedule.end, "02:00");
+    }
+
+    #[test]
+    fn render_keeps_route_access_rules() {
+        let input = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/srv"
+access = { rules = [{ effect = "deny", source = "10.1.0.0/16" }, { effect = "allow", source = "10.0.0.0/8" }, { effect = "allow", source = "all" }] }
+"#;
+        let cfg = exyonq_config_ir::AppConfig::parse_str(input).unwrap();
+        let out = render_toml(&cfg).unwrap();
+        assert!(out.contains("rules = ["));
+        let cfg2 = exyonq_config_ir::AppConfig::parse_str(&out).unwrap();
+        let rules = &cfg2.routes[0]
+            .access
+            .as_ref()
+            .expect("access roundtrip")
+            .rules;
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].source, "10.1.0.0/16");
+        assert_eq!(rules[1].source, "10.0.0.0/8");
+        assert_eq!(rules[2].source, "all");
     }
 
     #[test]

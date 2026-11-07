@@ -64,8 +64,16 @@ pub fn append_mirror_prometheus(out: &mut String) {
 #[derive(Clone)]
 pub(crate) struct MirrorMarker;
 
-/// Mirror routes with `mirror_request_body off` (empty body). Fired from the
-/// header hook so it also covers paths answered before body dispatch.
+/// Started-subrequest counter — lets tests observe that denied requests do
+/// not amplify (AUDIT-D6).
+#[cfg(test)]
+pub(crate) fn mirror_started_for_tests() -> u64 {
+    MIRROR_STARTED.load(Ordering::Relaxed)
+}
+
+/// Mirror routes with `mirror_request_body off` (empty body). Fired from
+/// `dispatch_core` post-access (nginx PRECONTENT) — requests rejected by
+/// auth/WAF/zone gates never reach it (AUDIT-D6).
 pub(crate) fn maybe_mirror_headers(
     ctx: &ConnectionContext,
     path: &str,
@@ -141,6 +149,8 @@ fn fire(
         let proxy_client = ctx.proxy_client.clone();
         let xff = ctx.x_forwarded_for.clone();
         let ops = Arc::clone(&ctx.ops);
+        let scheme = ctx.scheme;
+        let local_port = ctx.local_port;
         let method = method.clone();
         let host = host.map(str::to_string);
         let headers = request_headers.to_vec();
@@ -176,6 +186,8 @@ fn fire(
             };
             let mirror_ctx = ConnectionContext {
                 state,
+                scheme,
+                local_port,
                 proxy_client,
                 x_forwarded_for: xff,
                 ops,

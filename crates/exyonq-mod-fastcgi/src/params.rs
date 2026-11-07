@@ -45,6 +45,8 @@ pub struct MinForwardRequest {
     pub server_protocol: String,
     pub server_name: String,
     pub server_port: u16,
+    /// Connection scheme (`http` or `https`) for CGI `REQUEST_SCHEME`/`HTTPS`.
+    pub scheme: String,
     pub query_string: Option<String>,
     pub content_type: Option<String>,
     pub path_info: Option<String>,
@@ -65,6 +67,7 @@ impl MinForwardRequest {
             server_protocol: "HTTP/1.1".to_string(),
             server_name: "localhost".to_string(),
             server_port: 80,
+            scheme: "http".to_string(),
             query_string: None,
             content_type: None,
             path_info: None,
@@ -128,6 +131,16 @@ impl MinForwardRequest {
             ("REMOTE_ADDR".to_string(), self.remote_addr.clone()),
         ];
 
+        let scheme = if self.scheme.eq_ignore_ascii_case("https") {
+            "https"
+        } else {
+            "http"
+        };
+        push_param(&mut params, "REQUEST_SCHEME", scheme)?;
+        if scheme == "https" {
+            push_param(&mut params, "HTTPS", "on")?;
+        }
+
         if let Some(q) = &self.query_string {
             if !q.is_empty() {
                 push_param(&mut params, "QUERY_STRING", q)?;
@@ -153,7 +166,6 @@ impl MinForwardRequest {
         }
 
         let nominated = connection_nominated_names_from_pairs(&self.http_headers);
-
         for (name, value) in &self.http_headers {
             if nominated
                 .iter()
@@ -161,13 +173,40 @@ impl MinForwardRequest {
             {
                 continue;
             }
-            if let Some(cgi_name) = http_header_to_cgi_param(name) {
-                if seen.contains(&cgi_name) {
-                    continue;
+            let Some(cgi_name) = http_header_to_cgi_param(name) else {
+                continue;
+            };
+            if seen.contains(&cgi_name) {
+                // EXY-11: repeated field — merge into the earlier param instead
+                // of dropping it. `Cookie` joins with "; " (RFC 6265 §5.4);
+                // other CGI params join with ", " (RFC 3875 / RFC 7230 §3.2.2).
+                let merged_sep = if cgi_name == "HTTP_COOKIE" {
+                    "; "
+                } else {
+                    ", "
+                };
+                if let Some((_, existing)) = params.iter_mut().find(|(k, _)| *k == cgi_name) {
+                    let merged = format!("{existing}{merged_sep}{value}");
+                    validate_param_pair(&cgi_name, &merged)?;
+                    *existing = merged;
                 }
-                push_param(&mut params, &cgi_name, value)?;
-                seen.insert(cgi_name);
+
+                continue;
             }
+            push_param(&mut params, &cgi_name, value)?;
+            seen.insert(cgi_name);
+        }
+
+        // Hyper may expose the authority separately from the header list. CGI
+        // clients and WordPress use HTTP_HOST for absolute admin/login URLs;
+        // never leave it empty when SERVER_NAME is known.
+        if !seen.contains("HTTP_HOST") {
+            let host = if self.server_name.is_empty() {
+                "localhost"
+            } else {
+                self.server_name.as_str()
+            };
+            push_param(&mut params, "HTTP_HOST", host)?;
         }
 
         Ok(params)
@@ -279,6 +318,71 @@ mod tests {
         assert!(params
             .iter()
             .any(|(k, v)| k == "HTTP_X_END_TO_END" && v == "yes"));
+    }
+
+    #[test]
+    fn merges_repeated_cookie_headers_with_semicolon() {
+        // EXY-11: HTTP/2 fragmented Cookie lines must reach PHP as one
+        // "; "-joined HTTP_COOKIE — WordPress auth needs every cookie.
+        let mut req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        req.http_headers = vec![
+            ("Cookie".into(), "a=1".into()),
+            ("cookie".into(), "b=2".into()),
+            ("Cookie".into(), "c=3".into()),
+        ];
+        let params = req.to_fcgi_params().expect("params");
+        let cookies: Vec<&str> = params
+            .iter()
+            .filter(|(k, _)| k == "HTTP_COOKIE")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(cookies, ["a=1; b=2; c=3"]);
+    }
+
+    #[test]
+    fn merges_other_repeated_headers_with_comma() {
+        let mut req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        req.http_headers = vec![
+            ("Accept".into(), "text/html".into()),
+            ("Accept".into(), "application/json".into()),
+        ];
+        let params = req.to_fcgi_params().expect("params");
+        let accepts: Vec<&str> = params
+            .iter()
+            .filter(|(k, _)| k == "HTTP_ACCEPT")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(accepts, ["text/html, application/json"]);
+    }
+
+    #[test]
+    fn missing_host_falls_back_to_server_name() {
+        let req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        let params = req.to_fcgi_params().expect("params");
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "HTTP_HOST" && v == "localhost"));
+    }
+
+    #[test]
+    fn https_scheme_emits_https_and_request_scheme() {
+        let mut req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        req.scheme = "https".into();
+        let params = req.to_fcgi_params().expect("params");
+        assert!(params.iter().any(|(k, v)| k == "HTTPS" && v == "on"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "REQUEST_SCHEME" && v == "https"));
+    }
+
+    #[test]
+    fn http_scheme_does_not_claim_https() {
+        let req = MinForwardRequest::get("/index.php", "/index.php", "/var/www/index.php");
+        let params = req.to_fcgi_params().expect("params");
+        assert!(!params.iter().any(|(k, _)| k == "HTTPS"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| k == "REQUEST_SCHEME" && v == "http"));
     }
 
     #[test]

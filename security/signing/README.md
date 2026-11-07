@@ -7,6 +7,7 @@ OFFICIAL_RELEASE_AUTHENTICITY_AVAILABLE = NO
 P14SIGN_PUBLIC_TRUST_POLICY = ACTIVE_LOCAL
 PUBLICATION_STATUS = LOCAL_ACTIVATION_ONLY
 PUBLIC_TRUST_ROOT_PUBLISHED = NO
+ARTIFACT_SIGNATURE_AUTHORITATIVE = SSH_ED25519_V2_OVER_SHA256SUMS
 ```
 
 This directory holds **public** verification material only — never private keys.
@@ -22,13 +23,15 @@ DO_NOT_TREAT_GITHUB_AS_SOLE_TRUST_ROOT = YES
 | `TRUST-POLICY.md` | Active local trust policy |
 | `fingerprints.txt` | Exact SSH + Cosign fingerprints |
 | `exyonq-release-tag-signers` | SSH `allowedSignersFile` (principal `exyonq-release`) |
-| `exyonq-release-tag-ssh-v1.pub` | Official SSH public key (v1) |
+| `exyonq-release-artifact-signers` | SSH artifact `allowedSignersFile` (principal `exyonq-release`, namespace `file`) |
+| `exyonq-release-tag-ssh-v2.pub` | Active local SSH public key (v2) |
+| `exyonq-release-tag-ssh-v1.pub` | Superseded local SSH public key (v1; historical tags only) |
 | `exyonq-cosign.pub` | Official Cosign public key (blob + OCI, MODEL_1) |
 
 ## Inspect fingerprints
 
 ```bash
-ssh-keygen -lf security/signing/exyonq-release-tag-ssh-v1.pub
+ssh-keygen -lf security/signing/exyonq-release-tag-ssh-v2.pub
 
 shasum -a 256 security/signing/exyonq-cosign.pub
 ```
@@ -37,6 +40,9 @@ Expected:
 
 ```text
 SSH_FINGERPRINT =
+  SHA256:7sMmeEgNFoOZa3xvaMgJPs4T724wWxiWMaFfW3Iusfs
+
+SUPERSEDED_SSH_FINGERPRINT =
   SHA256:U2Mnxtmcl1Xz7dw6lyMaLciwsBM/V/vmmDyU4iljz1c
 
 COSIGN_PUBLIC_KEY_SHA256 =
@@ -73,6 +79,32 @@ cosign verify-blob \
   --bundle SHA256SUMS.txt.bundle \
   SHA256SUMS.txt
 ```
+
+## Verify an SSH artifact signature
+
+The artifact root is `SHA256SUMS.txt`; the SSH signature uses namespace `file`
+and the principal `exyonq-release`. This is the authoritative artifact layer
+for the local candidate. Official releases additionally require the Cosign
+layer above.
+
+```bash
+bash scripts/release/verify-release-bundle.sh \
+  --bundle-root <RELEASE_BUNDLE_DIR> \
+  --verify-artifact-signature-ssh \
+  --ssh-allowed-signers security/signing/exyonq-release-artifact-signers
+```
+
+Build and sign a local candidate without exposing the key:
+
+```bash
+bash scripts/release/build-signed-release-bundle.sh \
+  --signing-key "$EXYONQ_RELEASE_SSH_KEY" \
+  --out-dir .exyonq-local/signing/local-candidate
+```
+
+The output is always `LOCAL_CANDIDATE_NOT_FOR_RELEASE`; it never publishes,
+tags, pushes or deploys. The private key must remain owner-only and outside the
+repository and the bundle.
 
 Offline / controlled environments may also use the harness:
 

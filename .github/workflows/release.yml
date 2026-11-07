@@ -55,9 +55,17 @@ jobs:
       - name: cargo deny check advisories bans sources
         run: cargo deny check advisories bans sources
       - name: security tests
+        # Keep build artifacts out of the checkout: the fail-closed publication
+        # scan below must not inspect generated rlib/rmeta files.
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/exyonq-release-target
         run: cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security)' --test-threads=1
       - name: private-material-zero
-        run: bash scripts/security/scan-private-material.sh --git-tree --repo .
+        # target/ is generated build output, never publication material.
+        # Remove cached/generated copies before the fail-closed scan.
+        run: |
+          rm -rf -- target
+          bash scripts/security/scan-private-material.sh --publication --repo .
       - name: verify release audit
         run: bash scripts/verify-release-audit.sh "${{ steps.ver.outputs.version }}"
 
@@ -120,6 +128,15 @@ jobs:
         # P1.5-WS6: --locked required for release artifacts.
         # SBOM embebido vía cargo-auditable — `cargo audit bin` puede verificar el binario suelto.
         run: cargo auditable build --release --locked -p exyonq -p exyonqctl -p exyonq-compat-cli --target ${{ matrix.target }}
+      - name: Verify artifact source tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${GITHUB_REF#refs/tags/v}"
+          BIN="target/${{ matrix.target }}/release/exyonq"
+          "$BIN" --version | tee /tmp/exyonq-version.txt
+          grep -Fx "source_tag=$TAG" /tmp/exyonq-version.txt
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{}")"
       - name: Verify embedded SBOM
         run: |
           for bin in exyonq exyonqctl exyonq-compat; do
@@ -373,6 +390,8 @@ jobs:
     permissions:
       packages: write
       contents: read
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -426,6 +445,7 @@ jobs:
             EXYONQ_VERSION=${{ steps.ver.outputs.version }}
             EXYONQ_GIT_REVISION=${{ github.sha }}
             EXYONQ_OFFICIAL_RELEASE=1
+            EXYONQ_SOURCE_TAG=v${{ steps.ver.outputs.version }}
           # Explicit OCI identity (also set in Dockerfile LABEL from the same ARGs).
           labels: |
             org.opencontainers.image.title=ExyonQ
@@ -437,8 +457,47 @@ jobs:
           tags: |
             ghcr.io/exyonq/exyonq:${{ steps.ver.outputs.version }}
 
+  docker-wordpress:
+    # Build the WordPress image from the server image that was just published.
+    # The WordPress Dockerfile consumes the exact version tag, so the two OCI
+    # images in a release always share the same ExyonQ binary.
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: packaging/docker/wordpress/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            EXYONQ_IMAGE=ghcr.io/exyonq/exyonq:${{ needs.docker.outputs.version }}
+            EXYONQ_VERSION=${{ needs.docker.outputs.version }}
+            EXYONQ_GIT_REVISION=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=ExyonQ WordPress
+            org.opencontainers.image.version=${{ needs.docker.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/ExyonQ/ExyonQ
+            org.opencontainers.image.licenses=Apache-2.0
+          tags: |
+            ghcr.io/exyonq/exyonq-wordpress:${{ needs.docker.outputs.version }}
+
   github-release:
-    needs: [security-release, build, checksums, package-linux, docker, compliance-artifacts]
+    needs: [security-release, build, checksums, package-linux, docker, docker-wordpress, compliance-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write

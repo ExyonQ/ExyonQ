@@ -78,6 +78,8 @@ cache = "default"
         .expect("state");
     CachedCtx {
         ctx: Arc::new(ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
@@ -187,6 +189,8 @@ async fn new_runtime_generation_forces_miss() {
         .await
         .expect("state2");
     let ctx2 = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: state2,
         proxy_client: ctx.proxy_client.clone(),
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),
@@ -231,6 +235,8 @@ root = "{}"
         .await
         .expect("state");
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: hyper::header::HeaderValue::from_static("127.0.0.1"),

@@ -23,7 +23,8 @@
 | `RewriteCond` / regex `RewriteRule` / `RedirectMatch` | REJECTED_UNSUPPORTED | reject+line | Use native htaccess overlay for WP front-controller |
 | `ProxyPassReverse <local-path> <remote-url>` | MIGRATED_TO_EXYONQ_CONSTRUCT | yes | → `[[route.location_rewrite]]` (F3-R20); 1-arg `<Location>` form rejected |
 | `ProxyPass` with upstream path / balancers / variables | REJECTED_UNSUPPORTED | reject+line | Same fail-closed policy as NGINX proxy MVP |
-| `AuthType` / `AuthUserFile` / `Require` | REJECTED_UNSUPPORTED | reject+line | Auth surface absent |
+| `AuthType Basic` / `AuthUserFile` / `AuthName` / `Require valid-user` | MIGRATED_TO_EXYONQ_CONSTRUCT | yes | → `modules.auth.routes.<route>` |
+| `Require ip` / `Require method` / `Require all granted\|denied` / `Require not ip`; common `Order`/`Allow`/`Deny` | MIGRATED_TO_EXYONQ_CONSTRUCT | yes | → `[[route]] access` (deny-wins); `Satisfy any` and unrepresentable order reject |
 | `ErrorDocument` | REJECTED_UNSUPPORTED | reject+line | No custom error-page IR |
 | `Include` / `IncludeOptional` | REJECTED_UNSUPPORTED | reject+line | Expand in later cut |
 | Unknown directive | REJECTED_UNSUPPORTED | reject+line | Never silent |

@@ -103,6 +103,13 @@ curl -sS -b "$COOKIE" -c "$COOKIE" -o /tmp/wp-e2e-install.html \
   "$BASE/wp-admin/install.php?step=2"
 grep -q 'Success!' /tmp/wp-e2e-install.html || fail "WordPress install did not succeed"
 
+# wp-config.php must carry all eight non-empty salts. A failed remote fetch used
+# to write an empty salts file and leave the site with predictable empty keys.
+for key in AUTH_KEY SECURE_AUTH_KEY LOGGED_IN_KEY NONCE_KEY AUTH_SALT SECURE_AUTH_SALT LOGGED_IN_SALT NONCE_SALT; do
+  docker exec "$NAME" grep -qE "define\\( '$key', '[^']+' \\);" /var/www/html/wp-config.php \
+    || fail "wp-config.php missing non-empty $key"
+done
+
 # Login and verify the session reaches wp-admin.
 curl -sS -b "$COOKIE" -c "$COOKIE" -o /dev/null "$BASE/wp-login.php"
 curl -sS -b "$COOKIE" -c "$COOKIE" -o /dev/null -D /tmp/wp-e2e-login.headers \
@@ -119,6 +126,11 @@ code=$(curl -s -b "$COOKIE" -o /dev/null -w '%{http_code}' "$BASE/wp-admin/")
 # Test-only nonce fragment.
 cat > /tmp/wp-e2e-nonce.php <<'EOF'
 <?php
+/**
+ * Plugin Name: OL02 Test Nonce
+ * Description: Test-only nonce fragment; never shipped in an image.
+ * Version: 0.0.0
+ */
 add_action( 'wp_footer', function () {
 	$nonce = wp_create_nonce( 'ol02_check' );
 	echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
@@ -134,13 +146,25 @@ add_action( 'admin_post_nopriv_ol02_check', function () {
 	exit;
 } );
 EOF
-docker cp /tmp/wp-e2e-nonce.php "$NAME":/var/www/html/wp-content/mu-plugins/ol02-nonce.php
+docker exec "$NAME" mkdir -p /var/www/html/wp-content/plugins/ol02-nonce
+docker cp /tmp/wp-e2e-nonce.php "$NAME":/var/www/html/wp-content/plugins/ol02-nonce/ol02-nonce.php
+docker exec "$NAME" php -r 'define( "WP_USE_THEMES", false ); require "/var/www/html/wp-load.php"; require_once ABSPATH . "wp-admin/includes/plugin.php"; foreach ( array( "exyonq-cache/exyonq-cache.php", "ol02-nonce/ol02-nonce.php" ) as $plugin ) { $result = activate_plugin( $plugin ); if ( is_wp_error( $result ) ) { fwrite( STDERR, $plugin . ": " . $result->get_error_message() . "\n" ); exit( 1 ); } }'
+docker exec "$NAME" test ! -e /var/www/html/wp-content/mu-plugins/exyonq-cache.php \
+  || fail "exyonq-cache must not be installed as a mu-plugin"
 docker restart "$NAME" >/dev/null
 for _ in $(seq 1 60); do
   code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/wp-admin/install.php" || true)
   [ "$code" = "200" ] && break
   sleep 1
 done
+
+# The normal plugin must stay active after a restart, and the purge socket
+# must accept its token. status_probe sends a real purge_generation command.
+docker exec "$NAME" php -r 'define( "WP_USE_THEMES", false ); require "/var/www/html/wp-load.php"; require_once ABSPATH . "wp-admin/includes/plugin.php"; exit( is_plugin_active( "exyonq-cache/exyonq-cache.php" ) ? 0 : 1 );' \
+  || fail "exyonq-cache is not active after restart"
+docker exec "$NAME" php -r 'define( "WP_USE_THEMES", false ); require "/var/www/html/wp-load.php"; $probe = ExyonQ_Cache_Plugin::instance()->client()->status_probe(); echo json_encode( $probe ), "\n"; if ( ( $probe["auth"] ?? "" ) !== "accepted" ) { exit( 1 ); }' \
+  | tee /tmp/wp-e2e-purge-probe.json \
+  || fail "purge socket probe did not authenticate"
 
 # Anonymous cache: miss then hit, same nonce.
 rm -f "$COOKIE2"
@@ -169,6 +193,9 @@ cat > "$OUT/wordpress-e2e.md" <<EOF
 - Image: $IMAGE
 - Install: PASS
 - Login + wp-admin 200: PASS
+- ExyonQ Cache normal plugin active after restart: PASS
+- Mu-plugin absent: PASS
+- Purge socket status_probe: auth accepted
 - Anonymous FPC miss -> hit: PASS
 - Cached nonce accepted by another anonymous client: PASS
 - Logged-in X-Cache: bypass / cookie_denied: PASS

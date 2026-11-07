@@ -108,6 +108,8 @@ htaccess = "overlay"
         .expect("state");
     StaticOverlayHarness {
         ctx: ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -194,6 +196,8 @@ htaccess = "overlay"
         .await
         .expect("state");
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -284,6 +288,9 @@ async fn fcgi_no_executor_returns_501() {
     let request = build_fcgi_dispatch_request(
         0,
         Some(&dir.path().to_path_buf()),
+        None,
+        None,
+        None,
         "GET",
         "/index.php",
         "",
@@ -324,6 +331,9 @@ async fn fcgi_backend_failure_returns_502() {
     let request = build_fcgi_dispatch_request(
         0,
         Some(&dir.path().to_path_buf()),
+        None,
+        None,
+        None,
         "GET",
         "/index.php",
         "",
@@ -383,6 +393,9 @@ async fn fcgi_saturation_returns_503() {
     let request = build_fcgi_dispatch_request(
         0,
         Some(&dir.path().to_path_buf()),
+        None,
+        None,
+        None,
         "GET",
         "/index.php",
         "",
@@ -414,6 +427,9 @@ async fn fcgi_saturation_returns_503() {
             build_fcgi_dispatch_request(
                 0,
                 Some(&dir.path().to_path_buf()),
+                None,
+                None,
+                None,
                 "GET",
                 "/index.php",
                 "",
@@ -459,6 +475,9 @@ async fn fcgi_timeout_returns_504() {
     let request = build_fcgi_dispatch_request(
         0,
         Some(&dir.path().to_path_buf()),
+        None,
+        None,
+        None,
         "GET",
         "/index.php",
         "",
@@ -552,6 +571,9 @@ fn fcgi_executor_receives_resolved_index_script() {
     let request = build_fcgi_dispatch_request(
         0,
         Some(&dir.path().to_path_buf()),
+        None,
+        None,
+        None,
         "GET",
         uri,
         "",

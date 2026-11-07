@@ -66,7 +66,7 @@ fi
 
 # PMZ
 if bash scripts/security/scan-private-material.sh --selftest >/dev/null \
-  && bash scripts/security/scan-private-material.sh --git-tree --repo . >/dev/null; then
+  && bash scripts/security/scan-private-material.sh --publication --repo . >/dev/null; then
   pass "PMZ"
 else
   fail "PMZ"

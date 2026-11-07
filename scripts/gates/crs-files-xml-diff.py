@@ -6,6 +6,7 @@ ModSecurity v3 (owasp/modsecurity-crs nginx image). Compares the enforcement
 decision (403 vs pass) and the upstream hit for every case.
 """
 import argparse
+import hashlib
 import os
 import shutil
 import socket
@@ -22,6 +23,10 @@ ORIGIN_PORT = 19130
 EXY_PORT = 18131
 REF_PORT = 18141
 CONTAINER = "crs-files-xml-ref"
+REF_IMAGE = (
+    "owasp/modsecurity-crs@sha256:"
+    "873ce68a658d2e3b61484a8a24d215f7d15456e7ce5aec5e7114bf000d743365"
+)
 
 ORIGIN_HITS = 0
 ORIGIN_LOCK = threading.Lock()
@@ -338,7 +343,7 @@ def start_reference() -> None:
             "-e", "PROXY_HOST_HEADER=crs.test",
             "-v", f"{WORK / 'rules.conf'}:/etc/modsecurity.d/custom/rules.conf:ro",
             "-v", f"{WORK / 'setup.conf.template'}:/etc/nginx/templates/modsecurity.d/setup.conf.template:ro",
-            "owasp/modsecurity-crs:nginx-alpine",
+            REF_IMAGE,
         ],
         check=True,
         stdout=subprocess.DEVNULL,
@@ -360,6 +365,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
+    binary = ROOT / "target/debug/exyonq"
+    if not binary.is_file():
+        raise SystemExit(f"missing measured binary: {binary}")
+    print(
+        f"binary={binary} binary_sha256={hashlib.sha256(binary.read_bytes()).hexdigest()}",
+        flush=True,
+    )
+    print(f"reference_image={REF_IMAGE}", flush=True)
 
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True)

@@ -66,6 +66,27 @@ impl SendfileAsset {
         _body_len: usize,
         prepared: Option<&PreparedStaticWire>,
     ) -> io::Result<Self> {
+        crate::sensitive::ensure_file_name_allowed(path).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "sensitive static path blocked",
+            )
+        })?;
+        if let Some(r) = root {
+            // The file name guard above is context-free (it must tolerate
+            // internal `.tmp` files). With a configured root we can apply the
+            // authoritative dotfile policy to the root-relative sendfile path.
+            if let Ok(relative) = path.strip_prefix(r.canonical_root) {
+                if let Some(relative) = relative.to_str() {
+                    crate::sensitive::ensure_relative_allowed(relative).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "sensitive static path blocked",
+                        )
+                    })?;
+                }
+            }
+        }
         let (file, meta) = match root {
             Some(r) => open_regular_file_contained(path, r)?,
             None => open_regular_file_nofollow(path)?,

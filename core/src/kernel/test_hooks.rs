@@ -19,16 +19,50 @@ use std::sync::{Arc, Once};
 
 static INSTALL: Once = Once::new();
 
+/// Process-global kernel hooks and pinned module runtimes are shared mutable
+/// state: `install_kernel_hooks` replaces the pinned runtime, so any test that
+/// installs can swap the runtime another in-flight `--lib` test resolves
+/// through. Serialize one-shot installs and tests that pin their own runtime on
+/// a single gate.
+pub(crate) static WIRE_HOOKS_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Duration hold for async tests — acquired once at test setup and kept until
+/// the returned guard drops so the pinned runtimes stay installed.
+pub(crate) async fn wire_hooks_gate() -> tokio::sync::MutexGuard<'static, ()> {
+    WIRE_HOOKS_GATE.lock().await
+}
+
+/// Duration hold for sync `#[test]`s — `blocking_lock` panics inside an async
+/// runtime context, so this is only legal on a plain test thread (before any
+/// local `Runtime::new()`/`block_on`).
+pub(crate) fn wire_hooks_gate_blocking() -> tokio::sync::MutexGuard<'static, ()> {
+    WIRE_HOOKS_GATE.blocking_lock()
+}
+
+/// Run a one-shot kernel-hook install under the shared gate. Executes on a
+/// plain thread so `blocking_lock` is legal from `#[test]` and `#[tokio::test]`
+/// callers alike. The caller must not already hold the gate (self-deadlock).
+pub(crate) fn with_wire_hooks_gate(install: impl FnOnce() + Send + 'static) {
+    std::thread::spawn(move || {
+        let _gate = WIRE_HOOKS_GATE.blocking_lock();
+        install();
+    })
+    .join()
+    .expect("wire hooks install thread");
+}
+
 /// Install production wire eligibility hooks (once per process).
 ///
 /// Must use real `install_kernel_hooks` — a broad `GET /api/` stub would win the
 /// module-api `OnceLock` and classify WebSocket upgrades as GET-only proxy wire,
 /// yielding 502 instead of Hyper upgrade (101) in later tests in the same process.
 pub fn ensure_wire_hooks_installed() {
-    INSTALL.call_once(|| {
-        let static_rt = Arc::new(exyonq_mod_static::StaticRuntime::new());
-        exyonq_mod_static::install_kernel_hooks(static_rt);
-        let proxy_rt = Arc::new(exyonq_mod_proxy::ProxyRuntime::new());
-        exyonq_mod_proxy::install_kernel_hooks(proxy_rt);
+    with_wire_hooks_gate(|| {
+        INSTALL.call_once(|| {
+            let static_rt = Arc::new(exyonq_mod_static::StaticRuntime::new());
+            exyonq_mod_static::install_kernel_hooks(static_rt);
+            let proxy_rt = Arc::new(exyonq_mod_proxy::ProxyRuntime::new());
+            exyonq_mod_proxy::install_kernel_hooks(proxy_rt);
+        });
     });
 }

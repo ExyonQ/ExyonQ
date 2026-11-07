@@ -13,8 +13,11 @@ SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20"
 
 GATES=(
   static-e2e.sh
+  security-headers-redirect-e2e.sh
   proxy-e2e.sh
   fastcgi-php-fpm-e2e.sh
+  f6-wp02-saturation-e2e.sh
+  f6-wp03-config-e2e.sh
   tls-e2e.sh
   http2-e2e.sh
 )

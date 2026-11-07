@@ -120,6 +120,91 @@ mkdir -p "$SANDBOX/paths"
 printf 'KEY_PATH=/Volumes/LexarSecure/%s/cosign.key\n' "EXYONQ-SIGNING-A" >"$SANDBOX/paths/notes.env"
 expect_fail signing_volume_path bash "$SCAN" --tree "$SANDBOX/paths"
 
+# --- 11. Publication mode includes untracked, non-ignored files. ---
+# The old --git-tree mode only enumerates tracked paths; this regression keeps
+# the publication review from silently missing a canary that a push would ship.
+PUBREPO="$SANDBOX/publication-repo"
+mkdir -p "$PUBREPO"
+git -C "$PUBREPO" init -q
+git -C "$PUBREPO" config user.name 'ExyonQ Scanner Test'
+git -C "$PUBREPO" config user.email 'scanner-test@exyonq.invalid'
+printf 'public tree baseline\n' >"$PUBREPO/tracked.txt"
+git -C "$PUBREPO" add tracked.txt
+git -C "$PUBREPO" commit -q -m 'scanner publication baseline'
+pem_pkcs8 >"$PUBREPO/untracked-canary.txt"
+expect_pass publication_git_tree_misses_untracked \
+  bash "$SCAN" --git-tree --allow-blind-scan --repo "$PUBREPO"
+expect_fail git_tree_requires_explicit_risk_marker \
+  bash "$SCAN" --git-tree --repo "$PUBREPO"
+expect_fail publication_blocks_untracked_canary \
+  bash "$SCAN" --publication --repo "$PUBREPO"
+rm -f "$PUBREPO/untracked-canary.txt"
+expect_pass publication_clean_after_canary_removal \
+  bash "$SCAN" --publication --repo "$PUBREPO"
+
+# A secret staged in the index must be caught even when the working tree is clean.
+pem_pkcs8 >"$PUBREPO/tracked.txt"
+git -C "$PUBREPO" add tracked.txt
+printf 'public tree baseline\n' >"$PUBREPO/tracked.txt"
+expect_pass publication_git_tree_misses_staged_secret \
+  bash "$SCAN" --git-tree --allow-blind-scan --repo "$PUBREPO"
+expect_fail publication_blocks_staged_canary \
+  bash "$SCAN" --publication --repo "$PUBREPO"
+expect_fail git_index_blocks_staged_canary \
+  bash "$SCAN" --git-index --repo "$PUBREPO"
+git -C "$PUBREPO" reset --hard -q HEAD
+expect_pass publication_clean_after_staged_removal \
+  bash "$SCAN" --publication --repo "$PUBREPO"
+expect_pass git_index_clean_after_staged_removal \
+  bash "$SCAN" --git-index --repo "$PUBREPO"
+
+# Ignored paths are local-only and therefore outside the publication set.
+printf 'ignored-local/\n' >"$PUBREPO/.gitignore"
+mkdir -p "$PUBREPO/ignored-local"
+pem_pkcs8 >"$PUBREPO/ignored-local/canary.txt"
+expect_pass publication_excludes_ignored_local \
+  bash "$SCAN" --publication --repo "$PUBREPO"
+
+# --- 12. Full reachable history, including files deleted later. ---
+HISTREPO="$SANDBOX/history-repo"
+mkdir -p "$HISTREPO"
+git -C "$HISTREPO" init -q
+git -C "$HISTREPO" config user.name 'ExyonQ Scanner Test'
+git -C "$HISTREPO" config user.email 'scanner-test@exyonq.invalid'
+printf 'history baseline\n' >"$HISTREPO/tracked.txt"
+git -C "$HISTREPO" add tracked.txt
+git -C "$HISTREPO" commit -q -m 'history baseline'
+pem_pkcs8 >"$HISTREPO/deleted-canary.txt"
+git -C "$HISTREPO" add deleted-canary.txt
+git -C "$HISTREPO" commit -q -m 'history canary commit'
+rm -f "$HISTREPO/deleted-canary.txt"
+git -C "$HISTREPO" add -A
+git -C "$HISTREPO" commit -q -m 'delete history canary'
+expect_fail history_blocks_deleted_canary \
+  bash "$SCAN" --history --repo "$HISTREPO"
+
+HISTCLEAN="$SANDBOX/history-clean"
+mkdir -p "$HISTCLEAN"
+git -C "$HISTCLEAN" init -q
+git -C "$HISTCLEAN" config user.name 'ExyonQ Scanner Test'
+git -C "$HISTCLEAN" config user.email 'scanner-test@exyonq.invalid'
+printf 'history clean\n' >"$HISTCLEAN/tracked.txt"
+git -C "$HISTCLEAN" add tracked.txt
+git -C "$HISTCLEAN" commit -q -m 'history clean'
+expect_pass history_clean_repository \
+  bash "$SCAN" --history --repo "$HISTCLEAN"
+
+# A regex definition is not key material. This mirrors the historical
+# p14sign-common.sh false positive without embedding a real PEM block.
+begin="-----BEGIN"
+printf '%s\n' \
+  "grep -qE '^${begin} RSA PRIVATE KEY-----\$' \"\$p\"" \
+  >"$HISTCLEAN/pattern-only.sh"
+git -C "$HISTCLEAN" add pattern-only.sh
+git -C "$HISTCLEAN" commit -q -m 'pattern definition only'
+expect_pass history_ignores_regex_pattern_source \
+  bash "$SCAN" --history --repo "$HISTCLEAN"
+
 # --- Positive: public cert only ---
 mkdir -p "$SANDBOX/public"
 printf '%s\n%s\n%s\n' \
@@ -149,5 +234,10 @@ echo "PRIVATE_MATERIAL_SCANNER_ARCHIVE_TEST=PASS"
 echo "PRIVATE_MATERIAL_SCANNER_OCI_TEST=PASS"
 echo "PRIVATE_MATERIAL_SCANNER_RENAMED_FILE_TEST=PASS"
 echo "PRIVATE_MATERIAL_SCANNER_FALSE_NEGATIVE_GATE=PASS"
+echo "PRIVATE_MATERIAL_SCANNER_PUBLICATION_GATE=PASS"
+echo "PRIVATE_MATERIAL_SCANNER_PUBLICATION_INDEX_GATE=PASS"
+echo "PRIVATE_MATERIAL_SCANNER_INDEX_BLOB_GATE=PASS"
+echo "PRIVATE_MATERIAL_SCANNER_HISTORY_GATE=PASS"
+echo "PRIVATE_MATERIAL_SCANNER_BLIND_MODE_GATE=PASS"
 echo "EXYONQ_SEC_PRIVATE_MATERIAL_ZERO_SELFTEST=PASS"
 echo "EXYONQ_REGRESSION_TESTS=PASS"

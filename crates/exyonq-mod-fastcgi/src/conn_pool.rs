@@ -82,6 +82,8 @@ pub struct ConnPool {
     generation: u64,
     /// Config `[[fcgi_pool]].name` when known (Q-08 diagnostics).
     pool_name: String,
+    /// Stable per-pool Prometheus counters (aggregate series remain process-wide).
+    pool_metrics: std::sync::Arc<crate::metrics::FcgiPoolMetrics>,
     endpoint: PoolEndpoint,
     config: ConnPoolConfig,
     state: Mutex<ConnPoolState>,
@@ -125,9 +127,12 @@ impl ConnPool {
         config: ConnPoolConfig,
         pool_name: impl Into<String>,
     ) -> Self {
+        let pool_name = pool_name.into();
+        let pool_metrics = metrics::pool_metrics(&pool_name);
         Self {
             generation,
-            pool_name: pool_name.into(),
+            pool_name,
+            pool_metrics,
             endpoint,
             config,
             state: Mutex::new(ConnPoolState {
@@ -160,6 +165,7 @@ impl ConnPool {
 
     /// Q-08: structured warn when returning PoolBusy.
     fn emit_saturation(&self, kind: SaturationKind) {
+        self.pool_metrics.note_saturation_rejection();
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let msg = format_saturation_message(
             &self.pool_name,
@@ -328,6 +334,7 @@ impl ConnPool {
         let checkout_cap = budget.checkout_budget().map_err(|e| {
             self.checkout_timeouts.fetch_add(1, Ordering::Relaxed);
             metrics::note_fcgi_checkout_timeout();
+            self.pool_metrics.note_checkout_timeout();
             // Checkout wait exhausted under absolute budget → 503 (not 504).
             let _ = e;
             self.emit_saturation(SaturationKind::Checkout);
@@ -340,6 +347,7 @@ impl ConnPool {
             if budget.expired() {
                 self.checkout_timeouts.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_checkout_timeout();
+                self.pool_metrics.note_checkout_timeout();
                 metrics::note_fcgi_timeout_phase_total();
                 return Err(WireError::Timeout);
             }
@@ -441,6 +449,7 @@ impl ConnPool {
             if slice.is_zero() {
                 self.checkout_timeouts.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_checkout_timeout();
+                self.pool_metrics.note_checkout_timeout();
                 self.busy_rejections.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_saturation_rejection();
                 drop(state);
@@ -457,6 +466,7 @@ impl ConnPool {
             if wait_result.timed_out() && Instant::now() >= wait_deadline {
                 self.checkout_timeouts.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_checkout_timeout();
+                self.pool_metrics.note_checkout_timeout();
                 self.busy_rejections.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_saturation_rejection();
                 drop(state);

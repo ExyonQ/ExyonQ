@@ -19,12 +19,13 @@ Maps Apache constructs onto **existing** ExyonQ IR/runtime equivalents. Fail-clo
 | `ProxyPass /path http://host:port/` (authority-only) | `[[upstream]]` + `route.upstream` |
 | `ProxyPassMatch` PHP / `FilesMatch` + `SetHandler proxy:unix:…\|fcgi://…` | `[[fcgi_pool]]` + `route.fastcgi` |
 
+| `AuthType Basic` + `AuthUserFile` + `AuthName` + `Require valid-user` | `modules.auth.routes.<route>` |
+
 ## Still rejected (no product equivalent yet)
 
 | Apache | Why |
 | --- | --- |
 | `ErrorDocument` URL/texto | ADR-050 maps path form only (`error_pages`); URL/text still rejected |
-| `AuthType` / `AuthUserFile` / `Require` | Auth module absent |
 | `ProxyPassReverse` | No response `Location` rewrite |
 | `RedirectMatch` / regex `RewriteRule` / `RewriteCond` | No regex match IR; use htaccess overlay for WP front-controller |
 | `ProxyPass` with upstream path / balancers / variables | Same fail-closed policy as NGINX proxy MVP |

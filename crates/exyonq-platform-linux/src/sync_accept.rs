@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::thread;
 use tracing::warn;
 
-const POOL_SATURATED_RESPONSE: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
+const POOL_SATURATED_RESPONSE: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable";
 
 fn reject_sync_accept_connection(mut stream: TcpStream, peer: SocketAddr) {
     let _ = stream.set_nodelay(true);

@@ -78,6 +78,8 @@ fn install_fcgi_runtime_for_tests(
 
 fn clone_ctx(ctx: &ConnectionContext) -> ConnectionContext {
     ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state: Arc::clone(&ctx.state),
         proxy_client: ctx.proxy_client.clone(),
         x_forwarded_for: ctx.x_forwarded_for.clone(),
@@ -154,6 +156,8 @@ document_root = "{}"
         install_fcgi_runtime_for_tests(executor, vec![(0, DEFAULT_FCGI_MAX_CONCURRENCY)]);
     FcgiOverlayHarness {
         ctx: ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -346,6 +350,8 @@ document_root = "{}"
         .expect("state");
     let _fcgi_guard = install_fcgi_runtime_for_tests(Arc::new(NoCall), vec![(0, 1)]);
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -498,6 +504,8 @@ document_root = "{}"
     let _fcgi_guard =
         install_fcgi_runtime_for_tests(Arc::new(CaptureScriptExecutor), vec![(0, 8), (1, 8)]);
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -584,6 +592,8 @@ document_root = "{}"
         .await
         .expect("state");
     let ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -652,6 +662,8 @@ document_root = "{}"
     let _fcgi_guard = install_fcgi_runtime_for_tests(executor, capacities);
     FcgiOverlayHarness {
         ctx: ConnectionContext {
+            scheme: "http",
+            local_port: None,
             state,
             proxy_client,
             x_forwarded_for: HeaderValue::from_static("127.0.0.1"),
@@ -772,6 +784,8 @@ document_root = "{}"
     ))
     .expect("register global fcgi for multi-thread test");
     let harness_ctx = ConnectionContext {
+        scheme: "http",
+        local_port: None,
         state,
         proxy_client,
         x_forwarded_for: HeaderValue::from_static("127.0.0.1"),

@@ -69,6 +69,40 @@ impl ServerState {
         config: AppConfig,
         proxy_client: ProxyClient,
     ) -> anyhow::Result<Arc<Self>> {
+        Self::build_with_waf_binding(
+            generation,
+            config,
+            proxy_client,
+            crate::waf::waf_binding_for_new_state(),
+        )
+        .await
+    }
+
+    /// Test-only published constructor with an explicit WAF binding: tests that
+    /// need a rejecting/inspecting WAF binding must not install it through
+    /// `install_waf_runtime_binding` — the process-global binding slot is
+    /// snapshotted by every concurrent `ServerState` build, so an
+    /// `AlwaysRateLimit`-style gate would leak into unrelated tests and 429 them.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) async fn new_with_waf_binding_for_test(
+        generation: u64,
+        config: AppConfig,
+        proxy_client: ProxyClient,
+        waf_binding: WafRuntimeBinding,
+    ) -> anyhow::Result<Arc<Self>> {
+        let state =
+            Self::build_with_waf_binding(generation, config, proxy_client, waf_binding).await?;
+        state.publish_compiled_module_slots()?;
+        crate::reload::publish_runtime_generation(state.generation);
+        Ok(state)
+    }
+
+    async fn build_with_waf_binding(
+        generation: u64,
+        config: AppConfig,
+        proxy_client: ProxyClient,
+        waf_binding: WafRuntimeBinding,
+    ) -> anyhow::Result<Arc<Self>> {
         let snapshot = compile_runtime_plan(generation, config.clone())?;
         snapshot.module_state.init().await?;
 
@@ -87,7 +121,6 @@ impl ServerState {
             None
         };
 
-        let waf_binding: WafRuntimeBinding = crate::waf::waf_binding_for_new_state();
         let state = Arc::new(Self {
             generation: snapshot.generation,
             config: snapshot.config.clone(),
@@ -167,5 +200,65 @@ impl ServerState {
     pub fn path_requires_module_pipeline(&self, path: &str) -> bool {
         let m = &self.config.modules.metrics;
         m.enabled && (path == m.path.as_str() || path == m.health_path.as_str())
+    }
+
+    /// Route-bound features the fast paths (wire proxy GET, epoll sendfile,
+    /// blocking static pool, `/site/` static shortcut) cannot honor — the
+    /// request must take the full dispatch path.
+    ///
+    /// AUDIT-D1/D2/D7: wire and static fast paths implement transport only —
+    /// they cannot emit a route 401 (`auth_basic`), per-zone 429
+    /// (`limit_req_zone`), `sub_filter` transforms, mirror subrequests,
+    /// `slice` assembly, `.htaccess` overlays, `[[cache_policy]]` stores, or
+    /// `[[route.response_headers]]`. Cap056 added this gate for `route.cache`
+    /// alone; every route-bound feature shipped since silently no-ops on
+    /// fast paths. Extend this check whenever a feature binds to a route.
+    pub fn route_requires_full_dispatch(&self, route_idx: usize) -> bool {
+        self.snapshot.cache_policy_for_route(route_idx).is_some()
+            || !self.snapshot.route_response_headers(route_idx).is_empty()
+            || self
+                .snapshot
+                .htaccess_site_id_for_route(route_idx)
+                .is_some()
+            || self.config.routes.get(route_idx).is_some_and(|route| {
+                let modules = &self.config.modules;
+                let name = route.name.as_str();
+                // EXY-16/ADR-050: the wire transport cannot substitute a
+                // server error document after an upstream 4xx/5xx. Keep such
+                // routes on the full dispatch path, where error_pages runs.
+                let server_has_error_pages = self.config.servers.iter().any(|server| {
+                    !server.error_pages.is_empty()
+                        && server.routes.iter().any(|candidate| candidate == name)
+                });
+                // cache_headers needs the Hyper path to emit Cache-Control —
+                // the wire surface cannot materialize it (EXY-01/EXY-05 trap).
+                // dir_redirect is NOT gated here — the wire path emits the
+                // NGINX-style 301 inline (EXY-03), keeping sendfile eligible.
+                server_has_error_pages
+                    || route.cache_headers.is_some()
+                    // Structural rewrite/redirect is evaluated only after route
+                    // lookup in full dispatch. The wire path would answer 404
+                    // (rewrite) or bypass the route redirect entirely.
+                    || route.rewrite.is_some()
+                    || route.redirect.is_some()
+                    || route.access.is_some()
+                    || modules.auth.routes.contains_key(name)
+                    || modules.ratelimit.client.enabled
+                    || modules.ratelimit.routes.contains_key(name)
+                    || modules.sub_filter.routes.contains_key(name)
+                    || modules.mirror.routes.contains_key(name)
+                    || modules.slice.routes.contains_key(name)
+            })
+    }
+
+    /// Generation-wide features no fast path can honor at all: FPC must see
+    /// every eligible GET (lookup/store/stale/`X-Cache`), gunzip transforms
+    /// response bodies, and response-phase WAF rules inspect what fast paths
+    /// emit unchecked.
+    pub fn wire_incompatible_features_active(&self) -> bool {
+        self.snapshot.full_page_cache.enabled
+            || self.gunzip_configured()
+            || self.config.modules.ratelimit.client.enabled
+            || self.waf.inspects_responses()
     }
 }

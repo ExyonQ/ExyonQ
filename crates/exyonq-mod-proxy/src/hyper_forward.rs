@@ -20,7 +20,8 @@ use crate::hyper_client::{get_empty_body_client, ProxyClient};
 use crate::retry::{classify_hyper_error, UpstreamAttemptClass};
 use crate::upstream_target::UpstreamTarget;
 use crate::{
-    content_type_is_event_stream, request_headers_safe_for_proxy, strip_hop_by_hop_headers,
+    content_type_is_event_stream, insert_or_merge_cookie, merge_cookie_header_map,
+    merge_cookie_pairs, request_headers_safe_for_proxy, strip_hop_by_hop_headers,
     upstream_timeout_for_path,
 };
 use exyonq_module_api::proxy_dispatch::{
@@ -306,6 +307,10 @@ pub async fn attempt_forward_empty_body_with_headers(
         if name.eq_ignore_ascii_case("x-forwarded-for")
             || name.eq_ignore_ascii_case("x-forwarded-proto")
             || name.eq_ignore_ascii_case("host")
+            // This path always sends Empty body: forwarding the client's
+            // Content-Length would make the upstream wait for bytes that are
+            // intentionally absent (GET/HEAD with a body takes the framed path).
+            || name.eq_ignore_ascii_case("content-length")
         {
             continue;
         }
@@ -313,7 +318,8 @@ pub async fn attempt_forward_empty_body_with_headers(
             hyper::header::HeaderName::from_bytes(name.as_bytes()),
             HeaderValue::from_str(value),
         ) {
-            header_map.insert(n, v);
+            // EXY-11: merge repeated `Cookie` lines ("; "); other fields last-wins.
+            insert_or_merge_cookie(&mut header_map, n, v);
         }
     }
     strip_hop_by_hop_headers(&mut header_map);
@@ -469,14 +475,16 @@ pub async fn forward_get_streaming_with_proto(
     }
     // The cache path must forward the client request faithfully: keying a
     // response on a header the origin never saw would cache one variant for all.
-    for (name, value) in request_headers {
+    // EXY-11: fold repeated `Cookie` lines into one "; "-joined field —
+    // CGI-style upstreams only honour a single Cookie line.
+    for (name, value) in merge_cookie_pairs(request_headers) {
         let lower = name.to_ascii_lowercase();
         if GET_FORWARD_SKIP_HEADERS.contains(&lower.as_str()) {
             continue;
         }
         if let (Ok(n), Ok(v)) = (
             hyper::header::HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
+            HeaderValue::from_str(&value),
         ) {
             builder = builder.header(n, v);
         }
@@ -612,6 +620,8 @@ pub async fn forward_request_complete(
         .to_string();
     *req.uri_mut() = upstream.uri_for(&path_and_query);
     strip_hop_by_hop_headers(req.headers_mut());
+    // EXY-11: fold repeated `Cookie` lines before forwarding (RFC 6265 §5.4).
+    merge_cookie_header_map(req.headers_mut());
     if let Some(value) = x_forwarded_for {
         req.headers_mut().insert("x-forwarded-for", value.clone());
     }

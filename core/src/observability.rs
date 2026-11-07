@@ -356,6 +356,10 @@ mod tests {
 
     #[test]
     fn request_id_required_follows_access_and_otel_flags() {
+        // set_otel_spans_enabled flips the process-global wire OTel flag —
+        // `epoll_sendfile_eligible` returns false while set, so concurrent
+        // predicate asserts must not observe this window.
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         let prev_access = access_logging_enabled();
         let prev_otel = otel_spans_enabled();
         set_access_logging_enabled(false);

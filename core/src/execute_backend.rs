@@ -38,7 +38,7 @@ use exyonq_module_api::static_dispatch::{
     StaticCompiledSlot, StaticDispatchRequest, StaticDispatchService, StaticMethod,
 };
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use exyonq_module_api::fcgi_dispatch::{
@@ -406,6 +406,11 @@ pub fn build_static_dispatch_request_with_budget(
         root_slot,
         method,
         request_path,
+        // Builders keep the historical HTTP default; HTTPS entry points
+        // overwrite `request.scheme` after construction.
+        scheme: "http",
+        local_port: None,
+        request_query: None,
         headers,
         materialization_budget_bytes,
     }
@@ -567,6 +572,9 @@ pub(crate) fn fcgi_dispatch_service_present() -> bool {
 pub fn build_fcgi_dispatch_request(
     pool_id: u32,
     pool_document_root: Option<&PathBuf>,
+    script_root: Option<&Path>,
+    script_name_uri: Option<&str>,
+    front_controller: Option<&str>,
     method: &str,
     uri_path: &str,
     query_string: &str,
@@ -582,6 +590,9 @@ pub fn build_fcgi_dispatch_request(
     let outcome = resolver.resolve(&FastcgiScriptResolutionRequest {
         uri_path: uri_path.to_string(),
         pool_document_root: pool_document_root.cloned(),
+        script_root: script_root.map(Path::to_path_buf),
+        script_name_uri: script_name_uri.map(str::to_string),
+        front_controller: front_controller.map(str::to_string),
         generation: 0,
         purpose: FastcgiScriptResolutionPurpose::Dispatch,
     });
@@ -617,6 +628,7 @@ pub fn build_fcgi_dispatch_request(
         document_root,
         server_name,
         server_port,
+        scheme: "http".to_string(),
         remote_addr: remote_addr.to_string(),
         server_protocol: "HTTP/1.1".to_string(),
         content_type,
@@ -674,6 +686,7 @@ pub async fn execute_backend(
                     document_root: String::new(),
                     server_name: String::new(),
                     server_port: 80,
+                    scheme: "http".into(),
                     remote_addr: String::new(),
                     server_protocol: String::new(),
                     content_type: None,
@@ -701,6 +714,9 @@ pub async fn execute_backend(
                     root_slot: *root_slot,
                     method: StaticMethod::Get,
                     request_path: Arc::from("/"),
+                    scheme: "http",
+                    local_port: None,
+                    request_query: None,
                     headers: Vec::new(),
                     materialization_budget_bytes: None,
                 },
@@ -819,6 +835,7 @@ mod tests {
                 document_root: "/var/www".into(),
                 server_name: "localhost".into(),
                 server_port: 80,
+                scheme: "http".into(),
                 remote_addr: "127.0.0.1".into(),
                 server_protocol: "HTTP/1.1".into(),
                 content_type: None,

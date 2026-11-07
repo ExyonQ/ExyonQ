@@ -26,10 +26,18 @@ EOF
 
 case "$MODE" in
   preflight)
-    bash "$SCAN" --git-tree --repo "$ROOT"
+    # Publication mode is the exact set a normal push can ship: tracked
+    # working-tree files plus untracked, non-ignored files.
+    bash "$SCAN" --publication --repo "$ROOT"
+    # All reachable history is read-only evidence; real key material there is
+    # an open exposure even when the current tree is clean.
+    bash "$SCAN" --history --repo "$ROOT"
     bash "$ROOT/scripts/verify-no-private-paths.sh"
     bash "$ROOT/scripts/security/tests/test-private-material-scanner.sh"
-    echo "PRIVATE_MATERIAL_TREE_GATE=PASS"
+    bash "$ROOT/scripts/security/tests/test-publication-path-guard.sh"
+    echo "PRIVATE_MATERIAL_PUBLICATION_GATE=PASS"
+    echo "PRIVATE_MATERIAL_HISTORY_GATE=PASS"
+    echo "PUBLICATION_PATH_GUARD=PASS"
     echo "PRIVATE_MATERIAL_RELEASE_PREFLIGHT=PASS"
     ;;
   archive)

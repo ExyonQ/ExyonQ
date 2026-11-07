@@ -8,8 +8,11 @@ set -eu
 EXYONQ_WP_DB_PATH="${EXYONQ_WP_DB_PATH:-/var/www/html/wp-content/database/db.sqlite}"
 EXYONQ_WP_DB_DIR="$(dirname "$EXYONQ_WP_DB_PATH")"
 
-mkdir -p /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/mu-plugins
-chown www-data:www-data /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/mu-plugins
+# The image runs as www-data; keep the ownership fix-ups for root callers
+# (for example an operator overriding --user 0) without failing as non-root.
+chown_if_root() { [ "$(id -u)" = "0" ] && chown "$@" || true; }
+mkdir -p /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/plugins
+chown_if_root www-data:www-data /run/php /run/exyonq "$EXYONQ_WP_DB_DIR" /var/www/html/wp-content/plugins
 chmod 0750 /run/exyonq
 
 # The SQLite plugin writes 'DENY FROM ALL' here only when the file is missing;
@@ -17,7 +20,7 @@ chmod 0750 /run/exyonq
 # install then 502s the site. The route-level dotfile/extension deny already
 # covers the database file, so a placeholder is enough.
 printf '# Database directory protected by ExyonQ route rules.\n' > "$EXYONQ_WP_DB_DIR/.htaccess"
-chown www-data:www-data "$EXYONQ_WP_DB_DIR/.htaccess"
+chown_if_root www-data:www-data "$EXYONQ_WP_DB_DIR/.htaccess"
 
 # One-shot migration from the randomized layout of pre-0.8 images: when the
 # fixed file is missing but a .ht.<hex>/.ht.sqlite database exists, move it to
@@ -28,36 +31,49 @@ if [ ! -f /var/www/html/wp-config.php ] || ! grep -q "DB_PATH" /var/www/html/wp-
       if [ -f "$f" ]; then
         mv "$f" "$EXYONQ_WP_DB_PATH"
         rm -rf "${f%/.ht.sqlite}" /var/www/html/wp-content/database/db-path.php
-        chown www-data:www-data "$EXYONQ_WP_DB_PATH"
+        chown_if_root www-data:www-data "$EXYONQ_WP_DB_PATH"
         break
       fi
     done
   fi
 fi
 
-if [ ! -f /var/www/html/wp-content/mu-plugins/exyonq-cache.php ]; then
-  cat > /var/www/html/wp-content/mu-plugins/exyonq-cache.php << 'EOF'
-<?php
-/**
- * Plugin Name: ExyonQ Cache
- * Description: Invalida la caché de página de ExyonQ al publicar.
- * Version: 0.2.0
- * Author: ExyonQ
- */
-require_once __DIR__ . '/exyonq-cache/exyonq-cache.php';
-EOF
-  chown www-data:www-data /var/www/html/wp-content/mu-plugins/exyonq-cache.php
+# The purge token must survive container restarts: the plugin reads the same
+# value from wp-config.php. Regenerating it per boot left the plugin with a
+# stale token and made every purge fail with unauthenticated.
+EXYONQ_CACHE_PURGE_SOCKET=/run/exyonq/cache-purge.sock
+if [ -f /var/www/html/wp-config.php ]; then
+  EXYONQ_CACHE_PURGE_TOKEN="$(sed -n "s/^define( 'EXYONQ_CACHE_PURGE_TOKEN', '\([^']*\)' );$/\1/p" /var/www/html/wp-config.php | head -n 1)"
+else
+  EXYONQ_CACHE_PURGE_TOKEN=""
 fi
-
-export EXYONQ_CACHE_PURGE_SOCKET=/run/exyonq/cache-purge.sock
-# Token de purge por arranque: compartido entre ExyonQ (env) y el mu-plugin (wp-config define).
-export EXYONQ_CACHE_PURGE_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+if [ -z "$EXYONQ_CACHE_PURGE_TOKEN" ]; then
+  EXYONQ_CACHE_PURGE_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+export EXYONQ_CACHE_PURGE_SOCKET EXYONQ_CACHE_PURGE_TOKEN
+if [ -f /var/www/html/wp-config.php ] && ! grep -q "EXYONQ_CACHE_PURGE_TOKEN" /var/www/html/wp-config.php; then
+  # Upgrade a pre-existing config that predates the purge constants.
+  sed -i "1a define( 'EXYONQ_CACHE_PURGE_TOKEN', '${EXYONQ_CACHE_PURGE_TOKEN}' );" /var/www/html/wp-config.php
+  chown_if_root www-data:www-data /var/www/html/wp-config.php
+fi
 # site_id = stable_fpc_site_id("wordpress") — debe coincidir con [[route]] name="wordpress"
 # en packaging/release/conf/wordpress.toml.
 EXYONQ_WP_SITE_ID=18218855368947783640
 
 if [ ! -f /var/www/html/wp-config.php ]; then
-  php -r 'echo file_get_contents("https://api.wordpress.org/secret-key/1.1/salt/");' > /tmp/wp-salts.php
+  # Generate the eight salts locally with the CSPRNG. The previous
+  # file_get_contents() path failed on Wolfi's PHP (the openssl stream wrapper
+  # has no CA configured) and left wp-config.php without any salts.
+  php -r '
+$names = ["AUTH_KEY", "SECURE_AUTH_KEY", "LOGGED_IN_KEY", "NONCE_KEY", "AUTH_SALT", "SECURE_AUTH_SALT", "LOGGED_IN_SALT", "NONCE_SALT"];
+$chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_ []{}<>~`+=,.;:/?|";
+foreach ($names as $name) {
+    $value = "";
+    for ($i = 0; $i < 64; $i++) {
+        $value .= $chars[random_int(0, strlen($chars) - 1)];
+    }
+    echo "define( \x27" . $name . "\x27, \x27" . addslashes($value) . "\x27 );\n";
+}' > /tmp/wp-salts.php
   cat > /var/www/html/wp-config.php << 'EOF'
 <?php
 define( 'DB_NAME', 'wordpress' );
@@ -83,7 +99,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 require_once ABSPATH . 'wp-settings.php';
 EOF
   rm -f /tmp/wp-salts.php
-  chown www-data:www-data /var/www/html/wp-config.php
+  chown_if_root www-data:www-data /var/www/html/wp-config.php
   chmod 0640 /var/www/html/wp-config.php
 elif ! grep -q "DB_PATH" /var/www/html/wp-config.php; then
   # Pre-0.8 wp-config: pin the SQLite file to the fixed path.
@@ -92,9 +108,13 @@ elif ! grep -q "DB_PATH" /var/www/html/wp-config.php; then
     /var/www/html/wp-config.php > /tmp/wp-config.php \
     && cat /tmp/wp-config.php > /var/www/html/wp-config.php \
     && rm -f /tmp/wp-config.php \
-    && chown www-data:www-data /var/www/html/wp-config.php
+    && chown_if_root www-data:www-data /var/www/html/wp-config.php
 fi
 
 php-fpm --daemonize
-# su(1) exists in both util-linux (Debian) and busybox (Wolfi); runuser does not.
-exec su -s /bin/sh www-data -c '/usr/local/bin/exyonq serve -c /etc/exyonq/wordpress.toml'
+# su(1) exists in both util-linux and busybox (Wolfi); runuser does not. When the
+# image already runs as www-data, exec directly and skip the privilege switch.
+if [ "$(id -u)" = "0" ]; then
+  exec su -s /bin/sh www-data -c '/usr/local/bin/exyonq serve -c /etc/exyonq/wordpress.toml'
+fi
+exec /usr/local/bin/exyonq serve -c /etc/exyonq/wordpress.toml

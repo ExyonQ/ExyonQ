@@ -15,7 +15,9 @@
  */
 //! DB5 Part D — static on-demand execution context validation (test-only).
 
-use exyonq_mod_static::{read_file_bytes_with_budget, PreloadLimits, StaticRoot};
+use exyonq_mod_static::{
+    read_file_bytes_with_budget, PreloadLimits, StaticRoot, StaticRootRouteOpts,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -117,7 +119,19 @@ fn db5_preload_disabled_skips_tree_and_ondemand_resolve_works() {
         max_total_bytes: 1,
         max_entries: 1,
     };
-    let mut svc = StaticRoot::new_with_preload_limits(&root, "/site", None, limits).unwrap();
+    let mut svc = StaticRoot::new_with_preload_limits(
+        &root,
+        "/site",
+        None,
+        limits,
+        StaticRootRouteOpts {
+            join_uri: false,
+            literal: false,
+            dir_redirect: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     svc.preload_tree().unwrap();
     assert_eq!(svc.cache_len(), 0);
     assert!(svc.resolve_live_file_path("/site/x.txt").is_ok());
