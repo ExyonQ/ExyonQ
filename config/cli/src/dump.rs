@@ -72,6 +72,9 @@ fn pretty_canonical_json(cfg: &AppConfig) -> Result<String, String> {
 fn render_canonical_toml(cfg: &AppConfig) -> String {
     let mut out = String::new();
     out.push_str(&format!("config_version = {}\n\n", cfg.config_version));
+    if let Some(workers) = cfg.tuning.accept_workers {
+        out.push_str(&format!("[tuning]\naccept_workers = {workers}\n\n"));
+    }
 
     for server in &cfg.servers {
         out.push_str("[[server]]\n");

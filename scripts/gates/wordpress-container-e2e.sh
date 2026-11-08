@@ -166,6 +166,30 @@ docker exec "$NAME" php -r 'define( "WP_USE_THEMES", false ); require "/var/www/
   | tee /tmp/wp-e2e-purge-probe.json \
   || fail "purge socket probe did not authenticate"
 
+# Regression: the purge token must survive a restart. 0.9.1 regenerated
+# EXYONQ_CACHE_PURGE_TOKEN on every boot and wrote it into wp-config.php only
+# when creating that file, so the plugin kept the stale value and every purge
+# answered unauthenticated. Only a post-restart probe catches that.
+token_hash() {
+  docker exec "$NAME" php -r 'define( "WP_USE_THEMES", false ); require "/var/www/html/wp-load.php"; echo hash( "sha256", defined( "EXYONQ_CACHE_PURGE_TOKEN" ) ? (string) EXYONQ_CACHE_PURGE_TOKEN : "UNDEFINED" ), "\n";' \
+    | tail -1
+}
+TOKEN_BEFORE="$( token_hash )"
+docker restart "$NAME" >/dev/null
+for _ in $(seq 1 60); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/wp-admin/install.php" || true)
+  [ "$code" = "200" ] && break
+  sleep 1
+done
+[ "$code" = "200" ] || fail "installer after restart-2 ($code)"
+TOKEN_AFTER="$( token_hash )"
+[ -n "$TOKEN_BEFORE" ] && [ "$TOKEN_BEFORE" = "$TOKEN_AFTER" ] \
+  || fail "purge token changed across restart (before=$TOKEN_BEFORE after=$TOKEN_AFTER)"
+docker exec "$NAME" php -r 'define( "WP_USE_THEMES", false ); require "/var/www/html/wp-load.php"; $probe = ExyonQ_Cache_Plugin::instance()->client()->status_probe(); echo json_encode( $probe ), "\n"; if ( ( $probe["auth"] ?? "" ) !== "accepted" ) { exit( 1 ); }' \
+  | tee /tmp/wp-e2e-purge-probe-restart.json \
+  || fail "purge socket probe failed after restart"
+PURGE_SURVIVES_RESTART=PASS
+
 # Anonymous cache: miss then hit, same nonce.
 rm -f "$COOKIE2"
 for i in 1 2; do
@@ -196,6 +220,7 @@ cat > "$OUT/wordpress-e2e.md" <<EOF
 - ExyonQ Cache normal plugin active after restart: PASS
 - Mu-plugin absent: PASS
 - Purge socket status_probe: auth accepted
+- Purge token stable across a restart, status_probe still accepted: PASS
 - Anonymous FPC miss -> hit: PASS
 - Cached nonce accepted by another anonymous client: PASS
 - Logged-in X-Cache: bypass / cookie_denied: PASS

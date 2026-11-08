@@ -112,7 +112,7 @@ pass "GET_200"
 # Oversize POST → 413 (TooLarge error-response write success path)
 python3 - <<'PY' >"$TMP/oversize.bin"
 import sys
-sys.stdout.buffer.write(b"x" * (32 * 1024 * 1024 + 1))
+sys.stdout.buffer.write(b"x" * (64 * 1024 * 1024 + 1))
 PY
 code="$(docker_run --network host -v "${TMP}:/e2e:ro" "$CLIENT_IMAGE" \
   curl --http3-only -sk --max-time 120 \

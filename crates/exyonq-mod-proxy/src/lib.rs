@@ -98,13 +98,10 @@ pub use selector::{
     SelectionOutcome,
 };
 pub use spike::run_spike_proxy;
-pub use sse::{
-    content_type_is_event_stream, path_is_sse_stream, upstream_timeout_for_path, SSE_STREAM_PATHS,
-    SSE_STREAM_TIMEOUT,
-};
+pub use sse::content_type_is_event_stream;
 pub use upstream::{UpstreamDescriptor, BENCH_SMALL_UPSTREAM_BODY};
 pub use upstream_target::UpstreamTarget;
-pub use uri::{build_uri, preseed_path_uris, PRESEED_PROXY_PATHS};
+pub use uri::build_uri;
 pub use websocket::{forward_websocket, is_websocket_upgrade};
 pub use wire_conn::try_shutdown_health;
 #[cfg(target_os = "linux")]

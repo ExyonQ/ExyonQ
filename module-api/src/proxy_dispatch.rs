@@ -50,7 +50,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Maximum request body bytes accepted for proxy forward (aligned with core security limits).
-pub const PROXY_MAX_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
+///
+/// Kept equal to the FastCGI cap so the HTTP/3 defense-in-depth check does not
+/// reject a body the FastCGI route would otherwise accept.
+pub const PROXY_MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Compiled endpoint row carried on [`ProxyCompiledSlot`] for P2B selection.
 #[derive(Debug, Clone, PartialEq, Eq)]

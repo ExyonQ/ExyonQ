@@ -21,6 +21,110 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
+## [0.9.2] — RELEASE CANDIDATE (not published)
+
+```text
+VERSION = 0.9.2
+PUBLICATION_STATUS = NOT_PUBLISHED
+TAG = LOCAL ONLY, OWNER-GATED
+PREVIOUS_PUBLIC = 0.9.1
+BASE_TAG = v0.9.1
+RELEASE_NOTES = docs/release/v0.9.2.md
+```
+
+> **Candidate only.** No published `v0.9.2` tag, GitHub Release, GHCR image,
+> or Docker Hub mirror exists. Do not present this entry as a shipped release.
+
+This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
+`docs/release/v0.9.0.md` and `docs/release/v0.9.1.md`.
+
+### Added
+
+- **WordPress cache invalidation as a normal plugin.** The integration is
+  loaded through the standard plugin lifecycle instead of as a must-use plugin.
+  (`ab0e166`)
+- **SSH v2 artifact signatures.** Release verification now supports the SSH
+  signature format and the release signer trust policy. This is release
+  tooling, not a change to the HTTP server. (`4956073`)
+- **Artifact-bound OL-04/OL-03 E2E.** A dedicated workflow and negative control
+  bind the tested binary hash to the evidence logs. (`731da56`, `524b0d3`)
+
+### Fixed
+
+- **OL-03 OpenLiteSpeed readiness.** The comparison waits for OLS to answer
+  HTTP instead of treating an open TCP port as ready, and asserts only the
+  documented `perClientConnLimit` contract. (`9550d7e`)
+
+### Security
+
+- **Security audit 2026-11-07 (H-01…H-10).** H-01: removed release notes that
+  documented a `allow_sensitive` static option that does not exist. H-02: the
+  H1/H2, bounded static-range and benchmark paths share a 64 MiB request-body
+  budget and answer `413` before materializing more. H-03: `x-forwarded-host`,
+  `x-forwarded-port`, `x-real-ip` and `forwarded` are no longer forwarded
+  upstream, so a cached response cannot replay client-supplied forwarding
+  metadata to the origin. H-04: the default WAF policy is `mode = "block"`,
+  inspects up to 64 MiB and blocks when the inspection budget is exhausted
+  (previously `monitor`/1 MiB/`log_and_allow`, which left a body tail
+  uninspected). H-05: the quiche provider no longer enables HTTP/3 0-RTT.
+  H-06: the security workflows pin `cargo-audit 0.22.2`, `cargo-deny 0.20.2`,
+  `cargo-about 0.9.0` and `cargo-cyclonedx 0.5.9` and no longer mask failures
+  with `|| true`. H-07: the wire parsers reject control characters and
+  `raw_upstream` validates its target before writing. H-09: SNI wildcards match
+  a single label and patterns are validated. H-10: static file cloning reports
+  an error with `500` instead of panicking.
+- H-06 tag/bundle signing is **not** implemented: it needs a release key and
+  owner authorization.
+
+### Changed
+
+- **Per-route request-body limit.** `[[route]].max_request_body_bytes` answers
+  `413` before WAF inspection and upstream dispatch, so it bounds both body
+  materialization and WAF inspection CPU for that route; routes without it keep
+  the shared 64 MiB proxy bound.
+- WAF/OL-05 evidence records the final revalidation and reCAPTCHA v3 status;
+  the positive v3 path still requires a real v3 key. (`38fdb74`)
+-  Release evidence for the 0.9.1 image status and security audit was updated
+  after the 0.9.1 release. (`4cdad85`)
+- Workspace product version **0.9.1 → 0.9.2**; release-manifest and signing
+  allowlists accept 0.9.2; packaging defaults use 0.9.2.
+- The CI job invokes the OL-03 comparison against
+  `litespeedtech/openlitespeed@sha256:91ca324386be3fe8cd91591112dbdd8e41af48cccbe4a48e3e8673a2921c8504`;
+  the launcher and the comparison reject mutable tags.
+
+### Verification
+
+- E2E workflow run `42331859740` completed successfully on `731da56`; artifact
+  `ol04-ol03-artifact-evidence` (30,759 bytes, 54 files) reported
+  `RESULT=PASS OL04 OL03 ARTIFACT_BOUND`.
+- H-03/H-04 real E2E on 2026-11-07: `scripts/e2e/sec-h03-cache-forwarded-e2e.sh`
+  PASS (two clean requests after the poisoned one do not hit the origin again;
+  no `evil.example` in the forwarded request) and
+  `scripts/e2e/sec-h04-waf-body-tail-e2e.sh` PASS against real CRS v4.25.0
+  (`aabf675f`): benign bodies reach the origin and a 942100 payload at the tail
+  of a 64 KiB and 2 MiB body (debug build) and of 2 MiB, 8 MiB and 64 MiB
+  bodies (release build) is blocked with no `EXY-LIMIT-BODY-001`.
+- Observed cost of full-body inspection on the development arm64 host, release
+  build: 2 MiB ≈ 1.4 s, 8 MiB ≈ 5.4 s, 64 MiB ≈ 66 s per request. Size
+  `max_inspection_body_bytes` to the largest body the protected routes accept.
+- Route-body-limit E2E (`scripts/e2e/sec-h04-route-body-limit-e2e.sh`): a 64 MiB
+  body on a 2 MiB route answers `413` in well under a second with zero origin
+  hits, while the same body on the unset route is still inspected and accepted;
+  the 2 MiB boundary stays `200` and a 942100 tail stays `403`.
+- Full 0.9.2 release qualification is **NOT EXECUTED**: no tag candidate, full
+  CI/security run, release build, image build, or signature verification has
+  been run for this draft.
+
+### Limitations (honest)
+
+- The WordPress production-browser journey remains open.
+- The positive reCAPTCHA v3 path remains **NOT EXECUTED** without a real v3 key.
+- No Windows build is produced, by policy.
+- NGINX/Apache/OpenLiteSpeed compatibility remains the documented scope; this
+  draft does not claim total parity.
+
+---
+
 ## [Unreleased]
 
 ### Notes

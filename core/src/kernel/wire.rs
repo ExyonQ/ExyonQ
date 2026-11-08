@@ -62,6 +62,8 @@ fn wire_head_is_websocket_upgrade(head: &[u8]) -> bool {
 pub fn plan_wire_decision(
     view: &GenerationView,
     head: &[u8],
+    static_owned: bool,
+    proxy_owned: bool,
 ) -> Result<WirePlanDecision, WirePlanningError> {
     if head.is_empty() {
         return Err(WirePlanningError);
@@ -72,15 +74,19 @@ pub fn plan_wire_decision(
         return Ok(WirePlanDecision::Hyper);
     }
 
+    // Route ownership is resolved by the caller from the compiled route table; the
+    // planner itself must not infer it from benchmark path prefixes. Static is
+    // checked first so a static route whose path also looks proxy-shaped keeps its
+    // terminal owner.
+    if static_owned && view.site_static_slot.is_some() && static_wire::might_use_static_wire(head) {
+        return Ok(WirePlanDecision::Static);
+    }
     // Cap067 wire-cheap: ratelimit/metrics do NOT force Hyper here.
     // Compression uses early AE gate in plan_wire_after_headers / handler
     // (`modules_require_hyper_for_request_head`), not this planner.
     // OpenMetrics scrape stays Hyper via `tokio_accept_required` / path.
-    if proxy_wire::might_use_proxy_wire(head) {
+    if proxy_owned && proxy_wire::might_use_proxy_wire(head) {
         return Ok(WirePlanDecision::Proxy);
-    }
-    if view.site_static_slot.is_some() && static_wire::might_use_static_wire(head) {
-        return Ok(WirePlanDecision::Static);
     }
 
     Ok(WirePlanDecision::Hyper)
@@ -95,17 +101,30 @@ mod tests {
         GenerationView::pinned(1, false, Some(0))
     }
 
+    /// Test-only route ownership shim (production resolves this from the route table).
+    fn plan_for_test(
+        view: &GenerationView,
+        head: &[u8],
+    ) -> Result<WirePlanDecision, WirePlanningError> {
+        let static_owned = head.starts_with(b"GET /health ")
+            || head.starts_with(b"HEAD /health ")
+            || head.starts_with(b"GET /site/")
+            || head.starts_with(b"HEAD /site/");
+        let proxy_owned = head.starts_with(b"GET /api/") || head.starts_with(b"GET /api ");
+        plan_wire_decision(view, head, static_owned, proxy_owned)
+    }
+
     #[test]
     fn ps1c_planner_rejects_empty_head() {
         ensure_wire_hooks_installed();
-        assert!(plan_wire_decision(&bench_view(), b"").is_err());
+        assert!(plan_for_test(&bench_view(), b"").is_err());
     }
 
     #[test]
     fn ps1c_planner_static_for_health_wire() {
         ensure_wire_hooks_installed();
         let head = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
-        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        let decision = plan_for_test(&bench_view(), head).expect("plan");
         assert_eq!(decision, WirePlanDecision::Static);
     }
 
@@ -114,7 +133,7 @@ mod tests {
     fn ps1c_planner_static_for_ordinary_site_asset_when_sendfile_auto() {
         ensure_wire_hooks_installed();
         let head = b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n";
-        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        let decision = plan_for_test(&bench_view(), head).expect("plan");
         // Cap067: ordinary static GET is Wire Static so WAF→sendfile divert can run.
         assert_eq!(decision, WirePlanDecision::Static);
     }
@@ -124,7 +143,7 @@ mod tests {
     fn ps1c_planner_hyper_for_ordinary_site_asset_on_non_linux() {
         ensure_wire_hooks_installed();
         let head = b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n";
-        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        let decision = plan_for_test(&bench_view(), head).expect("plan");
         assert_eq!(decision, WirePlanDecision::Hyper);
     }
 
@@ -132,7 +151,7 @@ mod tests {
     fn ps1c_planner_proxy_for_api_wire() {
         ensure_wire_hooks_installed();
         let head = b"GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";
-        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        let decision = plan_for_test(&bench_view(), head).expect("plan");
         assert_eq!(decision, WirePlanDecision::Proxy);
     }
 
@@ -140,7 +159,7 @@ mod tests {
     fn ps1c_planner_websocket_upgrade_uses_hyper() {
         ensure_wire_hooks_installed();
         let head = b"GET /api/ws-echo HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
-        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        let decision = plan_for_test(&bench_view(), head).expect("plan");
         assert_eq!(decision, WirePlanDecision::Hyper);
     }
 
@@ -149,7 +168,7 @@ mod tests {
         ensure_wire_hooks_installed();
         // LA-CAP031-002: token list form must not fall through to GET-only proxy wire.
         let head = b"GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: close, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
-        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        let decision = plan_for_test(&bench_view(), head).expect("plan");
         assert_eq!(decision, WirePlanDecision::Hyper);
     }
 
@@ -157,7 +176,7 @@ mod tests {
     fn cap031_planner_websocket_connection_keep_alive_upgrade_no_space_uses_hyper() {
         ensure_wire_hooks_installed();
         let head = b"GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive,Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
-        let decision = plan_wire_decision(&bench_view(), head).expect("plan");
+        let decision = plan_for_test(&bench_view(), head).expect("plan");
         assert_eq!(decision, WirePlanDecision::Hyper);
     }
 
@@ -169,17 +188,17 @@ mod tests {
         let site = b"GET /site/index.html HTTP/1.1\r\nHost: x\r\n\r\n";
         let api = b"GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";
         assert_eq!(
-            plan_wire_decision(&view, api).expect("plan"),
+            plan_for_test(&view, api).expect("plan"),
             WirePlanDecision::Proxy
         );
         #[cfg(target_os = "linux")]
         assert_eq!(
-            plan_wire_decision(&view, site).expect("plan"),
+            plan_for_test(&view, site).expect("plan"),
             WirePlanDecision::Static
         );
         #[cfg(not(target_os = "linux"))]
         assert_eq!(
-            plan_wire_decision(&view, site).expect("plan"),
+            plan_for_test(&view, site).expect("plan"),
             WirePlanDecision::Hyper
         );
     }
@@ -189,7 +208,7 @@ mod tests {
         ensure_wire_hooks_installed();
         let view = GenerationView::pinned(42, false, None);
         let head = b"GET /unknown HTTP/1.1\r\nHost: x\r\n\r\n";
-        let _ = plan_wire_decision(&view, head).expect("plan");
+        let _ = plan_for_test(&view, head).expect("plan");
         assert_eq!(view.generation, 42);
     }
 }

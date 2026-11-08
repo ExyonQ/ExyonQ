@@ -209,6 +209,19 @@ fn ci() -> anyhow::Result<()> {
         "bash",
         &["scripts/gates/config-examples-validate.sh"],
     )?;
+    run_in(
+        root.clone(),
+        "bash",
+        &["scripts/gates/l02-no-benchmark-path-decisions.sh"],
+    )?;
+    run_in(
+        root.clone(),
+        "bash",
+        &[
+            "scripts/gates/l02-no-benchmark-path-decisions.sh",
+            "--selftest",
+        ],
+    )?;
     run("cargo", &["fmt", "--all", "--", "--check"])?;
     run(
         "cargo",

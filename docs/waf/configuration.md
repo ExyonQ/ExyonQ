@@ -16,10 +16,10 @@ aborts startup/reload; the previous generation remains active.
 | Field | Type | Default | Allowed | Runtime effect |
 | --- | --- | --- | --- | --- |
 | `enabled` | bool | `true` | bool | `false` forces detectors off / no-op compile path |
-| `mode` | string | `"monitor"` | `monitor` \| `block` \| `disabled` | Signature enforcement mode (see PRODUCT.md) |
+| `mode` | string | `"block"` | `monitor` \| `block` \| `disabled` | Signature enforcement mode (see PRODUCT.md) |
 | `engine` | string | `"native"` | `native` only | Other values rejected |
-| `max_inspection_body_bytes` | u64 | `1048576` | `>= 1` | Body inspection budget |
-| `on_inspection_limit` | string | `"log_and_allow"` | `allow_uninspected` \| `block` \| `log_and_allow` | Behavior when budget exhausted |
+| `max_inspection_body_bytes` | u64 | `67108864` | `>= 1` | Body inspection budget (aligned with the proxy body limit) |
+| `on_inspection_limit` | string | `"block"` | `allow_uninspected` \| `block` \| `log_and_allow` | Behavior when budget exhausted |
 | `fail_policy` | string | `"closed_for_invalid_rules"` | that value only | Compile/config fail-closed |
 
 ### `on_inspection_limit`
@@ -143,8 +143,8 @@ Malformed exclusions fail config parse. Empty `rule_ids` never means “all rule
 enabled = true
 mode = "block"
 engine = "native"
-max_inspection_body_bytes = 1048576
-on_inspection_limit = "log_and_allow"
+max_inspection_body_bytes = 67108864
+on_inspection_limit = "block"
 fail_policy = "closed_for_invalid_rules"
 
 [waf.abuse]

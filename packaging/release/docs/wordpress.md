@@ -106,6 +106,25 @@ profile used in tests stays at 30000. A plugin install or a core update
 can exceed 30 seconds. A timeout from ExyonQ is 504. A dead PHP-FPM is
 502.
 
+## Uploads and request bodies
+
+ExyonQ accepts a FastCGI request body up to 64 MiB (67,108,864 bytes). This is
+the same ceiling as nginx `client_max_body_size 64m`: a larger declared
+`Content-Length`, or a streamed body that crosses the bound, is rejected with
+HTTP 413 before PHP-FPM is contacted. It is not an upstream failure, so the
+client sees 413 and not 502.
+
+The WordPress image sets PHP's `upload_max_filesize` and `post_max_size` to
+`64M` for the same reason. Both layers must agree: raising only ExyonQ leaves
+PHP rejecting the upload, and raising only PHP leaves ExyonQ answering 413.
+Multipart framing consumes part of the request body, so the largest single
+file is slightly below 64 MiB, exactly as with nginx at the same setting.
+
+Bodies are materialized under a fixed cap, not streamed to PHP-FPM. The cap is
+global in this release; it is not a per-route TOML option. HTTP/3 requests are
+additionally bounded by `http3.request_body_drain_cap_bytes` (64 KiB by
+default); raise it on the listener when large uploads arrive over HTTP/3.
+
 ## Capacity and 503
 
 ExyonQ admits `max_concurrency` FastCGI requests per pool and keeps at most
@@ -185,10 +204,20 @@ post's URL. A menu change purges the tag `menu`. A URL that is not in the cache
 does not empty the site.
 
 ExyonQ opens that socket only when the cache is enabled and
-`EXYONQ_CACHE_PURGE_SOCKET` is set. The entrypoint sets the path and a
-persistent `EXYONQ_CACHE_PURGE_TOKEN` in `wp-config.php`; the plugin reads that
-constant. The token survives a container restart. The plugin does not invent
-the site id. The plain server image does not run this cache.
+an `EXYONQ_CACHE_PURGE_SOCKET` is available. The explicit variable wins;
+otherwise ExyonQ derives `cache-purge.sock` from the parent of
+`EXYONQ_CONTROL_SOCKET`, so a systemd unit using `/run/%p` publishes the socket
+in its own runtime directory. At startup ExyonQ writes `cache-purge.token`
+(mode 0640) and `<socket>.sites` (mode 0640); the purge socket is mode 0660. If no token variable is set it
+generates one. The entrypoint still sets a persistent path/token and a fallback
+site id in `wp-config.php`. The plugin reads explicit constants first, then the
+sidecars; the site index is authoritative and carries the full u64 without
+`PHP_INT_MAX` truncation. The token survives a container restart. The WordPress
+image runs PHP-FPM and ExyonQ as `www-data`; a split-user deployment must give
+the PHP user access to the runtime directory and a shared group (or run the
+WordPress unit with `Group=www-data`). The token is still never world-readable.
+The plain
+server image does not run this cache.
 
 ## Containers
 

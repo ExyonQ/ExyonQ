@@ -19,12 +19,12 @@
 mod linux {
     use crate::wire_eligibility;
 
-    const SMALL_STATIC: &[u8] = b"GET /site/1k.bin HTTP/1.1\r\n";
-    const HEAD_SMALL: &[u8] = b"HEAD /site/1k.bin HTTP/1.1\r\n";
-    const SENDFILE_64K: &[u8] = b"GET /site/64k.bin HTTP/1.1\r\n";
-    const SENDFILE_1M: &[u8] = b"GET /site/1m.bin HTTP/1.1\r\n";
-    const PROXY: &[u8] = b"GET /api/ HTTP/1.1\r\n";
-    const INVALID: &[u8] = b"GET /assets/page.html HTTP/1.1\r\n";
+    const SMALL_STATIC: &[u8] = b"GET /site/1k.bin HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const HEAD_SMALL: &[u8] = b"HEAD /site/1k.bin HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const SENDFILE_64K: &[u8] = b"GET /site/64k.bin HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const SENDFILE_1M: &[u8] = b"GET /site/1m.bin HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const PROXY: &[u8] = b"GET /api/ HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const INVALID: &[u8] = b"GET /assets/page.html HTTP/1.1\r\nHost: localhost\r\n\r\n";
 
     #[test]
     fn wire_blocking_off_by_default() {
@@ -91,10 +91,10 @@ mod linux {
     #[test]
     fn epoll_sendfile_eligible_denies_sensitive_request_paths() {
         for head in [
-            b"GET /.env HTTP/1.1\r\n".as_slice(),
-            b"GET /.git/config HTTP/1.1\r\n".as_slice(),
-            b"GET /config.php HTTP/1.1\r\n".as_slice(),
-            b"GET /%2eenv HTTP/1.1\r\n".as_slice(),
+            b"GET /.env HTTP/1.1\r\nHost: localhost\r\n\r\n".as_slice(),
+            b"GET /.git/config HTTP/1.1\r\nHost: localhost\r\n\r\n".as_slice(),
+            b"GET /config.php HTTP/1.1\r\nHost: localhost\r\n\r\n".as_slice(),
+            b"GET /%2eenv HTTP/1.1\r\nHost: localhost\r\n\r\n".as_slice(),
         ] {
             assert!(
                 !wire_eligibility::epoll_sendfile_eligible(head),
@@ -103,12 +103,12 @@ mod linux {
             );
         }
         assert!(wire_eligibility::epoll_sendfile_eligible(
-            b"GET /.well-known/test HTTP/1.1\r\n"
+            b"GET /.well-known/test HTTP/1.1\r\nHost: localhost\r\n\r\n"
         ));
-        // Traversal keeps the existing 403 terminal on the wire; it never
-        // reaches sendfile open because match_sendfile_asset applies the policy.
-        assert!(wire_eligibility::epoll_sendfile_eligible(
-            b"GET /.well-known/../.env HTTP/1.1\r\n"
+        // H-01: any non-canonical spelling falls back to Hyper, which
+        // normalizes before auth/routing and rejects traversal with 400/403.
+        assert!(!wire_eligibility::epoll_sendfile_eligible(
+            b"GET /.well-known/../.env HTTP/1.1\r\nHost: localhost\r\n\r\n"
         ));
     }
 
@@ -134,7 +134,9 @@ mod linux {
         ));
         assert!(wire_eligibility::epoll_sendfile_eligible(ABSOLUTE_HEAD));
         assert!(wire_eligibility::epoll_sendfile_eligible(ABSOLUTE_QUERY));
-        assert!(!wire_eligibility::epoll_sendfile_eligible(ABSOLUTE_API));
+        // L-02: no `/api` prefix exclusion at head level; compiled route
+        // ownership decides, not a benchmark prefix.
+        assert!(wire_eligibility::epoll_sendfile_eligible(ABSOLUTE_API));
         assert!(!wire_eligibility::epoll_sendfile_eligible(ABSOLUTE_HEALTH));
         assert!(!wire_eligibility::epoll_sendfile_eligible(ABSOLUTE_METRICS));
         assert_eq!(
@@ -155,7 +157,9 @@ mod linux {
     fn might_use_static_wire_includes_sendfile_candidates() {
         assert!(wire_eligibility::might_use_static_wire(SMALL_STATIC));
         assert!(wire_eligibility::might_use_static_wire(SENDFILE_64K));
-        assert!(!wire_eligibility::might_use_static_wire(PROXY));
+        // L-02: capability only — a canonical GET head is a candidate even on a
+        // proxy path; `static_slot_owns_request` is the route-aware gate.
+        assert!(wire_eligibility::might_use_static_wire(PROXY));
         assert!(wire_eligibility::might_use_static_wire(INVALID));
         assert!(wire_eligibility::might_use_static_wire(
             b"GET /health HTTP/1.1\r\n"

@@ -125,7 +125,8 @@ pub struct RuntimeSnapshot {
     pub clusters: HashMap<String, CompiledCluster>,
     /// Dense compiled static slots parallel to [`Backend::Static`] `root_slot` (IR route order).
     pub static_slots: Box<[StaticCompiledSlot]>,
-    /// Fast-path alias: root_slot index for route name `"site"`.
+    /// Fast-path alias: root_slot index of the first compiled static slot.
+    /// The name is historical; ownership comes from `Backend::Static` (L-02).
     pub site_static_slot: Option<u32>,
     /// Dense compiled proxy slots parallel to [`Backend::Proxy`] `cluster_id` (sorted upstream names).
     pub proxy_compiled_slots: Box<[ProxyCompiledSlot]>,
@@ -485,11 +486,14 @@ pub fn compile_runtime_plan_from_ir(
     }
 
     let mut static_slots = Vec::new();
+    // Wire static gate: any compiled static slot is a candidate. Route selection
+    // still happens per request in the static runtime; the name `site` is not a
+    // product capability (L-02).
     let mut site_static_slot = None;
     for route in &config.routes {
         if let Some(root) = &route.root {
             let slot_idx = static_slots.len() as u32;
-            if route.name == "site" {
+            if site_static_slot.is_none() {
                 site_static_slot = Some(slot_idx);
             }
             static_slots.push(StaticCompiledSlot {
@@ -892,6 +896,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: name.into(),
@@ -962,6 +967,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -1003,6 +1009,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,

@@ -25,7 +25,11 @@ pub enum SdpEligibility {
     RejectClose,
 }
 
-/// Peek-based eligibility: GET /api/ without Upgrade / TE / duplicate CL signals.
+/// Peek-based eligibility: GET without Upgrade / TE / duplicate CL signals.
+///
+/// Route ownership is decided after the full request is parsed against the
+/// compiled projection; a non-proxy path is handed back to legacy before any
+/// downstream write. Do not infer ownership from a benchmark path prefix here.
 pub fn peek_sdp_eligible(peek: &[u8]) -> SdpEligibility {
     if peek.is_empty() {
         return SdpEligibility::HandoffLegacy;
@@ -34,7 +38,7 @@ pub fn peek_sdp_eligible(peek: &[u8]) -> SdpEligibility {
     if peek.len() < 8 {
         return SdpEligibility::HandoffLegacy;
     }
-    if !(peek.starts_with(b"GET /api/") || peek.starts_with(b"GET /api ")) {
+    if !peek.starts_with(b"GET ") {
         return SdpEligibility::HandoffLegacy;
     }
     let lower = peek.to_ascii_lowercase();

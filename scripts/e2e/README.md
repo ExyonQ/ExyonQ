@@ -15,6 +15,7 @@ operational smoke category in this workspace (FORBIDDEN).
 | `static-e2e.sh` | static serving | C+ |
 | `security-headers-redirect-e2e.sh` | EXY-17/18: HTML cache/security headers and `www` 301 with path/query preservation | C+ |
 | `proxy-e2e.sh` | reverse proxy | C+ (controlled HTTP peer) |
+| `h01-l01-canonical-host-e2e.sh` | H-01/L-01: canonical path reaches the same auth/route gate, traversal is rejected, and a host-scoped route without `Host` falls to Hyper `400` | C+ (real external auth + origin peers; portable Darwin/Linux) |
 | `ap04-e2e.sh` | AP-04: external auth subrequest, real HS256 JWT and opaque bearer-token checks, decisions, timeout, static bypass, user propagation | C+ (controlled HTTP auth peer) |
 | `fastcgi-php-fpm-e2e.sh` | FastCGI + real PHP-FPM | C+ |
 | `ol03-full-e2e.sh` | OL-03: OLS `perClientConnLimit` translation + static/dyn RPS, in/out bandwidth, soft/hard, blockBadReq; runs on Darwin and Linux | C+ |
@@ -25,6 +26,9 @@ operational smoke category in this workspace (FORBIDDEN).
 | `ol05-waf-metrics-e2e.sh` | OL-05/Q-10: real CRS 942100 hit, per-rule Prometheus counter, block and detection-only modes | C+ |
 | `f6-wp02-saturation-e2e.sh` | FastCGI saturation envelope (16 vs 40, 20 concurrent, per-pool metrics); Linux required | C+ |
 | `f6-wp03-config-e2e.sh` | Published WordPress config copy: cache headers, wp-config deny, front controller; Linux required | C+ |
+| `sec-h03-cache-forwarded-e2e.sh` | H-03: a cached response must not replay client-supplied forwarding headers (`X-Forwarded-Host`/`-Port`, `X-Real-IP`, `Forwarded`); two clean requests must not hit the origin again | C+ |
+| `sec-h04-waf-body-tail-e2e.sh` | H-04: default WAF policy inspects the whole proxy body — a benign 2 MiB body reaches the origin and a real CRS 942100 payload at its tail is blocked, without `EXY-LIMIT-BODY-001` | C+ |
+| `sec-h04-route-body-limit-e2e.sh` | H-04 cost bound: a 2 MiB `[[route]].max_request_body_bytes` answers `413` for a 64 MiB body before WAF/origin (< 5 s), while the same body on the unset route is still fully inspected; the 2 MiB boundary and a 942100 tail stay 200/403 | C+ |
 | `tls-e2e.sh` | TLS ALPN + HTTPS GET + reload | C |
 | `http2-e2e.sh` | HTTP/2 multiplex + body integrity | C |
 | `http3-protocol-e2e.sh` | HTTP/3 wire product path | C |

@@ -22,7 +22,6 @@ use crate::upstream_target::UpstreamTarget;
 use crate::{
     content_type_is_event_stream, insert_or_merge_cookie, merge_cookie_header_map,
     merge_cookie_pairs, request_headers_safe_for_proxy, strip_hop_by_hop_headers,
-    upstream_timeout_for_path,
 };
 use exyonq_module_api::proxy_dispatch::{
     ProxyDispatchOutcome, ProxyMaterializedResponse, ProxyMethod, ProxyStreamHandle,
@@ -243,7 +242,7 @@ async fn forward_empty_body(
     x_forwarded_proto: Option<&HeaderValue>,
     metrics: &ProxyHyperMetrics,
 ) -> Response<BoxBody> {
-    let timeout = upstream_timeout_for_path(upstream.timeout, path_and_query);
+    let timeout = upstream.timeout;
     match attempt_forward_empty_body(
         upstream,
         path_and_query,
@@ -432,6 +431,13 @@ const GET_FORWARD_SKIP_HEADERS: &[&str] = &[
     "proxy-authorization",
     "x-forwarded-for",
     "x-forwarded-proto",
+    // H-03: these are trusted forwarding metadata, never client input on the
+    // cache GET path. Forwarding them while excluding them from the cache key
+    // let an attacker poison a clean cache entry with an origin-visible host.
+    "x-forwarded-host",
+    "x-forwarded-port",
+    "x-real-ip",
+    "forwarded",
 ];
 
 pub async fn forward_get_streaming(
@@ -496,7 +502,7 @@ pub async fn forward_get_streaming_with_proto(
 
     let client = get_empty_body_client();
     let request = client.request(req);
-    let timeout = upstream_timeout_for_path(upstream.timeout, path_and_query);
+    let timeout = upstream.timeout;
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(resp)) => {
             upstream.passive.record(true);
@@ -570,7 +576,7 @@ pub async fn forward_request(
     }
 
     let request = client.request(req);
-    let timeout = upstream_timeout_for_path(upstream.timeout, &path_and_query);
+    let timeout = upstream.timeout;
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(resp)) => {
             upstream.passive.record(true);
@@ -630,7 +636,7 @@ pub async fn forward_request_complete(
     }
 
     let request = client.request(req);
-    let timeout = upstream_timeout_for_path(upstream.timeout, &path_and_query);
+    let timeout = upstream.timeout;
     let resp = match tokio::time::timeout(timeout, request).await {
         Ok(Ok(resp)) => {
             upstream.passive.record(true);
@@ -746,4 +752,26 @@ pub fn take_streaming(handle: ProxyStreamHandle) -> Option<Response<BoxBody>> {
 
 pub fn take_websocket(handle: ProxyWebSocketHandle) -> Option<Response<BoxBody>> {
     crate::attach::take_websocket_response(handle)
+}
+
+#[cfg(test)]
+mod forwarding_header_tests {
+    use super::GET_FORWARD_SKIP_HEADERS;
+
+    #[test]
+    fn client_forwarding_metadata_is_never_forwarded_on_cache_get() {
+        for name in [
+            "x-forwarded-for",
+            "x-forwarded-proto",
+            "x-forwarded-host",
+            "x-forwarded-port",
+            "x-real-ip",
+            "forwarded",
+        ] {
+            assert!(
+                GET_FORWARD_SKIP_HEADERS.contains(&name),
+                "{name} must be stripped from the cache GET path"
+            );
+        }
+    }
 }

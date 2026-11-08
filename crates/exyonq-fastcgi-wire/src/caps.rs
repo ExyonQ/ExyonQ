@@ -21,7 +21,7 @@ use std::time::Duration;
 pub const MAX_FCGI_PARAMS_BYTES: usize = 128 * 1024;
 
 /// Maximum aggregate STDIN body bytes across all STDIN records.
-pub const MAX_FCGI_STDIN_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_FCGI_STDIN_BYTES: usize = 64 * 1024 * 1024;
 
 /// Maximum aggregate STDOUT bytes read from the peer.
 pub const MAX_FCGI_RESPONSE_BYTES: usize = 64 * 1024 * 1024;

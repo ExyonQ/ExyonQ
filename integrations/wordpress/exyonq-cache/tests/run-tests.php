@@ -98,6 +98,23 @@ $client = new ExyonQ_Cache_Client();
 assert_true( $client->is_configured(), 'configured when constants set' );
 assert_true( $client->socket_path() === $sock, 'socket path accepted' );
 
+// Sidecar contract: the server-published u64 index is authoritative over a
+// wp-config constant (the recurring stale/hash-mismatch failure).
+$u64 = '18218855368947783640';
+file_put_contents( $sock . '.sites', "wordpress\t" . $u64 . "\n" );
+$sidecar = new ExyonQ_Cache_Client();
+assert_true( $sidecar->site_id_from_index() === $u64, 'u64 site id read from .sites' );
+assert_true( $sidecar->site_id_decimal() === $u64, '.sites wins over stale constant' );
+$status = $sidecar->public_status();
+assert_true( ! empty( $status['configured'] ), 'public status reports configured' );
+assert_true( ! empty( $status['token_present'] ), 'public status reports token present' );
+assert_true( ! empty( $status['site_index_present'] ), 'public status reports site index present' );
+assert_true( ! array_key_exists( 'token', $status ), 'public status never exposes token' );
+file_put_contents( $sock . '.sites', "wordpress\t99\n" );
+assert_true( ( new ExyonQ_Cache_Client() )->site_id_decimal() === '99', 'index update is observed' );
+@unlink( $sock . '.sites' );
+assert_true( ( new ExyonQ_Cache_Client() )->site_id_decimal() === '42', 'constant fallback when index absent' );
+
 // Path traversal rejected at client.
 $bad = $client->purge_url( 'http', 'example.test', '/../etc/passwd' );
 assert_true( $bad['ok'] === false && ( $bad['error'] ?? '' ) === 'invalid_url', 'path traversal rejected' );

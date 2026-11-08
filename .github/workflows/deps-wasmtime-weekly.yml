@@ -20,4 +20,6 @@ jobs:
       - name: wasmtime watch report
         run: bash scripts/deps/wasmtime-watch.sh
       - name: cargo audit (signal)
-        run: cargo install cargo-audit --locked && cargo audit || true
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit

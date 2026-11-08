@@ -14,20 +14,11 @@
  * limitations under the License.
  */
 //! Upstream URI construction (no Hyper client).
+//!
+//! L-02: every request path is built from the compiled upstream base. There is
+//! no benchmark-path preselection table.
 
 use http::Uri;
-use std::collections::HashMap;
-
-/// Bench hot-path paths pre-resolved against an upstream base (P4/P8).
-pub const PRESEED_PROXY_PATHS: &[&str] = &[
-    "/",
-    "/api/",
-    "/api/health",
-    "/api/echo",
-    "/api/stream",
-    "/api/stream-long",
-    "/health",
-];
 
 /// Build upstream request URI from configured base and client path/query.
 pub fn build_uri(base: &Uri, path_and_query: &str) -> Uri {
@@ -40,14 +31,6 @@ pub fn build_uri(base: &Uri, path_and_query: &str) -> Uri {
     Uri::from_parts(parts).unwrap_or_else(|_| base.clone())
 }
 
-/// Precompute common path URIs for the hot proxy path.
-pub fn preseed_path_uris(base: &Uri) -> HashMap<String, Uri> {
-    PRESEED_PROXY_PATHS
-        .iter()
-        .map(|path| (path.to_string(), build_uri(base, path)))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,15 +38,8 @@ mod tests {
     #[test]
     fn build_uri_preserves_query() {
         let base: Uri = "http://127.0.0.1:9000".parse().expect("base");
-        let uri = build_uri(&base, "/api/health?v=1");
-        assert_eq!(uri.path(), "/api/health");
+        let uri = build_uri(&base, "/v1/health?v=1");
+        assert_eq!(uri.path(), "/v1/health");
         assert_eq!(uri.query(), Some("v=1"));
-    }
-
-    #[test]
-    fn preseed_includes_api_stream() {
-        let base: Uri = "http://upstream".parse().expect("base");
-        let map = preseed_path_uris(&base);
-        assert!(map.contains_key("/api/stream"));
     }
 }

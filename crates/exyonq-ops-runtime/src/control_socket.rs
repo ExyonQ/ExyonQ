@@ -246,33 +246,12 @@ fn chmod_owner_only(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Cap063 LA-001: create the socket inode under umask 0o177 so mode is 0o600
-/// at bind time — no cross-UID connect window before a later chmod.
+/// L-04: bind normally and chmod the inode before the accept loop starts.
+/// A process-global umask() races with every other thread (tempdirs, other
+/// sockets) and made the workspace suite flaky; it is not used here.
 #[cfg(unix)]
 fn bind_unix_listener_owner_mode(socket_path: &Path) -> std::io::Result<UnixListener> {
-    use std::sync::Mutex;
-    static UMASK_LOCK: Mutex<()> = Mutex::new(());
-
-    // mode_t width differs: Linux u32, Darwin u16.
-    #[cfg(target_os = "macos")]
-    type ModeT = u16;
-    #[cfg(not(target_os = "macos"))]
-    type ModeT = u32;
-
-    unsafe extern "C" {
-        fn umask(mask: ModeT) -> ModeT;
-    }
-
-    let _guard = UMASK_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Socket create mask 0777 & ~0177 = 0600.
-    let previous = unsafe { umask(0o177) };
-    let bound = UnixListener::bind(socket_path);
-    unsafe {
-        umask(previous);
-    }
-    bound
+    UnixListener::bind(socket_path)
 }
 
 #[cfg(not(unix))]
@@ -466,10 +445,11 @@ pub async fn run_control_socket(
     run_control_accept_loop(bound, config_path, port).await
 }
 
-/// Synchronous bind with owner-only mode at creation time.
+/// Synchronous bind with owner-only mode before accepting.
 ///
-/// Cap063: umask-scoped bind closes the bind→chmod race; chmod confirms mode.
-/// chmod failure unlinks the path and fails closed (LA-CAP063-003).
+/// The listener is bound, then chmod 0600 runs before this function returns
+/// and before any accept loop starts. chmod failure unlinks the path and fails
+/// closed (LA-CAP063-003).
 pub fn bind_control_listener(socket_path: &Path) -> anyhow::Result<BoundControlSocket> {
     prepare_control_socket_path(socket_path)?;
     let listener = bind_unix_listener_owner_mode(socket_path).map_err(|err| {

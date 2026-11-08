@@ -262,7 +262,7 @@ pass "POST_small"
 
 python3 - <<'PY' >"$TMP/oversize.bin"
 import sys
-sys.stdout.buffer.write(b"x" * (32 * 1024 * 1024 + 1))
+sys.stdout.buffer.write(b"x" * (64 * 1024 * 1024 + 1))
 PY
 # File lives on host — mount into the curl container (path is not visible otherwise).
 code="$(docker_run "${DOCKER_NET[@]}" -v "${TMP}:/e2e:ro" "$CLIENT_IMAGE" \

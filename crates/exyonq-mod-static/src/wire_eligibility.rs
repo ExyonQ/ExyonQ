@@ -84,15 +84,38 @@ pub fn epoll_sendfile_eligible(head: &[u8]) -> bool {
     if !path.starts_with(b"/") {
         return false;
     }
+    // H-01: the wire path must not bypass route canonicalization. Any
+    // non-canonical spelling falls back to Hyper, which normalizes it before
+    // auth/WAF/route selection. HTTP/1.0 without Host also falls back so the
+    // Hyper gate can reject host-scoped listeners (L-01).
+    let Ok(path_str) = std::str::from_utf8(path) else {
+        return false;
+    };
+    match exyonq_module_api::canonicalize_path(path_str) {
+        Some(canonical) if canonical == path_str => {}
+        _ => return false,
+    }
+    // L-01: origin-form HTTP/1.x without Host must reach Hyper, which rejects
+    // host-scoped listeners. Absolute-form carries its authority in the target.
+    let target_has_authority = head
+        .split(|&b| b == b'\n')
+        .next()
+        .and_then(|line| {
+            let start = line.iter().position(|&b| b == b' ')? + 1;
+            let rest = &line[start..];
+            let end = rest.iter().position(|&b| b == b' ')?;
+            Some(&rest[..end])
+        })
+        .is_some_and(|target| target.starts_with(b"http://") || target.starts_with(b"https://"));
+    if !target_has_authority && crate::conditional::header_from_raw_head(head, b"host").is_none() {
+        return false;
+    }
     // H-01: sensitive names stay on Hyper, where the static policy returns an
     // opaque 404. Path traversal is different: the wire owns its pre-existing
     // 403 terminal, but must never open a sendfile asset; `match_sendfile_asset`
     // applies the same policy before any open.
-    match std::str::from_utf8(path) {
-        Ok(path) => match crate::sensitive::ensure_relative_allowed(path) {
-            Ok(()) | Err(crate::StaticError::PathTraversal) => {}
-            Err(_) => return false,
-        },
+    match crate::sensitive::ensure_relative_allowed(path_str) {
+        Ok(()) | Err(crate::StaticError::PathTraversal) => {}
         Err(_) => return false,
     }
     // Origin-form extract of `/health` / `/metrics` (including absolute-form).
@@ -100,11 +123,24 @@ pub fn epoll_sendfile_eligible(head: &[u8]) -> bool {
     if path == b"/health" || path == b"/live" || path == b"/ready" || path == b"/metrics" {
         return false;
     }
-    // Product surface: proxy API is never a static sendfile candidate.
-    if path == b"/api" || path.starts_with(b"/api/") {
-        return false;
-    }
     true
+}
+
+/// Route-aware static ownership used by the accept/planner path.
+///
+/// The path-only predicates above admit any GET/HEAD candidate; this predicate
+/// resolves the compiled static slots and answers whether one owns the request
+/// path (and Host). Proxy routes therefore fall through without a `/api`
+/// benchmark-prefix special case.
+pub fn static_slot_owns_request(_head: &[u8]) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        crate::epoll_session::static_slot_owns_request(_head)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
 #[cfg(target_os = "linux")]

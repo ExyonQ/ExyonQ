@@ -32,9 +32,27 @@ FAIL=0
 # Isolate from a caller's WAF environment; the test sets only its own values.
 unset EXYONQ_WAF_MODE EXYONQ_WAF_ENFORCE EXYONQ_WAF_ABUSE \
   EXYONQ_WAF_ABUSE_RPS EXYONQ_WAF_ABUSE_BURST
+RECAPTCHA_TEST_SITE_KEY='6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI'
+HCAPTCHA_TEST_SITE_KEY='10000000-ffff-ffff-ffff-000000000001'
 export OL04_RECAPTCHA_SECRET='6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe'
 export OL04_HCAPTCHA_SECRET='0x0000000000000000000000000000000000000000'
 export OL04_BAD_RECAPTCHA_SECRET='invalid-secret'
+
+# Optional positive reCAPTCHA v3 phase. The token is single-use and expires in
+# about two minutes; it must be generated for action "challenge" with this site
+# key and the same host that siteverify sees. Never print the secret or token.
+V3_SITE_KEY="${OL04_RECAPTCHA_V3_SITE_KEY:-}"
+V3_SECRET="${OL04_RECAPTCHA_V3_SECRET:-}"
+V3_TOKEN="${OL04_RECAPTCHA_V3_TOKEN:-}"
+V3_REAL=0
+if [[ -n "$V3_SITE_KEY$V3_SECRET$V3_TOKEN" ]]; then
+  if [[ -z "$V3_SITE_KEY" || -z "$V3_SECRET" || -z "$V3_TOKEN" ]]; then
+    echo "FAIL positive v3 requires OL04_RECAPTCHA_V3_SITE_KEY, OL04_RECAPTCHA_V3_SECRET and OL04_RECAPTCHA_V3_TOKEN together" >&2
+    exit 1
+  fi
+  V3_REAL=1
+  export OL04_RECAPTCHA_V3_SECRET
+fi
 
 stop_server() {
   if [[ -n "$EXY_PID" ]]; then
@@ -127,16 +145,17 @@ cat >"$RUN/client.py" <<'PY'
 import hashlib
 import http.client
 import json
+import os
 import re
 import sys
 import urllib.parse
 
 PORT = int(sys.argv[1])
 MODE = sys.argv[2]
-TOKEN = sys.argv[3]
-EXPECT_SUCCESS = sys.argv[4] == '1'
+EXPECT_SUCCESS = sys.argv[3] == '1'
 HOST = '127.0.0.1'
 PATH = '/index.html'
+TOKEN = os.environ.get('OL04_CLIENT_TOKEN', '')
 results = []
 
 PROVIDERS = {
@@ -144,7 +163,10 @@ PROVIDERS = {
     'bad-recaptcha': ('www.google.com/recaptcha/api.js', 'g-recaptcha'),
     'hcaptcha': ('js.hcaptcha.com/1/api.js', 'h-captcha'),
 }
-SITE_KEY = '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI' if 'recaptcha' in MODE else '10000000-ffff-ffff-ffff-000000000001'
+SITE_KEY = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else (
+    '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI' if 'recaptcha' in MODE
+    else '10000000-ffff-ffff-ffff-000000000001'
+)
 
 def check(name, expected, actual):
     ok = expected == actual
@@ -280,16 +302,23 @@ RECAPTCHA_CFG="$RUN/recaptcha.toml"
 BAD_RECAPTCHA_CFG="$RUN/bad-recaptcha.toml"
 HCAPTCHA_CFG="$RUN/hcaptcha.toml"
 V3_RECAPTCHA_CFG="$RUN/recaptcha-v3.toml"
+V3_POSITIVE_CFG="$RUN/recaptcha-v3-positive.toml"
 write_config "$NATIVE_CFG" native
 write_config "$MONITOR_CFG" native '' '' monitor
-write_config "$RECAPTCHA_CFG" recaptcha 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI OL04_RECAPTCHA_SECRET
-write_config "$BAD_RECAPTCHA_CFG" recaptcha 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI OL04_BAD_RECAPTCHA_SECRET
-write_config "$HCAPTCHA_CFG" hcaptcha 10000000-ffff-ffff-ffff-000000000001 OL04_HCAPTCHA_SECRET
-write_config "$V3_RECAPTCHA_CFG" recaptcha_v3 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI OL04_RECAPTCHA_SECRET
+write_config "$RECAPTCHA_CFG" recaptcha "$RECAPTCHA_TEST_SITE_KEY" OL04_RECAPTCHA_SECRET
+write_config "$BAD_RECAPTCHA_CFG" recaptcha "$RECAPTCHA_TEST_SITE_KEY" OL04_BAD_RECAPTCHA_SECRET
+write_config "$HCAPTCHA_CFG" hcaptcha "$HCAPTCHA_TEST_SITE_KEY" OL04_HCAPTCHA_SECRET
+write_config "$V3_RECAPTCHA_CFG" recaptcha_v3 "$RECAPTCHA_TEST_SITE_KEY" OL04_RECAPTCHA_SECRET
+if [[ $V3_REAL -eq 1 ]]; then
+  write_config "$V3_POSITIVE_CFG" recaptcha_v3 "$V3_SITE_KEY" OL04_RECAPTCHA_V3_SECRET
+fi
 
 for phase in native monitor recaptcha recaptcha-v3 bad-recaptcha hcaptcha; do
   validate_cfg "$phase" "$RUN/$phase.toml"
 done
+if [[ $V3_REAL -eq 1 ]]; then
+  validate_cfg "recaptcha-v3-positive" "$V3_POSITIVE_CFG"
+fi
 
 # Missing provider fields must fail config validation.
 cat >"$RUN/bad-config.toml" <<EOF
@@ -312,8 +341,8 @@ EOF
 check "invalid provider config rejected" 1 "$?"
 
 run_client() {
-  local phase=$1 mode=$2 token=$3 expect=$4
-  python3 "$RUN/client.py" "$PORT" "$mode" "$token" "$expect" >"$RUN/client-$phase.log" 2>&1
+  local phase=$1 mode=$2 token=$3 expect=$4 site_key=${5:-}
+  OL04_CLIENT_TOKEN="$token" python3 "$RUN/client.py" "$PORT" "$mode" "$expect" "$site_key" >"$RUN/client-$phase.log" 2>&1
   local rc=$?
   cat "$RUN/client-$phase.log"
   check "OL-04 $phase assertions" 0 "$rc"
@@ -322,19 +351,26 @@ run_client() {
 for phase in native monitor recaptcha recaptcha-v3 hcaptcha; do
   start_server "$phase" "$RUN/$phase.toml"
   case "$phase" in
-    native) run_client native native '' 1 ;;
-    monitor) run_client monitor native '' 1 ;;
-    recaptcha) run_client recaptcha recaptcha test-token 1 ;;
+    native) run_client native native '' 1 '' ;;
+    monitor) run_client monitor native '' 1 '' ;;
+    recaptcha) run_client recaptcha recaptcha test-token 1 "$RECAPTCHA_TEST_SITE_KEY" ;;
     # Google's official v2 test key accepts the token but omits v3 score/action.
     # This real provider call must fail closed; a positive v3 token needs a real
     # v3 key and is covered by the response-contract unit test, not invented here.
-    recaptcha-v3) run_client recaptcha-v3 recaptcha-v3 test-token 0 ;;
-    hcaptcha) run_client hcaptcha hcaptcha 10000000-aaaa-bbbb-cccc-000000000001 1 ;;
+    recaptcha-v3) run_client recaptcha-v3 recaptcha-v3 test-token 0 "$RECAPTCHA_TEST_SITE_KEY" ;;
+    hcaptcha) run_client hcaptcha hcaptcha 10000000-aaaa-bbbb-cccc-000000000001 1 "$HCAPTCHA_TEST_SITE_KEY" ;;
   esac
 done
 
+if [[ $V3_REAL -eq 1 ]]; then
+  start_server recaptcha-v3-positive "$V3_POSITIVE_CFG"
+  run_client recaptcha-v3-positive recaptcha-v3 "$V3_TOKEN" 1 "$V3_SITE_KEY"
+else
+  echo "NOT EXECUTED positive reCAPTCHA v3: set OL04_RECAPTCHA_V3_SITE_KEY, OL04_RECAPTCHA_V3_SECRET and OL04_RECAPTCHA_V3_TOKEN"
+fi
+
 start_server bad-recaptcha "$BAD_RECAPTCHA_CFG"
-run_client bad-recaptcha bad-recaptcha test-token 0
+run_client bad-recaptcha bad-recaptcha test-token 0 "$RECAPTCHA_TEST_SITE_KEY"
 
 stop_server
 echo

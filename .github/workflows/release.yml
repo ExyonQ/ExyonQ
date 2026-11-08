@@ -23,11 +23,11 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --locked --version 0.22.2
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        run: cargo install cargo-deny --locked --version 0.20.2
       - name: Install cargo-about
-        run: cargo install cargo-about --locked --features cli
+        run: cargo install cargo-about --locked --version 0.9.0 --features cli
       - uses: taiki-e/install-action@599db1c4ae1189bda3d02a890b7ede4888c9d8f5 # nextest
       - name: Resolve version
         id: ver
@@ -79,9 +79,9 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-about
-        run: cargo install cargo-about --locked --features cli
+        run: cargo install cargo-about --locked --version 0.9.0 --features cli
       - name: Install cargo-cyclonedx
-        run: cargo install cargo-cyclonedx --locked
+        run: cargo install cargo-cyclonedx --locked --version 0.5.9
       - name: Generate release compliance artifacts
         shell: bash
         run: bash scripts/legal/generate-release-compliance-artifacts.sh

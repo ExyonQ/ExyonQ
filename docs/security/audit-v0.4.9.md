@@ -46,7 +46,7 @@ None.
 
 | ID | Severity | Resolution |
 | --- | --- | --- |
-| static PHP and dotfile download | alta | Static routes return 403 for `.php`, `.phtml`, `.phar`, and dotfile names. `.well-known` stays reachable. `allow_sensitive = true` is the opt-in |
+| static PHP and dotfile download | alta | Static routes return 403 for `.php`, `.phtml`, `.phar`, and dotfile names. `.well-known` stays reachable |
 
 ## Waivers
 
@@ -57,7 +57,7 @@ None.
 ## Surfaces reviewed
 
 - [x] Static path resolver
-- [x] Config parse (new `allow_sensitive` field, default deny)
+- [x] Config parse (static sensitive-path defaults deny)
 - [x] HTTP/1.1 raw static loop (epoll returns 403 for Forbidden; does not open the file)
 - [ ] Hyper proxy path
 - [ ] Reverse proxy headers

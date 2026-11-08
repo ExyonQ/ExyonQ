@@ -677,6 +677,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_include_fastcgi_pool_document_root() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             access: None,
@@ -734,6 +735,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_empty_without_overlay_routes() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             access: None,

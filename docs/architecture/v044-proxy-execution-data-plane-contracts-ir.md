@@ -885,7 +885,6 @@ PLAN_ALLOCATIONS small bounded constant
 
 | Arc site | Why shared | Clones/req | Verdict |
 | --- | --- | --- | --- |
-| `UpstreamTarget.path_uris` | immutable map | 0 on hot path if snapshot in plan | OK in plan snapshot |
 | `ProxyRuntime` | process pinned | once per connection | OK cold |
 | Body `Bytes` | refcount move | minimize | prefer move |
 | `ProxyRequestPlan` | — | do not Arc on hot path | borrow/move |

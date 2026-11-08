@@ -62,8 +62,8 @@ p14sign_assert_version_policy() {
     p14sign_fixture_version "$version" || p14sign_die "with --test-fixture only approved fixture versions are allowed (got $version)"
   else
     case "$version" in
-      0.4.0|0.4.1|0.4.2|0.4.3|0.4.4|0.4.4.1|0.4.5|0.4.6|0.4.7|0.4.8|0.4.9|0.4.10|0.4.11|0.7.0|0.9.0|0.9.1) ;;
-      *) p14sign_die "without --test-fixture only versions 0.4.0–0.4.11, 0.7.0, 0.9.0, 0.9.1 are allowed on this line (got $version)" ;;
+      0.4.0|0.4.1|0.4.2|0.4.3|0.4.4|0.4.4.1|0.4.5|0.4.6|0.4.7|0.4.8|0.4.9|0.4.10|0.4.11|0.7.0|0.9.0|0.9.1|0.9.2) ;;
+      *) p14sign_die "without --test-fixture only versions 0.4.0–0.4.11, 0.7.0, 0.9.0, 0.9.1 and 0.9.2 are allowed on this line (got $version)" ;;
     esac
   fi
 }

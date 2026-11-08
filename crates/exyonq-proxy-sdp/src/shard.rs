@@ -286,6 +286,12 @@ fn drive_session(ctx: &mut DriveCtx<'_>, client_tok: Token, next_token: &mut Tok
                         continue;
                     }
                     Ok(req) => {
+                        // SDP-P1 is a proxy dataplane, not a terminal router. Keep
+                        // the full request bytes so a path whose compiled backend
+                        // is not a proxy can be handed to the legacy dispatcher
+                        // instead of returning a wire 404 that Hyper would not
+                        // have produced.
+                        let request_head = sess.client_in[..req.header_block_len].to_vec();
                         // Drop header bytes; GET has no body.
                         sess.client_in.drain(..req.header_block_len);
                         sess.client_ka = req.keepalive;
@@ -294,11 +300,30 @@ fn drive_session(ctx: &mut DriveCtx<'_>, client_tok: Token, next_token: &mut Tok
                         let Some((route_idx, cluster_id, upstream, host_hdr, timeout)) =
                             proj.resolve_proxy_upstream(&req.path_query, req.host.as_deref())
                         else {
-                            args.counters.errors.fetch_add(1, Ordering::Relaxed);
-                            queue_simple(sess, b"HTTP/1.1 404 Not Found\r\nserver: exyonq\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
-                            sess.phase = Phase::DownstreamFlush;
-                            sess.client_ka = false;
-                            continue;
+                            args.counters.handoff_legacy.fetch_add(1, Ordering::Relaxed);
+                            let Some(mut owned) = sessions.remove(&client_tok) else {
+                                return Action::Close;
+                            };
+                            if let Err(error) = poll.registry().deregister(&mut owned.client) {
+                                tracing::debug!(
+                                    error = %error,
+                                    "legacy handoff client deregistration failed"
+                                );
+                            }
+                            if let (Some(mut up), Some(ut)) =
+                                (owned.upstream.take(), owned.upstream_token.take())
+                            {
+                                if let Err(error) = poll.registry().deregister(&mut up) {
+                                    tracing::debug!(
+                                        error = %error,
+                                        "legacy handoff upstream deregistration failed"
+                                    );
+                                }
+                                up_to_client.remove(&ut);
+                            }
+                            let stream = mio_to_std(owned.client);
+                            (args.handoff)(stream, request_head);
+                            return Action::Close;
                         };
                         let client_ip = sess
                             .client

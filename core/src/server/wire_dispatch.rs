@@ -15,10 +15,10 @@
  */
 //! Shared HTTP/1.1 wire fast-path dispatch (plain TCP + TLS).
 //!
-//! **Wire static (PR-6d3b):** `might_use_static_wire` + `site_static` is a permanent
-//! byte-prefix fast path — not a legacy debt path. Runtime does **not** call
-//! `RouteIndex` or `BackendTable` here; semantic alignment to `Backend::Static` for route
-//! `"site"` is enforced at compile time (PR-6d3a invariants) and in offline tests below.
+//! **Wire static (PR-6d3b):** `might_use_static_wire` is a permanent byte-prefix
+//! fast path — not legacy debt. L-02: request ownership comes from the compiled
+//! route backend (`wire_route_ownership`), never from a route name or a benchmark
+//! path prefix; the offline tests below pin that contract.
 #![cfg_attr(target_os = "linux", allow(dead_code))]
 
 use crate::kernel::generation::GenerationView;
@@ -255,6 +255,30 @@ pub(crate) fn wire_head_requires_full_dispatch(state: &ServerState, head: &[u8])
         .is_some_and(|(idx, _)| state.route_requires_full_dispatch(idx))
 }
 
+/// Route ownership without path-prefix heuristics (L-02).
+///
+/// `/health` is the only non-route inline probe. Every other request must resolve
+/// through the compiled route table; a miss is neither a static nor a proxy
+/// fast-path candidate.
+fn wire_route_ownership(state: &ServerState, head: &[u8]) -> (bool, bool) {
+    if head.starts_with(b"GET /health ") || head.starts_with(b"HEAD /health ") {
+        return (true, false);
+    }
+    let Some(path) = parse_wire_origin_path(head) else {
+        return (false, false);
+    };
+    let header_pairs = parse_wire_header_pairs(head);
+    let host = wire_host_from_pairs(&header_pairs).map(strip_host_port);
+    let Some((route_idx, _)) = state.route_index.match_route_index_with_host(path, host) else {
+        return (false, false);
+    };
+    match state.snapshot.resolve_backend(route_idx) {
+        Some(Backend::Static { .. }) => (true, false),
+        Some(Backend::Proxy { .. }) => (false, true),
+        _ => (false, false),
+    }
+}
+
 /// AUDIT-D2 (static keep-alive): a full-dispatch route whose paths a static
 /// slot could claim makes wire-static unsafe generation-wide. The epoll /
 /// blocking / tokio static loops re-resolve the *slot* per request but never
@@ -315,8 +339,16 @@ fn parse_wire_origin_path(head: &[u8]) -> Option<&str> {
         return None;
     };
     let end = rest.iter().position(|&b| b == b' ')?;
-    let target = std::str::from_utf8(&rest[..end]).ok()?;
+    let target = &rest[..end];
+    if !valid_wire_request_target(target) {
+        return None;
+    }
+    let target = std::str::from_utf8(target).ok()?;
     Some(target.split('?').next().unwrap_or(target))
+}
+
+fn valid_wire_request_target(target: &[u8]) -> bool {
+    !target.is_empty() && target.iter().all(|&b| b >= 0x20 && b != 0x7f)
 }
 
 fn parse_wire_get_path(head: &[u8]) -> Option<&str> {
@@ -325,7 +357,11 @@ fn parse_wire_get_path(head: &[u8]) -> Option<&str> {
     }
     let rest = &head[4..];
     let end = rest.iter().position(|&b| b == b' ')?;
-    std::str::from_utf8(&rest[..end]).ok()
+    let target = &rest[..end];
+    if !valid_wire_request_target(target) {
+        return None;
+    }
+    std::str::from_utf8(target).ok()
 }
 
 /// Request-target for WAF: lossy UTF-8 so invalid bytes cannot skip wire WAF (P1-H).
@@ -338,7 +374,11 @@ fn parse_wire_request_target_lossy(head: &[u8]) -> Option<String> {
         return None;
     };
     let end = rest.iter().position(|&b| b == b' ')?;
-    Some(String::from_utf8_lossy(&rest[..end]).into_owned())
+    let target = &rest[..end];
+    if !valid_wire_request_target(target) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(target).into_owned())
 }
 
 fn parse_wire_header_pairs(head: &[u8]) -> Vec<(String, String)> {
@@ -740,7 +780,6 @@ pub(crate) fn epoll_keep_alive_eligible(head: &[u8]) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-#[cfg(target_os = "linux")]
 pub(crate) fn epoll_sendfile_eligible(head: &[u8]) -> bool {
     static_wire::epoll_sendfile_eligible(head)
 }
@@ -750,7 +789,10 @@ pub(crate) fn epoll_sendfile_eligible(head: &[u8]) -> bool {
 /// ordinary Hyper/static traffic via `!might_use_static_wire`.
 #[cfg(target_os = "linux")]
 pub(crate) fn tokio_accept_required(head: &[u8]) -> bool {
-    head.starts_with(b"GET /api/") || !might_use_static_wire(head)
+    if head.starts_with(b"GET /health ") || head.starts_with(b"HEAD /health ") {
+        return false;
+    }
+    !might_use_static_wire(head) || !static_wire::static_slot_owns_request(head)
 }
 
 pub(crate) struct WireDispatchContext {
@@ -849,7 +891,8 @@ where
         return Some(WirePlan::Hyper(stream, head, rest));
     }
     let view = generation_view_from_state(state);
-    let decision = plan_wire_decision(&view, head.as_ref()).ok()?;
+    let (static_owned, proxy_owned) = wire_route_ownership(state, head.as_ref());
+    let decision = plan_wire_decision(&view, head.as_ref(), static_owned, proxy_owned).ok()?;
     // A path with no static slot is not sendfile. Planning Static would
     // re-enter Cap067 after a Hyper handoff and hide proxy / metrics routes.
     #[cfg(target_os = "linux")]
@@ -1217,6 +1260,26 @@ mod waf_wire_parse_tests {
         assert!(target.contains("%3Cscript%3E"));
         assert!(target.contains('\u{FFFD}'));
     }
+
+    #[test]
+    fn wire_request_target_rejects_header_injection_bytes() {
+        assert!(
+            parse_wire_get_path(b"GET /api/x\r\nX-Injected: yes HTTP/1.1\r\n").is_none(),
+            "CRLF in the request target must be rejected"
+        );
+        assert!(
+            parse_wire_get_path(b"GET /api/x\tHTTP/1.1\r\n").is_none(),
+            "TAB in the request target must be rejected"
+        );
+        assert!(
+            parse_wire_get_path(b"GET /api/x\x7f HTTP/1.1\r\n").is_none(),
+            "DEL in the request target must be rejected"
+        );
+        assert!(
+            parse_wire_get_path(b"GET /api/x HTTP/1.1\r\n").is_some(),
+            "a printable request target must remain accepted"
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -1287,13 +1350,21 @@ mod tests {
         // Cap061: must NOT key off bench filenames — eligibility is product properties.
         #[cfg(target_os = "linux")]
         {
-            assert!(might_use_static_wire(b"GET /site/1k.bin HTTP/1.1\r\n"));
-            assert!(might_use_static_wire(b"GET /site/64k.bin HTTP/1.1\r\n"));
-            assert!(might_use_static_wire(b"GET /site/1m.bin HTTP/1.1\r\n"));
             assert!(might_use_static_wire(
-                b"GET /site/routes/route050.bin HTTP/1.1\r\n"
+                b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n"
             ));
-            assert!(might_use_static_wire(b"GET /site/ok.txt HTTP/1.1\r\n"));
+            assert!(might_use_static_wire(
+                b"GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n"
+            ));
+            assert!(might_use_static_wire(
+                b"GET /site/1m.bin HTTP/1.1\r\nHost: x\r\n\r\n"
+            ));
+            assert!(might_use_static_wire(
+                b"GET /site/routes/route050.bin HTTP/1.1\r\nHost: x\r\n\r\n"
+            ));
+            assert!(might_use_static_wire(
+                b"GET /site/ok.txt HTTP/1.1\r\nHost: x\r\n\r\n"
+            ));
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -1307,27 +1378,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn wire_static_predicates_exclude_proxy_paths() {
-        ensure_wire_hooks();
-        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
-        assert!(!might_use_static_wire(b"GET /api/health HTTP/1.1\r\n"));
-        assert!(!might_use_static_wire(b"GET /api/ HTTP/1.1\r\n"));
-        // Cap067: non-API GET is a sendfile wire candidate on Linux; proxy prefix stays excluded.
+    /// L-02: the head-level predicate is route-agnostic; what excludes a proxy
+    /// path is the compiled route ownership (`static_slot_owns_request`), not a
+    /// `/api` benchmark prefix.
+    #[tokio::test]
+    async fn wire_static_ownership_excludes_proxy_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_state, _guards) = state_for(bench_site_config(Some(dir.path().to_path_buf()))).await;
+        let assets = b"GET /assets/page.html HTTP/1.1\r\nHost: x\r\n\r\n";
+        let site = b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n";
+        let api = b"GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";
         #[cfg(target_os = "linux")]
         {
-            assert!(might_use_static_wire(b"GET /assets/page.html HTTP/1.1\r\n"));
+            assert!(
+                might_use_static_wire(assets),
+                "a static assets path must be a wire candidate"
+            );
+            assert!(
+                exyonq_module_api::static_wire::static_slot_owns_request(site),
+                "the compiled /site slot must own the static path"
+            );
+            assert!(
+                !exyonq_module_api::static_wire::static_slot_owns_request(api),
+                "a proxy /api path must not be owned by the static slot"
+            );
         }
         #[cfg(not(target_os = "linux"))]
         {
-            assert!(!might_use_static_wire(
-                b"GET /assets/page.html HTTP/1.1\r\n"
-            ));
+            assert!(
+                !might_use_static_wire(assets),
+                "non-Linux must not advertise a static wire"
+            );
+            assert!(
+                !exyonq_module_api::static_wire::static_slot_owns_request(site),
+                "non-Linux must not claim a static slot"
+            );
+            assert!(
+                !exyonq_module_api::static_wire::static_slot_owns_request(api),
+                "non-Linux must not claim a proxy path"
+            );
         }
     }
 
     fn bench_site_config(root: Option<std::path::PathBuf>) -> AppConfig {
         let site = RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             fallback_rewrite: None,
@@ -1367,6 +1462,7 @@ mod tests {
             cache: None,
         };
         let api = RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             fallback_rewrite: None,
@@ -1413,6 +1509,7 @@ mod tests {
         AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -1612,7 +1709,7 @@ mod tests {
             plan_wire_after_headers(PlanStream, &with_site, health, Bytes::new()).expect("plan");
         assert!(matches!(plan, WirePlan::Static(..)));
 
-        let site_asset = Bytes::from_static(b"GET /site/1k.bin HTTP/1.1\r\n");
+        let site_asset = Bytes::from_static(b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n");
         let plan =
             plan_wire_after_headers(PlanStream, &with_site, site_asset.clone(), Bytes::new())
                 .expect("plan");
@@ -1622,13 +1719,83 @@ mod tests {
             "Cap067: site GET must plan Static for sendfile divert"
         );
         #[cfg(not(target_os = "linux"))]
-        assert!(matches!(plan, WirePlan::Hyper(..)));
+        assert!(
+            matches!(plan, WirePlan::Hyper(..)),
+            "a non-Linux static route must fall back to Hyper"
+        );
 
         let (api_only, _static_guard2) = state_for_inner(bench_site_config(None)).await;
         assert!(api_only.site_static_slot.is_none());
         let plan =
             plan_wire_after_headers(PlanStream, &api_only, site_asset, Bytes::new()).expect("plan");
         assert!(matches!(plan, WirePlan::Hyper(..)));
+    }
+
+    /// L-02: ownership comes from the compiled backend, not from a route named
+    /// `site` or a benchmark `/api` prefix. A static route named `assets` and a
+    /// proxy route named `backend` must produce the same transport decisions as
+    /// the legacy names.
+    #[tokio::test]
+    async fn wire_route_ownership_is_backend_driven_not_name_or_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = bench_site_config(Some(dir.path().to_path_buf()));
+        config.routes[0].name = "assets".into();
+        config.routes[0].r#match.path = "/assets".into();
+        config.routes[1].name = "backend".into();
+        config.routes[1].r#match.path = "/backend".into();
+        let mut edge = config.routes[0].clone();
+        edge.name = "edge".into();
+        edge.r#match.path = "/edge".into();
+        config.routes.push(edge);
+        config.servers[0].routes = vec!["assets".into(), "backend".into(), "edge".into()];
+
+        let (state, _static_guard) = state_for(config).await;
+        assert!(
+            state.site_static_slot.is_some(),
+            "the compiled static route must publish a site slot"
+        );
+
+        let assets = Bytes::from_static(b"GET /assets/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n");
+        let plan = plan_wire_after_headers(PlanStream, &state, assets, Bytes::new()).expect("plan");
+        #[cfg(target_os = "linux")]
+        assert!(
+            matches!(plan, WirePlan::Static(..)),
+            "assets static route must use wire static on Linux"
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            matches!(plan, WirePlan::Hyper(..)),
+            "a non-Linux static route must fall back to Hyper"
+        );
+
+        let edge = Bytes::from_static(b"GET /edge/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n");
+        let plan = plan_wire_after_headers(PlanStream, &state, edge, Bytes::new()).expect("plan");
+        #[cfg(target_os = "linux")]
+        assert!(
+            matches!(plan, WirePlan::Static(..)),
+            "edge static route must use wire static on Linux"
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            matches!(plan, WirePlan::Hyper(..)),
+            "a non-Linux static route must fall back to Hyper"
+        );
+
+        let backend = Bytes::from_static(b"GET /backend/health HTTP/1.1\r\nHost: x\r\n\r\n");
+        let plan =
+            plan_wire_after_headers(PlanStream, &state, backend, Bytes::new()).expect("plan");
+        assert!(
+            matches!(plan, WirePlan::Proxy(..)),
+            "proxy route must use wire proxy without an /api prefix"
+        );
+
+        let unknown = Bytes::from_static(b"GET /no-such-slot HTTP/1.1\r\nHost: x\r\n\r\n");
+        let plan =
+            plan_wire_after_headers(PlanStream, &state, unknown, Bytes::new()).expect("plan");
+        assert!(
+            matches!(plan, WirePlan::Hyper(..)),
+            "a path without a compiled slot must fall back to Hyper"
+        );
     }
 
     fn wire_path_prefix(head: &[u8]) -> &str {
@@ -1685,25 +1852,21 @@ mod tests {
         ensure_wire_hooks();
         let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         let heads = [
-            b"GET /site/1k.bin HTTP/1.1\r\n".as_slice(),
-            b"HEAD /site/1k.bin HTTP/1.1\r\n",
-            b"GET /site/64k.bin HTTP/1.1\r\n",
-            b"GET /site/1m.bin HTTP/1.1\r\n",
-            b"GET /api/ HTTP/1.1\r\n",
+            b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n".as_slice(),
+            b"HEAD /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"GET /site/1m.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"GET /api/ HTTP/1.1\r\nHost: x\r\n\r\n",
         ];
         for head in heads {
             let sync = exyonq_module_api::static_wire::static_use_blocking_pool(head);
             let tcp = exyonq_module_api::static_wire::static_tcp_blocking_pool_admission(head);
             assert_eq!(tcp, sync, "head={}", String::from_utf8_lossy(head));
-            if head.starts_with(b"GET /api/") {
-                assert!(!exyonq_module_api::static_wire::epoll_sendfile_eligible(
-                    head
-                ));
-            } else if head.starts_with(b"GET /site/") || head.starts_with(b"HEAD /site/") {
-                assert!(exyonq_module_api::static_wire::epoll_sendfile_eligible(
-                    head
-                ));
-            }
+            // L-02: the head-level predicate is route-agnostic; the compiled
+            // route (proxy vs static) is what decides admission later.
+            assert!(exyonq_module_api::static_wire::epoll_sendfile_eligible(
+                head
+            ));
         }
     }
 
@@ -1714,22 +1877,24 @@ mod tests {
         // Cap067: eligibility is capability-based; same predicate for any static GET/HEAD.
         // Cap061: must NOT require bench filenames — /site/foo.bin and /site/64k.bin equal.
         assert_eq!(
-            epoll_sendfile_eligible(b"GET /site/64k.bin HTTP/1.1\r\n"),
-            epoll_sendfile_eligible(b"GET /site/ordinary.bin HTTP/1.1\r\n")
+            epoll_sendfile_eligible(b"GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n"),
+            epoll_sendfile_eligible(b"GET /site/ordinary.bin HTTP/1.1\r\nHost: x\r\n\r\n")
         );
         assert!(epoll_sendfile_eligible(
-            b"GET /site/ordinary.bin HTTP/1.1\r\n"
+            b"GET /site/ordinary.bin HTTP/1.1\r\nHost: x\r\n\r\n"
         ));
         assert!(!epoll_sendfile_eligible(b"GET /health HTTP/1.1\r\n"));
         // RFC 9112 absolute-form request-target uses the same origin path as origin-form.
         assert_eq!(
-            epoll_sendfile_eligible(b"GET /site/1k.bin HTTP/1.1\r\n"),
+            epoll_sendfile_eligible(b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n"),
             epoll_sendfile_eligible(b"GET http://exyonq:8080/site/1k.bin HTTP/1.1\r\n")
         );
         assert!(epoll_sendfile_eligible(
             b"GET http://exyonq:8080/site/1k.bin HTTP/1.1\r\n"
         ));
-        assert!(!epoll_sendfile_eligible(
+        // L-02: no `/api` prefix exclusion at head level — the compiled route
+        // decides ownership; this predicate only answers method/canonical/host.
+        assert!(epoll_sendfile_eligible(
             b"GET http://exyonq:8080/api/foo HTTP/1.1\r\n"
         ));
         assert!(!epoll_sendfile_eligible(
@@ -1745,10 +1910,14 @@ mod tests {
         let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
         exyonq_mod_static::reset_epoll_sendfile_enabled_cache_for_tests();
         std::env::set_var("EXYONQ_EPOLL_SENDFILE", "0");
-        assert!(!epoll_sendfile_eligible(b"GET /site/64k.bin HTTP/1.1\r\n"));
+        assert!(!epoll_sendfile_eligible(
+            b"GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n"
+        ));
         std::env::remove_var("EXYONQ_EPOLL_SENDFILE");
         exyonq_mod_static::reset_epoll_sendfile_enabled_cache_for_tests();
-        assert!(epoll_sendfile_eligible(b"GET /site/64k.bin HTTP/1.1\r\n"));
+        assert!(epoll_sendfile_eligible(
+            b"GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n"
+        ));
     }
 
     #[test]
@@ -1773,33 +1942,78 @@ mod tests {
         assert!(!epoll_keep_alive_eligible(b"GET /site/1m.bin HTTP/1.1\r\n"));
     }
 
-    #[test]
-    fn tokio_required_proxy_and_site_files() {
-        ensure_wire_hooks();
-        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
-        assert!(tokio_accept_required(b"GET /api/ HTTP/1.1\r\n"));
-        assert!(tokio_accept_required(b"GET /api/stream HTTP/1.1\r\n"));
+    #[tokio::test]
+    async fn tokio_required_proxy_and_site_files() {
+        // L-02: a real compiled `/site` slot must own the static GETs below; a
+        // path-only predicate no longer decides accept admission.
+        let dir = tempfile::tempdir().unwrap();
+        let (_state, _guards) = state_for(bench_site_config(Some(dir.path().to_path_buf()))).await;
+        let check = |head: &[u8], expected: bool, label: &str| {
+            assert_eq!(tokio_accept_required(head), expected, "{label}");
+        };
+        check(
+            b"GET /api/ HTTP/1.1\r\nHost: x\r\n\r\n",
+            true,
+            "proxy API requires Tokio",
+        );
+        check(
+            b"GET /api/stream HTTP/1.1\r\nHost: x\r\n\r\n",
+            true,
+            "proxy stream requires Tokio",
+        );
         // Cap067: GET site assets are wire/sendfile candidates → not Tokio-required on Linux.
         #[cfg(target_os = "linux")]
         {
-            assert!(!tokio_accept_required(b"GET /site/64k.bin HTTP/1.1\r\n"));
-            assert!(!tokio_accept_required(b"GET /site/1m.bin HTTP/1.1\r\n"));
-            assert!(!tokio_accept_required(b"GET /site/1k.bin HTTP/1.1\r\n"));
-            assert!(!tokio_accept_required(
-                b"GET /site/routes/route001.bin HTTP/1.1\r\n"
-            ));
+            check(
+                b"GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                false,
+                "64k site asset is owned by the static wire",
+            );
+            check(
+                b"GET /site/1m.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                false,
+                "1m site asset is owned by the static wire",
+            );
+            check(
+                b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                false,
+                "1k site asset is owned by the static wire",
+            );
+            check(
+                b"GET /site/routes/route001.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                false,
+                "nested site asset is owned by the static wire",
+            );
         }
         #[cfg(not(target_os = "linux"))]
         {
-            assert!(tokio_accept_required(b"GET /site/64k.bin HTTP/1.1\r\n"));
-            assert!(tokio_accept_required(b"GET /site/1m.bin HTTP/1.1\r\n"));
-            assert!(tokio_accept_required(b"GET /site/1k.bin HTTP/1.1\r\n"));
-            assert!(tokio_accept_required(
-                b"GET /site/routes/route001.bin HTTP/1.1\r\n"
-            ));
+            check(
+                b"GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                true,
+                "non-Linux 64k site asset requires Tokio",
+            );
+            check(
+                b"GET /site/1m.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                true,
+                "non-Linux 1m site asset requires Tokio",
+            );
+            check(
+                b"GET /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                true,
+                "non-Linux 1k site asset requires Tokio",
+            );
+            check(
+                b"GET /site/routes/route001.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+                true,
+                "non-Linux nested site asset requires Tokio",
+            );
         }
         // Non-GET still cannot take sendfile wire.
-        assert!(tokio_accept_required(b"POST /site/1k.bin HTTP/1.1\r\n"));
+        check(
+            b"POST /site/1k.bin HTTP/1.1\r\nHost: x\r\n\r\n",
+            true,
+            "POST cannot use static wire",
+        );
     }
 
     #[test]
@@ -2242,6 +2456,7 @@ mod ws_tunnel_tests {
 
     pub(super) fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
         let api = RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: "api".into(),
@@ -2288,6 +2503,7 @@ mod ws_tunnel_tests {
         AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: format!("127.0.0.1:{listen_port}"),
                 server_name: ServerNames::None,

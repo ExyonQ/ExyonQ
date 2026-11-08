@@ -118,6 +118,10 @@ fn canonical_value(config: &AppConfig) -> serde_json::Value {
         serde_json::to_value(&config.waf).expect("waf serialize"),
     );
     root.insert(
+        "tuning".into(),
+        serde_json::to_value(&config.tuning).expect("tuning serialize"),
+    );
+    root.insert(
         "logging".into(),
         serde_json::to_value(&config.logging).expect("logging serialize"),
     );

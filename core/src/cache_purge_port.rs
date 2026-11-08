@@ -246,6 +246,145 @@ impl CachePurgePort for CoreCachePurgePort {
     }
 }
 
+/// Token the WordPress plugin will read from `cache-purge.token`.
+/// Empty, too long, or characters outside `[A-Za-z0-9._~+-]` are rejected.
+pub fn purge_token_acceptable(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 256
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'+' | b'-'))
+}
+
+/// 32 random bytes, hex-encoded. The value is not logged.
+pub fn generate_purge_token() -> Result<String, String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    let mut urandom =
+        std::fs::File::open("/dev/urandom").map_err(|err| format!("open /dev/urandom: {err}"))?;
+    urandom
+        .read_exact(&mut bytes)
+        .map_err(|err| format!("read /dev/urandom: {err}"))?;
+    let mut token = String::with_capacity(64);
+    for byte in bytes {
+        token.push_str(&format!("{byte:02x}"));
+    }
+    Ok(token)
+}
+
+/// `route-name<TAB>site-id` lines. PHP reads this file and must not recompute the id.
+pub fn render_purge_site_index(sites: &[(&str, u64)]) -> Result<String, String> {
+    let mut out = String::new();
+    for (name, id) in sites {
+        if name.is_empty()
+            || name
+                .bytes()
+                .any(|b| b.is_ascii_whitespace() || b == b'\\' || b == b'/')
+        {
+            return Err("purge site index refused a route name".into());
+        }
+        if *id == 0 {
+            return Err("purge site id must be non-zero".into());
+        }
+        out.push_str(name);
+        out.push('\t');
+        out.push_str(&id.to_string());
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Write `<socket-dir>/cache-purge.token` (mode 0640) and `<socket>.sites` (mode 0640).
+///
+/// Called when the purge socket is about to listen. The token is the same secret
+/// the socket will compare. Neither path is logged with the token bytes.
+pub fn publish_purge_sidecars(
+    socket_path: &std::path::Path,
+    token: &str,
+    sites: &[(&str, u64)],
+) -> Result<(), String> {
+    if !purge_token_acceptable(token) {
+        return Err(
+            "purge token is empty or has characters the WordPress plugin will not read".into(),
+        );
+    }
+    let parent = socket_path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .ok_or_else(|| "purge socket path has no directory".to_string())?;
+    let _parent_created = !parent.exists();
+    std::fs::create_dir_all(parent)
+        .map_err(|err| format!("create purge directory {}: {err}", parent.display()))?;
+    #[cfg(unix)]
+    if _parent_created {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o750))
+            .map_err(|err| format!("chmod purge directory {}: {err}", parent.display()))?;
+    }
+    let index = render_purge_site_index(sites)?;
+    let token_path = parent.join("cache-purge.token");
+    let mut sites_name = socket_path.as_os_str().to_owned();
+    sites_name.push(".sites");
+    let sites_path = std::path::PathBuf::from(sites_name);
+    write_private_file(&token_path, token.as_bytes(), 0o640)?;
+    write_private_file(&sites_path, index.as_bytes(), 0o640)?;
+    Ok(())
+}
+
+fn write_private_file(path: &std::path::Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    let mut partial_name = path.as_os_str().to_owned();
+    partial_name.push(".partial");
+    let partial = std::path::PathBuf::from(partial_name);
+    let result = write_private_file_inner(&partial, path, bytes, mode);
+    if result.is_err() {
+        if let Err(error) = std::fs::remove_file(&partial) {
+            tracing::debug!(
+                error = %error,
+                path = %partial.display(),
+                "purge sidecar partial cleanup failed"
+            );
+        }
+    }
+    result
+}
+
+fn write_private_file_inner(
+    partial: &std::path::Path,
+    path: &std::path::Path,
+    bytes: &[u8],
+    _mode: u32,
+) -> Result<(), String> {
+    use std::io::Write;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(partial)
+            .map_err(|err| format!("open {}: {err}", partial.display()))?;
+        file.write_all(bytes)
+            .map_err(|err| format!("write {}: {err}", partial.display()))?;
+        file.sync_all()
+            .map_err(|err| format!("sync {}: {err}", partial.display()))?;
+        std::fs::set_permissions(partial, std::fs::Permissions::from_mode(_mode))
+            .map_err(|err| format!("chmod {}: {err}", partial.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let mut file = std::fs::File::create(partial)
+            .map_err(|err| format!("open {}: {err}", partial.display()))?;
+        file.write_all(bytes)
+            .map_err(|err| format!("write {}: {err}", partial.display()))?;
+        file.sync_all()
+            .map_err(|err| format!("sync {}: {err}", partial.display()))?;
+    }
+    std::fs::rename(partial, path)
+        .map_err(|err| format!("rename {} -> {}: {err}", partial.display(), path.display()))
+}
+
 fn op_name(op: &CachePurgeOp) -> &'static str {
     match op {
         CachePurgeOp::Url { .. } => "purge.url",
@@ -276,4 +415,73 @@ pub fn purge_port_with_coordination(
             inner, publisher, node_id, true,
         ),
     )
+}
+
+#[cfg(test)]
+mod purge_sidecar_tests {
+    use super::{publish_purge_sidecars, purge_token_acceptable, render_purge_site_index};
+    use exyonq_runtime_plan::stable_fpc_site_id;
+
+    #[test]
+    fn site_index_uses_the_runtime_site_id() {
+        let id = stable_fpc_site_id("wordpress");
+        let text = render_purge_site_index(&[("wordpress", id), ("wp-content", 7)]).unwrap();
+        assert_eq!(
+            text,
+            format!("wordpress\t{id}\nwp-content\t7\n"),
+            "site index must use the runtime id"
+        );
+        assert!(
+            id > i64::MAX as u64,
+            "WordPress ids must exercise u64 handling"
+        );
+        assert!(
+            render_purge_site_index(&[("wp includes", 1)]).is_err(),
+            "route names with whitespace must be rejected"
+        );
+        assert!(
+            render_purge_site_index(&[("wordpress", 0)]).is_err(),
+            "zero site ids must be rejected"
+        );
+        assert!(!purge_token_acceptable(""), "empty tokens must be rejected");
+        assert!(
+            !purge_token_acceptable("has space"),
+            "tokens with spaces must be rejected"
+        );
+        assert!(
+            purge_token_acceptable("abcDEF0123._~+-"),
+            "the documented token alphabet must be accepted"
+        );
+    }
+
+    #[test]
+    fn sidecars_are_owner_readable_and_name_the_wordpress_route() {
+        let id = stable_fpc_site_id("wordpress");
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let dir = temp_dir.path().to_path_buf();
+        let socket = dir.join("cache-purge.sock");
+        publish_purge_sidecars(socket.as_path(), "token-value", &[("wordpress", id)]).unwrap();
+
+        let token = std::fs::read_to_string(dir.join("cache-purge.token")).unwrap();
+        assert_eq!(token, "token-value");
+        let sites = std::fs::read_to_string(socket.with_extension("sock.sites")).unwrap();
+        assert_eq!(sites, format!("wordpress\t{id}\n"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let token_mode = std::fs::metadata(dir.join("cache-purge.token"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(token_mode, 0o640);
+            let sites_mode = std::fs::metadata(socket.with_extension("sock.sites"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(sites_mode, 0o640);
+        }
+    }
 }

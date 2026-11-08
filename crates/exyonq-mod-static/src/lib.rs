@@ -240,6 +240,11 @@ pub fn read_file_range(
     length: u64,
 ) -> Result<(Vec<u8>, &'static str), StaticError> {
     sensitive::ensure_file_name_allowed(path)?;
+    // H-02: a range is still a full materialization. Refuse a range larger
+    // than the cross-protocol ceiling before allocating its buffer.
+    if length > exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES {
+        return Err(StaticError::BudgetExceeded);
+    }
     let len_usize = usize::try_from(length).map_err(|_| {
         StaticError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

@@ -52,7 +52,7 @@ NGINX defines all four in `http`, `server` and `location`. ExyonQ must resolve a
 
 - Resolve destination as an internal route, not a free URL.
 - Multiple mirrors; mirror failure never changes the main response.
-- `mirror_request_body` default `on` (nginx 1.27). With `on` the client body is read before the subrequests are created and reused from the main path's bounded buffer (32 MiB proxy cap, no second copy); with `off` the subrequest carries a well-framed empty body (no inherited `Content-Length`).
+- `mirror_request_body` default `on` (nginx 1.27). With `on` the client body is read before the subrequests are created and reused from the main path's bounded buffer (64 MiB proxy cap, no second copy); with `off` the subrequest carries a well-framed empty body (no inherited `Content-Length`).
 - Metrics: started, completed, cancelled, failed.
 - Exit: differential green; importer `Supported`.
 

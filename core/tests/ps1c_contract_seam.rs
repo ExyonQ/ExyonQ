@@ -46,7 +46,7 @@ fn ps1c_planner_api_is_transport_agnostic() {
     let view = GenerationView::pinned(1, false, Some(0));
     let head = b"GET /site/index.html HTTP/1.1\r\nHost: x\r\n\r\n";
     // API accepts only GenerationView + bytes — no stream/fd parameters.
-    assert!(plan_wire_decision(&view, head).is_ok());
+    assert!(plan_wire_decision(&view, head, true, false).is_ok());
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn ps1c_generation_identity_stable_across_planner_call() {
     ensure_wire_hooks();
     let view = GenerationView::pinned(77, false, Some(1));
     let head = b"GET /api/x HTTP/1.1\r\nHost: x\r\n\r\n";
-    let _ = plan_wire_decision(&view, head).expect("plan");
+    let _ = plan_wire_decision(&view, head, false, true).expect("plan");
     assert_eq!(view.generation, 77);
 }
 
@@ -64,7 +64,7 @@ fn ps1c_planner_parity_proxy_decision() {
     let view = GenerationView::pinned(1, false, Some(0));
     let head = b"GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";
     assert_eq!(
-        plan_wire_decision(&view, head).expect("plan"),
+        plan_wire_decision(&view, head, false, true).expect("plan"),
         WirePlanDecision::Proxy
     );
 }

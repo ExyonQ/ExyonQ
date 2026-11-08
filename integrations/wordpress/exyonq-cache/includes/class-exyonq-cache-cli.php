@@ -36,8 +36,12 @@ final class ExyonQ_Cache_CLI {
 		WP_CLI::log( 'plugin_version=' . EXYONQ_CACHE_PLUGIN_VERSION );
 		WP_CLI::log( 'multisite=' . ( is_multisite() ? 'yes(deferred)' : 'no' ) );
 		WP_CLI::log( 'configured=' . ( ! empty( $probe['configured'] ) ? 'yes' : 'no' ) );
-		WP_CLI::log( 'socket_configured=' . ( $client->socket_path() !== '' ? 'yes' : 'no' ) );
-		WP_CLI::log( 'site_id_configured=' . ( $client->site_id() !== '' ? 'yes' : 'no' ) );
+		WP_CLI::log( 'socket=' . $client->socket_path() );
+		WP_CLI::log( 'socket_present=' . ( file_exists( $client->socket_path() ) ? 'yes' : 'no' ) );
+		WP_CLI::log( 'token_present=' . ( $client->token() !== '' ? 'yes' : 'no' ) );
+		WP_CLI::log( 'site_id=' . ( $client->site_id_decimal() !== '' ? $client->site_id_decimal() : 'missing' ) );
+		WP_CLI::log( 'site_index_present=' . ( $client->site_id_from_index() !== '' ? 'yes' : 'no' ) );
+		WP_CLI::log( 'route=' . $client->route_name() );
 		WP_CLI::log( 'reachable=' . ( ! empty( $probe['reachable'] ) ? 'yes' : 'no' ) );
 		WP_CLI::log( 'auth=' . ( $probe['auth'] ?? 'unknown' ) );
 		if ( ! empty( $probe['error'] ) ) {

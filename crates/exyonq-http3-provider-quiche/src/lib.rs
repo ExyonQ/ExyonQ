@@ -176,7 +176,9 @@ where
     config.set_initial_max_streams_bidi(cfg.max_concurrent_streams);
     config.set_initial_max_streams_uni(cfg.max_concurrent_streams);
     config.set_disable_active_migration(true);
-    config.enable_early_data();
+    // H-05: 0-RTT has no anti-replay ticket cache here. Do not enable it until
+    // the provider can reject replayed tickets and restrict early data to
+    // idempotent methods.
     // P13D Phase 4: remove Quinn's 25 ms delayed-ACK floor (quiche default is 25).
     config.set_max_ack_delay(cfg.max_ack_delay_ms);
     DIAG.max_ack_delay_ms_configured

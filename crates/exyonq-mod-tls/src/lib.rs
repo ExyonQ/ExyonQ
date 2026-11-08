@@ -240,13 +240,16 @@ impl ResolvesServerCert for SniResolver {
             if let Some(key) = self.by_name.get(lower.as_str()) {
                 return Some(Arc::clone(key));
             }
-            let mut rest = lower.as_str();
-            while let Some((_, suffix)) = rest.split_once('.') {
-                let wildcard = format!("*.{suffix}");
-                if let Some(key) = self.by_name.get(wildcard.as_str()) {
-                    return Some(Arc::clone(key));
+            // RFC 6125: a wildcard covers exactly one label and only in the
+            // leftmost position. `*.example.com` must not match
+            // `a.b.example.com` via a suffix walk.
+            if let Some((label, suffix)) = lower.split_once('.') {
+                if !label.is_empty() {
+                    let wildcard = format!("*.{suffix}");
+                    if let Some(key) = self.by_name.get(wildcard.as_str()) {
+                        return Some(Arc::clone(key));
+                    }
                 }
-                rest = suffix;
             }
         }
         if self.strict {
@@ -301,6 +304,12 @@ pub fn load_rustls_config_multi(
         }
         for name in &entry.names {
             let key = name.trim_end_matches('.').to_ascii_lowercase();
+            if !valid_server_name_pattern(&key) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("tls: invalid server_name pattern {key:?}"),
+                ));
+            }
             if by_name
                 .insert(key.clone(), Arc::clone(&certified))
                 .is_some()
@@ -328,6 +337,19 @@ pub fn load_rustls_config_multi(
         }
     }
     Ok(config)
+}
+
+/// Wildcards are accepted only as `*.` on the leftmost label.
+fn valid_server_name_pattern(name: &str) -> bool {
+    let stars = name.matches('*').count();
+    if stars == 0 {
+        return !name.is_empty();
+    }
+    if stars != 1 {
+        return false;
+    }
+    name.strip_prefix("*.")
+        .is_some_and(|suffix| !suffix.is_empty() && !suffix.contains('*'))
 }
 
 /// Load one `SniCert` into a rustls `CertifiedKey`: cert chain, matching
@@ -726,9 +748,11 @@ mod tests {
             handshake_leaf(Arc::clone(&config), "x.wild.test"),
             leaf_der(&cert_w)
         );
+        // H-09: one wildcard label only; a.b.wild.test falls through to the
+        // deterministic default certificate instead of *.wild.test.
         assert_eq!(
             handshake_leaf(Arc::clone(&config), "a.b.wild.test"),
-            leaf_der(&cert_w)
+            leaf_der(&cert_a)
         );
         // Unknown SNI falls back to the first configured certificate.
         assert_eq!(

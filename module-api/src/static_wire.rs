@@ -24,6 +24,10 @@ pub struct StaticWireEligibilityHooks {
     pub static_wire_use_blocking_pool: fn(head: &[u8]) -> bool,
     pub static_sendfile_use_blocking_pool: fn(head: &[u8]) -> bool,
     pub might_use_static_wire: fn(head: &[u8]) -> bool,
+    /// Route-aware ownership: the request path resolves to a compiled static slot.
+    /// This is the capability the wire accept/planner uses instead of
+    /// benchmark path prefixes.
+    pub static_slot_owns_request: fn(head: &[u8]) -> bool,
 }
 
 static ELIGIBILITY: OnceLock<StaticWireEligibilityHooks> = OnceLock::new();
@@ -69,6 +73,11 @@ pub fn static_tcp_blocking_pool_admission(head: &[u8]) -> bool {
 
 pub fn might_use_static_wire(head: &[u8]) -> bool {
     (eligibility().might_use_static_wire)(head)
+}
+
+/// True when a compiled static route owns this request path/host.
+pub fn static_slot_owns_request(head: &[u8]) -> bool {
+    (eligibility().static_slot_owns_request)(head)
 }
 
 /// Epoll/Tokio registration hooks (sendfile handoff from async path).

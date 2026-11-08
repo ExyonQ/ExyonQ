@@ -46,6 +46,7 @@ match = { path = "/" }
 fastcgi = "php"
 htaccess = "overlay"
 
+# FastCGI request bodies up to 64 MiB reach PHP-FPM; larger requests get 413.
 [[fcgi_pool]]
 name = "php"
 address = "/run/php/php-fpm.sock"

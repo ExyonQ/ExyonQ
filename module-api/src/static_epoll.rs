@@ -190,7 +190,7 @@ pub fn record_product_response(status: u16) {
 
 /// Delivered inline response: counter, route label, and latency.
 ///
-/// The epoll static fast path is bound to the `site` static slot (see
+/// The epoll static fast path is bound to a compiled static slot (see
 /// `ServerState::site_static_slot`), so route/upstream are stable.
 #[cfg(target_os = "linux")]
 pub fn record_product_exchange(head: &[u8], status: u16, elapsed_ms: f64) {

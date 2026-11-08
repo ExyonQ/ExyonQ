@@ -127,7 +127,7 @@ bash scripts/legal/generate-release-compliance-artifacts.sh
 REV="$(git rev-parse HEAD)"
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.9.1 \
+  --build-arg EXYONQ_VERSION=0.9.2 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=0 \
   -t exyonq/exyonq:local .
@@ -135,10 +135,10 @@ docker buildx build -f packaging/docker/Dockerfile \
 # Official release image — FAIL_CLOSED without a 40-hex revision; never rely on .git in context.
 docker buildx build -f packaging/docker/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  --build-arg EXYONQ_VERSION=0.9.1 \
+  --build-arg EXYONQ_VERSION=0.9.2 \
   --build-arg "EXYONQ_GIT_REVISION=${REV}" \
   --build-arg EXYONQ_OFFICIAL_RELEASE=1 \
-  -t ghcr.io/exyonq/exyonq:0.9.1 .
+  -t ghcr.io/exyonq/exyonq:0.9.2 .
 ```
 
 ## Docker image bases
@@ -150,7 +150,7 @@ and are not rebuilt by ExyonQ.
 | Image | Dockerfile | Base | Status (2026-11-06) |
 | --- | --- | --- | --- |
 | `exyonq` | `packaging/docker/Dockerfile` | `chainguard/rust:latest-dev` (build), `chainguard/glibc-dynamic` (runtime) | built and smoke-tested |
-| `exyonq-wordpress` | `packaging/docker/wordpress/Dockerfile` | `chainguard/wolfi-base` + Wolfi PHP 8.5.12 | built; installer HTTP 200 on arm64 (0.9.1 local); final multiarch E2E pending |
+| `exyonq-wordpress` | `packaging/docker/wordpress/Dockerfile` | `chainguard/wolfi-base` + Wolfi PHP 8.5.12 | built; installer HTTP 200 on arm64 (0.9.1 local); 0.9.2 build/E2E pending |
 | `exyonq-bench/server` | `benchmarks/docker/Dockerfile.exyonq` | `chainguard/rust` (build), `chainguard/wolfi-base` (runtime) | built; serves benchmark target |
 | `exyonq-bench/tls` | `benchmarks/docker/Dockerfile.bench-tls` | `chainguard/wolfi-base` | built |
 | `exyonq-bench/runner` | `benchmarks/docker/Dockerfile.bench-runner` | `chainguard/rust` (build), `chainguard/wolfi-base` (runtime) | built; `rewrk` real run PASS |

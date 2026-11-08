@@ -82,6 +82,17 @@ pub fn resolve_accept_workers() -> usize {
     default_runtime_parallelism()
 }
 
+/// Resolve accept workers with an explicit `[tuning].accept_workers` override.
+///
+/// Precedence: config value > `EXYONQ_ACCEPT_WORKERS` > auto-detect. The IR
+/// validates `1..=MAX_TUNING_WORKERS`; the clamp here is defensive only.
+pub fn resolve_accept_workers_with(configured: Option<usize>) -> usize {
+    if let Some(workers) = configured {
+        return workers.clamp(MIN_WORKERS, MAX_WORKERS);
+    }
+    resolve_accept_workers()
+}
+
 /// `EXYONQ_EPOLL_POOL_THREADS` — Cap067 keepalive OS-thread pool.
 ///
 /// When unset, follows `accept_workers` so Cap067 cannot silently remain at a

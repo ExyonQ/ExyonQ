@@ -66,3 +66,16 @@ pub fn ensure_wire_hooks_installed() {
         });
     });
 }
+
+/// Pin a test static runtime that owns `/site` under `root`.
+///
+/// L-02 accept admission fails closed when no compiled static slot owns the
+/// request, so tests asserting static wire admission must publish a real slot.
+/// Call only while holding [`WIRE_HOOKS_GATE`].
+#[cfg(target_os = "linux")]
+pub(crate) fn pin_site_static_runtime(root: &std::path::Path) {
+    let site = exyonq_mod_static::StaticRoot::new(root, "/site", None).expect("static root");
+    let rt = Arc::new(exyonq_mod_static::StaticRuntime::new());
+    rt.bind_roots(1, vec![Arc::new(site)].into_boxed_slice());
+    exyonq_mod_static::install_kernel_hooks(rt);
+}
