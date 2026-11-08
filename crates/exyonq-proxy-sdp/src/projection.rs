@@ -58,7 +58,7 @@ pub fn build_projection_from_parts(
 }
 
 impl GenerationProjection {
-    /// Resolve `/api/`-class proxy route → first executable upstream addr.
+    /// Resolve the matched proxy route to its first executable upstream addr.
     pub fn resolve_proxy_upstream(
         &self,
         path: &str,

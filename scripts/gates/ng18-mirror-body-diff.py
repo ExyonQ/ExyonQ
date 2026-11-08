@@ -294,7 +294,7 @@ def nginx_config(phase: str) -> str:
     backend = "host.docker.internal" if sys.platform == "darwin" else "127.0.0.1"
     return f"""worker_processes 1; pid /tmp/ng18-mbd.pid; error_log /dev/stderr warn;
 events {{ worker_connections 256; }}
-http {{ client_max_body_size 32m; access_log off; server {{ listen {NGINX_PORT};
+http {{ client_max_body_size 64m; access_log off; server {{ listen {NGINX_PORT};
   location = /main {{
     {mirrors} {off}
     proxy_pass http://{backend}:{ORIGIN_PORT};
@@ -458,14 +458,14 @@ def cases(phase: str) -> list[dict]:
         {"name": "client_abort", "method": "POST", "path": "/main",
          "body": b"X" * 100, "framing": "cl", "expect": 0, "abort": True},
         {"name": "under_limit", "method": "POST", "path": "/main",
-         "body": b"U" * (32 * 1024 * 1024 - 1), "framing": "cl", "expect": 1},
+         "body": b"U" * (64 * 1024 * 1024 - 1), "framing": "cl", "expect": 1},
         {"name": "at_limit", "method": "POST", "path": "/main",
-         "body": b"M" * (32 * 1024 * 1024), "framing": "cl", "expect": 1},
+         "body": b"M" * (64 * 1024 * 1024), "framing": "cl", "expect": 1},
         {"name": "over_limit", "method": "POST", "path": "/main",
          "body": b"", "framing": "cl", "expect": 0,
-         "declared_length": 32 * 1024 * 1024 + 1},
+         "declared_length": 64 * 1024 * 1024 + 1},
         {"name": "over_limit_chunked", "method": "POST", "path": "/main",
-         "body": b"C" * (32 * 1024 * 1024 + 1), "framing": "chunked", "expect": 0},
+         "body": b"C" * (64 * 1024 * 1024 + 1), "framing": "chunked", "expect": 0},
     ]
     if phase == "multi":
         base = [c for c in base if c["name"] in ("post_small", "post_chunked", "get")]

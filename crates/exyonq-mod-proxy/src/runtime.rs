@@ -22,8 +22,8 @@ use crate::headers::{
 use crate::health::{peer_key_from_http_uri, HealthSupervisor};
 use crate::hyper_client::{build_incoming_client, post_body_client, ProxyClient};
 use crate::hyper_forward::{
-    attempt_forward_empty_body, classify_hyper_response, forward_get_streaming, forward_request,
-    note_connect_retry, response_for_attempt_class_ctx, ProxyHyperMetrics,
+    attempt_forward_empty_body_with_headers, classify_hyper_response, forward_get_streaming,
+    forward_request, note_connect_retry, response_for_attempt_class_ctx, ProxyHyperMetrics,
 };
 use crate::retry::{
     classify_hyper_error, may_retry_connect, remaining_budget, shared_deadline,
@@ -34,7 +34,6 @@ use crate::selector::{
     endpoint_transport_identity, EndpointAdmin, EndpointSelector, EndpointSpec, FailoverMode,
     InflightLease, PassivePeer, SelectionOutcome,
 };
-use crate::sse::upstream_timeout_for_path;
 use crate::upstream_target::UpstreamTarget;
 use crate::UpstreamDescriptor;
 use async_trait::async_trait;
@@ -1340,8 +1339,7 @@ impl ProxyDispatchService for ProxyRuntime {
                 return ProxyDispatchOutcome::ServiceUnavailable;
             }
         };
-        let total_timeout =
-            upstream_timeout_for_path(first.target.timeout, &request.path_and_query);
+        let total_timeout = first.target.timeout;
         let deadline = shared_deadline(total_timeout);
         let max_retries = first.target.max_connect_retries;
         let mut retries_used: u8 = 0;
@@ -1593,10 +1591,11 @@ impl ProxyRuntime {
         target: &UpstreamTarget,
         path_and_query: &str,
         x_forwarded_for: Option<&HeaderValue>,
+        request_headers: &[(String, String)],
         ctx: &AffinityCtx<'_>,
     ) -> hyper::Response<http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>> {
         // Cap021: wire GET shares connect-only retry + peer exclusion + deadline with dispatch.
-        let total = upstream_timeout_for_path(target.timeout, path_and_query);
+        let total = target.timeout;
         let deadline = shared_deadline(total);
         let max_retries = target.max_connect_retries;
         let mut retries_used = 0u8;
@@ -1604,12 +1603,13 @@ impl ProxyRuntime {
 
         // Happy path: borrow `target` — no UpstreamTarget/HeaderValue clone until a connect retry.
         let budget = remaining_budget(deadline);
-        match attempt_forward_empty_body(
+        match attempt_forward_empty_body_with_headers(
             target,
             path_and_query,
             Method::GET,
             x_forwarded_for,
             None,
+            request_headers,
             &self.metrics,
             budget,
         )
@@ -1665,12 +1665,13 @@ impl ProxyRuntime {
 
                 loop {
                     let budget = remaining_budget(deadline);
-                    match attempt_forward_empty_body(
+                    match attempt_forward_empty_body_with_headers(
                         &current,
                         path_and_query,
                         Method::GET,
                         x_forwarded_for,
                         None,
+                        request_headers,
                         &self.metrics,
                         budget,
                     )

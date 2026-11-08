@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//! Raw HTTP/1.1 loop for cached `/api/*` proxy paths (P4/P8 bench hot path) — KD3.4 module-owned.
+//! Raw HTTP/1.1 proxy loop for compiled proxy slots — KD3.4 module-owned.
 //!
 //! Downstream framing: known-length upstream responses use `Content-Length` + keep-alive
 //! (reuse the TCP admission). Unknown length / TE keeps Cap034 chunked + close. Host must
@@ -207,7 +207,17 @@ fn wire_head_is_websocket_upgrade(head: &[u8]) -> bool {
 }
 
 pub fn might_use_proxy_wire(head: &[u8]) -> bool {
-    if !(head.starts_with(b"GET /api/") || head.starts_with(b"GET /api ")) {
+    // H-01/L-01: never hand a non-canonical target (or a request without an
+    // authority) to the wire proxy; Hyper canonicalizes and rejects it.
+    let Some(target) = parse_get_path_and_query(head) else {
+        return false;
+    };
+    let path = target.split('?').next().unwrap_or(target);
+    match exyonq_module_api::canonicalize_path(path) {
+        Some(canonical) if canonical == path => {}
+        _ => return false,
+    }
+    if !header_name_present_ci(head, b"host:") {
         return false;
     }
     if wire_head_is_websocket_upgrade(head) {
@@ -231,7 +241,11 @@ fn parse_get_path_and_query(head: &[u8]) -> Option<&str> {
     }
     let rest = &head[4..];
     let end = rest.iter().position(|&b| b == b' ')?;
-    std::str::from_utf8(&rest[..end]).ok()
+    let target = &rest[..end];
+    if target.is_empty() || target.iter().any(|&b| b < 0x20 || b == 0x7f) {
+        return None;
+    }
+    std::str::from_utf8(target).ok()
 }
 
 /// NG-07: append the minted route cookie on successful responses only.
@@ -1137,15 +1151,12 @@ where
         }
 
         // Cap024/dispatch alignment: no eligible upstream (incl. all unhealthy) → 503, not 404.
-        // NG-07: header parsing only when the cluster's policy consumes it.
-        let req_headers = if rt.cluster_uses_header_affinity(cluster_id) {
-            headers_from_head(head.as_ref())
-        } else {
-            Vec::new()
-        };
+        // M-02: the Hyper wire path forwards the end-to-end request headers
+        // (Cookie/Authorization/Range/Host), not just affinity keys.
+        let request_headers = headers_from_head(head.as_ref());
         let ctx = crate::runtime::AffinityCtx {
             client_ip: request_xff.to_str().ok(),
-            headers: &req_headers,
+            headers: &request_headers,
             path_key: path_and_query,
         };
         // NG-07: keyed/load policies resolve per request — each keep-alive
@@ -1203,8 +1214,10 @@ where
         let started = std::time::Instant::now();
         // F3-R20: a cluster with location_rewrite rules cannot use the raw
         // verbatim relay — the response head must be rewritten first.
-        let raw_ok = crate::raw_upstream::raw_upstream_get_enabled()
-            && rt.location_rewrite_rules(cluster_id).is_none();
+        // M-02: the raw relay does not forward Cookie/Authorization/Host/Range.
+        // Keep it disabled until it reaches header parity with the Hyper wire
+        // path; correctness takes precedence over the raw GET benchmark delta.
+        let raw_ok = false;
         let (last_status, outcome) = if raw_ok {
             let mut counted = CountingWrite {
                 inner: &mut stream,
@@ -1252,6 +1265,7 @@ where
                             target,
                             path_and_query,
                             Some(&request_xff),
+                            &request_headers,
                             &ctx,
                         )
                         .await;
@@ -1264,12 +1278,34 @@ where
             }
         } else {
             let mut response = rt
-                .forward_get_for_wire(cluster_id, target, path_and_query, Some(&request_xff), &ctx)
+                .forward_get_for_wire(
+                    cluster_id,
+                    target,
+                    path_and_query,
+                    Some(&request_xff),
+                    &request_headers,
+                    &ctx,
+                )
                 .await;
             append_route_cookie_wire(&mut response, route_cookie);
             let status = response.status().as_u16();
-            let outcome = write_proxy_response_wire(&mut stream, response, client_close).await?;
-            (status, outcome)
+            match write_proxy_response_wire(&mut stream, response, client_close).await {
+                Ok(outcome) => (status, outcome),
+                // NG-08 audit S1: the response head may already be on the wire
+                // when the upstream dies mid-body. Never write a second head;
+                // close and report the post-head failure as 502.
+                Err(error) => {
+                    if let Err(shutdown_error) = stream.shutdown().await {
+                        tracing::debug!(
+                            error = %shutdown_error,
+                            response_error = %error,
+                            "proxy wire shutdown failed after response write error"
+                        );
+                    }
+                    exyonq_module_api::wire_record_response(502);
+                    return Ok(502);
+                }
+            }
         };
         admission_status = last_status;
         let path = path_and_query.split('?').next().unwrap_or(path_and_query);
@@ -1426,6 +1462,12 @@ mod tests {
     }
 
     #[test]
+    fn wire_proxy_target_rejects_header_injection_bytes() {
+        assert!(parse_get_path_and_query(b"GET /api/x\r\nX-Injected: yes HTTP/1.1\r\n").is_none());
+        assert!(parse_get_path_and_query(b"GET /api/x\tHTTP/1.1\r\n").is_none());
+    }
+
+    #[test]
     fn might_use_rejects_invalid_te_cl_combo() {
         let head =
             b"GET /api/x HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n";
@@ -1510,8 +1552,8 @@ mod tests {
             b'\r', b'\n', b'\r', b'\n',
         ]);
         assert!(
-            might_use_proxy_wire(head.as_ref()),
-            "eligibility must admit before path parse"
+            !might_use_proxy_wire(head.as_ref()),
+            "non-UTF-8 target must fall back to Hyper"
         );
         assert!(
             parse_get_path_and_query(head.as_ref()).is_none(),
@@ -1557,7 +1599,7 @@ mod tests {
             assert!(n > 0);
             tokio::io::AsyncWriteExt::write_all(
                 &mut s,
-                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
             )
             .await
             .expect("upstream write");

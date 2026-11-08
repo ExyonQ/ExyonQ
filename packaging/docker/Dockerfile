@@ -17,7 +17,7 @@
 # EXYONQ_OFFICIAL_RELEASE=1 for official images. The tag is injected because the
 # build context excludes .git (git describe cannot run inside the builder).
 
-ARG EXYONQ_VERSION=0.9.1
+ARG EXYONQ_VERSION=0.9.2
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 ARG EXYONQ_SOURCE_TAG=""
@@ -28,7 +28,7 @@ FROM cgr.dev/chainguard/rust:latest-dev@sha256:fc2f649f494a11960920b7bd776770b89
 # Chainguard images default to nonroot; the build stage needs root for apk and
 # for installing cargo-auditable under /usr/local. The runtime stays nonroot.
 USER root
-ARG EXYONQ_VERSION=0.9.1
+ARG EXYONQ_VERSION=0.9.2
 ARG EXYONQ_GIT_REVISION=unknown
 ARG EXYONQ_OFFICIAL_RELEASE=0
 ARG EXYONQ_SOURCE_TAG=""

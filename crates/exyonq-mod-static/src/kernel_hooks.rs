@@ -38,6 +38,7 @@ pub fn install_kernel_hooks(_runtime: Arc<StaticRuntime>) {
         static_sendfile_use_blocking_pool:
             crate::wire_eligibility::static_sendfile_use_blocking_pool,
         might_use_static_wire: crate::wire_eligibility::might_use_static_wire,
+        static_slot_owns_request: crate::wire_eligibility::static_slot_owns_request,
     });
 
     #[cfg(target_os = "linux")]

@@ -441,6 +441,9 @@ fn render_toml(
         if let Some(index) = &route.index {
             out.push_str(&format!("index = {index:?}\n"));
         }
+        if let Some(limit) = route.max_request_body_bytes {
+            out.push_str(&format!("max_request_body_bytes = {limit}\n"));
+        }
         if let Some(access) = &route.access {
             out.push_str("access = {");
             let mut parts = Vec::new();
@@ -664,6 +667,32 @@ endpoints = [
         assert_eq!(ep.max_fails, 3);
         assert_eq!(ep.fail_timeout_ms, 5_000);
         assert_eq!(ep.slow_start_ms, 30_000);
+    }
+
+    #[test]
+    fn render_keeps_route_request_body_limit() {
+        let input = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+upstream = "b"
+max_request_body_bytes = 2097152
+[[upstream]]
+name = "b"
+target = "http://127.0.0.1:9000"
+"#;
+        let cfg = exyonq_config_ir::AppConfig::parse_str(input).unwrap();
+        let out = render_toml(&cfg).unwrap();
+        assert!(
+            out.contains("max_request_body_bytes = 2097152"),
+            "render must emit the route body limit: {out}"
+        );
+        let cfg2 = exyonq_config_ir::AppConfig::parse_str(&out).unwrap();
+        assert_eq!(cfg2.routes[0].max_request_body_bytes, Some(2_097_152));
     }
 
     #[test]

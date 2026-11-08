@@ -1,5 +1,5 @@
 # ExyonQ example configuration — /etc/exyonq/config.toml
-config_version = 1
+config_version = 2
 
 # Cap061 — production observability (RD-005: IR implemented; not env-only).
 [logging]

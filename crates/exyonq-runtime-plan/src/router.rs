@@ -135,7 +135,11 @@ impl RouteIndex {
         local_port: Option<u16>,
         request_headers: &[(String, String)],
     ) -> Option<(usize, &RouteConfig)> {
-        let path = normalize_path(path);
+        // Non-origin targets such as `OPTIONS *` are not router paths.
+        if !path.starts_with('/') {
+            return None;
+        }
+        let path = exyonq_module_api::canonicalize_path(path)?;
         self.best_match(&path, host, request_headers, local_port)
     }
 
@@ -179,6 +183,16 @@ impl RouteIndex {
     pub fn routes(&self) -> &[RouteConfig] {
         &self.routes
     }
+
+    /// L-01: true when a host-scoped route can match on this listener.
+    ///
+    /// Request paths without an authority must then be rejected instead of
+    /// falling through to a hostless default route.
+    pub fn requires_host_for_port(&self, local_port: Option<u16>) -> bool {
+        self.routes
+            .iter()
+            .any(|route| route.r#match.host.is_some() && port_matches_route(route, local_port))
+    }
 }
 
 /// EXY-03: `match.listen_port` — `None` (unset) matches every listener.
@@ -216,17 +230,6 @@ fn host_match_rank(configured: Option<&str>) -> u8 {
         Some(h) if h.starts_with('*') => 1,
         Some(_) => 2,
         None => 0,
-    }
-}
-
-fn normalize_path(path: &str) -> String {
-    if path.is_empty() {
-        return "/".to_string();
-    }
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
     }
 }
 
@@ -293,7 +296,10 @@ fn host_matches(expected: &str, actual: &str) -> bool {
 
 /// Legacy helper: longest directory-prefix among slice (prefix arms only).
 pub fn match_route<'a>(routes: &'a [RouteConfig], path: &str) -> Option<&'a RouteConfig> {
-    let path = normalize_path(path);
+    if !path.starts_with('/') {
+        return None;
+    }
+    let path = exyonq_module_api::canonicalize_path(path)?;
     routes
         .iter()
         .filter(|route| {
@@ -310,6 +316,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: name.to_string(),
@@ -583,6 +590,27 @@ mod tests {
         let index = RouteIndex::new(routes);
         assert_eq!(index.match_route("/assets-extra").unwrap().name, "root");
         assert_eq!(index.match_route("/assets/x").unwrap().name, "boundary");
+    }
+
+    #[test]
+    fn canonical_path_matches_the_policy_route() {
+        let routes = vec![route("default", "/"), route("admin", "/admin")];
+        let index = RouteIndex::new(routes);
+        for path in ["/./admin", "//admin", "/%61dmin", "/%2e/admin"] {
+            assert_eq!(index.match_route(path).unwrap().name, "admin", "{path}");
+        }
+        assert!(index.match_route("/%zz").is_none());
+        assert!(index.match_route("*").is_none());
+    }
+
+    #[test]
+    fn host_scoped_route_requires_an_authority() {
+        let index = RouteIndex::new(vec![
+            route_host("default", "/", None),
+            route_host("admin", "/admin", Some("admin.example")),
+        ]);
+        assert!(index.requires_host_for_port(None));
+        assert!(!RouteIndex::new(vec![route("default", "/")]).requires_host_for_port(None));
     }
 
     #[test]

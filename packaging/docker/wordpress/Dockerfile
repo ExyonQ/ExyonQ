@@ -3,11 +3,11 @@
 # runs on Wolfi (Chainguard wolfi-base + php-8.5 packages). Owner rule: every
 # image ExyonQ builds uses Wolfi; no Debian, Ubuntu, Alpine or Debian-distroless
 # base. Build the official image first:
-#   docker build -f packaging/docker/Dockerfile -t exyonq:0.9.1 .
-#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.9.1 .
+#   docker build -f packaging/docker/Dockerfile -t exyonq:0.9.2 .
+#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.9.2 .
 
-ARG EXYONQ_IMAGE=exyonq:0.9.1
-ARG EXYONQ_VERSION=0.9.1
+ARG EXYONQ_IMAGE=exyonq:0.9.2
+ARG EXYONQ_VERSION=0.9.2
 ARG EXYONQ_GIT_REVISION=unknown
 
 FROM ${EXYONQ_IMAGE} AS exyonqbin
@@ -50,7 +50,7 @@ RUN set -eux; \
     adduser -S -D -H -u 82 -G www-data www-data; \
     rm -f /etc/php/php-fpm.d/zz-apko.conf; \
     mkdir -p /run/php /run/exyonq /etc/exyonq; \
-    printf 'expose_php = Off\nopenssl.cafile = /etc/ssl/certs/ca-certificates.crt\ncurl.cainfo = /etc/ssl/certs/ca-certificates.crt\n' > /etc/php/conf.d/exyonq.ini; \
+    printf 'expose_php = Off\nupload_max_filesize = 64M\npost_max_size = 64M\nopenssl.cafile = /etc/ssl/certs/ca-certificates.crt\ncurl.cainfo = /etc/ssl/certs/ca-certificates.crt\n' > /etc/php/conf.d/exyonq.ini; \
     php -v | grep -qE '^PHP 8\.5\.(1[2-9]|[2-9][0-9])' \
         || { echo 'ERROR: PHP >= 8.5.12 required in this image' >&2; exit 1; }; \
     php -m | grep -qx mysqlnd; \

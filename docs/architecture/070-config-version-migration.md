@@ -17,9 +17,10 @@ exyonqctl config migrate --config /etc/exyonq/config.toml
   command rewrites the one line, then parses the result to prove it is a valid
   `config_version = 2` document before writing it.
 - `--output <path>` writes a new file and leaves the source untouched.
-- `--check` writes nothing and exits `1` while the file is still v1, so a CI job
-  can fail on drift; once the file is v2 it prints `MIGRATION=NOT_NEEDED` and
-  exits `0`.
+- `--check` writes nothing and exits `1` while the file is still v1. The
+  `config-migrate-check` CI job runs it over the published examples
+  (`scripts/gates/config-migrate-check.sh`) and fails on drift; once the file
+  is v2 it prints `MIGRATION=NOT_NEEDED` and exits `0`.
 - `--no-backup` skips the `.v1.bak` copy. The command refuses to overwrite an
   existing backup: remove it deliberately or pass `--no-backup`.
 

@@ -40,7 +40,7 @@ pub fn consumer_admit_plan_and_bundle(
 ) -> Result<(WirePlanDecision, HyperHandoff), ScaffoldAdmitError> {
     let token = PlatformConnectionAdmission::try_admit(ops).map_err(|_| ScaffoldAdmitError)?;
     let view = GenerationView::pinned(1, false, Some(0));
-    let decision = plan_wire_decision(&view, head).map_err(|_| ScaffoldAdmitError)?;
+    let decision = plan_wire_decision(&view, head, false, true).map_err(|_| ScaffoldAdmitError)?;
 
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|_| ScaffoldAdmitError)?;
     let peer: SocketAddr = listener.local_addr().map_err(|_| ScaffoldAdmitError)?;

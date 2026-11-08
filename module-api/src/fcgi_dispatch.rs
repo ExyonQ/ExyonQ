@@ -20,7 +20,10 @@
 use async_trait::async_trait;
 
 /// Maximum request body bytes accepted for FastCGI STDIN (aligned with mod-fastcgi cap).
-pub const FCGI_MAX_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
+///
+/// 64 MiB matches the nginx `client_max_body_size 64m` baseline; larger bodies
+/// are rejected with HTTP 413 before FastCGI dispatch.
+pub const FCGI_MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Default in-flight capacity when registration omits explicit pool limits.
 pub const DEFAULT_FCGI_MAX_CONCURRENCY: usize = 16;
@@ -204,6 +207,15 @@ pub enum FcgiDispatchOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_body_caps_are_64_mib_and_aligned() {
+        assert_eq!(FCGI_MAX_REQUEST_BODY_BYTES, 64 * 1024 * 1024);
+        assert_eq!(
+            FCGI_MAX_REQUEST_BODY_BYTES,
+            crate::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES
+        );
+    }
 
     #[test]
     fn success_response_carries_status_headers_body() {

@@ -1789,9 +1789,13 @@ fn should_handoff_on_accept(fd: RawFd) -> io::Result<bool> {
 }
 
 fn tokio_accept_required(head: &[u8]) -> bool {
-    // Cap061 LA-008: no filename force for former bench assets — same as ordinary
-    // traffic via `!might_use_static_wire` (`/health` stays on wire; `/metrics` → Hyper).
-    head.starts_with(b"GET /api/") || !static_wire::might_use_static_wire(head)
+    // Cap061 LA-008: no filename force for former bench assets. The route-aware
+    // ownership hook replaces the old `/api/` benchmark prefix: `/health` stays
+    // inline, `/metrics` and proxy/unknown routes hand off to Tokio.
+    if head.starts_with(b"GET /health ") || head.starts_with(b"HEAD /health ") {
+        return false;
+    }
+    !static_wire::might_use_static_wire(head) || !static_wire::static_slot_owns_request(head)
 }
 
 fn accept_batch(

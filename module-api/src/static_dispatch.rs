@@ -51,7 +51,7 @@ pub struct StaticCompiledSlot {
     pub filesystem_root: PathBuf,
     pub route_prefix: String,
     pub index_file: Option<String>,
-    /// IR route name (e.g. `"site"` for wire/epoll fast path).
+    /// IR route name (labels and diagnostics; never a wire ownership decision).
     pub route_name: String,
     /// IR `match.host`. `None` is hostless and matches any Host.
     pub route_host: Option<String>,
@@ -304,6 +304,13 @@ pub struct StaticDispatchRequest {
 /// Protocol adapters (e.g. H3 entry) map this signal to their oversized-response policy.
 /// Not a public product API; name is transport-agnostic.
 pub const MATERIALIZATION_BUDGET_EXCEEDED_HEADER: &str = "x-exyonq-materialization-budget-exceeded";
+
+/// Default cross-protocol ceiling for a fully materialized static response.
+///
+/// HTTP/1.1 and HTTP/2 previously passed `None` and could allocate an entire
+/// file in memory. Use this bounded default wherever no transport-specific
+/// budget is supplied; HTTP/3 keeps its own 64 MiB policy constant.
+pub const DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES: u64 = 67_108_864;
 
 /// Result of a cache-oriented static load (module maps errors to HTTP outcomes).
 #[derive(Debug, Clone, PartialEq, Eq)]

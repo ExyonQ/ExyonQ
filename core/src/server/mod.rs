@@ -67,8 +67,8 @@ pub use io_uring_start::register_io_uring_start;
 #[cfg(target_os = "linux")]
 pub use os_worker_guard::OsWorkerGuard;
 pub use runtime_parallelism::{
-    default_runtime_parallelism, resolve_accept_workers, resolve_epoll_pool_threads,
-    resolve_tokio_worker_threads, MAX_WORKERS, MIN_WORKERS,
+    default_runtime_parallelism, resolve_accept_workers, resolve_accept_workers_with,
+    resolve_epoll_pool_threads, resolve_tokio_worker_threads, MAX_WORKERS, MIN_WORKERS,
 };
 #[cfg(target_os = "linux")]
 pub use sync_accept_start::register_sync_accept_start;
@@ -148,8 +148,8 @@ async fn wait_for_listener(addr: SocketAddr, timeout: Duration) {
     warn!(%addr, "listener did not accept before the ACME bootstrap deadline");
 }
 
-fn accept_workers() -> usize {
-    crate::server::runtime_parallelism::resolve_accept_workers()
+fn accept_workers(tuning: &exyonq_config_ir::TuningConfig) -> usize {
+    crate::server::runtime_parallelism::resolve_accept_workers_with(tuning.accept_workers)
 }
 
 // The guard is a distinct ownership parameter: it must be moved into the
@@ -699,28 +699,79 @@ async fn run_on_impl(
     };
 
     #[cfg(unix)]
-    if let Ok(purge_path) = std::env::var("EXYONQ_CACHE_PURGE_SOCKET") {
-        match std::env::var("EXYONQ_CACHE_PURGE_TOKEN") {
-            Ok(token) if !token.is_empty() => {
-                if let Some(control_plane) = control_plane_service() {
-                    let purge_port = crate::lab_coord_hooks::build_lab_or_default_purge_port(
-                        reload::SharedServerState::clone(&shared),
-                    );
-                    control_plane.spawn_unix_cache_purge_socket(
-                        exyonq_module_api::CachePurgeSocketConfig {
-                            socket_path: std::path::PathBuf::from(purge_path),
-                            token: std::sync::Arc::<[u8]>::from(token.into_bytes()),
-                        },
-                        purge_port,
-                    );
-                    crate::lab_coord_hooks::start_lab_subscriber_if_any(
-                        reload::SharedServerState::clone(&shared),
-                    );
-                }
+    {
+        let state = reload::read_state(&shared);
+        let purge_env = std::env::var("EXYONQ_CACHE_PURGE_SOCKET")
+            .ok()
+            .filter(|path| !path.is_empty());
+        // A configured control socket tells us which per-unit RuntimeDirectory is
+        // writable. Derive the purge socket there so systemd deployments get the
+        // WordPress sidecars without a second hand-written variable. The explicit
+        // EXYONQ_CACHE_PURGE_SOCKET still wins.
+        let purge_path = purge_env.clone().or_else(|| {
+            if !state.snapshot.full_page_cache.enabled {
+                return None;
             }
-            _ => {
+            let control = std::env::var("EXYONQ_CONTROL_SOCKET").ok()?;
+            let parent = std::path::Path::new(&control).parent()?;
+            (!parent.as_os_str().is_empty()).then(|| {
+                parent
+                    .join("cache-purge.sock")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        });
+        if !state.snapshot.full_page_cache.enabled {
+            if purge_env.is_some() {
                 tracing::warn!(
-                    "EXYONQ_CACHE_PURGE_SOCKET set but EXYONQ_CACHE_PURGE_TOKEN missing/empty; purge socket not started"
+                    "EXYONQ_CACHE_PURGE_SOCKET is set but full_page_cache is disabled; purge socket not started"
+                );
+            }
+        } else if let Some(purge_path) = purge_path {
+            if state.config.routes.len() != state.snapshot.full_page_cache.route_site_ids.len() {
+                return Err(anyhow::anyhow!(
+                    "full_page_cache site ids do not match the route table"
+                ));
+            }
+            let token = match std::env::var("EXYONQ_CACHE_PURGE_TOKEN") {
+                Ok(token) if !token.is_empty() => token,
+                _ => crate::cache_purge_port::generate_purge_token().map_err(|err| {
+                    anyhow::anyhow!(
+                        "purge token was not provided and could not be generated: {err}"
+                    )
+                })?,
+            };
+            let sites: Vec<(&str, u64)> = state
+                .config
+                .routes
+                .iter()
+                .zip(state.snapshot.full_page_cache.route_site_ids.iter())
+                .map(|(route, id)| (route.name.as_str(), *id))
+                .collect();
+            crate::cache_purge_port::publish_purge_sidecars(
+                std::path::Path::new(&purge_path),
+                &token,
+                &sites,
+            )
+            .map_err(|err| anyhow::anyhow!("purge socket files were not written: {err}"))?;
+            if let Some(control_plane) = control_plane_service() {
+                let purge_port = crate::lab_coord_hooks::build_lab_or_default_purge_port(
+                    reload::SharedServerState::clone(&shared),
+                );
+                control_plane.spawn_unix_cache_purge_socket(
+                    exyonq_module_api::CachePurgeSocketConfig {
+                        socket_path: std::path::PathBuf::from(&purge_path),
+                        token: std::sync::Arc::<[u8]>::from(token.into_bytes()),
+                    },
+                    purge_port,
+                );
+                crate::lab_coord_hooks::start_lab_subscriber_if_any(
+                    reload::SharedServerState::clone(&shared),
+                );
+            } else {
+                tracing::warn!(
+                    path = %purge_path,
+                    "purge sidecars written but no control plane is registered; purge socket not started"
                 );
             }
         }
@@ -771,7 +822,7 @@ async fn run_on_impl(
         // Test path: the pre-bound listener is the single accept worker.
         1
     } else {
-        accept_workers()
+        accept_workers(&config.tuning)
     };
     // Expose the actual primary accept-pool geometry on /metrics. The
     // appender reads /proc at scrape time; this only records the real count.

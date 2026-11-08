@@ -32,6 +32,7 @@ fn redirect_config() -> AppConfig {
     AppConfig {
         config_version: 1,
         includes: Vec::new(),
+        tuning: Default::default(),
         servers: vec![ServerConfig {
             listen: "127.0.0.1:8080".into(),
             server_name: ServerNames::None,
@@ -42,6 +43,7 @@ fn redirect_config() -> AppConfig {
             error_pages: Default::default(),
         }],
         routes: vec![RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: "root".into(),

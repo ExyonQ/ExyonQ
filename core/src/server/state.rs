@@ -28,7 +28,8 @@ pub struct ServerState {
     pub snapshot: Arc<RuntimePlan>,
     pub config: AppConfig,
     pub route_index: RouteIndex,
-    /// Fast-path alias: compiled `root_slot` for route `"site"` (wire/epoll/H3 bench paths).
+    /// Fast-path alias: compiled `root_slot` of the first static slot (wire/epoll).
+    /// Historical name; the value is not tied to a route called `site` (L-02).
     pub site_static_slot: Option<u32>,
     pub proxy_client: ProxyClient,
     /// Composition-owned FPC L1 store (WC2B). `None` when `full_page_cache.enabled = false`.
@@ -203,7 +204,7 @@ impl ServerState {
     }
 
     /// Route-bound features the fast paths (wire proxy GET, epoll sendfile,
-    /// blocking static pool, `/site/` static shortcut) cannot honor — the
+    /// blocking static pool, static shortcut) cannot honor — the
     /// request must take the full dispatch path.
     ///
     /// AUDIT-D1/D2/D7: wire and static fast paths implement transport only —

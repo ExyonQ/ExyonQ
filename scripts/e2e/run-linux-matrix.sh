@@ -12,6 +12,7 @@ ORACLE_WS="${ORACLE_WS:-/home/ubuntu/exyonq-dev-soak-src}"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20"
 
 GATES=(
+  h01-l01-canonical-host-e2e.sh
   static-e2e.sh
   security-headers-redirect-e2e.sh
   proxy-e2e.sh

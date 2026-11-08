@@ -607,6 +607,7 @@ pub const ROOT_FIELD_CATALOG: &[&str] = &[
     "http3",
     "waf",
     "logging",
+    "tuning",
 ];
 
 pub const SERVER_FIELD_CATALOG: &[&str] =

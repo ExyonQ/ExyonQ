@@ -238,6 +238,14 @@ where
     U: AsyncRead + AsyncWrite + Unpin,
     C: AsyncWrite + Unpin,
 {
+    // H-07 defense in depth: the wire parsers reject controls, but never write
+    // an unvalidated request-target into the upstream request line.
+    if path_and_query.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid upstream request target",
+        ));
+    }
     let mut req_buf = [0u8; 512];
     let mut n = 0usize;
     push_slice(&mut req_buf, &mut n, b"GET ")?;
@@ -502,7 +510,7 @@ async fn get_known_length_on(
     path_and_query: &str,
     x_forwarded_for: Option<&HeaderValue>,
 ) -> io::Result<(RawGetResponse, bool)> {
-    // Stack request buffer: P4 `/api/` + Host + optional XFF fits well under 512 B.
+    // Stack request buffer: GET + Host + optional XFF fits well under 512 B.
     let mut req_buf = [0u8; 512];
     let mut n = 0usize;
     push_slice(&mut req_buf, &mut n, b"GET ")?;

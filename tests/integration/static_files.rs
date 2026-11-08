@@ -19,7 +19,7 @@ use bytes::Bytes;
 use exyonq_core::AppConfig;
 use http_body_util::BodyExt;
 use http_body_util::Full;
-use hyper::{Request, Uri};
+use hyper::{Request, StatusCode, Uri};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -33,9 +33,13 @@ fn ephemeral_addr() -> SocketAddr {
     listener.local_addr().unwrap()
 }
 
-async fn spawn_server(config: AppConfig) -> SocketAddr {
+async fn spawn_server(mut config: AppConfig) -> SocketAddr {
     bootstrap::ensure_integration_modules();
     let listen = ephemeral_addr();
+    // run_on also binds every address configured on a server. Keep the config
+    // on the ephemeral port this test owns instead of the fixture's fixed 8080,
+    // which may already be in use on a shared host.
+    config.servers[0].listen = listen.to_string();
     tokio::spawn(async move {
         exyonq_core::server::run_on(listen, config).await.unwrap();
     });
@@ -62,7 +66,7 @@ async fn serves_index_html_from_root() {
         .expect("timed out")
         .expect("request failed");
 
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert!(body.windows(6).any(|window| window == b"static"));
 }
@@ -78,15 +82,32 @@ async fn blocks_path_traversal() {
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(TokioExecutor::new()).build_http();
 
-    let uri: Uri = format!("http://{listen}/site/../www/index.html")
+    // Above-root traversal is rejected before route selection (H-01).
+    let uri: Uri = format!("http://{listen}/../www/index.html")
         .parse()
         .unwrap();
     let req = Request::get(uri).body(Full::new(Bytes::new())).unwrap();
-
     let response = timeout(Duration::from_secs(5), client.request(req))
         .await
         .expect("timed out")
         .expect("request failed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    assert_eq!(response.status(), 403);
+    // In-root dot segments are canonicalized *before* routing (H-01): the
+    // request `/site/../www/index.html` becomes `/www/index.html`, which no
+    // route owns. The static root must not serve its file for that spelling.
+    let uri: Uri = format!("http://{listen}/site/../www/index.html")
+        .parse()
+        .unwrap();
+    let req = Request::get(uri).body(Full::new(Bytes::new())).unwrap();
+    let response = timeout(Duration::from_secs(5), client.request(req))
+        .await
+        .expect("timed out")
+        .expect("request failed");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        !body.windows(6).any(|window| window == b"static"),
+        "traversal must not serve the static body"
+    );
 }

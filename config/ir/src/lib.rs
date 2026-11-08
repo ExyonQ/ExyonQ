@@ -94,6 +94,33 @@ pub const CONFIG_VERSION_V2: u32 = 2;
 pub const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 30_000;
 /// Cap037: operator-facing ceiling; zero remains valid (immediate TimedOut).
 pub const MAX_UPSTREAM_TIMEOUT_MS: u64 = 86_400_000;
+/// Inclusive worker-count ceiling for `[tuning]` (matches core geometry).
+pub const MAX_TUNING_WORKERS: usize = 16;
+
+/// `[tuning]` — runtime geometry knobs with the measured defaults applied.
+///
+/// Every field defaults to the value the server already uses, so an absent
+/// `[tuning]` table keeps the defaults (no tuning required). Explicit values
+/// take precedence over the legacy environment overrides.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TuningConfig {
+    /// Accept-worker count. Absent → `EXYONQ_ACCEPT_WORKERS`, else the detected
+    /// CPU parallelism clamped to `1..=16`.
+    #[serde(default)]
+    pub accept_workers: Option<usize>,
+}
+
+fn validate_tuning(tuning: &TuningConfig) -> Result<(), ConfigError> {
+    if let Some(workers) = tuning.accept_workers {
+        if !(1..=MAX_TUNING_WORKERS).contains(&workers) {
+            return Err(ConfigError::Parse(format!(
+                "tuning.accept_workers must be 1..={MAX_TUNING_WORKERS}, got {workers}"
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Parsed and validated ExyonQ configuration IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +145,8 @@ pub struct AppConfig {
     pub waf: WafConfig,
     /// `[logging]` — Cap061 production observability (RD-005).
     pub logging: LoggingConfig,
+    /// `[tuning]` — worker geometry with measured defaults (NG-21).
+    pub tuning: TuningConfig,
 }
 
 /// Top-level `[http3]` IR (neutral; no provider crate types).
@@ -315,6 +344,13 @@ pub struct RouteConfig {
     pub upstream: Option<String>,
     pub root: Option<PathBuf>,
     pub index: Option<String>,
+    /// Per-route request-body limit in bytes (`client_max_body_size`
+    /// semantics). Oversize requests answer `413` before WAF inspection and
+    /// before upstream dispatch, so the limit also bounds WAF inspection CPU.
+    /// `None` inherits the shared proxy (`64 MiB`) or FastCGI bound; a value
+    /// above that bound is clamped to it.
+    #[serde(default)]
+    pub max_request_body_bytes: Option<u64>,
     #[serde(default)]
     pub redirect: Option<RedirectConfig>,
     /// Cap035 literal path or NG-02 patterned rewrite (ADR-048).
@@ -1156,6 +1192,7 @@ pub struct RawConfigInput {
     pub http3: Http3Config,
     pub waf: WafConfig,
     pub logging: LoggingConfig,
+    pub tuning: TuningConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1188,6 +1225,8 @@ struct RawConfig {
     waf: WafConfig,
     #[serde(default)]
     logging: LoggingConfig,
+    #[serde(default)]
+    tuning: TuningConfig,
 }
 
 impl std::str::FromStr for AppConfig {
@@ -1229,6 +1268,7 @@ impl AppConfig {
             http3: raw.http3,
             waf: raw.waf,
             logging: raw.logging,
+            tuning: raw.tuning,
         })
     }
 
@@ -1403,9 +1443,11 @@ impl AppConfig {
         raw.modules.mirror.validate()?;
         raw.modules.slice.validate()?;
         raw.modules.auth.validate()?;
+        validate_module_route_names(&raw.modules, &route_names)?;
         if let Err(message) = validate_logging(&raw.logging) {
             return Err(ConfigError::Parse(message));
         }
+        validate_tuning(&raw.tuning)?;
 
         Ok(Self {
             config_version: expected,
@@ -1422,6 +1464,7 @@ impl AppConfig {
             http3: raw.http3,
             waf: raw.waf,
             logging: raw.logging,
+            tuning: raw.tuning,
         })
     }
 
@@ -1471,6 +1514,65 @@ impl AppConfig {
         }
         self
     }
+}
+
+/// M-01: every module map key is a route name. A typo must fail validation
+/// instead of silently disabling auth/limits/transforms at runtime.
+fn validate_module_route_names(
+    modules: &crate::ModulesConfig,
+    route_names: &HashSet<String>,
+) -> Result<(), ConfigError> {
+    fn check<'a>(
+        field: &str,
+        keys: impl Iterator<Item = &'a String>,
+        route_names: &HashSet<String>,
+    ) -> Result<(), ConfigError> {
+        for key in keys {
+            if !route_names.contains(key) {
+                return Err(ConfigError::Parse(format!(
+                    "{field}.{key} has no matching [[route]].name"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    check(
+        "modules.auth.routes",
+        modules.auth.routes.keys(),
+        route_names,
+    )?;
+    check(
+        "modules.ratelimit.routes",
+        modules.ratelimit.routes.keys(),
+        route_names,
+    )?;
+    check(
+        "modules.ratelimit.route_options",
+        modules.ratelimit.route_options.keys(),
+        route_names,
+    )?;
+    check(
+        "modules.ratelimit.route_limits",
+        modules.ratelimit.route_limits.keys(),
+        route_names,
+    )?;
+    check(
+        "modules.slice.routes",
+        modules.slice.routes.keys(),
+        route_names,
+    )?;
+    check(
+        "modules.mirror.routes",
+        modules.mirror.routes.keys(),
+        route_names,
+    )?;
+    check(
+        "modules.sub_filter.routes",
+        modules.sub_filter.routes.keys(),
+        route_names,
+    )?;
+    Ok(())
 }
 
 fn validate_ratelimit_config(rl: &RateLimitConfig) -> Result<(), ConfigError> {
@@ -1848,6 +1950,13 @@ fn validate_route_root_mode(route: &RouteConfig) -> Result<(), ConfigError> {
 }
 
 fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
+    if route.max_request_body_bytes == Some(0) {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: max_request_body_bytes must be positive",
+            route.name
+        )));
+    }
+
     // ADR-048: `flag = break` co-locates with exactly one of root|upstream|fastcgi
     // (nginx "stay in location"). Other rewrite forms remain exclusive terminals.
     let break_colocated = matches!(
@@ -3445,6 +3554,26 @@ upstream = "backend"
 name = "backend"
 target = "http://127.0.0.1:9000"
 "#;
+
+    #[test]
+    fn parses_route_request_body_limit() {
+        let input = VALID.replace(
+            "upstream = \"backend\"\n",
+            "upstream = \"backend\"\nmax_request_body_bytes = 1048576\n",
+        );
+        let config: AppConfig = input.parse().expect("route body limit");
+        assert_eq!(config.routes[0].max_request_body_bytes, Some(1_048_576));
+    }
+
+    #[test]
+    fn rejects_zero_route_request_body_limit() {
+        let input = VALID.replace(
+            "upstream = \"backend\"\n",
+            "upstream = \"backend\"\nmax_request_body_bytes = 0\n",
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(err.to_string().contains("max_request_body_bytes"));
+    }
 
     #[test]
     fn parses_valid_config() {
@@ -6281,5 +6410,25 @@ protocols = ["TLSv1.3"]
         cfg.zones.get_mut("z").unwrap().key = "expr:$remote_addr$".into();
         let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
         assert!(err.contains("expr:<nginx expression>"), "{err}");
+    }
+
+    #[test]
+    fn m01_rejects_module_map_key_without_route() {
+        let input = r#"
+config_version = 1
+[modules.auth.routes.admnin]
+realm = "Restricted"
+user_file = "/tmp/users"
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["admin"]
+[[route]]
+name = "admin"
+match = { path = "/admin" }
+root = "/tmp"
+"#;
+        let err = AppConfig::parse_str(input).unwrap_err().to_string();
+        assert!(err.contains("modules.auth.routes.admnin"), "{err}");
+        assert!(err.contains("no matching [[route]].name"), "{err}");
     }
 }

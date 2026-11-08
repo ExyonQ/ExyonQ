@@ -20,7 +20,9 @@ EXYONQ_WAF_MODE=block EXYONQ_WAF_ENFORCE=1 exyonq serve ./config.toml
 
 | Topic | Behavior |
 | --- | --- |
-| Budget | `waf.max_inspection_body_bytes` (default 1 MiB) |
+| Budget | `waf.max_inspection_body_bytes` (default 64 MiB, aligned with the proxy body limit) |
+| Inspection cost | Linear in inspected bytes; the whole accepted body is inspected, so size the budget to the largest body WAF-protected routes must accept (release-build inspection of a full 64 MiB body takes about a minute of CPU on the development host) |
+| Per-route bound | `[[route]].max_request_body_bytes` rejects a larger body with `413` **before** WAF inspection and upstream dispatch, so it also bounds inspection CPU per route; unset routes keep the shared 64 MiB proxy bound |
 | No body | Header phase only |
 | Collected body | Inspected after bounded collect; abuse not applied on body phase |
 | Over budget | Controlled by `on_inspection_limit`; may emit `EXY-LIMIT-BODY-001` |

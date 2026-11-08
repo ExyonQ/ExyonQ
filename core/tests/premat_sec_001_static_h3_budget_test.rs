@@ -67,6 +67,14 @@ fn h1_builder_defaults_budget_none() {
     assert_eq!(req.materialization_budget_bytes, None);
 }
 
+#[test]
+fn hyper_default_materialization_budget_is_bounded() {
+    assert_eq!(
+        exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES,
+        67_108_864
+    );
+}
+
 #[tokio::test]
 async fn budget_none_serves_body_over_tiny_limit() {
     let (_dir, _guard) = register_runtime_with_file(&[0u8; 128]);

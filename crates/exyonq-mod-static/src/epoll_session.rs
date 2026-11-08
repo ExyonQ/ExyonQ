@@ -919,7 +919,7 @@ pub fn pump_sendfile_session(fd: RawFd, session: u64) -> StaticEpollPumpResult {
                 "GET"
             };
             let path = crate::wire_eligibility::request_path_from_head(&head).unwrap_or("/");
-            // Q-15: this session is bound to the `site` static slot.
+            // Q-15: this session is bound to a compiled static slot.
             exyonq_module_api::wire_record_exchange_labeled(
                 method, path, status, elapsed_ms, "site", "static",
             );
@@ -1163,7 +1163,7 @@ mod ownership_tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn sendfile_miss_wire_classifies_not_found_and_traversal() {
+    fn sendfile_miss_wire_classifies_not_found_and_defers_traversal() {
         let _guard = serial_runtime_pin();
         crate::sendfile_fsm::reset_epoll_sendfile_enabled_cache_for_tests();
         crate::sendfile_fd_cache::clear_local();
@@ -1200,12 +1200,13 @@ mod ownership_tests {
             std::str::from_utf8(&miss_wire[..32.min(miss_wire.len())])
         );
 
+        // H-01: a non-canonical spelling is not wire-eligible; Hyper owns the
+        // canonicalization and rejects traversal with 400/403. The wire miss
+        // path must not claim it.
         let trav = b"GET /../outside HTTP/1.1\r\nHost: t\r\n\r\n";
-        let trav_wire = sendfile_miss_http_wire(0, trav, None).expect("traversal terminal");
         assert!(
-            trav_wire.starts_with(b"HTTP/1.1 403 "),
-            "path traversal must be HTTP 403, got {:?}",
-            std::str::from_utf8(&trav_wire[..32.min(trav_wire.len())])
+            sendfile_miss_http_wire(0, trav, None).is_none(),
+            "non-canonical traversal must fall back to Hyper, not a wire terminal"
         );
 
         assert!(

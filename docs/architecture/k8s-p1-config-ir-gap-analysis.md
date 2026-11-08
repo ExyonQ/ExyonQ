@@ -88,7 +88,7 @@ Note: user inspection path `crates/exyonq-config-ir/` does **not** exist; packag
 | Versioning | `config_version` u32 | file format | contract major.minor+caps | likely YES long-term | dual-read | version gate | P1–P2 | Medium |
 | Producers | file+discovery overlay | fail-open overlay | single authoritative producer | policy YES | discovery becomes producer-owned | — | P2 | High if ignored |
 | Obs identity | route label strings | route labels exist | bounded tokens | policy YES | cap cardinality | hash/registry | P2 | Medium |
-| Limits | ad hoc | body 32MiB etc | table of hard max | NO additive | — | — | P2 | Medium |
+| Limits | ad hoc | body 64MiB etc | table of hard max | NO additive | — | — | P2 | Medium |
 | Failure model | mixed anyhow/thiserror | uneven | structured codes | NO additive | map existing | — | P2 | Medium |
 
 ### Explicit answers

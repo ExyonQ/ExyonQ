@@ -60,7 +60,9 @@ type H3Response = Response<FinalBoxBody>;
 /// Private budget-exceeded signal for H3 remapping (macro avoids an extra handler-body token).
 macro_rules! budget_exceeded_marker_response {
     () => {{
-        let mut response = text_response(StatusCode::INTERNAL_SERVER_ERROR, "");
+        // H1/H2 return 413 before allocating; H3 remaps this marker to its
+        // oversized-response policy by inspecting the header.
+        let mut response = text_response(StatusCode::PAYLOAD_TOO_LARGE, "response body too large");
         response.headers_mut().insert(
             hyper::header::HeaderName::from_static("x-exyonq-materialization-budget-exceeded"),
             HeaderValue::from_static("1"),
@@ -286,9 +288,13 @@ async fn serve_http3_request_bytes(
         }
 
         if method == Method::POST {
-            // Static/site/health: POST not supported on H3 → 405 (no internal magic echo path).
+            // Static route/health: POST not supported on H3 → 405 (no internal magic echo path).
             let path = req.uri().path();
-            if path.as_bytes().starts_with(b"/site/") || path == "/health" {
+            let host = request_host_from_parts(req.uri(), req.headers());
+            if path == "/health"
+                || static_root_slot_for_request(&ctx.state, path, host.as_deref(), ctx.local_port)
+                    .is_some()
+            {
                 return method_not_allowed_h3();
             }
         }
@@ -324,7 +330,17 @@ async fn serve_http3_request_bytes(
         // Defense-in-depth: collected H3 body must not exceed shared proxy limit.
         if let Some(ref body) = post_body {
             use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
-            if body.len() > PROXY_MAX_REQUEST_BODY_BYTES {
+            let route_host = request_host_from_parts(&parts.uri, &parts.headers);
+            let route_idx = ctx.state.route_index.match_route_index_with_host_port(
+                parts.uri.path(),
+                route_host.as_deref(),
+                ctx.local_port,
+            );
+            let body_limit = route_request_body_limit(
+                route_idx.and_then(|(idx, _)| ctx.state.config.routes.get(idx)),
+                PROXY_MAX_REQUEST_BODY_BYTES,
+            );
+            if body.len() > body_limit {
                 return Response::builder()
                     .status(StatusCode::PAYLOAD_TOO_LARGE)
                     .header("content-type", "text/plain; charset=utf-8")
@@ -431,7 +447,17 @@ async fn serve_http3_with_modules(
         };
         if let Some(ref body) = post_body {
             use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
-            if body.len() > PROXY_MAX_REQUEST_BODY_BYTES {
+            let route_host = request_host_from_parts(&parts.uri, &parts.headers);
+            let route_idx = ctx.state.route_index.match_route_index_with_host_port(
+                parts.uri.path(),
+                route_host.as_deref(),
+                ctx.local_port,
+            );
+            let body_limit = route_request_body_limit(
+                route_idx.and_then(|(idx, _)| ctx.state.config.routes.get(idx)),
+                PROXY_MAX_REQUEST_BODY_BYTES,
+            );
+            if body.len() > body_limit {
                 return Response::builder()
                     .status(StatusCode::PAYLOAD_TOO_LARGE)
                     .header("content-type", "text/plain; charset=utf-8")
@@ -657,10 +683,10 @@ async fn serve_connection_inner(
             && matches!(*req.method(), Method::GET | Method::HEAD)
         {
             let path = req.uri().path();
-            if path.as_bytes().starts_with(b"/site/") {
-                // AUDIT-D7: match the route before the static shortcut — a
-                // `/site/` route carrying auth/limit/htaccess/cache (or FPC /
-                // response WAF active generation-wide) must take full dispatch.
+            if ctx.state.site_static_slot.is_some() {
+                // AUDIT-D7: match the route before the static shortcut — a static
+                // route carrying auth/limit/htaccess/cache (or FPC / response WAF
+                // active generation-wide) must take full dispatch.
                 let host = request_host(&req);
                 let route_forces_dispatch = ctx
                     .state
@@ -671,7 +697,12 @@ async fn serve_connection_inner(
                     && !route_forces_dispatch
                     && !ctx.state.wire_incompatible_features_active();
                 if static_ok {
-                    if let Some(root_slot) = site_static_root_slot(&ctx.state) {
+                    if let Some(root_slot) = static_root_slot_for_request(
+                        &ctx.state,
+                        path,
+                        host.as_deref(),
+                        ctx.local_port,
+                    ) {
                         let headers = header_pairs_from_map(req.headers());
                         let header_view = crate::waf::PairsHeaderView(&headers);
                         let client_ip_addr = client_ip_from_xff(Some(&xff));
@@ -712,7 +743,7 @@ async fn serve_connection_inner(
                             root_slot,
                             path,
                             static_dispatch_range_headers(req.headers()),
-                            None,
+                            Some(exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES),
                             ctx.scheme,
                             req.uri().query(),
                             request_authority(req.uri(), req.headers()).as_deref(),
@@ -920,6 +951,14 @@ fn outcome_from_response(response: &Response<BoxBody>) -> Option<&'static str> {
 
 /// Bench/minimal-config hot path: sync static, async proxy only when needed.
 async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> Response<BoxBody> {
+    let mut req = req;
+    if !canonicalize_request_uri(&mut req) {
+        return text_response(StatusCode::BAD_REQUEST, "invalid request path");
+    }
+    if request_host(&req).is_none() && ctx.state.route_index.requires_host_for_port(ctx.local_port)
+    {
+        return text_response(StatusCode::BAD_REQUEST, "Host header required");
+    }
     let path = req.uri().path();
     let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
 
@@ -933,7 +972,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
         if path == "/ready" {
             return probe_ready_response(req.method(), &ctx.ops);
         }
-        if path.as_bytes().starts_with(b"/site/") && !ctx.state.mirror_configured() {
+        if ctx.state.site_static_slot.is_some() && !ctx.state.mirror_configured() {
             // AUDIT-D7: match the route before the static shortcut — same gate
             // as serve_connection_inner (auth/limit/htaccess/cache/FPC).
             let host = request_host(&req);
@@ -946,7 +985,9 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
                 && !route_forces_dispatch
                 && !ctx.state.wire_incompatible_features_active();
             if static_ok {
-                if let Some(root_slot) = site_static_root_slot(&ctx.state) {
+                if let Some(root_slot) =
+                    static_root_slot_for_request(&ctx.state, path, host.as_deref(), ctx.local_port)
+                {
                     let headers = header_pairs_from_map(req.headers());
                     let header_view = crate::waf::PairsHeaderView(&headers);
                     let client_ip = client_ip_from_xff(Some(&xff));
@@ -968,7 +1009,7 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
                         root_slot,
                         path,
                         static_dispatch_range_headers_from_pairs(&headers),
-                        None,
+                        Some(exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES),
                         ctx.scheme,
                         req.uri().query(),
                         request_authority(req.uri(), req.headers()).as_deref(),
@@ -1322,8 +1363,15 @@ async fn handle_core_request(
     x_forwarded_for: Option<&HeaderValue>,
     ops: &Arc<crate::lifecycle::LifecycleState>,
 ) -> Response<BoxBody> {
-    let method = req.method().clone();
+    let mut req = req;
+    if !canonicalize_request_uri(&mut req) {
+        return text_response(StatusCode::BAD_REQUEST, "invalid request path");
+    }
     let host = request_host(&req);
+    if host.is_none() && state.route_index.requires_host_for_port(local_port) {
+        return text_response(StatusCode::BAD_REQUEST, "Host header required");
+    }
+    let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
     let request_pairs = header_pairs_from_map(req.headers());
@@ -1426,7 +1474,7 @@ async fn handle_core_request_inner(
         request_host(&req),
         x_forwarded_for,
         &request_headers,
-        None,
+        Some(exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES),
         None,
         ops,
     )
@@ -1540,15 +1588,21 @@ async fn handle_core_request_with_body(
     };
     use exyonq_module_api::proxy_dispatch::{ProxyDispatchOutcome, PROXY_MAX_REQUEST_BODY_BYTES};
 
-    let is_proxy_route = state
-        .route_index
-        .match_route_index_with_host_port(&path, host.as_deref(), local_port)
+    let matched_route =
+        state
+            .route_index
+            .match_route_index_with_host_port(&path, host.as_deref(), local_port);
+    let is_proxy_route = matched_route
         .is_some_and(|(route_idx, _)| state.snapshot.proxy_cluster_for_route(route_idx).is_some());
-    let body_limit = if is_proxy_route {
+    let base_body_limit = if is_proxy_route {
         PROXY_MAX_REQUEST_BODY_BYTES
     } else {
         FCGI_REQUEST_BODY_LIMIT
     };
+    let body_limit = route_request_body_limit(
+        matched_route.and_then(|(route_idx, _)| state.config.routes.get(route_idx)),
+        base_body_limit,
+    );
     let declared_len = parse_proxy_request_content_length(req.headers());
     let uri = req.uri().clone();
     let throttle_cfg = state.config.modules.ratelimit.client.clone();
@@ -1590,7 +1644,7 @@ async fn handle_core_request_with_body(
         host,
         x_forwarded_for,
         &headers,
-        None,
+        Some(exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES),
         Some(bytes::Bytes::from(body)),
         ops,
         waf_body_limited,
@@ -1656,6 +1710,14 @@ async fn dispatch_core_with_limit(
     ops: &Arc<crate::lifecycle::LifecycleState>,
     waf_body_limited: bool,
 ) -> Response<BoxBody> {
+    let canonical_uri = match canonicalize_uri(uri) {
+        Some(uri) => uri,
+        None => return text_response(StatusCode::BAD_REQUEST, "invalid request path"),
+    };
+    let uri = &canonical_uri;
+    if host.is_none() && state.route_index.requires_host_for_port(local_port) {
+        return text_response(StatusCode::BAD_REQUEST, "Host header required");
+    }
     let mut limited = waf_body_limited;
     let response = dispatch_core_inner(
         state,
@@ -1742,10 +1804,9 @@ async fn dispatch_core_inner(
         );
     }
 
-    if (*method == Method::GET || *method == Method::HEAD) && path.as_bytes().starts_with(b"/site/")
-    {
-        // AUDIT-D7: match the route before the static shortcut — a `/site/`
-        // route with auth_basic/zone-limit/htaccess/cache (or FPC / response
+    if (*method == Method::GET || *method == Method::HEAD) && state.site_static_slot.is_some() {
+        // AUDIT-D7: match the route before the static shortcut — a static route
+        // with auth_basic/zone-limit/htaccess/cache (or FPC / response
         // WAF active generation-wide) must reach the checks below, not be
         // served straight from disk.
         let route_forces_dispatch = state
@@ -1769,7 +1830,9 @@ async fn dispatch_core_inner(
             ) {
                 return reject;
             }
-            if let Some(root_slot) = site_static_root_slot(state) {
+            if let Some(root_slot) =
+                static_root_slot_for_request(state, path, host.as_deref(), local_port)
+            {
                 return static_dispatch_via_service(
                     method,
                     root_slot,
@@ -2900,6 +2963,22 @@ where
     }
 }
 
+/// Resolve a route's request-body limit, clamped to the shared proxy bound.
+///
+/// `None` inherits `base` (proxy or FastCGI bound). The route limit is a
+/// client-facing size policy: it bounds memory materialization *and* the bytes
+/// the WAF can inspect on that route.
+fn route_request_body_limit(route: Option<&exyonq_config_ir::RouteConfig>, base: usize) -> usize {
+    use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
+    let Some(limit) = route.and_then(|route| route.max_request_body_bytes) else {
+        return base;
+    };
+    usize::try_from(limit)
+        .unwrap_or(usize::MAX)
+        .min(base)
+        .min(PROXY_MAX_REQUEST_BODY_BYTES)
+}
+
 /// Shared limit check for FastCGI (and other) collected request bodies → HTTP 413.
 fn enforce_request_body_limit(len: usize, limit: usize) -> Result<(), StatusCode> {
     if len > limit {
@@ -2933,8 +3012,19 @@ fn fcgi_response_from_outcome(
         .expect("valid fcgi response")
 }
 
-fn site_static_root_slot(state: &ServerState) -> Option<u32> {
-    state.site_static_slot
+fn static_root_slot_for_request(
+    state: &ServerState,
+    path: &str,
+    host: Option<&str>,
+    local_port: Option<u16>,
+) -> Option<u32> {
+    let (route_idx, _) = state
+        .route_index
+        .match_route_index_with_host_port(path, host, local_port)?;
+    if state.route_requires_full_dispatch(route_idx) {
+        return None;
+    }
+    static_root_slot_for_route(state, route_idx)
 }
 
 fn static_root_slot_for_route(state: &ServerState, route_idx: usize) -> Option<u32> {
@@ -4181,9 +4271,11 @@ async fn proxy_route_target(
             client_ip,
             &throttle_cfg,
         );
-        match collect_proxy_request_body_bounded(declared_len, body, PROXY_MAX_REQUEST_BODY_BYTES)
-            .await
-        {
+        let body_limit = route_request_body_limit(
+            state.config.routes.get(route_idx),
+            PROXY_MAX_REQUEST_BODY_BYTES,
+        );
+        match collect_proxy_request_body_bounded(declared_len, body, body_limit).await {
             Ok(bytes) => Some(bytes),
             Err(ProxyRequestBodyReadError::TooLarge) => {
                 // Client-facing body limit (nginx client_max_body_size semantics):
@@ -4263,6 +4355,56 @@ fn redirect_response(redirect: &RedirectConfig) -> Response<BoxBody> {
 
 fn request_host(req: &Request<Incoming>) -> Option<String> {
     request_host_from_parts(req.uri(), req.headers())
+}
+
+/// H-01: canonicalize the request target once, before any auth/WAF/route gate.
+fn canonicalize_request_uri(req: &mut Request<Incoming>) -> bool {
+    // `OPTIONS *` and CONNECT authority-form are valid non-origin request
+    // targets; they are not router paths and must not be rewritten.
+    if !req.uri().path().starts_with('/') {
+        return true;
+    }
+    let canonical = match exyonq_module_api::canonicalize_path(req.uri().path()) {
+        Some(path) => path,
+        None => return false,
+    };
+    if canonical == req.uri().path() {
+        return true;
+    }
+    let target = match req.uri().query() {
+        Some(query) => format!("{canonical}?{query}"),
+        None => canonical,
+    };
+    let mut parts = req.uri().clone().into_parts();
+    parts.path_and_query = match target.parse() {
+        Ok(path_and_query) => Some(path_and_query),
+        Err(_) => return false,
+    };
+    match hyper::Uri::from_parts(parts) {
+        Ok(uri) => {
+            *req.uri_mut() = uri;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// H-01 defence in depth for dispatch paths that receive a URI directly.
+fn canonicalize_uri(uri: &hyper::Uri) -> Option<hyper::Uri> {
+    if !uri.path().starts_with('/') {
+        return Some(uri.clone());
+    }
+    let canonical = exyonq_module_api::canonicalize_path(uri.path())?;
+    if canonical == uri.path() {
+        return Some(uri.clone());
+    }
+    let target = match uri.query() {
+        Some(query) => format!("{canonical}?{query}"),
+        None => canonical,
+    };
+    let mut parts = uri.clone().into_parts();
+    parts.path_and_query = Some(target.parse().ok()?);
+    hyper::Uri::from_parts(parts).ok()
 }
 
 /// Full request authority (`host[:port]`) for absolute redirect targets —
@@ -4800,6 +4942,32 @@ fn effective_xff(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn h01_canonicalize_uri_normalizes_before_dispatch() {
+        let uri: hyper::Uri = "/%61dmin/../admin?x=1".parse().expect("uri");
+        let canonical = canonicalize_uri(&uri).expect("canonical uri");
+        assert_eq!(canonical.path(), "/admin");
+        assert_eq!(canonical.query(), Some("x=1"));
+    }
+
+    #[test]
+    fn h01_preserves_non_origin_form_targets() {
+        let asterisk: hyper::Uri = "*".parse().expect("asterisk target");
+        assert_eq!(
+            canonicalize_uri(&asterisk).expect("asterisk uri").path(),
+            "*"
+        );
+
+        let authority: hyper::Uri = "example.com:443".parse().expect("authority target");
+        assert_eq!(
+            canonicalize_uri(&authority)
+                .expect("authority uri")
+                .authority()
+                .map(|a| a.as_str()),
+            Some("example.com:443")
+        );
+    }
     use crate::config::{
         AppConfig, CachePolicyConfig, RouteConfig, RouteMatch, ServerConfig, ServerNames,
     };
@@ -4838,8 +5006,44 @@ mod tests {
         assert!(static_method_from_hyper(&Method::DELETE).is_none());
     }
 
+    #[test]
+    fn route_request_body_limit_clamps_to_shared_proxy_bound() {
+        use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
+
+        const ROUTE_BODY_LIMIT: u64 = 1024;
+        const ROUTE_BODY_LIMIT_USIZE: usize = ROUTE_BODY_LIMIT as usize;
+        const FASTCGI_BASE_LIMIT: usize = 512;
+        const UNROUTED_BASE_LIMIT: usize = 4096;
+
+        let mut r = route("limited", "/upload");
+        assert_eq!(
+            route_request_body_limit(Some(&r), PROXY_MAX_REQUEST_BODY_BYTES),
+            PROXY_MAX_REQUEST_BODY_BYTES
+        );
+        r.max_request_body_bytes = Some(ROUTE_BODY_LIMIT);
+        assert_eq!(
+            route_request_body_limit(Some(&r), PROXY_MAX_REQUEST_BODY_BYTES),
+            ROUTE_BODY_LIMIT_USIZE
+        );
+        // A route limit never lowers the caller's own base (FastCGI) bound.
+        assert_eq!(
+            route_request_body_limit(Some(&r), FASTCGI_BASE_LIMIT),
+            FASTCGI_BASE_LIMIT
+        );
+        r.max_request_body_bytes = Some(u64::MAX);
+        assert_eq!(
+            route_request_body_limit(Some(&r), PROXY_MAX_REQUEST_BODY_BYTES),
+            PROXY_MAX_REQUEST_BODY_BYTES
+        );
+        assert_eq!(
+            route_request_body_limit(None, UNROUTED_BASE_LIMIT),
+            UNROUTED_BASE_LIMIT
+        );
+    }
+
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: name.into(),
@@ -4936,6 +5140,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -4979,6 +5184,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_static_over_materialization_budget_is_413() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("big.bin"), vec![0u8; 64]).unwrap();
+        let mut assets = route("assets", "/assets");
+        assets.root = Some(dir.path().to_path_buf());
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            tuning: Default::default(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["assets".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages: HashMap::new(),
+                proxy_protocol: None,
+            }],
+            routes: vec![assets],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules: Default::default(),
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        let response = dispatch_core(
+            &state,
+            "http",
+            None,
+            &state.proxy_client,
+            &Method::GET,
+            &Uri::from_static("/assets/big.bin"),
+            None,
+            None,
+            &[],
+            Some(16),
+            None,
+            &test_ops(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
     async fn dispatch_static_via_backend_table_head() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("page.html"), b"via-backend-table").unwrap();
@@ -4987,6 +5242,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5051,6 +5307,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5143,6 +5400,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5200,6 +5458,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5266,6 +5525,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5329,6 +5589,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5470,6 +5731,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5525,6 +5787,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5563,6 +5826,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5617,6 +5881,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5715,6 +5980,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5818,6 +6084,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5948,6 +6215,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -5999,6 +6267,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -6049,6 +6318,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -6105,6 +6375,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -6203,6 +6474,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -6252,6 +6524,7 @@ mod tests {
         let config = AppConfig {
             config_version: 1,
             includes: Vec::new(),
+            tuning: Default::default(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,
@@ -6453,7 +6726,7 @@ mod tests {
             enforce_request_body_limit(2, 1).unwrap_err(),
             StatusCode::PAYLOAD_TOO_LARGE
         );
-        // Product FastCGI cap is 32 MiB — oversize maps to 413 (not 502).
+        // Product FastCGI cap is 64 MiB — oversize maps to 413 (not 502).
         assert_eq!(
             enforce_request_body_limit(FCGI_REQUEST_BODY_LIMIT + 1, FCGI_REQUEST_BODY_LIMIT)
                 .unwrap_err(),

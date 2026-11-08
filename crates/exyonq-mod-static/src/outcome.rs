@@ -87,7 +87,13 @@ fn materialize_sendfile(
     let Some(asset) = handles.take(handle) else {
         return (500, Vec::new(), b"stale sendfile handle".to_vec());
     };
-    let mut file = asset.file.as_ref().try_clone().expect("file clone");
+    let mut file = match asset.file.as_ref().try_clone() {
+        Ok(file) => file,
+        Err(err) => {
+            tracing::warn!(%err, "sendfile clone failed");
+            return (500, Vec::new(), b"file clone failed".to_vec());
+        }
+    };
     let mut body = vec![0u8; asset.body_len];
     if file.seek(SeekFrom::Start(0)).is_err() || file.read_exact(&mut body).is_err() {
         return (500, Vec::new(), b"read error".to_vec());

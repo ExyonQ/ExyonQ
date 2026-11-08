@@ -53,8 +53,9 @@ names the real commands that now provide that coverage.
 
 ## 6. Audit artifact
 
-- [ ] Copy [`audit-template.md`](audit-template.md) → `audit-vX.Y.Z.md` (or `cargo xtask security audit --version X.Y.Z`).
-- [ ] Fill version, commit, gates, findings, waivers, surfaces, sign-off.
+- [ ] Audit the code commit C and copy [`audit-template.md`](audit-template.md) → `audit-vX.Y.Z.md` (or `cargo xtask security audit --version X.Y.Z`).
+- [ ] Fill version, commit **C**, gates, findings, waivers, surfaces, sign-off.
+- [ ] If the document is added after C, commit only the audit document as an audit-only seal A whose first parent is C. The tag points at A; the verifier requires `A^ = C` and that the seal changes only `docs/security/audit-vX.Y.Z.md`.
 - [ ] No unresolved entries under `## Blockers`.
 - [ ] `bash scripts/verify-release-audit.sh X.Y.Z` PASS.
 - [ ] Optional: independent security review of the release diff before sign-off.
@@ -62,7 +63,7 @@ names the real commands that now provide that coverage.
 ## 7. Tag and release (owner ceremony only)
 
 - [ ] Signing readiness reviewed ([signing-readiness.md](../governance/signing-readiness.md)) — production keys **outside** repo.
-- [ ] `git tag -s -a vX.Y.Z` on audited commit (SSH tag signing).
+- [ ] `git tag -a vX.Y.Z` on the audit seal commit (use `-s -a` only when the owner authorizes signing).
 - [ ] Cosign blob + OCI digest signing per `security/signing/` (manual owner ceremony).
 - [ ] SSH artifact signature (V2, namespace `file`) verifies over `SHA256SUMS.txt` against `security/signing/exyonq-release-artifact-signers`.
 - [ ] `release.yml` `security-release` job green.

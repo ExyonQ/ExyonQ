@@ -51,7 +51,7 @@ Accepted with **CONDITIONAL ACCEPT** from security-compiler and local-debugger; 
 | --- | --- |
 | **`fcgi_request_timeout`** (300s, packet §7) | Deferred to **PR5-A2** / async Tokio path |
 | **`UnixStream::connect` without timeout** | Accepted for PR5-A-min module tests only; resolve in PR5-A2 if used on a real hot path |
-| **`wire_caps.rs` STDIN cap test** | Allocates ~32 MiB + 1 byte to validate cap; accepted while CI passes — monitor memory on Linux CI |
+| **`wire_caps.rs` STDIN cap test** | Allocates ~64 MiB + 1 byte to validate cap; accepted while CI passes — monitor memory on Linux CI |
 | **Unix socket temp dir cleanup** | Low/defer — `$TMPDIR/exyonq-fcgi-peer-{pid}/` may accumulate in repeated local runs |
 | **TCP peer 20 ms sleep** | Low/defer — anti-race before connect; no change required while CI is stable |
 | **`PeerMode::SlowRead`** | Future injection only — not exercised in CI to avoid long read-timeout hangs |

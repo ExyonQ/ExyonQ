@@ -30,6 +30,10 @@ jobs:
         run: bash scripts/verify-no-private-paths.sh
       - name: private-material-zero (publication set)
         run: bash scripts/security/scan-private-material.sh --publication --repo .
+      - name: README release version guard
+        run: |
+          bash scripts/gates/readme-release-version-gate.sh --selftest
+          bash scripts/gates/readme-release-version-gate.sh --tree .
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
         with:
           toolchain: 1.99.1
@@ -47,6 +51,24 @@ jobs:
         uses: taiki-e/install-action@599db1c4ae1189bda3d02a890b7ede4888c9d8f5 # nextest
       - name: test
         run: cargo nextest run --workspace --exclude exyonq-wasm-host --locked
+
+  config-migrate-check:
+    if: github.actor != 'dependabot[bot]'
+    name: config examples (migrate --check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: fail on example config drift
+        run: |
+          bash scripts/gates/config-migrate-check.sh --selftest
+          bash scripts/gates/config-migrate-check.sh
 
   static-linux-arm64:
     # EXY-07: run the Linux-only sendfile/admission tests on native ARM64.

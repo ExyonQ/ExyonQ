@@ -379,6 +379,7 @@ pub fn map_to_ir(
     let mut app = AppConfig {
         config_version: CONFIG_VERSION_V1,
         includes: Vec::new(),
+        tuning: Default::default(),
         servers,
         routes,
         upstreams,
@@ -1016,6 +1017,7 @@ fn map_location(
             if let Ok(rule) = parse_rewrite(&d.loc, &d.args) {
                 if let Some((status, _from, target)) = is_safe_literal_redirect(&rule) {
                     return Some(RouteConfig {
+                        max_request_body_bytes: None,
                         gunzip: None,
                         cache_tags: Vec::new(),
                         name: route_name.to_string(),
@@ -1050,6 +1052,7 @@ fn map_location(
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
                     return Some(RouteConfig {
+                        max_request_body_bytes: None,
                         gunzip: None,
                         cache_tags: Vec::new(),
                         name: route_name.to_string(),
@@ -1128,6 +1131,7 @@ fn map_location(
         let (fallback_rewrite, try_uri, try_uri_dir) =
             map_location_try_files(location).unwrap_or((None, None, None));
         return Some(RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: route_name.to_string(),
@@ -1186,6 +1190,7 @@ fn map_location(
             Some("[[route]] access = { deny = [\"all\"] }".into()),
         );
         return Some(RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: route_name.to_string(),
@@ -1364,6 +1369,7 @@ fn map_proxy(
     let proxy_set_headers = map_location_proxy_set_headers(location, report);
     let location_rewrite = map_location_proxy_redirects(location, target, route_match, report);
     Some(RouteConfig {
+        max_request_body_bytes: None,
         gunzip: None,
         cache_tags: Vec::new(),
         name: route_name.to_string(),
@@ -2127,6 +2133,7 @@ fn map_fastcgi(
         }
         report_fc(report);
         return Some(RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: route_name.to_string(),
@@ -2206,6 +2213,7 @@ fn map_fastcgi(
             }
             report_fc(report);
             return Some(RouteConfig {
+                max_request_body_bytes: None,
                 gunzip: None,
                 cache_tags: Vec::new(),
                 name: route_name.to_string(),
@@ -2256,6 +2264,7 @@ fn map_fastcgi(
         )?;
         report_fc(report);
         return Some(RouteConfig {
+            max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: route_name.to_string(),
@@ -2406,6 +2415,7 @@ fn map_return(
                 },
             );
             Some(RouteConfig {
+                max_request_body_bytes: None,
                 gunzip: None,
                 cache_tags: Vec::new(),
                 name: route_name.to_string(),
@@ -2515,6 +2525,7 @@ fn server_default_route(
         Some("route.root + root_mode=full-uri".into()),
     );
     Some(RouteConfig {
+        max_request_body_bytes: None,
         gunzip: None,
         cache_tags: Vec::new(),
         name: format!("srv{}_root", server_index + 1),

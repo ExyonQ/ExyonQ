@@ -19,10 +19,9 @@
 //! outside this type (`serve_proxy_with_cache`).
 
 use crate::selector::{endpoint_transport_identity, EndpointAdmin, PassivePeer};
-use crate::{build_uri, preseed_path_uris, UpstreamDescriptor};
+use crate::{build_uri, UpstreamDescriptor};
 use http::Uri;
 use hyper::header::HeaderValue;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,7 +43,6 @@ pub struct UpstreamTarget {
     /// AP-01: hot admin state shared with the member table — keep-alive pins
     /// must drop a cached target when `member set` disables/drains it.
     pub admin: Arc<EndpointAdmin>,
-    path_uris: Arc<HashMap<String, Uri>>,
 }
 
 impl UpstreamTarget {
@@ -72,7 +70,6 @@ impl UpstreamTarget {
             peer_key,
             passive: Arc::new(PassivePeer::disabled()),
             admin: Arc::new(EndpointAdmin::new(true, 1)),
-            path_uris: Arc::new(preseed_path_uris(&base)),
         })
     }
 
@@ -81,9 +78,27 @@ impl UpstreamTarget {
     }
 
     pub fn uri_for(&self, path_and_query: &str) -> Uri {
-        if let Some(uri) = self.path_uris.get(path_and_query) {
-            return uri.clone();
-        }
         build_uri(&self.base, path_and_query)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_for_builds_any_path_without_preseed() {
+        let target =
+            UpstreamTarget::from_config("http://127.0.0.1:9000", 2_000).expect("upstream target");
+        for path in ["/", "/v1/health", "/arbitrary/deep?q=1"] {
+            assert_eq!(
+                target
+                    .uri_for(path)
+                    .path_and_query()
+                    .expect("path")
+                    .as_str(),
+                path
+            );
+        }
     }
 }

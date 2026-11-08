@@ -32,7 +32,7 @@ fn default_waf_enabled() -> bool {
 }
 
 fn default_waf_mode() -> WafModeIr {
-    WafModeIr::Monitor
+    WafModeIr::Block
 }
 
 fn default_waf_engine() -> WafEngineIr {
@@ -40,11 +40,13 @@ fn default_waf_engine() -> WafEngineIr {
 }
 
 fn default_max_inspection_body_bytes() -> u64 {
-    1_048_576
+    // Keep in sync with module-api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES.
+    // Inspecting less than the proxy accepts leaves an uninspected tail window.
+    67_108_864
 }
 
 fn default_on_inspection_limit() -> WafOnInspectionLimitIr {
-    WafOnInspectionLimitIr::LogAndAllow
+    WafOnInspectionLimitIr::Block
 }
 
 fn default_fail_policy() -> WafFailPolicyIr {
@@ -504,12 +506,12 @@ target = "http://127.0.0.1:9000"
     fn absent_waf_defaults() {
         let config: AppConfig = MINIMAL.parse().expect("parse");
         assert!(config.waf.enabled);
-        assert_eq!(config.waf.mode, WafModeIr::Monitor);
+        assert_eq!(config.waf.mode, WafModeIr::Block);
         assert_eq!(config.waf.engine, WafEngineIr::Native);
-        assert_eq!(config.waf.max_inspection_body_bytes, 1_048_576);
+        assert_eq!(config.waf.max_inspection_body_bytes, 67_108_864);
         assert_eq!(
             config.waf.on_inspection_limit,
-            WafOnInspectionLimitIr::LogAndAllow
+            WafOnInspectionLimitIr::Block
         );
         assert_eq!(
             config.waf.fail_policy,
@@ -725,7 +727,9 @@ max_inspection_body_bytes = 0
         let config: AppConfig = MINIMAL.parse().unwrap();
         let base = fingerprint(&config);
         let mut changed = config.clone();
-        changed.waf.mode = WafModeIr::Block;
+        // Default is Block; flip to Monitor so this still proves the mode is
+        // part of the fingerprint.
+        changed.waf.mode = WafModeIr::Monitor;
         assert_ne!(base, fingerprint(&changed));
     }
 }

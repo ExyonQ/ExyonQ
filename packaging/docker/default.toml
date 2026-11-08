@@ -1,5 +1,5 @@
 # Default configuration for the official image. `docker run` serves this page.
-config_version = 1
+config_version = 2
 
 [logging]
 level = "info"

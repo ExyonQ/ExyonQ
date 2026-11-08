@@ -248,7 +248,7 @@ async fn chunked_valid_body_still_dispatches() {
         dispatches: AtomicUsize::new(0),
     });
     let (ctx, _guard) = proxy_ctx(Arc::clone(&counting)).await;
-    // Productive 32 MiB+1 chunked oversize would allocate heavily; unit tests cover
+    // Productive 64 MiB+1 chunked oversize would allocate heavily; unit tests cover
     // incremental oversize without CL. Live path verifies chunked still dispatches.
     let body = b"chunked-ok";
     let status = live_post(ctx, None, body, true).await;
@@ -280,7 +280,7 @@ fn handler_uses_bounded_collector_not_unbounded_collect() {
     );
     assert!(
         section.contains("PROXY_MAX_REQUEST_BODY_BYTES"),
-        "must enforce productive 32 MiB constant"
+        "must enforce productive 64 MiB constant"
     );
     assert!(
         section.contains("BadGateway"),
@@ -309,8 +309,8 @@ fn handler_uses_bounded_collector_not_unbounded_collect() {
 TEST_GAP / TOOL_LIMITATION (this phase):
 - HTTP/2 live harness for request body oversize: not available in this suite.
 - Cancellation mid-read without upstream contact: not instrumented (no cancel hook).
-- Physical 32 MiB + 1 incremental allocation test: covered via injectable-limit unit
-  tests; productive CL early-reject covers live 32 MiB + 1 without allocating body.
+- Physical 64 MiB + 1 incremental allocation test: covered via injectable-limit unit
+  tests; productive CL early-reject covers live 64 MiB + 1 without allocating body.
 - Cache insertion count: N/A for POST oversize (no cache path before dispatch).
 - Retry/replay: N/A (no retry implementation).
 */
