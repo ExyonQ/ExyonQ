@@ -53,6 +53,14 @@ python3 scripts/benchmarks/generate-competitive-dashboard.py
 - The run was a push on `feat/q12-bench`; `bench-regression` was skipped. The
   `main` baseline and a passing PR gate remain pending because `main` is 0.9.1.
 
+### Main Linux CI baseline (2026-11-09)
+
+- [q12-main-linux-2026-11-09.md](q12-main-linux-2026-11-09.md) — real
+  `main` baseline from run `42705724344` at revision `68d1257`; this is the
+  artifact consumed by the PR regression gate.
+- [q12-main-linux-2026-11-09.json](q12-main-linux-2026-11-09.json) — exact
+  machine-readable report.
+
 ### Native OLS Linux CI baseline (2026-11-09)
 
 - [q12-ols-linux-2026-11-09.md](q12-ols-linux-2026-11-09.md) — first native
@@ -69,4 +77,5 @@ python3 scripts/benchmarks/generate-competitive-dashboard.py
 baseline; it is not canonical Linux evidence and not a competitive claim.
 OpenLiteSpeed is **NOT EXECUTED** on macOS, but it **was executed natively in
 Linux CI** (`42699088690`, OpenLiteSpeed 1.9.4-3+noble). The branch CI baseline
-is executed; the `main` baseline and a passing PR gate are still pending.
+and the `main` baseline are executed; the PR gate uses host-normalized ratios
+so cross-runner shifts do not masquerade as regressions.
