@@ -11,16 +11,19 @@ CANDIDATE=""
 MAX_RPS_DROP="${BENCH_MAX_RPS_DROP_PCT:-10}"
 MAX_P99_RISE="${BENCH_MAX_P99_RISE_PCT:-15}"
 NORMALIZE_TO="${BENCH_NORMALIZE_TO:-}"
+REQUIRE_SERVER="${BENCH_REQUIRE_SERVER:-}"
 
 usage() {
     cat <<'EOF'
 Usage: bench-regression-gate.sh --baseline report.json --candidate report.json
                                 [--max-rps-drop-pct 10] [--max-p99-rise-pct 15]
-                                [--normalize-to nginx]
+                                [--normalize-to nginx] [--require-server ols]
 
 Exit 0 only when every candidate cell stays within both tolerances.
 With --normalize-to, RPS and p99 are compared as ratios to that server
 measured in the same run, cancelling host-wide shifts between runs.
+With --require-server, that server must be present for every payload in both
+reports; a missing required cell fails closed.
 EOF
 }
 
@@ -31,6 +34,7 @@ while [[ $# -gt 0 ]]; do
         --max-rps-drop-pct) MAX_RPS_DROP="${2:?}"; shift 2 ;;
         --max-p99-rise-pct) MAX_P99_RISE="${2:?}"; shift 2 ;;
         --normalize-to) NORMALIZE_TO="${2:?}"; shift 2 ;;
+        --require-server) REQUIRE_SERVER="${2:?}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -40,11 +44,11 @@ done
 [[ -f "$BASELINE" ]] || { echo "ERROR: missing baseline: $BASELINE" >&2; exit 2; }
 [[ -f "$CANDIDATE" ]] || { echo "ERROR: missing candidate: $CANDIDATE" >&2; exit 2; }
 
-python3 - "$BASELINE" "$CANDIDATE" "$MAX_RPS_DROP" "$MAX_P99_RISE" "$NORMALIZE_TO" <<'PY'
+python3 - "$BASELINE" "$CANDIDATE" "$MAX_RPS_DROP" "$MAX_P99_RISE" "$NORMALIZE_TO" "$REQUIRE_SERVER" <<'PY'
 import json
 import sys
 
-baseline_path, candidate_path, max_drop, max_rise, normalize_to = sys.argv[1:6]
+baseline_path, candidate_path, max_drop, max_rise, normalize_to, require_server = sys.argv[1:7]
 max_drop = float(max_drop)
 max_rise = float(max_rise)
 baseline = json.load(open(baseline_path, encoding="utf-8"))
@@ -52,6 +56,19 @@ candidate = json.load(open(candidate_path, encoding="utf-8"))
 
 if baseline.get("schema") != 1 or candidate.get("schema") != 1:
     raise SystemExit("BENCH_REGRESSION_GATE=FAIL reason=unsupported_report_schema")
+
+if require_server:
+    missing = []
+    for label, report in (("baseline", baseline), ("candidate", candidate)):
+        for payload, servers in report.get("results", {}).items():
+            if require_server not in servers:
+                missing.append(f"{payload}/{require_server}: missing in {label}")
+    if missing:
+        for failure in missing:
+            print(f"REQUIRED: {failure}")
+        raise SystemExit(
+            f"BENCH_REGRESSION_GATE=FAIL reason=required_server_missing:{require_server}"
+        )
 
 
 def ratio(value, reference):
