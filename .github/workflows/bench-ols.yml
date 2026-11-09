@@ -96,7 +96,7 @@ jobs:
             OLS_PID="$(pgrep -f '/usr/local/lsws/bin/lshttpd' | head -n1 || true)"
           fi
           [[ "$OLS_PID" =~ ^[0-9]+$ ]] || { echo "OLS_PID_NOT_FOUND" >&2; exit 1; }
-          kill -0 "$OLS_PID"
+          ps -p "$OLS_PID" >/dev/null
           OLS_VERSION="$(dpkg-query -W -f='${Version}' openlitespeed)"
           Q12_OLS_PID="$OLS_PID" Q12_OLS_VERSION="OpenLiteSpeed $OLS_VERSION" \
             bash scripts/bench/run-http-bench.sh

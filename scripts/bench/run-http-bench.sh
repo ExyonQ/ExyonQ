@@ -101,7 +101,7 @@ if server_selected ols; then
     [[ "$OLS_URL" =~ ^http://(127\.0\.0\.1|localhost|\[::1\]):[0-9]+/?$ ]] \
         || fail "Q12_OLS_URL must be a loopback URL such as http://127.0.0.1:8088"
     [[ "$OLS_PID" =~ ^[0-9]+$ ]] || fail "OLS selected but Q12_OLS_PID is not a PID"
-    kill -0 "$OLS_PID" 2>/dev/null || fail "OLS process $OLS_PID is not running"
+    ps -p "$OLS_PID" >/dev/null 2>&1 || fail "OLS process $OLS_PID is not running"
 fi
 
 IFS=',' read -r -a PAYLOADS <<<"$PAYLOADS_CSV"
@@ -194,7 +194,7 @@ wait_ready() {
             [[ "$actual" == "$expected" ]] || fail "$name served a different body"
             return 0
         fi
-        kill -0 "$pid" 2>/dev/null || {
+        ps -p "$pid" >/dev/null 2>&1 || {
             tail -n 20 "$WORK/logs/$name.log" >&2 || true
             fail "$name exited before readiness"
         }
@@ -336,7 +336,7 @@ start_ols() {
     # OLS is deliberately not launched by this harness: a native OLS install
     # owns its own config and lifecycle. The caller starts it on this host and
     # supplies its loopback URL and PID.
-    kill -0 "$OLS_PID" 2>/dev/null || fail "OLS process $OLS_PID is not running"
+    ps -p "$OLS_PID" >/dev/null 2>&1 || fail "OLS process $OLS_PID is not running"
 }
 
 start_server() {
