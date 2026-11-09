@@ -51,8 +51,8 @@ jobs:
           sudo systemctl stop lsws 2>/dev/null || true
           sudo /usr/local/lsws/bin/lswsctrl stop 2>/dev/null || true
           sudo install -d /bench/www /usr/local/lsws/conf/vhosts/bench
-          sudo install -m 0644 benchmarks/configs/openlitespeed/httpd_config.conf /usr/local/lsws/conf/httpd_config.conf
-          sudo install -m 0644 benchmarks/configs/openlitespeed/vhosts/bench/vhconf.conf /usr/local/lsws/conf/vhosts/bench/vhconf.conf
+          sudo install -m 0644 scripts/bench/openlitespeed/httpd_config.conf /usr/local/lsws/conf/httpd_config.conf
+          sudo install -m 0644 scripts/bench/openlitespeed/vhosts/bench/vhconf.conf /usr/local/lsws/conf/vhosts/bench/vhconf.conf
           # The benchmark config also defines HTTP/HTTPS listeners for the
           # Docker oracle. The native CI job needs only the bench listener.
           sudo sed -i '/^listener HTTP/,$d' /usr/local/lsws/conf/httpd_config.conf
