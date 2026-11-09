@@ -1,0 +1,96 @@
+name: HTTP benchmark
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  bench:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Install native benchmark dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nginx apache2 curl
+          if ! command -v oha >/dev/null 2>&1; then
+            cargo install oha --version 1.14.0 --locked
+          fi
+      - name: Build ExyonQ release
+        run: cargo build --release -p exyonq --bin exyonq --locked
+      - name: Run native benchmark
+        env:
+          Q12_SERVERS: exyonq,nginx,apache
+          Q12_REPETITIONS: "3"
+          Q12_DURATION: 5s
+          Q12_CONNECTIONS: "16"
+          Q12_OUT: target/q12-bench
+          Q12_HTTPD_BIN: /usr/sbin/apache2
+          Q12_MEASUREMENT_CLASS: ci_native_github_hosted
+        run: bash scripts/bench/run-http-bench.sh
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-evidence
+          path: target/q12-bench
+          if-no-files-found: warn
+          retention-days: 14
+
+  bench-regression:
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    needs: bench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download candidate evidence
+        uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-evidence
+          path: candidate
+      - name: Download latest main baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list --workflow=bench.yml --branch=main --status=success --limit=1 --json databaseId --jq '.[0].databaseId')"
+          if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+            echo "BENCH_BASELINE=NOT_FOUND"
+            echo "No successful main benchmark artifact exists. Run the HTTP benchmark workflow on main first."
+            exit 1
+          fi
+          mkdir -p baseline
+          gh run download "$run_id" --name bench-evidence --dir baseline
+          test -f baseline/report.json
+          echo "BENCH_BASELINE_RUN_ID=$run_id"
+      - name: Fail on throughput or p99 regression
+        run: |
+          bash scripts/gates/bench-regression-gate.sh \
+            --baseline baseline/report.json \
+            --candidate candidate/report.json \
+            --max-rps-drop-pct 25 \
+            --max-p99-rise-pct 30
