@@ -77,4 +77,5 @@ python3 scripts/benchmarks/generate-competitive-dashboard.py
 baseline; it is not canonical Linux evidence and not a competitive claim.
 OpenLiteSpeed is **NOT EXECUTED** on macOS, but it **was executed natively in
 Linux CI** (`42699088690`, OpenLiteSpeed 1.9.4-3+noble). The branch CI baseline
-is executed; the `main` baseline and a passing PR gate are still pending.
+and the `main` baseline are executed; the PR gate uses host-normalized ratios
+so cross-runner shifts do not masquerade as regressions.
