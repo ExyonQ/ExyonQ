@@ -19,6 +19,7 @@ PUBLIC_BENCHMARK_CLAIMS = FORBIDDEN unless separately authorized
 | `scripts/bench/rss_sampler.py` | Samples the resident set of the whole server process tree every 100 ms. |
 | `scripts/gates/bench-regression-gate.sh` | Compares two `report.json` files and fails on a throughput drop or p99 rise beyond the tolerance. |
 | `.github/workflows/bench.yml` | Runs the native Linux benchmark in CI, publishes the `main` baseline and gates PRs against it. |
+| `.github/workflows/bench-ols.yml` | Installs native OLS on Linux, serves the benchmark payload and runs the same harness with OLS. |
 
 ## Measurement protocol
 
@@ -99,8 +100,24 @@ runners are noisy, so those tolerances are wider than the native local ones.
 If no successful `main` artifact exists, the job fails with
 `BENCH_BASELINE=NOT_FOUND`; it never invents a baseline or soft-passes.
 
-The workflow is committed but **NOT EXECUTED** in this checkout: no push was
-made, so there is no first `main` baseline yet.
+The first native Linux CI baseline ran on 2026-11-09 as
+[run 42695705050](https://github.com/ExyonQ/ExyonQ/actions/runs/42695705050)
+on `feat/q12-bench`, commit `5bf2695`, with 3 × 5 s and 16 connections. The
+`bench` job succeeded in 9m45s and uploaded `bench-evidence`; the
+`bench-regression` job was skipped because the trigger was a push, not a PR.
+The numbers are in
+[q12-ci-linux-2026-11-09.md](../benchmarks/q12-ci-linux-2026-11-09.md).
+
+There is still **no `main` baseline**: `origin/main` is 0.9.1 and does not
+contain the 0.9.2 tag, so the PR gate cannot download a matching baseline yet.
+It remains fail-closed with `BENCH_BASELINE=NOT_FOUND`. A separate native OLS
+lane (`.github/workflows/bench-ols.yml`) installs the official OpenLiteSpeed
+Ubuntu package and runs the same harness with `Q12_SERVERS=...,ols`; it is
+described under [Native OpenLiteSpeed](#native-openlitespeed). It ran
+successfully on 2026-11-09 as
+[run 42699088690](https://github.com/ExyonQ/ExyonQ/actions/runs/42699088690),
+with native OpenLiteSpeed 1.9.4-3+noble; see
+[q12-ols-linux-2026-11-09.md](../benchmarks/q12-ols-linux-2026-11-09.md).
 
 ## Reproduce
 
@@ -139,7 +156,10 @@ bash scripts/bench/run-http-bench.sh
 A non-loopback URL is rejected. A container/VM or remote endpoint is not
 comparable even if a host PID is supplied; the operator is responsible for
 passing a native process. OLS remains **NOT EXECUTED** on the reference macOS
-host because there is no native macOS build there.
+host because there is no native macOS build there. It **was executed natively
+in Linux CI** on 2026-11-09: the job started the distro package from the
+tracked `scripts/bench/openlitespeed/` config, disabled gzip, and checked the
+sudo-owned process with `ps -p` instead of `kill -0`.
 
 ## Executed baseline (2026-11-08)
 
@@ -163,6 +183,17 @@ The intervals overlap on this host, so the table is an engineering baseline,
 not a ranking. The full report, including p50/p95 and every raw repetition,
 is [q12-http-native-2026-11-08.md](../benchmarks/q12-http-native-2026-11-08.md);
 the JSON next to it is the input for the regression gate.
+
+## Native OLS CI baseline (2026-11-09)
+
+Run `42699088690` measured all four servers on native Ubuntu 24.04 with
+OpenLiteSpeed 1.9.4-3+noble, 3 × 5 s and 16 connections. OLS reached
+74528.3 RPS at `1k.bin` and 36664.4 at `64k.bin`; ExyonQ in the same run
+reached 52217.1 and 43162.5. All 24 raw repetitions had `successRate = 1.0`,
+only HTTP 200 responses and zero errors. The complete table, including p99 and
+RSS, is in
+[q12-ols-linux-2026-11-09.md](../benchmarks/q12-ols-linux-2026-11-09.md). This
+is a separate CI run from the branch baseline and is not a gate baseline.
 
 ## Gate exercise (2026-11-08)
 
@@ -188,15 +219,18 @@ of the gate logic, not benchmark evidence.
 
 ## Boundaries
 
-- **OpenLiteSpeed is NOT EXECUTED on the reference host.** The harness has a
-  native opt-in path, but no native OLS build exists on macOS and Docker
-  Desktop is not comparable. A Linux host can now provide a native OLS
-  process without changing the harness.
-- **Linux native is NOT EXECUTED in this checkout.** The reference host is
-  macOS arm64. The CI workflow targets `ubuntu-24.04`, but it has not run.
-- **CI is NOT EXECUTED.** The workflow, candidate upload and baseline gate are
-  implemented; a pushed commit and a first successful `main` run are still
-  required before there is CI evidence.
+- **OpenLiteSpeed is NOT EXECUTED on the reference macOS host.** The harness
+  has a native opt-in path, but no native OLS build exists on macOS and Docker
+  Desktop is not comparable. The separate Linux CI lane executed native OLS
+  in run `42699088690`; that does not establish a macOS build.
+- **Linux native is EXECUTED in CI, not on a physical Linux host.** The
+  reference workstation is macOS arm64. Run `42695705050` is the first
+  `ci_native_github_hosted` baseline on `ubuntu-24.04`; its absolute numbers
+  are not portable.
+- **The `main` baseline and PR gate are NOT EXECUTED.** A branch baseline
+  exists, but `origin/main` is 0.9.1 and does not contain 0.9.2. The workflow
+  therefore remains fail-closed with `BENCH_BASELINE=NOT_FOUND` for a PR until
+  the release line is integrated.
 - **Host noise is real.** On the reference host the 95% intervals of different
   servers can overlap; the report is an engineering baseline, not a ranking.
 - The harness does not replace the private official campaign harness.

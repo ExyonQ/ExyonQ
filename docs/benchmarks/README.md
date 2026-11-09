@@ -30,7 +30,7 @@ python3 scripts/benchmarks/generate-competitive-dashboard.py
 | --- | --- |
 | [r3-exyonq-vs-ols-fixed-rate-parity.html](r3-exyonq-vs-ols-fixed-rate-parity.html) | Historical R3 fixed-rate proxy parity — not current P1 seal |
 
-## Q-12 reproducible HTTP baseline (2026-11-08)
+## Q-12 reproducible HTTP baselines
 
 - [q12-http-native-2026-11-08.md](q12-http-native-2026-11-08.md) — generated
   native baseline report: medians with 95% bootstrap intervals, RPS, p50/p95/p99
@@ -41,9 +41,32 @@ python3 scripts/benchmarks/generate-competitive-dashboard.py
   [scripts/bench/README.md](../../scripts/bench/README.md)).
 - Anti-regression gate: `scripts/gates/bench-regression-gate.sh`.
 
-`measurement_class = local_native_non_canonical`: real executions on a declared
-macOS arm64 host, not canonical Linux evidence, and not a competitive claim.
-OpenLiteSpeed is **NOT EXECUTED** on that host; the harness now accepts a
-native OLS process on Linux via a loopback URL/PID. CI execution is
-**NOT EXECUTED**: `.github/workflows/bench.yml` and the baseline gate exist,
-but there is no push or first successful `main` run yet.
+### Linux CI baseline (2026-11-09)
+
+- [q12-ci-linux-2026-11-09.md](q12-ci-linux-2026-11-09.md) — first native
+  Linux CI run (`42695705050`) on GitHub-hosted Ubuntu 24.04, 3 × 5 s,
+  16 connections.
+- [q12-ci-linux-2026-11-09.json](q12-ci-linux-2026-11-09.json) — exact
+  machine-readable report consumed by the gate.
+- `measurement_class = ci_native_github_hosted`; this is not a competitive
+  claim and the shared-runner noise is part of the result.
+- The run was a push on `feat/q12-bench`; `bench-regression` was skipped. The
+  `main` baseline and a passing PR gate remain pending because `main` is 0.9.1.
+
+### Native OLS Linux CI baseline (2026-11-09)
+
+- [q12-ols-linux-2026-11-09.md](q12-ols-linux-2026-11-09.md) — first native
+  OpenLiteSpeed run (`42699088690`) on GitHub-hosted Ubuntu 24.04, with
+  OpenLiteSpeed 1.9.4-3+noble and the same 3 × 5 s / 16-connection method.
+- [q12-ols-linux-2026-11-09.json](q12-ols-linux-2026-11-09.json) — exact
+  machine-readable report, including all four servers and both payloads.
+- All 24 raw repetitions report `successRate = 1.0`, only HTTP 200 responses
+  and zero errors; the run log ends with `RESULT=PASS Q12_HTTP_BENCH`.
+- This run is separate from `42695705050`; the host CPU differs, so its
+  numbers are not comparable across runs. It is not a `main` baseline.
+
+`measurement_class = local_native_non_canonical` applies to the macOS arm64
+baseline; it is not canonical Linux evidence and not a competitive claim.
+OpenLiteSpeed is **NOT EXECUTED** on macOS, but it **was executed natively in
+Linux CI** (`42699088690`, OpenLiteSpeed 1.9.4-3+noble). The branch CI baseline
+is executed; the `main` baseline and a passing PR gate are still pending.
