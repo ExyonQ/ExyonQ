@@ -1,0 +1,482 @@
+{
+  "measurement_class": "local_native_non_canonical",
+  "meta": {
+    "connections": 16,
+    "duration": "10s",
+    "exyonq_sha256": "f9daa144406415d45b0c031c24b3bc79bb0a24fbafa05a1a7ed9d2d30734f4a9",
+    "git_head": "bfdb22ebeff31226157d3bdc4237994edf1d02ea",
+    "git_status_porcelain": "M SECURITY.md\n M cli/exyonqctl/tests/config_migrate.rs\n M compat/nginx/src/map_ir.rs\n M config/cli/src/dump.rs\n M config/ir/src/canonical.rs\n M config/ir/src/lib.rs\n M config/ir/tests/tuning_config.rs\n M config/merge/src/lib.rs\n M config/schema/src/lib.rs\n M core/src/config/mod.rs\n M core/src/lib.rs\n M core/src/reload/mod.rs\n M core/src/server/handler.rs\n M core/src/server/io.rs\n M core/src/server/mod.rs\n M core/src/server/wire_dispatch.rs\n M core/tests/proxy_downstream_disconnect_cancellation_test.rs\n M core/tests/reload_lifecycle.rs\n M crates/exyonq-mod-proxy/src/hyper_forward.rs\n M crates/exyonq-mod-proxy/src/runtime.rs\n M crates/exyonq-mod-proxy/src/upstream_target.rs\n M crates/exyonq-mod-proxy/src/wire_conn.rs\n M crates/exyonq-mod-proxy/src/wire_io.rs\n M crates/exyonq-mod-proxy/tests/classify_sec_proxy_002.rs\n M crates/exyonq-mod-proxy/tests/p13a_classify_504_xff.rs\n M crates/exyonq-mod-static/src/wire_conn.rs\n M crates/exyonq-mod-static/src/wire_io.rs\n M crates/exyonq-platform-linux/src/epoll_worker.rs\n M crates/exyonq-runtime-plan/src/runtime_plan.rs\n M docs/architecture/070-config-version-migration.md\n M docs/architecture/071-tuning-knobs.md\n M docs/benchmarks/README.md\n M module-api/src/lib.rs\n M scripts/e2e/h01-l01-canonical-host-e2e.sh\n M tests/integration/acme.rs\n M tests/integration/security.rs\n M tests/integration/static_files.rs\n?? config/ir/src/stream.rs\n?? config/ir/tests/stream_config.rs\n?? core/src/stream_proxy.rs\n?? core/tests/ng20_quic_relay_test.rs\n?? core/tests/ng20_stream_proxy_test.rs\n?? docs/architecture/072-l4-stream.md\n?? docs/architecture/073-http-benchmark-harness.md\n?? module-api/src/runtime_tuning.rs\n?? scripts/bench/\n?? scripts/e2e/ng20-mysql-e2e.sh\n?? scripts/e2e/ng20-stream-e2e.sh\n?? scripts/e2e/ng21-tuning-e2e.sh\n?? scripts/gates/bench-regression-gate.sh\n?? scripts/gates/ng21-tuning-gate.sh",
+    "hardware": {
+      "arch": "arm64",
+      "cpu": "Apple M2 Pro",
+      "logical_cpus": 10,
+      "memory_bytes": 34359738368,
+      "os": "macOS 26.5.1"
+    },
+    "measurement_class": "local_native_non_canonical",
+    "payloads": [
+      "1k.bin",
+      "64k.bin"
+    ],
+    "repetitions": 5,
+    "schema": 1,
+    "servers": [
+      "exyonq",
+      "nginx",
+      "apache"
+    ],
+    "software": {
+      "exyonq": "exyonq 0.9.2",
+      "httpd": "Server version: Apache/2.4.66 (Unix)",
+      "nginx": "nginx version: nginx/1.31.8",
+      "oha": "oha 1.14.0"
+    },
+    "started_at": "2026-11-08T21:45:29Z",
+    "threads": 4
+  },
+  "results": {
+    "1k.bin": {
+      "apache": {
+        "p50_ms": {
+          "ci95": [
+            0.7284579999999999,
+            1.142083
+          ],
+          "median": 1.012167,
+          "values": [
+            1.142083,
+            1.012167,
+            1.043958,
+            0.887834,
+            0.7284579999999999
+          ]
+        },
+        "p95_ms": {
+          "ci95": [
+            2.4185,
+            6.899083
+          ],
+          "median": 4.399166,
+          "values": [
+            6.899083,
+            3.460084,
+            2.4185,
+            4.411041999999999,
+            4.399166
+          ]
+        },
+        "p99_ms": {
+          "ci95": [
+            7.887042,
+            32.362666999999995
+          ],
+          "median": 25.234666999999998,
+          "values": [
+            32.362666999999995,
+            16.765917,
+            7.887042,
+            25.234666999999998,
+            31.844208
+          ]
+        },
+        "repetitions": 5,
+        "rps": {
+          "ci95": [
+            6216.859128510488,
+            11716.877622152298
+          ],
+          "median": 8308.999360700682,
+          "values": [
+            6216.859128510488,
+            10267.184433820928,
+            11716.877622152298,
+            8308.999360700682,
+            8097.659239203086
+          ]
+        },
+        "rss_peak_mib": {
+          "ci95": [
+            14.109375,
+            15.1875
+          ],
+          "median": 14.609375,
+          "values": [
+            14.78125,
+            15.1875,
+            14.109375,
+            14.609375,
+            14.28125
+          ]
+        }
+      },
+      "exyonq": {
+        "p50_ms": {
+          "ci95": [
+            0.800917,
+            1.225292
+          ],
+          "median": 0.863334,
+          "values": [
+            1.170625,
+            0.863334,
+            0.817208,
+            0.800917,
+            1.225292
+          ]
+        },
+        "p95_ms": {
+          "ci95": [
+            2.0242910000000003,
+            5.6129999999999995
+          ],
+          "median": 2.9337500000000003,
+          "values": [
+            4.470792,
+            2.9337500000000003,
+            2.391834,
+            2.0242910000000003,
+            5.6129999999999995
+          ]
+        },
+        "p99_ms": {
+          "ci95": [
+            7.187709,
+            24.279166
+          ],
+          "median": 12.037167,
+          "values": [
+            21.474875,
+            12.037167,
+            9.94075,
+            7.187709,
+            24.279166
+          ]
+        },
+        "repetitions": 5,
+        "rps": {
+          "ci95": [
+            7050.1297208922215,
+            14384.394308428531
+          ],
+          "median": 11804.077565200227,
+          "values": [
+            8061.937551624546,
+            11804.077565200227,
+            13184.312786214188,
+            14384.394308428531,
+            7050.1297208922215
+          ]
+        },
+        "rss_peak_mib": {
+          "ci95": [
+            15.34375,
+            17.78125
+          ],
+          "median": 16.0,
+          "values": [
+            15.34375,
+            17.78125,
+            16.0,
+            15.890625,
+            17.703125
+          ]
+        }
+      },
+      "nginx": {
+        "p50_ms": {
+          "ci95": [
+            0.633042,
+            1.0423330000000002
+          ],
+          "median": 1.0034589999999999,
+          "values": [
+            1.0413340000000002,
+            0.869167,
+            1.0034589999999999,
+            1.0423330000000002,
+            0.633042
+          ]
+        },
+        "p95_ms": {
+          "ci95": [
+            1.876958,
+            4.553291
+          ],
+          "median": 2.8485,
+          "values": [
+            4.553291,
+            3.048541,
+            1.876958,
+            2.8485,
+            2.829208
+          ]
+        },
+        "p99_ms": {
+          "ci95": [
+            7.502042,
+            35.701041000000004
+          ],
+          "median": 22.714166000000002,
+          "values": [
+            23.236583000000003,
+            22.714166000000002,
+            7.502042,
+            9.541334,
+            35.701041000000004
+          ]
+        },
+        "repetitions": 5,
+        "rps": {
+          "ci95": [
+            7670.0601475879985,
+            12711.524415099891
+          ],
+          "median": 9305.790874465094,
+          "values": [
+            7670.0601475879985,
+            9305.790874465094,
+            12711.524415099891,
+            10990.12884582132,
+            8246.620553982073
+          ]
+        },
+        "rss_peak_mib": {
+          "ci95": [
+            21.609375,
+            23.875
+          ],
+          "median": 21.84375,
+          "values": [
+            23.875,
+            21.71875,
+            22.0625,
+            21.84375,
+            21.609375
+          ]
+        }
+      }
+    },
+    "64k.bin": {
+      "apache": {
+        "p50_ms": {
+          "ci95": [
+            1.585125,
+            1.9533749999999999
+          ],
+          "median": 1.829417,
+          "values": [
+            1.828125,
+            1.9533749999999999,
+            1.829417,
+            1.845833,
+            1.585125
+          ]
+        },
+        "p95_ms": {
+          "ci95": [
+            3.5145,
+            7.322167
+          ],
+          "median": 3.6791660000000004,
+          "values": [
+            3.5652079999999997,
+            6.141500000000001,
+            3.6791660000000004,
+            3.5145,
+            7.322167
+          ]
+        },
+        "p99_ms": {
+          "ci95": [
+            16.148041,
+            29.730459
+          ],
+          "median": 16.464167,
+          "values": [
+            16.464167,
+            23.110875,
+            16.172459,
+            16.148041,
+            29.730459
+          ]
+        },
+        "repetitions": 5,
+        "rps": {
+          "ci95": [
+            5608.786026358879,
+            7273.242517761216
+          ],
+          "median": 7197.916334258557,
+          "values": [
+            7273.242517761216,
+            5669.873102551501,
+            7247.660706205283,
+            7197.916334258557,
+            5608.786026358879
+          ]
+        },
+        "rss_peak_mib": {
+          "ci95": [
+            14.34375,
+            15.296875
+          ],
+          "median": 14.546875,
+          "values": [
+            15.296875,
+            14.546875,
+            14.34375,
+            14.546875,
+            14.375
+          ]
+        }
+      },
+      "exyonq": {
+        "p50_ms": {
+          "ci95": [
+            1.542917,
+            2.226667
+          ],
+          "median": 1.6172090000000001,
+          "values": [
+            1.542917,
+            1.60175,
+            1.6172090000000001,
+            2.226667,
+            2.092334
+          ]
+        },
+        "p95_ms": {
+          "ci95": [
+            3.3129169999999997,
+            10.515208
+          ],
+          "median": 4.722084,
+          "values": [
+            3.3129169999999997,
+            4.722084,
+            4.3430420000000005,
+            10.515208,
+            7.220166
+          ]
+        },
+        "p99_ms": {
+          "ci95": [
+            12.258708,
+            29.376958000000002
+          ],
+          "median": 18.811999999999998,
+          "values": [
+            12.258708,
+            17.981834,
+            18.811999999999998,
+            29.376958000000002,
+            25.736083
+          ]
+        },
+        "repetitions": 5,
+        "rps": {
+          "ci95": [
+            4286.50067476962,
+            8360.510214997634
+          ],
+          "median": 7378.800014758239,
+          "values": [
+            8360.510214997634,
+            7378.800014758239,
+            7525.91938786724,
+            4286.50067476962,
+            5028.8918777317695
+          ]
+        },
+        "rss_peak_mib": {
+          "ci95": [
+            17.640625,
+            18.890625
+          ],
+          "median": 18.125,
+          "values": [
+            18.15625,
+            18.890625,
+            18.125,
+            18.125,
+            17.640625
+          ]
+        }
+      },
+      "nginx": {
+        "p50_ms": {
+          "ci95": [
+            1.397333,
+            1.892333
+          ],
+          "median": 1.84325,
+          "values": [
+            1.839,
+            1.851791,
+            1.84325,
+            1.892333,
+            1.397333
+          ]
+        },
+        "p95_ms": {
+          "ci95": [
+            3.577,
+            5.092458000000001
+          ],
+          "median": 3.8852499999999996,
+          "values": [
+            3.577,
+            3.77175,
+            3.8852499999999996,
+            4.0498330000000005,
+            5.092458000000001
+          ]
+        },
+        "p99_ms": {
+          "ci95": [
+            15.330042,
+            40.891708
+          ],
+          "median": 18.299791,
+          "values": [
+            15.330042,
+            18.661292,
+            17.595333,
+            18.299791,
+            40.891708
+          ]
+        },
+        "repetitions": 5,
+        "rps": {
+          "ci95": [
+            5411.640140892864,
+            7256.478389027614
+          ],
+          "median": 6915.244615189545,
+          "values": [
+            7256.478389027614,
+            6915.244615189545,
+            7060.952436571907,
+            6807.954994784914,
+            5411.640140892864
+          ]
+        },
+        "rss_peak_mib": {
+          "ci95": [
+            19.03125,
+            21.984375
+          ],
+          "median": 21.84375,
+          "values": [
+            19.03125,
+            21.640625,
+            21.84375,
+            21.859375,
+            21.984375
+          ]
+        }
+      }
+    }
+  },
+  "schema": 1
+}
