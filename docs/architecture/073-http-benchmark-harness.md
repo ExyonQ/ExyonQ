@@ -108,13 +108,13 @@ on `feat/q12-bench`, commit `5bf2695`, with 3 × 5 s and 16 connections. The
 The numbers are in
 [q12-ci-linux-2026-11-09.md](../benchmarks/q12-ci-linux-2026-11-09.md).
 
-There is still **no `main` baseline**: `origin/main` is 0.9.1 and does not
-contain the 0.9.2 tag, so the PR gate cannot download a matching baseline yet.
-It remains fail-closed with `BENCH_BASELINE=NOT_FOUND`. A separate native OLS
-lane (`.github/workflows/bench-ols.yml`) installs the official OpenLiteSpeed
-Ubuntu package and runs the same harness with `Q12_SERVERS=...,ols`; it is
-described under [Native OpenLiteSpeed](#native-openlitespeed). It ran
-successfully on 2026-11-09 as
+The `main` baseline now exists: run `42705724344` at `68d1257`; the PR gate
+downloads it and passed on run `42710934813` in normalized mode. A separate
+native OLS lane (`.github/workflows/bench-ols.yml`) installs the official
+OpenLiteSpeed Ubuntu package and runs the same harness with
+`Q12_SERVERS=...,ols`; it is described under
+[Native OpenLiteSpeed](#native-openlitespeed). It ran successfully on
+2026-11-09 as
 [run 42699088690](https://github.com/ExyonQ/ExyonQ/actions/runs/42699088690),
 with native OpenLiteSpeed 1.9.4-3+noble; see
 [q12-ols-linux-2026-11-09.md](../benchmarks/q12-ols-linux-2026-11-09.md).
@@ -194,6 +194,13 @@ only HTTP 200 responses and zero errors. The complete table, including p99 and
 RSS, is in
 [q12-ols-linux-2026-11-09.md](../benchmarks/q12-ols-linux-2026-11-09.md). This
 is a separate CI run from the branch baseline and is not a gate baseline.
+
+A `main` native OLS baseline now exists: run `42705724338` at `68d1257`
+(OpenLiteSpeed 1.9.4-3+noble). On pull requests the OLS workflow runs
+`bench-ols-regression`, downloads the latest successful `main` OLS artifact,
+requires the `ols` cell and runs the same gate with
+`--normalize-to nginx --require-server ols` (25% RPS, 30% p99). A missing
+baseline or missing OLS cell fails closed.
 
 ## Gate exercise (2026-11-08)
 

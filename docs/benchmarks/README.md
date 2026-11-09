@@ -72,6 +72,8 @@ python3 scripts/benchmarks/generate-competitive-dashboard.py
   and zero errors; the run log ends with `RESULT=PASS Q12_HTTP_BENCH`.
 - This run is separate from `42695705050`; the host CPU differs, so its
   numbers are not comparable across runs. It is not a `main` baseline.
+- The native OLS gate baseline is run `42705724338` at `68d1257`; PRs require
+  the `ols` cell and compare it normalized to nginx from the same run.
 
 `measurement_class = local_native_non_canonical` applies to the macOS arm64
 baseline; it is not canonical Linux evidence and not a competitive claim.

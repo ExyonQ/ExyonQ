@@ -107,6 +107,14 @@ failed on a different EPYC runner, so CI uses the normalized mode for
 cross-runner comparisons. The gate remains fail-closed when the reference or
 a cell is missing.
 
+On a pull request, `.github/workflows/bench-ols.yml` runs `bench-ols` and then
+`bench-ols-regression`. The gate downloads the latest successful native OLS
+artifact from `main`, requires the `ols` cell in both reports and runs
+`bench-regression-gate.sh --normalize-to nginx --require-server ols` with the
+same 25% RPS / 30% p99 shared-runner budget. If no main OLS artifact exists or
+the OLS cell is missing, the job fails closed. The first main native OLS
+baseline is run `42705724338` at `68d1257`.
+
 `.github/workflows/bench-ols.yml` installs the official native OLS Ubuntu
 package and runs `Q12_SERVERS=exyonq,nginx,apache,ols`; it uses the tracked
 `scripts/bench/openlitespeed/` config (gzip disabled) and is a separate lane
