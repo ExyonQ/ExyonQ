@@ -2,7 +2,7 @@ name: HTTP benchmark (native OLS)
 
 on:
   push:
-    branches: [main, feat/q12-bench]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
