@@ -1,0 +1,110 @@
+name: HTTP benchmark (native OLS)
+
+on:
+  push:
+    branches: [main, feat/q12-bench]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  bench-ols:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Install native benchmark dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates curl wget nginx apache2
+          if ! command -v oha >/dev/null 2>&1; then
+            cargo install oha --version 1.14.0 --locked
+          fi
+      - name: Install native OpenLiteSpeed
+        run: |
+          set -euo pipefail
+          wget -qO /tmp/litespeed-repo.sh https://repo.litespeed.sh
+          sudo bash /tmp/litespeed-repo.sh
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends openlitespeed
+          dpkg-query -W -f='${Version}\n' openlitespeed
+          /usr/local/lsws/bin/openlitespeed -v 2>&1 | head -n 3 || true
+      - name: Configure native OLS for the benchmark payload
+        run: |
+          set -euo pipefail
+          sudo systemctl stop lsws 2>/dev/null || true
+          sudo /usr/local/lsws/bin/lswsctrl stop 2>/dev/null || true
+          sudo install -d /bench/www /usr/local/lsws/conf/vhosts/bench
+          sudo install -m 0644 benchmarks/configs/openlitespeed/httpd_config.conf /usr/local/lsws/conf/httpd_config.conf
+          sudo install -m 0644 benchmarks/configs/openlitespeed/vhosts/bench/vhconf.conf /usr/local/lsws/conf/vhosts/bench/vhconf.conf
+          # The benchmark config also defines HTTP/HTTPS listeners for the
+          # Docker oracle. The native CI job needs only the bench listener.
+          sudo sed -i '/^listener HTTP/,$d' /usr/local/lsws/conf/httpd_config.conf
+          sudo install -m 0644 benchmarks/scenarios/payloads/www/1k.bin /bench/www/1k.bin
+          sudo install -m 0644 benchmarks/scenarios/payloads/www/64k.bin /bench/www/64k.bin
+          sudo chmod -R a+rX /bench
+          if ! sudo /usr/local/lsws/bin/lswsctrl start; then
+            sudo tail -n 80 /usr/local/lsws/logs/error.log || true
+            exit 1
+          fi
+          ready=0
+          for _ in $(seq 1 100); do
+            if curl -fsS --max-time 1 -o /tmp/ols-1k http://127.0.0.1:8088/1k.bin \
+              && cmp -s /tmp/ols-1k benchmarks/scenarios/payloads/www/1k.bin; then
+              ready=1
+              break
+            fi
+            sleep 0.2
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            sudo tail -n 80 /usr/local/lsws/logs/error.log || true
+            exit 1
+          fi
+          echo "OLS_NATIVE_READY=1"
+      - name: Build ExyonQ release
+        run: cargo build --release -p exyonq --bin exyonq --locked
+      - name: Run Q-12 with native OLS
+        env:
+          Q12_SERVERS: exyonq,nginx,apache,ols
+          Q12_REPETITIONS: "3"
+          Q12_DURATION: 5s
+          Q12_CONNECTIONS: "16"
+          Q12_OUT: target/q12-bench-ols
+          Q12_HTTPD_BIN: /usr/sbin/apache2
+          Q12_OLS_URL: http://127.0.0.1:8088
+          Q12_MEASUREMENT_CLASS: ci_native_github_hosted
+        run: |
+          set -euo pipefail
+          OLS_PID="$(sudo cat /tmp/lshttpd/lshttpd.pid 2>/dev/null || true)"
+          if [[ -z "$OLS_PID" ]]; then
+            OLS_PID="$(pgrep -f '/usr/local/lsws/bin/lshttpd' | head -n1 || true)"
+          fi
+          [[ "$OLS_PID" =~ ^[0-9]+$ ]] || { echo "OLS_PID_NOT_FOUND" >&2; exit 1; }
+          kill -0 "$OLS_PID"
+          OLS_VERSION="$(dpkg-query -W -f='${Version}' openlitespeed)"
+          Q12_OLS_PID="$OLS_PID" Q12_OLS_VERSION="OpenLiteSpeed $OLS_VERSION" \
+            bash scripts/bench/run-http-bench.sh
+      - name: Upload native OLS evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-ols-evidence
+          path: target/q12-bench-ols
+          if-no-files-found: warn
+          retention-days: 14

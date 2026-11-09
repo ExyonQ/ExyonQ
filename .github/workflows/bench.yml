@@ -4,10 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    # The feature branch trigger lets the first Linux baseline run before this
-    # workflow is available on the default branch. It can be removed after
-    # the Q-12 branch is integrated.
-    branches: [main, feat/q12-bench]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
