@@ -53,6 +53,14 @@ python3 scripts/benchmarks/generate-competitive-dashboard.py
 - The run was a push on `feat/q12-bench`; `bench-regression` was skipped. The
   `main` baseline and a passing PR gate remain pending because `main` is 0.9.1.
 
+### Main Linux CI baseline (2026-11-09)
+
+- [q12-main-linux-2026-11-09.md](q12-main-linux-2026-11-09.md) — real
+  `main` baseline from run `42705724344` at revision `68d1257`; this is the
+  artifact consumed by the PR regression gate.
+- [q12-main-linux-2026-11-09.json](q12-main-linux-2026-11-09.json) — exact
+  machine-readable report.
+
 ### Native OLS Linux CI baseline (2026-11-09)
 
 - [q12-ols-linux-2026-11-09.md](q12-ols-linux-2026-11-09.md) — first native
