@@ -93,4 +93,5 @@ jobs:
             --baseline baseline/report.json \
             --candidate candidate/report.json \
             --max-rps-drop-pct 25 \
-            --max-p99-rise-pct 30
+            --max-p99-rise-pct 30 \
+            --normalize-to nginx

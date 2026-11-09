@@ -211,6 +211,13 @@ Result: `BENCH_REGRESSION_GATE=PASS`, exit 0, all six cells present. The
 candidate was faster than the baseline in every cell, so this exercised the
 pass path; it was not a regression run.
 
+The absolute gate was also exercised against the `main` baseline (`68d1257`,
+run `42705724344`) with PR #78. It failed because the runs used different EPYC
+models: nginx and Apache dropped 23–28% and p99 rose up to 93%, while ExyonQ
+stayed inside the 25%/30% limits. Normalized to nginx in the same run,
+ExyonQ's RPS ratio moved from 1.129 to 1.115 at `1k.bin` and from 1.103 to
+1.221 at `64k.bin`; CI now uses `--normalize-to nginx`.
+
 The failure path was exercised separately with `DEVELOPMENT_AID`: a copy of
 the real baseline report with the `1k.bin/exyonq` RPS median halved. The gate
 returned exit 1 with
@@ -227,10 +234,10 @@ of the gate logic, not benchmark evidence.
   reference workstation is macOS arm64. Run `42695705050` is the first
   `ci_native_github_hosted` baseline on `ubuntu-24.04`; its absolute numbers
   are not portable.
-- **The `main` baseline and PR gate are NOT EXECUTED.** A branch baseline
-  exists, but `origin/main` is 0.9.1 and does not contain 0.9.2. The workflow
-  therefore remains fail-closed with `BENCH_BASELINE=NOT_FOUND` for a PR until
-  the release line is integrated.
+- **The `main` baseline and PR gate are EXECUTED.** `main` is at `68d1257`
+  (0.9.2 + Q-12) and run `42705724344` produced the baseline. The first
+  absolute PR gate failed on a different runner; CI now uses the normalized
+  mode and remains fail-closed if the baseline artifact or a cell is missing.
 - **Host noise is real.** On the reference host the 95% intervals of different
   servers can overlap; the report is an engineering baseline, not a ranking.
 - The harness does not replace the private official campaign harness.

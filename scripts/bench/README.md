@@ -77,27 +77,35 @@ though a non-loopback URL is rejected outright.
 bash scripts/gates/bench-regression-gate.sh \
   --baseline baseline/report.json \
   --candidate current/report.json \
-  --max-rps-drop-pct 10 --max-p99-rise-pct 15
+  --max-rps-drop-pct 10 --max-p99-rise-pct 15 \
+  --normalize-to nginx
 ```
 
 The gate fails closed when a cell is missing, throughput drops more than the
 tolerance or p99 rises more than the tolerance.
+
+With `--normalize-to nginx`, each server's RPS and p99 are divided by the
+nginx measurement from the same run before applying the tolerances. This
+removes host-wide shifts between the main baseline and a PR candidate;
+absolute values remain in every report.
 
 ## CI
 
 `.github/workflows/bench.yml` runs the native Linux benchmark on
 `ubuntu-24.04` for `main`/PR/manual runs and uploads `bench-evidence`. On a PR,
 `bench-regression` downloads the latest successful `main` artifact and runs
-the gate against it with wider shared-runner tolerances (25% RPS, 30% p99).
+the gate against it with wider shared-runner tolerances (25% RPS, 30% p99)
+and `--normalize-to nginx`.
 There is no fake baseline: if no successful `main` artifact exists, the job
 fails with `BENCH_BASELINE=NOT_FOUND`.
 
 The first branch run succeeded on 2026-11-09 (run `42695705050`, Ubuntu
 24.04, 3 × 5 s, 16 connections) and its evidence is committed as
 `docs/benchmarks/q12-ci-linux-2026-11-09.md`. That was a push run, so the PR
-gate was skipped. There is still no `main` baseline because `main` is 0.9.1;
-the PR gate correctly fails with `BENCH_BASELINE=NOT_FOUND` until 0.9.2 is
-integrated into the release line.
+gate was skipped. The `main` baseline is run `42705724344` at `68d1257`; the absolute PR gate
+failed on a different EPYC runner, so CI uses the normalized mode for
+cross-runner comparisons. The gate remains fail-closed when the reference or
+a cell is missing.
 
 `.github/workflows/bench-ols.yml` installs the official native OLS Ubuntu
 package and runs `Q12_SERVERS=exyonq,nginx,apache,ols`; it uses the tracked
