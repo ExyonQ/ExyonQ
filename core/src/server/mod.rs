@@ -299,9 +299,13 @@ async fn accept_loop(
         let accept_result = tokio::select! {
             result = listener.accept() => result,
             changed = shutdown_rx.changed() => {
-                if changed.is_ok() && ops.shutdown_requested() {
+                if changed.is_err() {
                     break;
                 }
+                // Shutdown starts the drain; keep the listener open so new
+                // connections receive the 503 boundary instead of ECONNREFUSED
+                // while in-flight requests finish. run_on_impl aborts the accept
+                // tasks only after finalize_graceful_shutdown.
                 continue;
             }
         };
@@ -538,8 +542,8 @@ async fn run_on_impl(
         .into_iter()
         .filter(|addr| *addr != listen)
         .collect();
+    let mut extra_tasks = Vec::with_capacity(extra_listens.len());
     if !extra_listens.is_empty() {
-        let mut extra_tasks = Vec::with_capacity(extra_listens.len());
         for addr in extra_listens {
             let acceptor = config.listen_uses_tls(addr).then(|| shared_tls.clone());
             let listener = bind_tuned(addr).await?;
@@ -557,13 +561,6 @@ async fn run_on_impl(
                 config.primary_server().proxy_protocol.clone(),
             )));
         }
-        let mut shutdown_rx = ops.shutdown_rx();
-        tokio::spawn(async move {
-            let _ = shutdown_rx.changed().await;
-            for task in &extra_tasks {
-                task.abort();
-            }
-        });
     }
 
     {
@@ -922,6 +919,7 @@ async fn run_on_impl(
         info!("shutdown requested, stopping sdp-p1 listener");
         sdp.signal_stop();
         finalize_graceful_shutdown(&ops).await;
+        stop_listener_tasks(&mut extra_tasks).await;
         sdp.join();
         return Ok(());
     }
@@ -935,6 +933,7 @@ async fn run_on_impl(
         workers_handle.signal_stop();
         epoll_start::signal_registered_keepalive_pool_stop();
         finalize_graceful_shutdown(&ops).await;
+        stop_listener_tasks(&mut extra_tasks).await;
         workers_handle.stop();
         epoll_start::stop_registered_keepalive_pool();
         return Ok(());
@@ -949,6 +948,7 @@ async fn run_on_impl(
         workers_handle.signal_stop();
         epoll_start::signal_registered_keepalive_pool_stop();
         finalize_graceful_shutdown(&ops).await;
+        stop_listener_tasks(&mut extra_tasks).await;
         workers_handle.stop();
         epoll_start::stop_registered_keepalive_pool();
         return Ok(());
@@ -965,6 +965,7 @@ async fn run_on_impl(
             sync_workers.signal_stop();
             epoll_start::signal_registered_keepalive_pool_stop();
             finalize_graceful_shutdown(&ops).await;
+            stop_listener_tasks(&mut extra_tasks).await;
             sync_workers.stop();
             epoll_start::stop_registered_keepalive_pool();
             return Ok(());
@@ -995,20 +996,26 @@ async fn run_on_impl(
     }
 
     LifecycleState::wait_for_shutdown(&ops).await;
-    info!("shutdown requested, stopping listener");
-    for task in &tasks {
-        task.abort();
-    }
+    info!("shutdown requested, draining before listener teardown");
     #[cfg(target_os = "linux")]
     epoll_start::signal_registered_keepalive_pool_stop();
     finalize_graceful_shutdown(&ops).await;
-    for task in tasks {
-        let _ = task.await;
-    }
+    stop_listener_tasks(&mut tasks).await;
+    stop_listener_tasks(&mut extra_tasks).await;
     #[cfg(target_os = "linux")]
     epoll_start::stop_registered_keepalive_pool();
 
     Ok(())
+}
+
+/// Abort listener accept loops only after the drain boundary has been finalized.
+async fn stop_listener_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
+    for task in tasks.iter() {
+        task.abort();
+    }
+    for task in tasks.drain(..) {
+        let _ = task.await;
+    }
 }
 
 /// Cap041: stop Cap024 health probes, then wait for admitted connections (bounded).
@@ -1156,6 +1163,62 @@ domains = ["example.test"]
             got.is_err(),
             "listener must serve cleartext once TLS is removed, got {got:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_keeps_listener_open_for_drain_boundary() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        let state = ServerState::new(config, build_incoming_client())
+            .await
+            .unwrap();
+        let shared = reload::wrap_state(state);
+        let ops = LifecycleState::new();
+        let active = ops
+            .try_enter()
+            .expect("admit test connection before shutdown");
+        let task = tokio::spawn(accept_loop(
+            listener,
+            shared,
+            build_incoming_client(),
+            None,
+            Arc::clone(&ops),
+            None,
+        ));
+
+        ops.request_shutdown();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut conn = TcpStream::connect(addr)
+            .await
+            .expect("listener must stay open while drain is pending");
+        conn.write_all(b"GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), conn.read_to_end(&mut response))
+            .await
+            .expect("drain boundary response timeout")
+            .unwrap();
+        assert!(
+            response.starts_with(b"HTTP/1.1 503"),
+            "new connection during drain must get 503, got {:?}",
+            String::from_utf8_lossy(&response)
+        );
+        assert!(
+            response.windows(8).any(|window| window == b"draining"),
+            "drain boundary body missing: {:?}",
+            String::from_utf8_lossy(&response)
+        );
+        assert!(
+            response.windows(12).any(|window| window == b"Retry-After:"),
+            "drain boundary Retry-After missing: {:?}",
+            String::from_utf8_lossy(&response)
+        );
+        assert!(!ops.drain_complete(), "test token must keep drain pending");
+        drop(active);
+        assert!(ops.drain_complete());
+        task.abort();
     }
 
     #[tokio::test]
