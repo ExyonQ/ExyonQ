@@ -33,9 +33,16 @@ use exyonq_waf_api::{
     InspectionLimits, OnInspectionLimit, WafAbuseGate, WafAction, WafDecision, WafEngine, WafMode,
     WafPhase,
 };
+use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
+
+/// EXQ-032: bounded per-IP violation table (mirrors the client throttle ceiling).
+/// Active bans are never evicted; a new IP that cannot be tracked is still rate
+/// limited, so the table cap cannot disable the abuse gate.
+const MAX_BAN_TRACKED_CLIENTS: usize = 10_000;
 
 /// Install native WAF + abuse + challenge before the server starts.
 ///
@@ -347,6 +354,169 @@ fn map_builtins(t: &exyonq_config_ir::WafBuiltinToggles) -> BuiltinDetectors {
     }
 }
 
+#[derive(Debug)]
+struct ViolationEntry {
+    window_start: Instant,
+    count: u32,
+    ban_until: Option<Instant>,
+    last_seen: Instant,
+}
+
+/// EXQ-032: bounded per-IP counter of enforced WAF violations.
+#[derive(Debug)]
+struct ViolationTracker {
+    window: Duration,
+    threshold: u32,
+    ban: Duration,
+    clients: Mutex<HashMap<IpAddr, ViolationEntry>>,
+}
+
+impl ViolationTracker {
+    fn new(window: Duration, threshold: u32, ban: Duration) -> Self {
+        Self {
+            window,
+            threshold,
+            ban,
+            clients: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Remaining ban for `client_ip`, if one is active at `now`.
+    fn banned_for(&self, client_ip: IpAddr, now: Instant) -> Option<Duration> {
+        let mut clients = self
+            .clients
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = clients.get_mut(&client_ip)?;
+        match entry.ban_until {
+            Some(until) if until > now => Some(until - now),
+            Some(_) => {
+                // Ban elapsed: start a clean window for this IP.
+                entry.ban_until = None;
+                entry.count = 0;
+                entry.window_start = now;
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn record(&self, client_ip: IpAddr, now: Instant) {
+        let mut clients = self
+            .clients
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = clients.get_mut(&client_ip) {
+            Self::note(entry, now, self.window, self.threshold, self.ban);
+            return;
+        }
+        if clients.len() >= MAX_BAN_TRACKED_CLIENTS && !Self::evict_one(&mut clients, now) {
+            // Every tracked row has an active ban: keep the bans and skip
+            // counting this new IP instead of evicting a protected one.
+            return;
+        }
+        let mut entry = ViolationEntry {
+            window_start: now,
+            count: 0,
+            ban_until: None,
+            last_seen: now,
+        };
+        Self::note(&mut entry, now, self.window, self.threshold, self.ban);
+        clients.insert(client_ip, entry);
+    }
+
+    fn note(
+        entry: &mut ViolationEntry,
+        now: Instant,
+        window: Duration,
+        threshold: u32,
+        ban: Duration,
+    ) {
+        entry.last_seen = now;
+        if entry.ban_until.is_some_and(|until| until > now) {
+            return;
+        }
+        entry.ban_until = None;
+        if now.saturating_duration_since(entry.window_start) >= window {
+            entry.window_start = now;
+            entry.count = 0;
+        }
+        entry.count = entry.count.saturating_add(1);
+        if entry.count >= threshold {
+            entry.count = 0;
+            entry.window_start = now;
+            entry.ban_until = Some(now + ban);
+        }
+    }
+
+    /// Evict the oldest row without an active ban. Returns false when every row
+    /// is currently banned.
+    fn evict_one(clients: &mut HashMap<IpAddr, ViolationEntry>, now: Instant) -> bool {
+        let victim = clients
+            .iter()
+            .filter(|(_, entry)| entry.ban_until.is_none_or(|until| until <= now))
+            .min_by_key(|(_, entry)| entry.last_seen)
+            .map(|(ip, _)| *ip);
+        match victim {
+            Some(ip) => clients.remove(&ip).is_some(),
+            None => false,
+        }
+    }
+}
+
+struct EnvAbuseGate {
+    bucket: SyncTokenBucket,
+    challenge: bool,
+    violations: Option<ViolationTracker>,
+}
+
+impl EnvAbuseGate {
+    fn check_at(&self, client_ip: IpAddr, now: Instant) -> Option<WafDecision> {
+        if let Some(decision) = self.ban_decision(client_ip, now) {
+            return Some(decision);
+        }
+        let key = client_ip.to_string();
+        if self.bucket.allow_key(&key) {
+            return None;
+        }
+        if self.challenge {
+            Some(WafDecision::abuse_challenge(WafPhase::RequestHeaders))
+        } else {
+            let retry = self.bucket.retry_after_secs(&key).max(1) as u32;
+            Some(WafDecision::abuse_rate_limit_with_retry(
+                WafPhase::RequestHeaders,
+                retry,
+            ))
+        }
+    }
+
+    fn ban_decision(&self, client_ip: IpAddr, now: Instant) -> Option<WafDecision> {
+        let remaining = self.violations.as_ref()?.banned_for(client_ip, now)?;
+        let retry = remaining.as_secs().max(1).min(u64::from(u32::MAX)) as u32;
+        Some(WafDecision::abuse_ban(WafPhase::RequestHeaders, retry))
+    }
+
+    fn record_violation_at(&self, client_ip: IpAddr, now: Instant) {
+        if let Some(tracker) = &self.violations {
+            tracker.record(client_ip, now);
+        }
+    }
+}
+
+impl WafAbuseGate for EnvAbuseGate {
+    fn check(&self, client_ip: IpAddr, _route_id: Option<&str>) -> Option<WafDecision> {
+        self.check_at(client_ip, Instant::now())
+    }
+
+    fn check_ban(&self, client_ip: IpAddr) -> Option<WafDecision> {
+        self.ban_decision(client_ip, Instant::now())
+    }
+
+    fn record_violation(&self, client_ip: IpAddr) {
+        self.record_violation_at(client_ip, Instant::now());
+    }
+}
+
 /// Build abuse gate from IR (+ env overrides). `None` means abuse off.
 fn build_abuse_gate_from_config(
     config: &AppConfig,
@@ -391,35 +561,178 @@ fn build_abuse_gate_from_config(
 
     let as_challenge = mode == WafAbuseMode::Challenge;
 
-    struct EnvAbuseGate {
-        bucket: SyncTokenBucket,
-        challenge: bool,
-    }
-
-    impl WafAbuseGate for EnvAbuseGate {
-        fn check(&self, client_ip: IpAddr, _route_id: Option<&str>) -> Option<WafDecision> {
-            let key = client_ip.to_string();
-            if self.bucket.allow_key(&key) {
-                return None;
-            }
-            if self.challenge {
-                Some(WafDecision::abuse_challenge(WafPhase::RequestHeaders))
-            } else {
-                let retry = self.bucket.retry_after_secs(&key).max(1) as u32;
-                Some(WafDecision::abuse_rate_limit_with_retry(
-                    WafPhase::RequestHeaders,
-                    retry,
-                ))
-            }
+    // EXQ-032: violation counting/bans are opt-in (`violation_threshold = 0`
+    // disables them) so existing abuse configurations keep their behaviour.
+    let violations = if ir.violation_threshold > 0 {
+        if ir.violation_window_seconds == 0 || ir.ban_seconds == 0 {
+            return Err(anyhow::anyhow!(
+                "waf.abuse.violation_window_seconds and ban_seconds must be >= 1"
+            ));
         }
-    }
+        Some(ViolationTracker::new(
+            Duration::from_secs(ir.violation_window_seconds),
+            ir.violation_threshold,
+            Duration::from_secs(ir.ban_seconds),
+        ))
+    } else {
+        None
+    };
 
     info!(
         ?mode,
-        rps, burst, "waf abuse gate prepared (SyncTokenBucket; env overrides IR when set)"
+        rps,
+        burst,
+        violation_threshold = ir.violation_threshold,
+        violation_window_seconds = ir.violation_window_seconds,
+        ban_seconds = ir.ban_seconds,
+        "waf abuse gate prepared (SyncTokenBucket; env overrides IR when set)"
     );
     Ok(Some(Arc::new(EnvAbuseGate {
         bucket: SyncTokenBucket::new(rps, burst),
         challenge: as_challenge,
+        violations,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tracker(threshold: u32) -> ViolationTracker {
+        ViolationTracker::new(Duration::from_secs(60), threshold, Duration::from_secs(300))
+    }
+
+    fn ip(raw: &str) -> IpAddr {
+        raw.parse().expect("test ip")
+    }
+
+    fn generated(index: u32) -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::from(
+            (u32::from(10u8) << 24) | (index + 2),
+        ))
+    }
+
+    #[test]
+    fn twenty_violations_ban_only_that_ip() {
+        let tracker = tracker(20);
+        let t0 = Instant::now();
+        let bad = ip("203.0.113.20");
+        let good = ip("203.0.113.21");
+
+        for i in 0..19 {
+            tracker.record(bad, t0 + Duration::from_millis(i));
+            assert_eq!(
+                tracker.banned_for(bad, t0 + Duration::from_secs(1)),
+                None,
+                "ban must not trigger before the threshold"
+            );
+        }
+        tracker.record(bad, t0 + Duration::from_secs(2));
+
+        assert!(tracker
+            .banned_for(bad, t0 + Duration::from_secs(2))
+            .is_some());
+        assert_eq!(tracker.banned_for(good, t0 + Duration::from_secs(2)), None);
+    }
+
+    #[test]
+    fn ban_expires_and_does_not_extend() {
+        let tracker = tracker(2);
+        let t0 = Instant::now();
+        let client = ip("198.51.100.7");
+
+        tracker.record(client, t0);
+        tracker.record(client, t0 + Duration::from_secs(1));
+        assert_eq!(
+            tracker.banned_for(client, t0 + Duration::from_secs(1)),
+            Some(Duration::from_secs(300))
+        );
+
+        // A violating request during the ban must not extend it.
+        tracker.record(client, t0 + Duration::from_secs(10));
+        assert_eq!(
+            tracker.banned_for(client, t0 + Duration::from_secs(301)),
+            None
+        );
+    }
+
+    #[test]
+    fn window_expiry_resets_the_count() {
+        let tracker = tracker(20);
+        let t0 = Instant::now();
+        let client = ip("192.0.2.50");
+
+        for i in 0..10 {
+            tracker.record(client, t0 + Duration::from_secs(i));
+        }
+        for i in 0..10 {
+            tracker.record(client, t0 + Duration::from_secs(60 + i));
+        }
+        assert_eq!(
+            tracker.banned_for(client, t0 + Duration::from_secs(70)),
+            None
+        );
+    }
+
+    #[test]
+    fn violation_table_is_bounded() {
+        let tracker = tracker(20);
+        let t0 = Instant::now();
+        let oldest = ip("10.0.0.1");
+        tracker.record(oldest, t0 - Duration::from_secs(1));
+        for i in 0..(MAX_BAN_TRACKED_CLIENTS as u32 - 1) {
+            tracker.record(generated(i), t0 + Duration::from_millis(u64::from(i)));
+        }
+        tracker.record(ip("10.9.9.9"), t0 + Duration::from_secs(1));
+
+        let clients = tracker.clients.lock().expect("tracker lock");
+        assert_eq!(clients.len(), MAX_BAN_TRACKED_CLIENTS);
+        assert!(
+            !clients.contains_key(&oldest),
+            "oldest unbanned row must be evicted"
+        );
+    }
+
+    #[test]
+    fn active_bans_survive_a_full_table() {
+        let tracker = tracker(1);
+        let t0 = Instant::now();
+        let banned = ip("10.0.0.1");
+        tracker.record(banned, t0);
+        for i in 0..(MAX_BAN_TRACKED_CLIENTS as u32) {
+            tracker.record(generated(i), t0 + Duration::from_millis(u64::from(i)));
+        }
+
+        let clients = tracker.clients.lock().expect("tracker lock");
+        assert!(clients.len() <= MAX_BAN_TRACKED_CLIENTS);
+        assert!(
+            clients
+                .get(&banned)
+                .is_some_and(|entry| entry.ban_until.is_some()),
+            "an active ban must never be evicted"
+        );
+    }
+
+    #[test]
+    fn gate_returns_ban_decision_with_retry_after() {
+        let gate = EnvAbuseGate {
+            bucket: SyncTokenBucket::new(1_000, 1_000),
+            challenge: false,
+            violations: Some(tracker(20)),
+        };
+        let t0 = Instant::now();
+        let client = ip("203.0.113.30");
+        for i in 0..20 {
+            gate.record_violation_at(client, t0 + Duration::from_millis(i));
+        }
+        let banned_at = t0 + Duration::from_millis(19);
+        let decision = gate.check_at(client, banned_at).expect("banned");
+        assert_eq!(decision.action, WafAction::RateLimit);
+        assert_eq!(
+            decision.violations[0].rule_id.as_str(),
+            exyonq_waf_api::RULE_ID_ABUSE_BAN
+        );
+        assert_eq!(decision.retry_after_secs, Some(300));
+        assert!(gate.check_at(ip("203.0.113.31"), banned_at).is_none());
+    }
 }

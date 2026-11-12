@@ -95,6 +95,7 @@ fn emit_wire_reject_access(started: Instant, client_ip: Option<&str>, write_ok: 
     observability::emit_access_terminal(AccessTerminal {
         method: "?",
         path: "-",
+        host: None,
         status: 400,
         protocol: "http1.1-wire",
         duration_ms: observability::duration_ms(started),
@@ -143,9 +144,11 @@ pub(crate) fn emit_wire_access(
         .find(|(n, _)| n.eq_ignore_ascii_case("x-request-id"))
         .map(|(_, v)| v.as_str());
     let identity = observability::resolve_request_identity(raw_xid);
+    let host = wire_host_from_pairs(&pairs).map(strip_host_port);
     observability::emit_access_terminal(AccessTerminal {
         method: "GET",
         path,
+        host,
         status,
         protocol: "http1.1-wire",
         duration_ms,
@@ -487,6 +490,7 @@ pub(crate) fn evaluate_wire_waf(
                 b"",
                 generation,
                 state.waf_enforce,
+                state.waf_abuse.as_deref(),
             );
             return hook;
         }
@@ -593,8 +597,14 @@ enum ProxyWireOutcome<S> {
     Fallback(S, Bytes, Bytes),
 }
 
+struct WireWafReject {
+    bytes: Vec<u8>,
+    status: u16,
+    outcome: &'static str,
+}
+
 /// Wire proxy fast path; returns `Fallback` when Hyper must complete the request.
-fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<Vec<u8>> {
+fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<WireWafReject> {
     // The wire view has no request body. POST/PUT must reach Hyper so body
     // rules (944300, 920120, …) run against their real payload; applying the
     // header-only wire view to them caused broad false 403s.
@@ -607,7 +617,11 @@ fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<Vec<u
         head,
         &ctx.x_forwarded_for,
     ) {
-        crate::waf::WafHookResult::Reject(reject) => Some(format_waf_reject_http(&reject)),
+        crate::waf::WafHookResult::Reject(reject) => Some(WireWafReject {
+            bytes: format_waf_reject_http(&reject),
+            status: reject.status.as_u16(),
+            outcome: waf_reject_access_outcome(&reject),
+        }),
         crate::waf::WafHookResult::Continue => None,
     }
 }
@@ -1116,10 +1130,32 @@ where
 {
     // Hyper's Uri drops the fragment from the request-target. Check the raw
     // head before replaying it; otherwise 920610/920100 cannot see `#tag`.
-    if let Some(bytes) = wire_waf_reject_bytes(&ctx, head.as_ref()) {
+    if let Some(reject) = wire_waf_reject_bytes(&ctx, head.as_ref()) {
+        let started = Instant::now();
+        let client_ip = ctx.x_forwarded_for.to_str().ok();
         let mut stream = stream;
-        if let Err(err) = stream.write_all(&bytes).await {
-            warn!(%err, "waf reject response write failed");
+        match stream.write_all(&reject.bytes).await {
+            Ok(()) => {
+                exyonq_module_api::wire_record_response(reject.status);
+                emit_wire_access(
+                    head.as_ref(),
+                    reject.status,
+                    reject.outcome,
+                    client_ip,
+                    observability::duration_ms(started),
+                );
+            }
+            Err(err) => {
+                WIRE_WAF_REJECT_RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
+                warn!(%err, "waf reject response write failed");
+                emit_wire_access(
+                    head.as_ref(),
+                    reject.status,
+                    "response_write_failed",
+                    client_ip,
+                    observability::duration_ms(started),
+                );
+            }
         }
         return;
     }

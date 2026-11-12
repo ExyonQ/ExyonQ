@@ -214,6 +214,7 @@ pub fn resolve_request_identity(raw_x_request_id: Option<&str>) -> RequestIdenti
 pub struct AccessTerminal<'a> {
     pub method: &'a str,
     pub path: &'a str,
+    pub host: Option<&'a str>,
     pub status: u16,
     pub protocol: &'a str,
     pub duration_ms: u64,
@@ -235,6 +236,7 @@ pub fn emit_access_terminal(ev: AccessTerminal<'_>) {
         event = "access",
         method = %ev.method,
         path = %ev.path,
+        host = ev.host.unwrap_or("-"),
         status = ev.status,
         protocol = %ev.protocol,
         duration_ms = ev.duration_ms,
@@ -397,6 +399,7 @@ mod tests {
         emit_access_terminal(AccessTerminal {
             method: "GET",
             path: "/",
+            host: None,
             status: 200,
             protocol: "test",
             duration_ms: 0,

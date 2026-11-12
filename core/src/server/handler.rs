@@ -391,6 +391,7 @@ async fn serve_http3_request_bytes(
         access_needed,
         method.as_str(),
         &request_path,
+        request_host.as_deref(),
         protocol,
         started,
         Some(client_ip.as_str()),
@@ -612,6 +613,7 @@ async fn serve_connection_inner(
                     access_needed,
                     method.as_str(),
                     &request_path,
+                    request_host_value.as_deref(),
                     protocol,
                     started,
                     Some(client_ip.as_str()),
@@ -625,6 +627,7 @@ async fn serve_connection_inner(
                     access_needed,
                     method.as_str(),
                     &request_path,
+                    request_host_value.as_deref(),
                     protocol,
                     started,
                     Some(client_ip.as_str()),
@@ -650,6 +653,7 @@ async fn serve_connection_inner(
                 access_needed,
                 method.as_str(),
                 &request_path,
+                request_host_value.as_deref(),
                 protocol,
                 started,
                 Some(client_ip.as_str()),
@@ -666,6 +670,7 @@ async fn serve_connection_inner(
                     access_needed,
                     method.as_str(),
                     &request_path,
+                    request_host_value.as_deref(),
                     protocol,
                     started,
                     Some(client_ip.as_str()),
@@ -730,6 +735,7 @@ async fn serve_connection_inner(
                                 access_needed,
                                 method.as_str(),
                                 &request_path,
+                                request_host_value.as_deref(),
                                 protocol,
                                 started,
                                 Some(client_ip.as_str()),
@@ -755,6 +761,7 @@ async fn serve_connection_inner(
                             access_needed,
                             method.as_str(),
                             &request_path,
+                            request_host_value.as_deref(),
                             protocol,
                             started,
                             Some(client_ip.as_str()),
@@ -786,6 +793,7 @@ async fn serve_connection_inner(
                             access_needed,
                             method.as_str(),
                             &request_path,
+                            request_host_value.as_deref(),
                             protocol,
                             started,
                             Some(client_ip.as_str()),
@@ -842,6 +850,7 @@ async fn serve_connection_inner(
             access_needed,
             method.as_str(),
             &request_path,
+            request_host_value.as_deref(),
             protocol,
             started,
             Some(client_ip.as_str()),
@@ -871,6 +880,7 @@ fn finish_hyper(
     emit_access: bool,
     method: &str,
     path: &str,
+    host: Option<&str>,
     protocol: &str,
     started: std::time::Instant,
     client_ip: Option<&str>,
@@ -883,6 +893,7 @@ fn finish_hyper(
             crate::observability::emit_access_terminal(crate::observability::AccessTerminal {
                 method,
                 path,
+                host,
                 status: response.status().as_u16(),
                 protocol,
                 duration_ms: crate::observability::duration_ms(started),
@@ -1402,7 +1413,7 @@ async fn handle_core_request(
         response,
     )
     .await;
-    waf_response_gate(
+    let response = waf_response_gate(
         state,
         &method,
         host.as_deref(),
@@ -1412,7 +1423,24 @@ async fn handle_core_request(
         client_ip,
         response,
     )
-    .await
+    .await;
+    // EXQ-028: a response-phase WAF reject is synthesized after the first
+    // error-page pass, so resolve `error_pages` for it too. Without the marker
+    // this would re-read the same document for every 4xx/5xx response.
+    if response.extensions().get::<WafRejectResponse>().is_some() {
+        maybe_error_page(
+            state,
+            &method,
+            &path,
+            host.as_deref(),
+            local_port,
+            &request_pairs,
+            response,
+        )
+        .await
+    } else {
+        response
+    }
 }
 
 fn request_has_body(req: &Request<Incoming>) -> bool {
@@ -4464,9 +4492,15 @@ fn text_response(status: StatusCode, body: &str) -> Response<BoxBody> {
 fn accepts_html(headers: &[(String, String)]) -> bool {
     headers.iter().any(|(name, value)| {
         name.eq_ignore_ascii_case("accept")
-            && value
-                .split(',')
-                .any(|part| part.trim().to_ascii_lowercase().starts_with("text/html"))
+            && value.split(',').any(|part| {
+                let media = part
+                    .split(';')
+                    .next()
+                    .unwrap_or(part)
+                    .trim()
+                    .to_ascii_lowercase();
+                media == "text/html" || media == "*/*"
+            })
     })
 }
 
@@ -4648,6 +4682,11 @@ fn log_rate_limit(
     }
 }
 
+/// Marks a response synthesized from a WAF reject so the Hyper boundary can
+/// resolve the server `error_pages` document for it (EXQ-028).
+#[derive(Clone, Copy, Debug)]
+struct WafRejectResponse;
+
 fn waf_reject_response(reject: crate::waf::WafReject) -> Response<BoxBody> {
     let mut builder = Response::builder()
         .status(reject.status)
@@ -4676,6 +4715,7 @@ fn waf_reject_response(reject: crate::waf::WafReject) -> Response<BoxBody> {
     response
         .extensions_mut()
         .insert(crate::waf_body::WafBodyChecked);
+    response.extensions_mut().insert(WafRejectResponse);
     response
 }
 
@@ -4885,6 +4925,7 @@ fn waf_body_gate(
         body,
         state.generation,
         state.waf_enforce,
+        state.waf_abuse.as_deref(),
     );
     match hook {
         crate::waf::WafHookResult::Continue => WafBodyGate::Continue { inspection_limited },
@@ -6732,6 +6773,89 @@ mod tests {
                 .unwrap_err(),
             StatusCode::PAYLOAD_TOO_LARGE
         );
+    }
+
+    #[test]
+    fn accepts_html_covers_html_and_wildcard_media_ranges() {
+        let header = |value: &str| vec![("accept".to_string(), value.to_string())];
+        assert!(accepts_html(&header("text/html")));
+        assert!(accepts_html(&header("text/html,application/xhtml+xml")));
+        assert!(accepts_html(&header("text/html;q=0.9")));
+        assert!(accepts_html(&header("*/*")));
+        assert!(accepts_html(&header("application/json, */*;q=0.8")));
+        assert!(!accepts_html(&header("application/json")));
+        assert!(!accepts_html(&[]));
+    }
+
+    /// EXQ-028: a WAF 403 is a 4xx response like any other; when the server
+    /// declares `error_pages`, both HTML and wildcard clients must receive the
+    /// document with the original status and `no-cache`.
+    #[tokio::test]
+    async fn waf_403_uses_error_page_for_html_and_wildcard_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("403.html"), b"custom-403-page\n").unwrap();
+        let mut assets = route("assets", "/");
+        assets.root = Some(dir.path().to_path_buf());
+        let mut error_pages = HashMap::new();
+        error_pages.insert("403".to_string(), "/403.html".to_string());
+        let config = AppConfig {
+            config_version: 1,
+            includes: Vec::new(),
+            tuning: Default::default(),
+            servers: vec![ServerConfig {
+                listen: "127.0.0.1:8080".into(),
+                server_name: ServerNames::None,
+                routes: vec!["assets".into()],
+                tls: None,
+                http3_listen: None,
+                error_pages,
+                proxy_protocol: None,
+            }],
+            routes: vec![assets],
+            upstreams: HashMap::new(),
+            pools_fcgi: HashMap::new(),
+            cache_policies: HashMap::new(),
+            maps: Default::default(),
+            modules: Default::default(),
+            static_section: Default::default(),
+            full_page_cache: Default::default(),
+            http3: Default::default(),
+            waf: Default::default(),
+            logging: Default::default(),
+        };
+        let (state, _static_guard, _proxy_guard) = state_for(config).await;
+        for accept in ["text/html", "*/*"] {
+            let headers = vec![("accept".to_string(), accept.to_string())];
+            let response = maybe_error_page(
+                &state,
+                &Method::GET,
+                "/blocked",
+                None,
+                None,
+                &headers,
+                text_response(StatusCode::FORBIDDEN, "blocked by waf"),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "accept={accept}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|value| value.to_str().ok()),
+                Some("no-cache"),
+                "accept={accept}"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|value| value.to_str().ok()),
+                Some("text/html; charset=utf-8"),
+                "accept={accept}"
+            );
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(&body[..], b"custom-403-page\n", "accept={accept}");
+        }
     }
 }
 

@@ -21,7 +21,7 @@
 
 /// Generic drain reject (non-probe traffic).
 pub(crate) const DRAINING_RESPONSE: &[u8] =
-    b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\ndraining";
+    b"HTTP/1.1 503 Service Unavailable\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nRetry-After: 5\r\nConnection: close\r\n\r\ndraining";
 
 const LIVE_RESPONSE: &[u8] =
     b"HTTP/1.1 200 OK\r\nServer: exyonq\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nlive";
