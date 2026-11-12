@@ -61,6 +61,18 @@ fn default_abuse_burst() -> u32 {
     20
 }
 
+fn default_abuse_violation_threshold() -> u32 {
+    0
+}
+
+fn default_abuse_violation_window_seconds() -> u64 {
+    60
+}
+
+fn default_abuse_ban_seconds() -> u64 {
+    300
+}
+
 /// Top-level `[waf]` configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -154,6 +166,16 @@ pub struct WafAbuseConfig {
     pub requests_per_second: u32,
     #[serde(default = "default_abuse_burst")]
     pub burst: u32,
+    /// EXQ-032: enforced WAF Blocks per client IP inside the violation window
+    /// that trigger a temporary ban. `0` disables violation counting.
+    #[serde(default = "default_abuse_violation_threshold")]
+    pub violation_threshold: u32,
+    /// EXQ-032: window for `violation_threshold`.
+    #[serde(default = "default_abuse_violation_window_seconds")]
+    pub violation_window_seconds: u64,
+    /// EXQ-032: ban duration after `violation_threshold` is reached.
+    #[serde(default = "default_abuse_ban_seconds")]
+    pub ban_seconds: u64,
     /// OL-04: external CAPTCHA provider. `native` keeps the self-hosted PoW.
     #[serde(default, skip_serializing_if = "is_native_provider")]
     pub provider: WafCaptchaProvider,
@@ -189,6 +211,9 @@ impl Default for WafAbuseConfig {
             mode: WafAbuseMode::Off,
             requests_per_second: default_abuse_rps(),
             burst: default_abuse_burst(),
+            violation_threshold: default_abuse_violation_threshold(),
+            violation_window_seconds: default_abuse_violation_window_seconds(),
+            ban_seconds: default_abuse_ban_seconds(),
             provider: WafCaptchaProvider::Native,
             site_key: None,
             secret_env: None,
@@ -371,7 +396,29 @@ pub(crate) fn validate_waf(waf: &WafConfig) -> Result<(), ConfigError> {
 
 fn validate_waf_abuse(abuse: &WafAbuseConfig) -> Result<(), ConfigError> {
     if abuse.mode == WafAbuseMode::Off {
+        if abuse.violation_threshold > 0 {
+            return Err(ConfigError::Parse(
+                "waf.abuse.violation_threshold requires mode rate_limit or challenge".into(),
+            ));
+        }
         return Ok(());
+    }
+    if abuse.violation_threshold > 1_000_000 {
+        return Err(ConfigError::Parse(
+            "waf.abuse.violation_threshold must be <= 1000000".into(),
+        ));
+    }
+    if abuse.violation_threshold > 0 {
+        if abuse.violation_window_seconds == 0 || abuse.violation_window_seconds > 86_400 {
+            return Err(ConfigError::Parse(
+                "waf.abuse.violation_window_seconds must be between 1 and 86400".into(),
+            ));
+        }
+        if abuse.ban_seconds == 0 || abuse.ban_seconds > 604_800 {
+            return Err(ConfigError::Parse(
+                "waf.abuse.ban_seconds must be between 1 and 604800".into(),
+            ));
+        }
     }
     if abuse.requests_per_second == 0 {
         return Err(ConfigError::Parse(
@@ -520,6 +567,9 @@ target = "http://127.0.0.1:9000"
         assert_eq!(config.waf.abuse.mode, WafAbuseMode::Off);
         assert_eq!(config.waf.abuse.requests_per_second, 10);
         assert_eq!(config.waf.abuse.burst, 20);
+        assert_eq!(config.waf.abuse.violation_threshold, 0);
+        assert_eq!(config.waf.abuse.violation_window_seconds, 60);
+        assert_eq!(config.waf.abuse.ban_seconds, 300);
         assert_eq!(config.waf.abuse.provider, WafCaptchaProvider::Native);
         assert!(config.waf.abuse.site_key.is_none());
         assert!(config.waf.rulesets.is_empty());
@@ -543,6 +593,9 @@ fail_policy = "closed_for_invalid_rules"
 mode = "rate_limit"
 requests_per_second = 5
 burst = 15
+violation_threshold = 20
+violation_window_seconds = 120
+ban_seconds = 600
 
 [[waf.ruleset]]
 id = "exyonq-core"
@@ -562,6 +615,9 @@ rule_ids = ["EXY-XSS-1001"]
             WafOnInspectionLimitIr::Block
         );
         assert_eq!(config.waf.abuse.mode, WafAbuseMode::RateLimit);
+        assert_eq!(config.waf.abuse.violation_threshold, 20);
+        assert_eq!(config.waf.abuse.violation_window_seconds, 120);
+        assert_eq!(config.waf.abuse.ban_seconds, 600);
         assert_eq!(config.waf.rulesets.len(), 1);
         assert_eq!(config.waf.rulesets[0].id, "exyonq-core");
         assert_eq!(config.waf.exclusions.len(), 1);
@@ -719,6 +775,50 @@ max_inspection_body_bytes = 0
         let base = fingerprint(&config);
         let mut changed = config.clone();
         changed.waf.abuse.mode = WafAbuseMode::RateLimit;
+        assert_ne!(base, fingerprint(&changed));
+    }
+
+    #[test]
+    fn violation_threshold_requires_abuse_mode() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.abuse]
+violation_threshold = 20
+"#
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(
+            err.to_string().contains("violation_threshold"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn zero_violation_window_rejected() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.abuse]
+mode = "rate_limit"
+violation_threshold = 20
+violation_window_seconds = 0
+"#
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(
+            err.to_string().contains("violation_window_seconds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_violation_threshold_changes() {
+        let config: AppConfig = MINIMAL.parse().unwrap();
+        let base = fingerprint(&config);
+        let mut changed = config.clone();
+        changed.waf.abuse.mode = WafAbuseMode::RateLimit;
+        changed.waf.abuse.violation_threshold = 20;
         assert_ne!(base, fingerprint(&changed));
     }
 

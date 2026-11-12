@@ -4925,6 +4925,7 @@ fn waf_body_gate(
         body,
         state.generation,
         state.waf_enforce,
+        state.waf_abuse.as_deref(),
     );
     match hook {
         crate::waf::WafHookResult::Continue => WafBodyGate::Continue { inspection_limited },

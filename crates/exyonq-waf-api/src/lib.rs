@@ -118,6 +118,10 @@ impl Default for InspectionLimits {
 /// (modsecurity.conf 200002/200003); signature blocks stay 403.
 pub const RULE_ID_REQUEST_BODY_INVALID: &str = "EXY-REQBODY-001";
 
+/// EXQ-032: the per-IP violation counter reached its threshold and the client
+/// is temporarily banned. Host maps this to 429 with `Retry-After`.
+pub const RULE_ID_ABUSE_BAN: &str = "EXY-ABUSE-BAN-1001";
+
 /// Per-request mutable state for incremental body inspection.
 #[derive(Debug, Clone, Default)]
 pub struct BodyInspectionState {
@@ -209,6 +213,25 @@ impl WafDecision {
         }
     }
 
+    /// EXQ-032: temporary ban after repeated enforced WAF violations.
+    pub fn abuse_ban(phase: WafPhase, retry_after_secs: u32) -> Self {
+        Self {
+            action: WafAction::RateLimit,
+            violations: vec![WafViolation {
+                rule_id: WafRuleId::new(RULE_ID_ABUSE_BAN),
+                phase,
+                message: "abuse ban".into(),
+                evidence: WafEvidence {
+                    field: Some("client_ip".into()),
+                    matched: None,
+                    transforms: Vec::new(),
+                },
+            }],
+            inspection_truncated: false,
+            retry_after_secs: Some(retry_after_secs.max(1)),
+        }
+    }
+
     /// Host abuse seam: challenge required (host issues real PoW HTML).
     pub fn abuse_challenge(phase: WafPhase) -> Self {
         Self {
@@ -235,6 +258,26 @@ impl WafDecision {
 /// [`WafAction::Challenge`] or [`WafAction::RateLimit`] (or `None` to pass).
 pub trait WafAbuseGate: Send + Sync {
     fn check(&self, client_ip: IpAddr, route_id: Option<&str>) -> Option<WafDecision>;
+
+    /// EXQ-032: hard ban evaluated **before** signature inspection.
+    ///
+    /// A temporary ban from the violation counter must preempt the signature
+    /// engine, otherwise a client that keeps sending violating requests would
+    /// only ever see 403 and never observe the ban. Rate-limit and challenge
+    /// keep their documented post-signature precedence.
+    ///
+    /// Default `None` keeps existing gates source-compatible. Implementations
+    /// must return only [`WafAction::RateLimit`] decisions here.
+    fn check_ban(&self, _client_ip: IpAddr) -> Option<WafDecision> {
+        None
+    }
+
+    /// EXQ-032: record one enforced blocking WAF decision for this client.
+    ///
+    /// Called only when the host rejects with [`WafAction::Block`]; monitor
+    /// mode, allow/log decisions and abuse decisions are not violations.
+    /// Default no-op for gates without a violation counter.
+    fn record_violation(&self, _client_ip: IpAddr) {}
 }
 
 /// Issued challenge page (host maps to HTTP response).
@@ -447,6 +490,19 @@ mod tests {
         let out = apply_waf_mode(WafMode::Monitor, decision);
         assert_eq!(out.action, WafAction::Log);
         assert_eq!(out.violations.len(), 1);
+    }
+
+    #[test]
+    fn abuse_ban_has_stable_rule_id_and_retry_after() {
+        let decision = WafDecision::abuse_ban(WafPhase::RequestHeaders, 120);
+        assert_eq!(decision.action, WafAction::RateLimit);
+        assert!(decision.is_blocking());
+        assert_eq!(decision.violations[0].rule_id.as_str(), RULE_ID_ABUSE_BAN);
+        assert_eq!(decision.retry_after_secs, Some(120));
+        assert_eq!(
+            WafDecision::abuse_ban(WafPhase::RequestHeaders, 0).retry_after_secs,
+            Some(1)
+        );
     }
 
     #[test]

@@ -43,6 +43,9 @@ Use a **table**, not an array:
 mode = "off"                 # off | rate_limit | challenge
 requests_per_second = 10
 burst = 20
+violation_threshold = 0      # 0 = violation counting disabled (default)
+violation_window_seconds = 60
+ban_seconds = 300
 ```
 
 | Field | Type | Default | Validation | Runtime effect |
@@ -50,6 +53,9 @@ burst = 20
 | `mode` | string | `"off"` | `off` \| `rate_limit` \| `challenge` | Abuse gate mode |
 | `requests_per_second` | u32 | `10` | `>= 1` when mode ≠ `off` | Token bucket refill |
 | `burst` | u32 | `20` | `>= 1` when mode ≠ `off` | Token bucket capacity |
+| `violation_threshold` | u32 | `0` | `0` (off) or `1..=1000000`; requires mode ≠ `off` | Enforced WAF Blocks per client IP that trigger a temporary ban |
+| `violation_window_seconds` | u64 | `60` | `1..=86400` when threshold > `0` | Counting window |
+| `ban_seconds` | u64 | `300` | `1..=604800` when threshold > `0` | Ban duration (HTTP 429) |
 | `provider` | string | `"native"` | `native` \| `recaptcha` \| `recaptcha_v3` \| `hcaptcha` | Challenge widget/provider |
 | `site_key` | string? | none | Required for non-native provider | Public widget site key |
 | `secret_env` | string? | none | Required for non-native provider | Env var holding the provider secret |
@@ -64,6 +70,35 @@ Rate-limit response: HTTP **429** with **`Retry-After`** from
 
 Abuse is independent of the signature `mode`: `monitor` still enforces the
 configured Challenge/429. It is evaluated once per request.
+
+### Violation counting and bans (EXQ-032)
+
+When `violation_threshold > 0`, every **enforced** signature Block (`403`) is
+counted per client IP inside `violation_window_seconds`. Reaching the threshold
+bans that IP for `ban_seconds`: subsequent requests receive **429** with
+`Retry-After` **before** signature inspection, including requests that would
+otherwise pass. The ban is not extended while active; after it expires the
+counter starts clean. Monitor-mode hits, allow/log decisions and
+Challenge/Rate-limit decisions are never counted as violations.
+
+```toml
+[waf.abuse]
+mode = "rate_limit"
+requests_per_second = 1000
+burst = 1000
+violation_threshold = 20
+violation_window_seconds = 60
+ban_seconds = 900
+```
+
+The counter keeps at most 10.000 client IPs. Rows without an active ban are
+evicted least-recently-seen first; an active ban is never evicted. If every
+tracked row is banned, new IPs are not counted but the token bucket still
+applies. The counter lives in the abuse generation, so a reload that replaces
+the gate resets it.
+
+The ban emits `rule_id=EXY-ABUSE-BAN-1001` on the `exyonq_waf` warning
+`waf violation`, the stable pattern for fail2ban/journald alerting.
 
 ### CAPTCHA providers
 

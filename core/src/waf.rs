@@ -528,9 +528,28 @@ pub(crate) fn inspect_request_headers(
         route_id,
     };
     let ctx = log_context(client_ip, host, method, path, headers);
+    // EXQ-032: a temporary ban from the per-IP violation counter is a hard gate
+    // evaluated before the signature engine, so a violating client observes the
+    // ban (429) instead of an endless stream of 403s. Rate-limit/challenge keep
+    // their documented post-signature precedence.
+    //
+    // The ban check also runs on the wire preflight (`skip_abuse = true`): it is
+    // read-only and never consumes a token, so it cannot double-count the abuse
+    // decision Hyper owns. Skipping it there would let a banned client bypass
+    // the ban by sending a request that the preflight blocks on signatures.
+    if let Some(gate) = abuse {
+        if let Some(decision) = gate.check_ban(client_ip) {
+            return finish(WafPhase::RequestHeaders, decision, ctx, generation, true);
+        }
+    }
     let started = std::time::Instant::now();
     let decision = waf.inspect(WafPhase::RequestHeaders, &req);
     crate::waf_metrics::note_inspection(WafPhase::RequestHeaders, started.elapsed());
+    if enforce && decision.action == WafAction::Block {
+        if let Some(gate) = abuse {
+            gate.record_violation(client_ip);
+        }
+    }
     match finish(WafPhase::RequestHeaders, decision, ctx, generation, enforce) {
         reject @ WafHookResult::Reject(_) => reject,
         WafHookResult::Continue => {
@@ -646,6 +665,7 @@ pub(crate) fn inspect_request_body(
     body: &[u8],
     generation: u64,
     enforce: bool,
+    abuse: Option<&dyn WafAbuseGate>,
 ) -> (WafHookResult, bool) {
     let req = WafRequest {
         method,
@@ -666,6 +686,11 @@ pub(crate) fn inspect_request_body(
     // access log so an allowed-but-partially-inspected request is never
     // counted as clean traffic.
     let inspection_limited = decision.inspection_truncated;
+    if enforce && decision.action == WafAction::Block {
+        if let Some(gate) = abuse {
+            gate.record_violation(client_ip);
+        }
+    }
     (
         finish(
             WafPhase::RequestBodyComplete,
@@ -1025,11 +1050,193 @@ mod tests {
             b"ok",
             1,
             true,
+            None,
         );
         assert!(!inspection_limited);
         ABUSE_MODE.store(0, Ordering::SeqCst);
         assert!(matches!(r, WafHookResult::Continue));
         assert_eq!(ABUSE_CHECKS.load(Ordering::SeqCst), 0);
+    }
+
+    /// EXQ-032 gate: counts enforced blocks and bans at the configured threshold.
+    struct CountingBanGate {
+        threshold: usize,
+        records: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingBanGate {
+        fn new(threshold: usize) -> Self {
+            Self {
+                threshold,
+                records: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl WafAbuseGate for CountingBanGate {
+        fn check(&self, _client_ip: IpAddr, _route_id: Option<&str>) -> Option<WafDecision> {
+            None
+        }
+
+        fn check_ban(&self, _client_ip: IpAddr) -> Option<WafDecision> {
+            if self.records.load(Ordering::SeqCst) >= self.threshold {
+                Some(WafDecision::abuse_ban(WafPhase::RequestHeaders, 300))
+            } else {
+                None
+            }
+        }
+
+        fn record_violation(&self, _client_ip: IpAddr) {
+            self.records.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn twenty_enforced_violations_ban_the_ip() {
+        let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let headers = EmptyHeaders;
+        let gate = CountingBanGate::new(20);
+        let ip = IpAddr::from_str("203.0.113.20").unwrap();
+        for i in 1..=20 {
+            let r = inspect_request_headers(
+                &BlockingEngine,
+                "GET",
+                None,
+                "/",
+                None,
+                &headers,
+                ip,
+                None,
+                1,
+                false,
+                true,
+                Some(&gate),
+            );
+            let WafHookResult::Reject(reject) = r else {
+                panic!("violation {i} must be rejected");
+            };
+            assert_eq!(reject.status, http::StatusCode::FORBIDDEN, "violation {i}");
+        }
+        assert_eq!(gate.records.load(Ordering::SeqCst), 20);
+
+        let r = inspect_request_headers(
+            &BlockingEngine,
+            "GET",
+            None,
+            "/",
+            None,
+            &headers,
+            ip,
+            None,
+            1,
+            false,
+            true,
+            Some(&gate),
+        );
+        let WafHookResult::Reject(reject) = r else {
+            panic!("banned IP must be rejected");
+        };
+        assert_eq!(reject.status, http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(reject.retry_after_secs, Some(300));
+        assert_eq!(
+            gate.records.load(Ordering::SeqCst),
+            20,
+            "the ban itself must not count as a new violation"
+        );
+    }
+
+    #[test]
+    fn preflight_skip_abuse_still_enforces_ban() {
+        let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let headers = EmptyHeaders;
+        let gate = CountingBanGate::new(1);
+        let ip = IpAddr::from_str("203.0.113.23").unwrap();
+        let r = inspect_request_headers(
+            &BlockingEngine,
+            "GET",
+            None,
+            "/",
+            None,
+            &headers,
+            ip,
+            None,
+            1,
+            false,
+            true,
+            Some(&gate),
+        );
+        assert!(matches!(r, WafHookResult::Reject(_)));
+
+        // Wire preflight for a request replayed into Hyper: signature-only by
+        // design, but the ban must still preempt it.
+        let r = inspect_request_headers(
+            &BlockingEngine,
+            "GET",
+            None,
+            "/",
+            None,
+            &headers,
+            ip,
+            None,
+            1,
+            true,
+            true,
+            Some(&gate),
+        );
+        let WafHookResult::Reject(reject) = r else {
+            panic!("preflight must observe the ban");
+        };
+        assert_eq!(reject.status, http::StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn monitor_mode_block_does_not_record_violation() {
+        let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let headers = EmptyHeaders;
+        let gate = CountingBanGate::new(20);
+        let r = inspect_request_headers(
+            &BlockingEngine,
+            "GET",
+            None,
+            "/",
+            None,
+            &headers,
+            IpAddr::from_str("203.0.113.21").unwrap(),
+            None,
+            1,
+            false,
+            false,
+            Some(&gate),
+        );
+        assert!(matches!(r, WafHookResult::Continue));
+        assert_eq!(gate.records.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn enforced_body_block_records_violation() {
+        let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let headers = EmptyHeaders;
+        let gate = CountingBanGate::new(20);
+        let (r, inspection_limited) = inspect_request_body(
+            &BlockingEngine,
+            "POST",
+            None,
+            "/",
+            None,
+            &headers,
+            IpAddr::from_str("203.0.113.22").unwrap(),
+            None,
+            b"x",
+            1,
+            true,
+            Some(&gate),
+        );
+        assert!(!inspection_limited);
+        let WafHookResult::Reject(reject) = r else {
+            panic!("expected body reject");
+        };
+        assert_eq!(reject.status, http::StatusCode::FORBIDDEN);
+        assert_eq!(gate.records.load(Ordering::SeqCst), 1);
     }
 
     #[test]
