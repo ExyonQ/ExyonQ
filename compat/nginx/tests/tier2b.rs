@@ -271,6 +271,41 @@ fn tier2b_proxy_set_header_and_map() {
 }
 
 #[test]
+fn tier2b_proxy_add_x_forwarded_for_is_runtime_managed() {
+    // The runtime resolves the outbound X-Forwarded-For chain itself, and
+    // `$proxy_add_x_forwarded_for` is not an IR template variable. Importing it
+    // verbatim produced an IR that failed validation (ADR-051), so it must be
+    // reported as runtime-managed and left out of proxy_set_headers.
+    let (toml, report) = migrate_fixture("tier2b-xff-managed.conf");
+    assert!(
+        report.entries.iter().any(|e| {
+            e.directive == "proxy_set_header"
+                && e.status == NginxCompatStatus::Ignored
+                && e.message.contains("managed by the runtime")
+        }),
+        "{:?}",
+        report.entries
+    );
+    let cfg = AppConfig::parse_str(&toml).expect("parse");
+    let route = cfg
+        .routes
+        .iter()
+        .find(|r| !r.proxy_set_headers.is_empty())
+        .expect("proxy headers");
+    assert!(
+        !route
+            .proxy_set_headers
+            .iter()
+            .any(|h| h.name.eq_ignore_ascii_case("X-Forwarded-For")),
+        "runtime-managed header must not be emitted"
+    );
+    assert!(route
+        .proxy_set_headers
+        .iter()
+        .any(|h| h.name.eq_ignore_ascii_case("X-Real-IP") && h.value == "$remote_addr"));
+}
+
+#[test]
 fn tier2b_if_rejected() {
     let output = exyonq_compat_nginx::migrate_source(
         "tier2b-if-reject.conf",

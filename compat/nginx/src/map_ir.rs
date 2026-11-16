@@ -1960,6 +1960,25 @@ fn map_location_proxy_set_headers(
         }
         let name = d.args[0].clone();
         let value = d.args[1..].join(" ");
+        // The runtime owns the outbound X-Forwarded-For chain: it resolves the
+        // effective client address (real_ip trust + inbound chain) and sends
+        // that as the upstream header. `$proxy_add_x_forwarded_for` is the
+        // nginx spelling of exactly that, and it is not an IR template
+        // variable, so emitting it would produce an invalid IR.
+        if name.eq_ignore_ascii_case("x-forwarded-for")
+            && value.trim() == "$proxy_add_x_forwarded_for"
+        {
+            report.push(
+                &d.loc,
+                "proxy_set_header",
+                CompatStatus::Ignored,
+                format!(
+                    "proxy_set_header `{name}` is managed by the runtime (effective X-Forwarded-For from real_ip trust + inbound chain)"
+                ),
+                Some("runtime effective_xff".into()),
+            );
+            continue;
+        }
         if is_proxy_set_hop_by_hop_denied(&name) {
             report.push(
                 &d.loc,
