@@ -121,7 +121,7 @@ fn rand_suffix() -> u32 {
         .unwrap_or(0)
 }
 
-fn serve_connection(stream: &mut dyn ReadWrite, config: &PeerConfig) {
+fn serve_connection<S: Read + Write + HalfClose>(stream: &mut S, config: &PeerConfig) {
     let peer = ScriptedFpmTransport::new(ScriptedFpmConfig {
         request_id: config.request_id,
         stdout_body: config.stdout_body.clone(),
@@ -161,12 +161,9 @@ fn serve_connection(stream: &mut dyn ReadWrite, config: &PeerConfig) {
             }
 
             if let Ok(parsed) = parse_record(&frame) {
-                if config.mode == PeerMode::DropAfterParams
-                    && parsed.header.record_type == FCGI_PARAMS
-                    && parsed.content.is_empty()
-                {
-                    return;
-                }
+                // DropAfterParams does not bail out at the params record: it
+                // reads the whole request and only then half-closes, so the
+                // close is a FIN instead of a reset of unread request bytes.
                 if parsed.header.record_type == FCGI_STDIN && parsed.content.is_empty() {
                     request_complete = true;
                 }
@@ -177,6 +174,10 @@ fn serve_connection(stream: &mut dyn ReadWrite, config: &PeerConfig) {
             }
 
             if request_complete {
+                if config.mode == PeerMode::DropAfterParams {
+                    let _ = stream.shutdown_write();
+                    return;
+                }
                 if config.mode == PeerMode::SlowRead {
                     thread::sleep(config.slow_delay);
                 }
@@ -196,6 +197,31 @@ fn serve_connection(stream: &mut dyn ReadWrite, config: &PeerConfig) {
                 return;
             }
         }
+    }
+}
+
+/// Half-close so a scripted failure surfaces as EOF instead of a kernel reset.
+///
+/// Closing a socket that still holds unread request bytes makes the kernel send
+/// RST, so the client sees `ECONNRESET` (mapped to `WireError::IoFailed`)
+/// instead of `read() == 0` (`WireError::ConnectionClosed`). Whether the reset
+/// wins that race depends on how much of the request is still buffered, which
+/// differs between Linux and macOS and between fast and slow runners. The peer
+/// therefore stops writing, drains what the client still sends, and only then
+/// closes, so the test asserts a wire failure instead of a kernel race.
+trait HalfClose {
+    fn shutdown_write(&mut self) -> std::io::Result<()>;
+}
+
+impl HalfClose for std::os::unix::net::UnixStream {
+    fn shutdown_write(&mut self) -> std::io::Result<()> {
+        self.shutdown(std::net::Shutdown::Write)
+    }
+}
+
+impl HalfClose for std::net::TcpStream {
+    fn shutdown_write(&mut self) -> std::io::Result<()> {
+        self.shutdown(std::net::Shutdown::Write)
     }
 }
 
