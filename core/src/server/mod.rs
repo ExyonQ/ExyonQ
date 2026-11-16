@@ -527,6 +527,11 @@ async fn run_on_impl(
     // behind a readiness gate instead of awaiting it here.
     let ops = LifecycleState::new();
 
+    // NG-20: bind the L4 listeners before the HTTP accept path starts. A bad
+    // stream listener is a startup error, never a silently absent surface.
+    crate::stream_proxy::start_streams(&config.streams, &config.upstreams, Arc::clone(&ops))
+        .await?;
+
     // NG-25: every distinct `listen` gets its own socket. Servers sharing an
     // address are SNI/certificate variants of one listener (NG-24); a server
     // with a different address used to be silently ignored. The primary

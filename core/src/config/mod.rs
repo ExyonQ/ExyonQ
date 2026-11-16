@@ -19,6 +19,8 @@ pub use exyonq_config_ir::{
     canonical_json, fingerprint, AcmeConfig, AppConfig, CachePolicyConfig, CompressionConfig,
     ConfigError, FcgiPoolConfig, HtaccessMode, IrFingerprint, MetricsConfig, ModulesConfig,
     RateLimitConfig, RawConfigInput, RedirectConfig, RouteConfig, RouteMatch, ServerConfig,
-    ServerNames, TlsConfig, UpstreamConfig, CONFIG_VERSION_V1, CONFIG_VERSION_V2,
-    DEFAULT_UPSTREAM_TIMEOUT_MS,
+    ServerNames, StreamConfig, StreamProtocol, TlsConfig, UpstreamConfig, CONFIG_VERSION_V1,
+    CONFIG_VERSION_V2, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_STREAM_MAX_SESSIONS,
+    DEFAULT_UPSTREAM_TIMEOUT_MS, MAX_STREAM_IDLE_TIMEOUT_MS, MAX_STREAM_MAX_SESSIONS,
+    MIN_STREAM_IDLE_TIMEOUT_MS,
 };

@@ -17,7 +17,7 @@
 
 use crate::{
     AppConfig, FcgiPoolConfig, RewriteConfig, RewriteFlagConfig, RouteConfig, ServerConfig,
-    UpstreamConfig,
+    StreamConfig, UpstreamConfig,
 };
 use std::collections::BTreeMap;
 
@@ -91,6 +91,16 @@ fn canonical_value(config: &AppConfig) -> serde_json::Value {
         "upstream".into(),
         serde_json::Value::Array(upstreams.into_values().collect::<Vec<_>>()),
     );
+    if !config.streams.is_empty() {
+        let mut streams: Vec<serde_json::Value> =
+            config.streams.iter().map(canonical_stream).collect();
+        streams.sort_by(|a, b| {
+            a.get("name")
+                .and_then(|v| v.as_str())
+                .cmp(&b.get("name").and_then(|v| v.as_str()))
+        });
+        root.insert("stream".into(), serde_json::Value::Array(streams));
+    }
     if !pools_sorted.is_empty() {
         root.insert(
             "fcgi_pool".into(),
@@ -644,6 +654,38 @@ fn sha256_hex(input: &[u8]) -> String {
         h1 ^ h2,
         h1.rotate_left(17) ^ h2
     )
+}
+
+fn canonical_stream(stream: &StreamConfig) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "name".into(),
+        serde_json::Value::String(stream.name.clone()),
+    );
+    map.insert(
+        "listen".into(),
+        serde_json::Value::String(stream.listen.clone()),
+    );
+    map.insert(
+        "protocol".into(),
+        serde_json::Value::String(match stream.protocol {
+            crate::StreamProtocol::Tcp => "tcp".into(),
+            crate::StreamProtocol::Udp => "udp".into(),
+        }),
+    );
+    map.insert(
+        "upstream".into(),
+        serde_json::Value::String(stream.upstream.clone()),
+    );
+    map.insert(
+        "idle_timeout_ms".into(),
+        serde_json::Value::Number(stream.idle_timeout_ms.into()),
+    );
+    map.insert(
+        "max_sessions".into(),
+        serde_json::Value::Number(stream.max_sessions.into()),
+    );
+    serde_json::Value::Object(map)
 }
 
 #[cfg(test)]

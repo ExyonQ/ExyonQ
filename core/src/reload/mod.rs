@@ -339,6 +339,26 @@ fn reject_listen_bind_changes(current: &AppConfig, candidate: &AppConfig) -> any
             ));
         }
     }
+    // NG-20: L4 listeners own long-lived sockets and a compiled endpoint
+    // selector. Changing their bind/upstream set without rebinding would keep
+    // the old dataplane alive, so require a restart instead of a silent
+    // generation NO_OP.
+    if current.streams != candidate.streams {
+        return Err(anyhow::anyhow!(
+            "EXY-RELOAD-0005: stream listener change requires restart"
+        ));
+    }
+    for stream in &current.streams {
+        let cur = current.upstreams.get(&stream.upstream);
+        let cand = candidate.upstreams.get(&stream.upstream);
+        if cur != cand {
+            return Err(anyhow::anyhow!(
+                "EXY-RELOAD-0005: upstream `{}` is used by stream `{}`; changing it requires restart",
+                stream.upstream,
+                stream.name
+            ));
+        }
+    }
     Ok(())
 }
 

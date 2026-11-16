@@ -230,6 +230,24 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
         out.push_str(&format!("timeout_ms = {}\n\n", upstream.timeout_ms));
     }
 
+    let mut stream_names: Vec<_> = cfg.streams.iter().collect();
+    stream_names.sort_by(|a, b| a.name.cmp(&b.name));
+    for stream in stream_names {
+        out.push_str("[[stream]]\n");
+        out.push_str(&format!("name = {:?}\n", stream.name));
+        out.push_str(&format!("listen = {:?}\n", stream.listen));
+        out.push_str(&format!(
+            "protocol = {:?}\n",
+            match stream.protocol {
+                exyonq_config_ir::StreamProtocol::Tcp => "tcp",
+                exyonq_config_ir::StreamProtocol::Udp => "udp",
+            }
+        ));
+        out.push_str(&format!("upstream = {:?}\n", stream.upstream));
+        out.push_str(&format!("idle_timeout_ms = {}\n", stream.idle_timeout_ms));
+        out.push_str(&format!("max_sessions = {}\n\n", stream.max_sessions));
+    }
+
     let mut pool_names: Vec<_> = cfg.pools_fcgi.keys().collect();
     pool_names.sort();
     for name in pool_names {

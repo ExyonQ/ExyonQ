@@ -380,6 +380,7 @@ pub fn map_to_ir(
         config_version: CONFIG_VERSION_V1,
         includes: Vec::new(),
         tuning: Default::default(),
+        streams: Vec::new(),
         servers,
         routes,
         upstreams,

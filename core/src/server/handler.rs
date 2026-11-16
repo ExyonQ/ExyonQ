@@ -5163,6 +5163,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5213,6 +5214,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5265,6 +5267,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5330,6 +5333,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let policy = state
@@ -5423,6 +5427,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5479,6 +5484,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5546,6 +5552,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5612,6 +5619,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let (assets_idx, _assets_route) = state
@@ -5754,6 +5762,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(state.snapshot.static_slot_for_route_backend(0).is_some());
@@ -5810,6 +5819,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(state.snapshot.proxy_cluster_for_route(0).is_none());
@@ -5849,6 +5859,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5904,6 +5915,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let path = "/site/index.html";
@@ -6001,6 +6013,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
 
@@ -6105,6 +6118,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let denied = dispatch_core(
@@ -6236,6 +6250,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         for (idx, expected) in [
@@ -6288,6 +6303,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(
@@ -6339,6 +6355,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let gate = crate::server::wire_dispatch::build_keepalive_route_gate(&state);
@@ -6396,6 +6413,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
 
@@ -6495,6 +6513,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(
@@ -6545,6 +6564,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         // FPC is generation-wide → every wire head requires full dispatch.

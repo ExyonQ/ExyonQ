@@ -93,6 +93,7 @@ fn redirect_config() -> AppConfig {
         http3: Default::default(),
         waf: Default::default(),
         logging: Default::default(),
+        streams: Vec::new(),
     }
 }
 

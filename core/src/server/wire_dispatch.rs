@@ -1530,6 +1530,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         }
     }
 
@@ -2504,6 +2505,7 @@ mod ws_tunnel_tests {
             config_version: 1,
             includes: Vec::new(),
             tuning: Default::default(),
+            streams: Vec::new(),
             servers: vec![ServerConfig {
                 listen: format!("127.0.0.1:{listen_port}"),
                 server_name: ServerNames::None,

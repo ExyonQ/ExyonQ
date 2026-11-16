@@ -45,6 +45,7 @@ pub mod pipeline_registry;
 pub mod platform;
 pub mod reload;
 pub mod server;
+pub mod stream_proxy;
 pub mod structural_route_rules;
 mod sub_filter;
 pub mod waf;

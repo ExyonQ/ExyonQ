@@ -28,6 +28,7 @@ mod logging;
 pub mod modules;
 mod registry;
 mod static_preload;
+mod stream;
 mod upstream_health;
 mod waf;
 
@@ -73,6 +74,10 @@ pub use static_preload::{
     DEFAULT_PRELOAD_TOTAL_BYTES, ENCODING_CACHE_LEVEL_CEILING, ENCODING_CACHE_MAX_BYTES_CEILING,
     ENCODING_CACHE_MAX_ENTRIES_CEILING, ENCODING_CACHE_MAX_TOTAL_BYTES_CEILING,
     PRELOAD_MAX_ENTRIES_CEILING, PRELOAD_MAX_FILE_BYTES_CEILING, PRELOAD_MAX_TOTAL_BYTES_CEILING,
+};
+pub use stream::{
+    StreamConfig, StreamProtocol, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_STREAM_MAX_SESSIONS,
+    MAX_STREAMS, MAX_STREAM_IDLE_TIMEOUT_MS, MAX_STREAM_MAX_SESSIONS, MIN_STREAM_IDLE_TIMEOUT_MS,
 };
 pub use upstream_health::UpstreamHealthCheckConfig;
 pub use waf::{
@@ -147,6 +152,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     /// `[tuning]` — worker geometry with measured defaults (NG-21).
     pub tuning: TuningConfig,
+    /// NG-20: `[[stream]]` L4 TCP/UDP listeners.
+    pub streams: Vec<StreamConfig>,
 }
 
 /// Top-level `[http3]` IR (neutral; no provider crate types).
@@ -1193,6 +1200,7 @@ pub struct RawConfigInput {
     pub waf: WafConfig,
     pub logging: LoggingConfig,
     pub tuning: TuningConfig,
+    pub stream: Vec<StreamConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1227,6 +1235,8 @@ struct RawConfig {
     logging: LoggingConfig,
     #[serde(default)]
     tuning: TuningConfig,
+    #[serde(default)]
+    stream: Vec<StreamConfig>,
 }
 
 impl std::str::FromStr for AppConfig {
@@ -1269,6 +1279,7 @@ impl AppConfig {
             waf: raw.waf,
             logging: raw.logging,
             tuning: raw.tuning,
+            stream: raw.stream,
         })
     }
 
@@ -1419,6 +1430,7 @@ impl AppConfig {
             // Endpoint set already validated in UpstreamConfig::try_from_parts.
             let _ = upstream.user_backend_id()?;
         }
+        validate_streams(&raw.stream, &raw.server, &upstreams)?;
 
         for pool in pools_fcgi.values() {
             validate_fcgi_pool_address(&pool.name, &pool.address)?;
@@ -1465,6 +1477,7 @@ impl AppConfig {
             waf: raw.waf,
             logging: raw.logging,
             tuning: raw.tuning,
+            streams: raw.stream,
         })
     }
 
@@ -3070,6 +3083,90 @@ fn validate_server_name(name: &str, server_idx: usize) -> Result<(), ConfigError
 /// NG-15: `[[server]]` blocks that share a `listen` collapse into one socket.
 /// Enforce the invariants that keep every block meaningful — otherwise the
 /// runtime would silently ignore configured servers/certificates.
+/// NG-20: validate `[[stream]]` listeners against the HTTP TCP / HTTP/3 UDP
+/// bind sets and their named upstreams. This is deliberately fail-closed: an
+/// unroutable listener must be a config error, not a silent runtime no-op.
+fn validate_streams(
+    streams: &[StreamConfig],
+    servers: &[ServerConfig],
+    upstreams: &HashMap<String, UpstreamConfig>,
+) -> Result<(), ConfigError> {
+    if streams.len() > MAX_STREAMS {
+        return Err(ConfigError::Parse(format!(
+            "at most {MAX_STREAMS} [[stream]] listeners allowed (found {})",
+            streams.len()
+        )));
+    }
+    unique_names(streams.iter().map(|stream| stream.name.as_str()), "stream")?;
+
+    // TCP and UDP are separate port spaces. In particular, HTTPS on TCP/443
+    // and QUIC on UDP/443 (or an L4 UDP tunnel beside an HTTP TCP listener)
+    // are valid and must not be rejected as duplicate binds.
+    let mut tcp_bound = HashSet::new();
+    let mut udp_bound = HashSet::new();
+    for server in servers {
+        tcp_bound.insert(parse_listen(&server.listen)?);
+        if let Some(http3) = &server.http3_listen {
+            if let Ok(addr) = parse_listen(http3) {
+                udp_bound.insert(addr);
+            }
+        }
+    }
+    for stream in streams {
+        UserBackendId::new(stream.name.clone())?;
+        let addr = parse_listen(&stream.listen)?;
+        let bound = match stream.protocol {
+            StreamProtocol::Tcp => &mut tcp_bound,
+            StreamProtocol::Udp => &mut udp_bound,
+        };
+        if !bound.insert(addr) {
+            let transport = match stream.protocol {
+                StreamProtocol::Tcp => "TCP",
+                StreamProtocol::Udp => "UDP",
+            };
+            return Err(ConfigError::Parse(format!(
+                "stream `{}` {transport} listen address {} is already bound by another listener",
+                stream.name, stream.listen
+            )));
+        }
+        if !(MIN_STREAM_IDLE_TIMEOUT_MS..=MAX_STREAM_IDLE_TIMEOUT_MS)
+            .contains(&stream.idle_timeout_ms)
+        {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}`: idle_timeout_ms must be {MIN_STREAM_IDLE_TIMEOUT_MS}..={MAX_STREAM_IDLE_TIMEOUT_MS}, got {}",
+                stream.name, stream.idle_timeout_ms
+            )));
+        }
+        if !(1..=MAX_STREAM_MAX_SESSIONS).contains(&stream.max_sessions) {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}`: max_sessions must be 1..={MAX_STREAM_MAX_SESSIONS}, got {}",
+                stream.name, stream.max_sessions
+            )));
+        }
+        let upstream = upstreams.get(&stream.upstream).ok_or_else(|| {
+            ConfigError::Parse(format!(
+                "stream `{}` references unknown upstream `{}`",
+                stream.name, stream.upstream
+            ))
+        })?;
+        if upstream.endpoint_set.is_empty() {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}` upstream `{}` has no endpoints",
+                stream.name, stream.upstream
+            )));
+        }
+        if !upstream.endpoint_set.endpoints().iter().any(|endpoint| {
+            endpoint.admin_state == AdminEndpointState::Enabled && endpoint.weight > 0
+        }) {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}` upstream `{}` has no enabled endpoint with weight > 0",
+                stream.name, stream.upstream
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError> {
     if servers.iter().skip(1).any(|s| s.http3_listen.is_some()) {
         return Err(ConfigError::Parse(

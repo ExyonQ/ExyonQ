@@ -30,8 +30,8 @@ pub const MAX_INCLUDE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 use exyonq_config_ir::{
     endpoint_from_discovery_hostport, endpoint_from_http_target, AppConfig, CachePolicyConfig,
     ConfigError, EndpointSet, FcgiPoolConfig, FullPageCacheConfig, Http3Config, LoggingConfig,
-    RawConfigInput, RouteConfig, ServerConfig, TuningConfig, UpstreamConfig, WafConfig,
-    CONFIG_VERSION_V2, DEFAULT_UPSTREAM_TIMEOUT_MS,
+    RawConfigInput, RouteConfig, ServerConfig, StreamConfig, TuningConfig, UpstreamConfig,
+    WafConfig, CONFIG_VERSION_V2, DEFAULT_UPSTREAM_TIMEOUT_MS,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -46,6 +46,8 @@ struct RawFragment {
     upstream: Vec<UpstreamConfig>,
     #[serde(default)]
     fcgi_pool: Vec<FcgiPoolConfig>,
+    #[serde(default)]
+    stream: Vec<StreamConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +82,8 @@ struct RawRoot {
     logging: LoggingConfig,
     #[serde(default)]
     tuning: TuningConfig,
+    #[serde(default)]
+    stream: Vec<StreamConfig>,
 }
 
 /// Load IR from path, resolving `include` fragments (config_version = 2).
@@ -119,6 +123,7 @@ fn merge_includes(base_dir: &Path, mut root: RawRoot) -> Result<AppConfig, Confi
         append_unique(&mut root.route, fragment.route, "route")?;
         append_unique(&mut root.upstream, fragment.upstream, "upstream")?;
         append_unique(&mut root.fcgi_pool, fragment.fcgi_pool, "fcgi_pool")?;
+        append_unique(&mut root.stream, fragment.stream, "stream")?;
     }
     AppConfig::from_raw_input(raw_to_ir(root))
 }
@@ -166,6 +171,12 @@ impl Named for CachePolicyConfig {
     }
 }
 
+impl Named for StreamConfig {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 fn raw_to_ir(raw: RawRoot) -> RawConfigInput {
     RawConfigInput {
         config_version: raw.config_version,
@@ -183,6 +194,7 @@ fn raw_to_ir(raw: RawRoot) -> RawConfigInput {
         waf: raw.waf,
         logging: raw.logging,
         tuning: raw.tuning,
+        stream: raw.stream,
     }
 }
 

@@ -988,6 +988,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let snap = compile_config(config);
         assert!(snap.route_backend_id(0).is_none());
@@ -1030,6 +1031,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let snap = compile_config(config);
         let api_id = snap.route_backend_id(0).unwrap();

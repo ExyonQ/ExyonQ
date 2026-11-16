@@ -40,6 +40,11 @@ This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 
 ### Added
 
+- **L4 stream proxy (`[[stream]]`, NG-20).** Raw TCP/UDP forwarding to a
+  named upstream with weighted round-robin and per-connection / per-source
+  affinity, fail-closed validation and restart-only reload. MySQL 8.4, Redis
+  and QUIC-UDP verified end to end on native Linux amd64 and arm64. See
+  `docs/architecture/072-l4-stream.md`.
 - **WordPress cache invalidation as a normal plugin.** The integration is
   loaded through the standard plugin lifecycle instead of as a must-use plugin.
   (`ab0e166`)
