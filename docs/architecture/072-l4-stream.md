@@ -116,6 +116,24 @@ binaries: 429 002 664 B / SHA-256 `42b6f388dad3d480…` on amd64 and 416 235 280
 / SHA-256 `89d2fdfa753e86ce…` on arm64. `scripts/e2e/lib/host-provenance.sh`
 reports `HOST_DOCKERENV=absent`, `HOST_DETECT_VIRT=kvm`,
 `HOST_PROVENANCE=vm` on both hosts: native Linux inside a hypervisor VM, not a
-container. CI remains **NOT EXECUTED** (no push). The per-run logs live in
+container. **CI executed on 2026-11-16.** The branch that carries this
+increment, `release/v0.9.2`, was pushed as `bdcdc3c..6ee38a5` and the `check`
+lane ran on Linux throughout: [push run `43955904651`](https://github.com/ExyonQ/ExyonQ/actions/runs/43955904651)
+is **success** on `6ee38a5` (fmt, `clippy -D warnings`, `nextest` of the whole
+workspace on `ubuntu-latest`, `static-linux-arm64` on `ubuntu-24.04-arm`,
+`wasm-host`, `supply-chain`, `semver-checks` and
+`build x86_64-unknown-linux-gnu`), and the same commit is green in
+[PR #80 (`43955913574`)](https://github.com/ExyonQ/ExyonQ/actions/runs/43955913574),
+[Security `43955913314`](https://github.com/ExyonQ/ExyonQ/actions/runs/43955913314)
+and [HTTP benchmark `43955913133`](https://github.com/ExyonQ/ExyonQ/actions/runs/43955913133).
+No macOS job was added to the lane: the tier-1 macOS build stays `main`-only, so
+a release branch goes green with Linux runners alone. `E2E artifact-bound`
+([`43955904588`](https://github.com/ExyonQ/ExyonQ/actions/runs/43955904588))
+and `CRS differential`
+([`43955913155`](https://github.com/ExyonQ/ExyonQ/actions/runs/43955913155))
+were still red on that commit from causes that predate this increment: both
+were already red on `bdcdc3c` on 2026-11-10, `OL-04` passes natively on the
+bench host (13/13, `RESULT=PASS OL-04`) and fails only in the runner. They stay
+open and are not attributed to the stream proxy. The per-run logs live in
 `target/ng20-*.log` (untracked); the tracked record is
-`ROADMAP EXYONQ/ROADMAP/0.9.2-BLOCKERS/01-ng20.md`.
+`docs/releases/0.9.2-release-evidence.md`.
