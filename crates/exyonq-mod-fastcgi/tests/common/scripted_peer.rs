@@ -23,8 +23,8 @@ static PEER_BIND_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use exyonq_mod_fastcgi::{
     encode_record_frame, parse_record, FastcgiRecordTransport, ScriptedFpmConfig,
-    ScriptedFpmTransport, END_REQUEST_BODY_LEN, FCGI_END_REQUEST, FCGI_PARAMS,
-    FCGI_REQUEST_COMPLETE, FCGI_STDIN,
+    ScriptedFpmTransport, END_REQUEST_BODY_LEN, FCGI_END_REQUEST, FCGI_REQUEST_COMPLETE,
+    FCGI_STDIN,
 };
 use std::io::{Read, Write};
 use std::net::TcpListener;
