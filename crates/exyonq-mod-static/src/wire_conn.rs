@@ -503,12 +503,33 @@ fn ensure_headers_blocking(
     }
 }
 
+/// What an async wire serve leaves behind.
+///
+/// `Handoff` carries the connection back to the caller because the wire only
+/// answers its own probes; site files belong to Hyper/static.
+pub enum ServeOutcome {
+    Served,
+    Handoff {
+        stream: TcpStream,
+        head: Bytes,
+        rest: Bytes,
+    },
+}
+
+/// Heads this wire answers itself. Everything else is Hyper's.
+fn wire_owns_head(head: &[u8]) -> bool {
+    head.starts_with(b"GET /health ")
+        || head.starts_with(b"HEAD /health ")
+        || head.starts_with(b"GET /metrics ")
+        || head.starts_with(b"GET /metrics\r")
+}
+
 pub async fn serve(
     site: Arc<StaticRoot>,
     mut stream: TcpStream,
     first_head: Bytes,
     mut carry: Bytes,
-) -> Result<()> {
+) -> Result<ServeOutcome> {
     // Cap061 LA-008: no filename-keyed early divert (sendfile/route bench loops).
     // Wire serves /health only; /metrics is not an OpenMetrics authority (LA-CAP054-008).
     // Site files use Hyper/static.
@@ -537,9 +558,21 @@ pub async fn serve(
                 head.as_ref(),
                 carry.as_ref(),
             ) {
-                Ok(()) => return Ok(()),
+                Ok(()) => return Ok(ServeOutcome::Served),
                 Err(restored) => stream = restored,
             }
+        }
+
+        if !wire_owns_head(head.as_ref()) {
+            // Not ours (a site file or any other route): hand the connection
+            // back with the bytes already read so Hyper can replay it. A
+            // terminal 404 here is what broke the request that followed a probe
+            // on the same keep-alive connection.
+            return Ok(ServeOutcome::Handoff {
+                stream,
+                head,
+                rest: carry,
+            });
         }
 
         let started = Instant::now();
@@ -563,14 +596,14 @@ pub async fn serve(
                         stream,
                         carry.as_ref(),
                     ) {
-                        Ok(()) => return Ok(()),
+                        Ok(()) => return Ok(ServeOutcome::Served),
                         Err(restored) => stream = restored,
                     }
                 }
             }
         }
     }
-    Ok(())
+    Ok(ServeOutcome::Served)
 }
 
 pub async fn serve_async<S>(

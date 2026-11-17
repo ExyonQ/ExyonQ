@@ -1009,7 +1009,7 @@ async fn execute_wire_plan(plan: WirePlan<TcpStream>, ctx: WireDispatchContext) 
                     {
                         // Cap061 LA-CAP061-001: do NOT hardcode 200 here.
                         // `/health` is the only exempt inline wire owner.
-                        let _ = serve_static_tcp(site_slot, stream, head, rest).await;
+                        let _ = serve_static_tcp(site_slot, stream, head, rest, ctx).await;
                     } else {
                         // Cap067 declined terminal ownership before admission. Hyper now
                         // owns admission, WAF, static dispatch, metrics, and any fallback.
@@ -1093,6 +1093,7 @@ async fn serve_static_tcp(
     stream: TcpStream,
     head: Bytes,
     rest: Bytes,
+    ctx: WireDispatchContext,
 ) -> std::io::Result<()> {
     if !epoll_sendfile_eligible(head.as_ref())
         && static_wire::static_tcp_blocking_pool_admission(head.as_ref())
@@ -1128,7 +1129,17 @@ async fn serve_static_tcp(
             }
         }
     }
-    static_wire::serve_wire_site_tcp(site_slot, stream, head, rest).await
+    // The wire owns the probes only. A head it does not serve comes back with
+    // the bytes already read so Hyper — which owns admission, WAF and static
+    // dispatch — answers it on this same connection. Answering 404 in the wire
+    // is what turned the request after `/health` into `404 not found`.
+    match static_wire::serve_wire_site_tcp(site_slot, stream, head, rest).await? {
+        static_wire::StaticWireTcpOutcome::Served => Ok(()),
+        static_wire::StaticWireTcpOutcome::Handoff { stream, head, rest } => {
+            serve_hyper_fallback(stream, head, rest, ctx).await;
+            Ok(())
+        }
+    }
 }
 
 async fn serve_hyper_fallback<S>(stream: S, head: Bytes, rest: Bytes, ctx: WireDispatchContext)

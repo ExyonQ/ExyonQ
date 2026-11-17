@@ -42,6 +42,7 @@ use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
 /// The abuse booking is process-global; the tests below share one gate state.
@@ -218,17 +219,11 @@ async fn get(
     path: &str,
 ) -> (StatusCode, Bytes) {
     let uri: Uri = format!("http://{listen}{path}").parse().unwrap();
-    // One connection per request. Reusing a keep-alive connection after a
-    // `/health` probe is broken on native Linux: the next request on that
-    // connection is answered `404 not found` (reproduced with the real binary,
-    // same host and config, `curl /health /index.html` on one connection).
-    // That is a dataplane defect with its own reproduction; this test measures
-    // quota accounting per request, so it does not depend on connection reuse
-    // and must not be read as evidence that reuse works.
-    let req = Request::get(uri)
-        .header(hyper::header::CONNECTION, "close")
-        .body(Full::new(Bytes::new()))
-        .unwrap();
+    // Keep-alive is part of the contract this exercises: the client pools the
+    // connection, so a probe and the request after it travel on the same socket.
+    // The wire used to answer the second head with a terminal `404 not found`
+    // instead of handing the connection back to Hyper.
+    let req = Request::get(uri).body(Full::new(Bytes::new())).unwrap();
     let response = timeout(Duration::from_secs(5), client.request(req))
         .await
         .expect("timed out")
@@ -236,6 +231,56 @@ async fn get(
     let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     (status, body)
+}
+
+/// Send one request on an existing connection and read one full response.
+///
+/// The probes test drives its own socket so "same connection" is a property of
+/// the test, not of a client pool's reuse heuristics.
+async fn request_on(stream: &mut tokio::net::TcpStream, target: &str) -> (u16, Vec<u8>) {
+    let request = format!("GET {target} HTTP/1.1\r\nHost: exyonq.local\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&buf[..end]).to_string();
+            let status: u16 = head
+                .split_whitespace()
+                .nth(1)
+                .expect("status code")
+                .parse()
+                .expect("numeric status");
+            let body_start = end + 4;
+            let mut body_len = 0usize;
+            for line in head.lines() {
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    body_len = value.trim().parse().expect("content-length");
+                }
+            }
+            while buf.len() < body_start + body_len {
+                let mut chunk = [0u8; 1024];
+                let n = stream.read(&mut chunk).await.expect("read body");
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let end_body = (body_start + body_len).min(buf.len());
+            return (status, buf[body_start..end_body].to_vec());
+        }
+        let mut chunk = [0u8; 1024];
+        let n = stream.read(&mut chunk).await.expect("read response head");
+        if n == 0 {
+            panic!(
+                "connection closed before a response: {:?}",
+                String::from_utf8_lossy(&buf)
+            );
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
 }
 
 /// A client with `burst = 1` gets its first request served and the second one
@@ -282,13 +327,18 @@ async fn one_request_consumes_exactly_one_quota_unit() {
 async fn probes_do_not_spend_the_quota() {
     let _guard = GLOBAL.lock().await;
     let Harness { listen, gate } = harness().await;
-    let client = client();
+
+    // One socket for the whole sequence: the wire answers the probe and hands
+    // the same connection to Hyper for the file.
+    let mut stream = tokio::net::TcpStream::connect(listen)
+        .await
+        .expect("connect keep-alive socket");
 
     for _ in 0..3 {
-        let (status, body) = get(&client, listen, "/health").await;
+        let (status, body) = request_on(&mut stream, "/health").await;
         assert_eq!(
             status,
-            StatusCode::OK,
+            StatusCode::OK.as_u16(),
             "a probe must be answered by the handler, body={:?}",
             String::from_utf8_lossy(&body)
         );
@@ -299,11 +349,12 @@ async fn probes_do_not_spend_the_quota() {
         "probes must not reach the abuse gate"
     );
 
-    let (status, body) = get(&client, listen, "/index.html").await;
+    let (status, body) = request_on(&mut stream, "/index.html").await;
     assert_eq!(
         status,
-        StatusCode::OK,
-        "the burst is still intact, body={:?}",
+        StatusCode::OK.as_u16(),
+        "the burst is still intact on the same connection, body={:?}",
         String::from_utf8_lossy(&body)
     );
+    assert_eq!(body.as_slice(), b"burst-ok");
 }

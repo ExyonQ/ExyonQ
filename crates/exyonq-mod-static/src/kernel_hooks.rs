@@ -117,13 +117,26 @@ fn serve_wire_site_tcp_hook(
     stream: tokio::net::TcpStream,
     head: bytes::Bytes,
     rest: bytes::Bytes,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send>> {
+) -> exyonq_module_api::static_wire::StaticWireSiteTcpFuture {
     Box::pin(async move {
         let runtime = crate::epoll_session::runtime_for_hooks();
         let root = runtime
             .root_for_slot_public(site_slot)
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "site slot"))?;
-        crate::wire_conn::serve(root, stream, head, rest).await
+        Ok(
+            match crate::wire_conn::serve(root, stream, head, rest).await? {
+                crate::wire_conn::ServeOutcome::Served => {
+                    exyonq_module_api::static_wire::StaticWireTcpOutcome::Served
+                }
+                crate::wire_conn::ServeOutcome::Handoff { stream, head, rest } => {
+                    exyonq_module_api::static_wire::StaticWireTcpOutcome::Handoff {
+                        stream,
+                        head,
+                        rest,
+                    }
+                }
+            },
+        )
     })
 }
 

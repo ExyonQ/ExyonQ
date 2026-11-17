@@ -235,6 +235,26 @@ pub fn shed_blocking_admission(stream: std::net::TcpStream) -> StaticWireServeFu
 pub type StaticWireServeFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send>>;
 
+/// Outcome of serving one Tokio connection on the static wire.
+///
+/// The wire owns the probes (`/health`, `/metrics`) and nothing else: a head it
+/// does not serve must go back to Hyper on the same connection. Answering a
+/// terminal 404 there made the request after a probe look like a missing file.
+pub enum StaticWireTcpOutcome {
+    /// The wire answered every request it owned.
+    Served,
+    /// The head is not the wire's: replay it on Hyper.
+    Handoff {
+        stream: tokio::net::TcpStream,
+        head: bytes::Bytes,
+        rest: bytes::Bytes,
+    },
+}
+
+/// [`StaticWireTcpOutcome`]-carrying future (clippy: type complexity).
+pub type StaticWireSiteTcpFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<StaticWireTcpOutcome>> + Send>>;
+
 /// Async wire serve (Tokio path) — owned stream (no connection internals in core).
 pub struct StaticWireAsyncHooks {
     pub serve_wire_site_tcp: fn(
@@ -242,7 +262,7 @@ pub struct StaticWireAsyncHooks {
         stream: tokio::net::TcpStream,
         head: bytes::Bytes,
         rest: bytes::Bytes,
-    ) -> StaticWireServeFuture,
+    ) -> StaticWireSiteTcpFuture,
 }
 
 static ASYNC: OnceLock<StaticWireAsyncHooks> = OnceLock::new();
@@ -262,7 +282,7 @@ pub fn serve_wire_site_tcp(
     stream: tokio::net::TcpStream,
     head: bytes::Bytes,
     rest: bytes::Bytes,
-) -> StaticWireServeFuture {
+) -> StaticWireSiteTcpFuture {
     (async_hooks().serve_wire_site_tcp)(site_slot, stream, head, rest)
 }
 
