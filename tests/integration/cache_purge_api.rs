@@ -23,6 +23,10 @@
 //! never cached is a successful no-op.
 
 mod bootstrap;
+/// The servers in this binary share the process-wide proxy client and the OS
+/// ephemeral port range: run concurrently, one test can answer another test's
+/// request, so the suite serialises itself like `WC2C`/`WC3` do.
+static SUITE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use bytes::Bytes;
 use exyonq_core::AppConfig;
@@ -172,7 +176,9 @@ async fn purge(socket: &Path, line: String) -> serde_json::Value {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn control_api_url_purge_evicts_the_entry_for_every_spelling() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     bootstrap::ensure_integration_modules();
     let root = tempfile::tempdir().expect("root");
     let control = tempfile::tempdir().expect("control dir");

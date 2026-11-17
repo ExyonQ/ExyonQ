@@ -22,6 +22,10 @@
 //! equivalent return the same thing.
 
 mod bootstrap;
+/// The servers in this binary share the process-wide proxy client and the OS
+/// ephemeral port range: run concurrently, one test can answer another test's
+/// request, so the suite serialises itself like `WC2C`/`WC3` do.
+static SUITE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use bytes::Bytes;
 use exyonq_core::AppConfig;
@@ -98,7 +102,9 @@ index = "index.html"
 /// return the same status and body as the form that already worked, instead of
 /// 400 from the URI rebuild.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn percent_encoded_path_bytes_reach_the_same_file() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("hello world.html"), "space-ok").expect("space file");
     std::fs::write(dir.path().join("fn().html"), "paren-ok").expect("paren file");
@@ -212,7 +218,9 @@ timeout_ms = 2000
 /// an escape and `%FF` must stay the same escape, because a literal space is not
 /// a legal request-target byte and would be a 400 instead of a proxied request.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn proxy_forwards_escaped_path_bytes_to_a_real_upstream() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("index.html"), "site").expect("index file");
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -309,7 +317,9 @@ async fn assert_upstream_target(
 /// escaped target, and what the upstream receives must stay a legal
 /// request-target (no literal space, no double encoding).
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn decoded_literal_rewrite_applies_to_an_escaped_target() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("index.html"), "site").expect("index file");
     let seen = Arc::new(Mutex::new(Vec::new()));

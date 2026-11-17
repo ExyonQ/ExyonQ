@@ -22,6 +22,10 @@
 //! patterned, including a capture) and the upstream request-target.
 
 mod bootstrap;
+/// The servers in this binary share the process-wide proxy client and the OS
+/// ephemeral port range: run concurrently, one test can answer another test's
+/// request, so the suite serialises itself like `WC2C`/`WC3` do.
+static SUITE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use bytes::Bytes;
 use exyonq_core::AppConfig;
@@ -180,7 +184,9 @@ fn fixture_root() -> tempfile::TempDir {
 /// The sensitive-name gate classifies the canonical path, so every escape
 /// spelling of a denied name is denied with the same opaque 404.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn sensitive_names_stay_denied_in_every_spelling() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = fixture_root();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let upstream = spawn_echo_upstream(Arc::clone(&seen)).await;
@@ -215,7 +221,9 @@ async fn sensitive_names_stay_denied_in_every_spelling() {
 /// A literal rewrite is applied to the canonical path and its target is served,
 /// whether or not the request carries escapes.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn literal_rewrite_serves_its_target_for_encoded_requests() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = fixture_root();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let upstream = spawn_echo_upstream(Arc::clone(&seen)).await;
@@ -238,7 +246,9 @@ async fn literal_rewrite_serves_its_target_for_encoded_requests() {
 /// escape survives into the rewritten target and the static resolver decodes it
 /// once, so `a%20b` opens the file named `a b`.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn patterned_rewrite_captures_the_canonical_path() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = fixture_root();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let upstream = spawn_echo_upstream(Arc::clone(&seen)).await;
@@ -263,7 +273,9 @@ async fn patterned_rewrite_captures_the_canonical_path() {
 /// The path forwarded upstream is the canonical URI form: the target keeps its
 /// escapes and its query instead of being decoded into an invalid request line.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn proxy_forwards_the_canonical_request_target() {
+    let _gate = SUITE_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = fixture_root();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let upstream = spawn_echo_upstream(Arc::clone(&seen)).await;
