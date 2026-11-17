@@ -86,3 +86,7 @@ path = "path_representation.rs"
 [[test]]
 name = "ng21_h2_header_limits"
 path = "ng21_h2_header_limits.rs"
+
+[[test]]
+name = "path_consumers"
+path = "path_consumers.rs"

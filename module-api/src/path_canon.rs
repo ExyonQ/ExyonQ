@@ -32,10 +32,6 @@
 /// Canonicalize an HTTP request path. `None` means the request must be
 /// rejected with 400 rather than interpreted by a downstream component.
 pub fn canonicalize_path(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return Some("/".to_string());
-    }
-
     let decoded = decode_percent_path(path)?;
     let trailing_slash = decoded.last() == Some(&b'/');
 
@@ -92,7 +88,8 @@ pub fn decode_percent_path(path: &str) -> Option<Vec<u8>> {
 }
 
 fn push_decoded(byte: u8, out: &mut Vec<u8>) -> Option<()> {
-    if byte == 0 || byte < 0x20 || byte == 0x7f || byte == b'\\' {
+    // NUL is already covered by `< 0x20`; the check is a single range on purpose.
+    if byte < 0x20 || byte == 0x7f || byte == b'\\' {
         return None;
     }
     out.push(byte);
@@ -234,6 +231,20 @@ mod tests {
     }
 
     #[test]
+    fn double_encoding_stays_literal() {
+        // One decode leaves `%2e` as text, so the second encoding is inert: the
+        // canonical form keeps it escaped and never becomes a dot segment.
+        assert_eq!(
+            canonicalize_path("/%252e%252e/x").as_deref(),
+            Some("/%252e%252e/x")
+        );
+        // The same escape, once decoded, is a dot segment and fails closed.
+        for path in ["/.%2e/x", "/%2e./x"] {
+            assert!(canonicalize_path(path).is_none(), "{path}");
+        }
+    }
+
+    #[test]
     fn rejects_ambiguous_or_unsafe_spellings() {
         for path in [
             "/../admin",
@@ -242,6 +253,8 @@ mod tests {
             "/%zz",
             "/%00",
             "/bad%0dname",
+            "/a\u{0}b",
+            "/a\u{7f}b",
         ] {
             assert!(canonicalize_path(path).is_none(), "{path}");
         }
@@ -252,5 +265,10 @@ mod tests {
         assert_eq!(canonicalize_path("/admin/").as_deref(), Some("/admin/"));
         assert_eq!(canonicalize_path("/").as_deref(), Some("/"));
         assert_eq!(canonicalize_path("//").as_deref(), Some("/"));
+        assert_eq!(
+            canonicalize_path("").as_deref(),
+            Some("/"),
+            "an empty target normalizes like a bare slash"
+        );
     }
 }
