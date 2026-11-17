@@ -424,11 +424,17 @@ pub(crate) fn waf_wire_materialization_active(state: &ServerState) -> bool {
 }
 
 /// Cap015: evaluate generation-frozen WAF on wire heads before static/proxy serve.
+///
+/// `skip_abuse` is for pre-checks whose request will then be handed to Hyper:
+/// Hyper runs the same header gate again and owns the abuse decision, so
+/// counting there as well spent two quota units per request (with `burst = 1`
+/// that challenged every client's first request — the OL-04 E2E failure).
 pub(crate) fn evaluate_wire_waf(
     state: &ServerState,
     generation: u64,
     head: &[u8],
     x_forwarded_for: &HeaderValue,
+    skip_abuse: bool,
 ) -> crate::waf::WafHookResult {
     // ARCH-002: skip parse_wire_header_pairs / owned Strings / engine inspect when WAF is off.
     if !waf_wire_materialization_active(state) {
@@ -455,6 +461,16 @@ pub(crate) fn evaluate_wire_waf(
             Some(trust) => trust.resolve_from_pairs(peer_ip, &header_pairs),
             None => peer_ip,
         };
+    if crate::waf::abuse_trace_enabled() {
+        tracing::warn!(
+            target: "exyonq::waf_abuse_trace",
+            caller = "wire-pre-check",
+            skip_abuse,
+            path = %path,
+            client_ip = %client_ip,
+            "abuse judgement site"
+        );
+    }
     let decision = crate::waf::inspect_request_headers(
         state.waf.as_ref(),
         parse_wire_method(head),
@@ -465,7 +481,7 @@ pub(crate) fn evaluate_wire_waf(
         client_ip,
         None,
         generation,
-        false,
+        skip_abuse,
         state.waf_enforce,
         state.waf_abuse.as_deref(),
     );
@@ -601,11 +617,15 @@ fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<Vec<u
     if !(head.starts_with(b"GET ") || head.starts_with(b"HEAD ")) {
         return None;
     }
+    // Pre-check only: this rejected request never reaches Hyper, but an allowed
+    // one always does, and Hyper runs the full gate including abuse. Judging the
+    // quota here would charge the client twice for one request.
     match evaluate_wire_waf(
         &ctx.state,
         ctx.pinned_generation,
         head,
         &ctx.x_forwarded_for,
+        true,
     ) {
         crate::waf::WafHookResult::Reject(reject) => Some(format_waf_reject_http(&reject)),
         crate::waf::WafHookResult::Continue => None,
@@ -686,7 +706,8 @@ where
     }
 
     // Cap015: proxy wire must not bypass signature/abuse WAF (same contract as Hyper path).
-    match evaluate_wire_waf(state, generation, head.as_ref(), &x_forwarded_for) {
+    // The wire answers this request itself, so its gate is the authoritative one.
+    match evaluate_wire_waf(state, generation, head.as_ref(), &x_forwarded_for, false) {
         crate::waf::WafHookResult::Reject(reject) => {
             let started = Instant::now();
             complete_waf_reject_wire(

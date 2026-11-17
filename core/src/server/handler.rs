@@ -4806,6 +4806,16 @@ fn waf_header_gate(
     client_ip: std::net::IpAddr,
     skip_abuse: bool,
 ) -> Option<Response<BoxBody>> {
+    if crate::waf::abuse_trace_enabled() {
+        tracing::warn!(
+            target: "exyonq::waf_abuse_trace",
+            caller = "hyper-gate",
+            skip_abuse,
+            path,
+            client_ip = %client_ip,
+            "abuse judgement site"
+        );
+    }
     match crate::waf::inspect_request_headers(
         state.waf.as_ref(),
         method.as_str(),

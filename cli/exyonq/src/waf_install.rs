@@ -394,12 +394,26 @@ fn build_abuse_gate_from_config(
     struct EnvAbuseGate {
         bucket: SyncTokenBucket,
         challenge: bool,
+        attempts: std::sync::atomic::AtomicU64,
     }
 
     impl WafAbuseGate for EnvAbuseGate {
         fn check(&self, client_ip: IpAddr, _route_id: Option<&str>) -> Option<WafDecision> {
             let key = client_ip.to_string();
-            if self.bucket.allow_key(&key) {
+            let allowed = self.bucket.allow_key(&key);
+            if exyonq_core::waf::abuse_trace_enabled() {
+                tracing::warn!(
+                    target: "exyonq::waf_abuse_trace",
+                    key = %key,
+                    allowed,
+                    challenge = self.challenge,
+                    retry_after = self.bucket.retry_after_secs(&key),
+                    attempt = self.attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+                    pid = std::process::id(),
+                    "abuse bucket charge"
+                );
+            }
+            if allowed {
                 return None;
             }
             if self.challenge {
@@ -421,5 +435,6 @@ fn build_abuse_gate_from_config(
     Ok(Some(Arc::new(EnvAbuseGate {
         bucket: SyncTokenBucket::new(rps, burst),
         challenge: as_challenge,
+        attempts: std::sync::atomic::AtomicU64::new(0),
     })))
 }

@@ -57,6 +57,10 @@ mod zone_ratelimit;
 /// TLS runtime (KD4.5 — implementation in `exyonq-mod-tls`).
 pub use exyonq_mod_tls as tls;
 
+/// Test-only re-export of the WAF seam types a test needs to install a
+/// `WafRuntimeBinding` (the field types of the public binding).
+#[cfg(feature = "test-utils")]
+pub use exyonq_waf_api::{WafAbuseGate, WafDecision, WafPhase};
 pub use mirror::append_mirror_prometheus;
 pub use waf::{
     clear_waf_abuse_gate, commit_staged_waf_binding, commit_waf_reload,

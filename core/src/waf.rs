@@ -431,6 +431,17 @@ fn finish(
     WafHookResult::Continue
 }
 
+/// Abuse-gate tracing, off unless `EXYONQ_WAF_ABUSE_TRACE` is set at startup.
+///
+/// The OL-04 differential needs to know *who* consults the gate for one client
+/// request and in which phase; the token bucket itself cannot say that. This is
+/// diagnostic only: it never changes a decision and costs one relaxed atomic
+/// load when the variable is absent.
+pub fn abuse_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("EXYONQ_WAF_ABUSE_TRACE").is_some())
+}
+
 fn finish_abuse(
     phase: WafPhase,
     client_ip: IpAddr,
@@ -442,6 +453,20 @@ fn finish_abuse(
     skip_abuse: bool,
     abuse: Option<&dyn WafAbuseGate>,
 ) -> WafHookResult {
+    let trace = abuse_trace_enabled();
+    if trace {
+        tracing::warn!(
+            target: "exyonq::waf_abuse_trace",
+            ?phase,
+            skip_abuse,
+            client_ip = %client_ip,
+            path,
+            route_id = route_id.unwrap_or("-"),
+            has_cookie = cookie_header.is_some(),
+            gate_installed = abuse.is_some(),
+            "abuse gate consulted"
+        );
+    }
     if skip_abuse {
         return WafHookResult::Continue;
     }

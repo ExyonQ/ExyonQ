@@ -70,3 +70,7 @@ path = "wasm_host.rs"
 [[test]]
 name = "acme"
 path = "acme.rs"
+
+[[test]]
+name = "waf_abuse_burst"
+path = "waf_abuse_burst.rs"
