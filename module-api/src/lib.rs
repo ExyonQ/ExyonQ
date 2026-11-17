@@ -157,7 +157,7 @@ pub use observability_runtime::{
     freeze_prometheus_appenders, register_prometheus_appender, register_test_prometheus_appender,
     PrometheusAppendFn, PrometheusAppenderTestGuard,
 };
-pub use path_canon::canonicalize_path;
+pub use path_canon::{canonicalize_path, decode_percent_path};
 pub use reload_runtime::{
     clear_reload_runtime_for_tests, register_reload_runtime_service,
     reload_runtime_registration_test_gate, reload_runtime_service, ReloadRuntimeRegisterError,

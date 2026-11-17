@@ -250,12 +250,23 @@ impl StaticRoot {
     }
 
     /// H-01: classify the root-relative path before any cache or filesystem use.
+    ///
+    /// The request path reaches this module in its canonical URI form, where
+    /// bytes a request-target cannot carry literally are still `%XX`-escaped.
+    /// The filesystem is where path *semantics* starts, so this is the point
+    /// that decodes: `/hello%20world.html` opens `hello world.html`. The 400
+    /// that used to be returned for those paths was a representation bug, not a
+    /// policy one; a name that is not valid UTF-8 (e.g. `%FF`) simply has no
+    /// representable target here and is reported as not found.
     fn checked_relative(&self, request_path: &str) -> Result<String, StaticError> {
-        let relative = self
+        let encoded = self
             .relative_for(request_path)
             .ok_or(StaticError::NotFound)?;
-        sensitive::ensure_relative_allowed(&relative)?;
-        Ok(relative)
+        let decoded = exyonq_module_api::decode_percent_path(&encoded)
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or(StaticError::NotFound)?;
+        sensitive::ensure_relative_allowed(&decoded)?;
+        Ok(decoded)
     }
 
     /// Wire/sendfile entry points need the same policy without exposing the
