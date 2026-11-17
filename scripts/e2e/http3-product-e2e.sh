@@ -19,6 +19,11 @@ CLIENT_IMAGE="${EXYONQ_H3_CLIENT_IMAGE:-ymuski/curl-http3:latest}"
 CLIENT_PLATFORM="${EXYONQ_H3_CLIENT_PLATFORM:-linux/amd64}"
 CLIENT_DIGEST="${EXYONQ_H3_CLIENT_DIGEST:-}"
 RUN_ID="${P1_3B_E2E_RUN_ID:-p13b-e2e-$(date -u +%Y%m%dT%H%M%SZ)}"
+# NG-21 header geometry under test: the committed `[tuning].max_header_bytes`
+# must rule HTTP/3 in the product binary. The probe sizes stay below the QPACK
+# field-section limit (~16 KiB), which would otherwise refuse the block with a
+# connection error before the application budget is consulted.
+H3_MAX_HEADER_BYTES="${H3_MAX_HEADER_BYTES:-8192}"
 
 docker_run() {
   docker run --rm --platform "$CLIENT_PLATFORM" "$@"
@@ -164,6 +169,9 @@ UP_PID=$!
 
 cat >"$CFG" <<EOF
 config_version = 1
+
+[tuning]
+max_header_bytes = ${H3_MAX_HEADER_BYTES}
 
 [[server]]
 listen = "127.0.0.1:${TCP_PORT}"
@@ -347,6 +355,20 @@ fi
 echo "$lr" | grep -qi '^:method:' && fail "pseudo-header :method forwarded"
 pass "HEADER_TRANSLATION_SPOTCHECK"
 
+# NG-21 over the product binary: a header block inside the committed budget is
+# served, and one above it is refused with 431 (same observable as HTTP/2).
+PAD_OK="$(python3 -c 'print("a" * 4096)')"
+code="$(h3_code -H "x-pad: ${PAD_OK}" "${H3_URL}/site/")"
+[[ "$code" == "200" ]] \
+  || fail "H3 header within budget (4096 B, budget=${H3_MAX_HEADER_BYTES}) expected 200 got $code"
+pass "H3_HEADER_WITHIN_BUDGET_200 budget=${H3_MAX_HEADER_BYTES}"
+
+PAD_OVER="$(python3 -c 'print("a" * 12288)')"
+code="$(h3_code -H "x-pad: ${PAD_OVER}" "${H3_URL}/site/")"
+[[ "$code" == "431" ]] \
+  || fail "H3 header over budget (12288 B, budget=${H3_MAX_HEADER_BYTES}) expected 431 got $code"
+pass "H3_HEADER_OVER_BUDGET_431 budget=${H3_MAX_HEADER_BYTES}"
+
 if rg -q 'secret-token|Bearer secret' "$LOG" 2>/dev/null; then
   fail "secret leaked into server log"
 fi
@@ -424,6 +446,7 @@ echo "CLIENT_DIGEST=$CLIENT_DIGEST"
 echo "CLIENT_PLATFORM=$CLIENT_PLATFORM"
 echo "CERT_HASH=$CERT_HASH"
 echo "CONFIG_HASH=$CONFIG_HASH"
+echo "H3_MAX_HEADER_BYTES=$H3_MAX_HEADER_BYTES"
 echo "HARNESS_HASH=$HARNESS_HASH"
 echo "UDP_PORT=$UDP_PORT TCP_PORT=$TCP_PORT"
 echo "H3_RELOAD_SUPPORT=SAME_LISTENER_CONFIG_ONLY"
