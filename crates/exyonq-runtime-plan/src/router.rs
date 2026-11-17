@@ -30,6 +30,12 @@ use regex::Regex;
 pub struct RouteIndex {
     routes: Vec<RouteConfig>,
     matchers: Vec<CompiledMatcher>,
+    /// Each route's prefix in the same canonical form the request path is
+    /// matched in, computed once here instead of per request. Without this a
+    /// route declared as `/ü` never matched `/%C3%BC/x`, because the request
+    /// path is canonicalised into URI form (`b10d524`) and the raw UTF-8
+    /// prefix is not.
+    prefixes: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -85,7 +91,15 @@ impl RouteIndex {
             };
             matchers.push(matcher);
         }
-        Ok(Self { routes, matchers })
+        let prefixes = routes
+            .iter()
+            .map(|route| canonical_route_prefix(&route.r#match.path))
+            .collect();
+        Ok(Self {
+            routes,
+            matchers,
+            prefixes,
+        })
     }
 
     /// Panic on invalid match (tests with prefix-only fixtures).
@@ -158,14 +172,15 @@ impl RouteIndex {
         self.routes
             .iter()
             .zip(self.matchers.iter())
+            .zip(self.prefixes.iter())
             .enumerate()
-            .filter(|(_, (route, matcher))| {
+            .filter(|(_, ((route, matcher), prefix))| {
                 port_matches_route(route, local_port)
                     && host_matches_route(route, host)
-                    && path_matches(path, route, matcher)
+                    && path_matches(path, route, matcher, prefix)
                     && exyonq_config_ir::match_header_satisfied(&route.r#match, request_headers)
             })
-            .max_by_key(|(idx, (route, _))| {
+            .max_by_key(|(idx, ((route, _), _))| {
                 (
                     // NGINX: listen selects the server first — a port-scoped
                     // route that matched outranks an unscoped one.
@@ -176,7 +191,7 @@ impl RouteIndex {
                     Reverse(*idx),
                 )
             })
-            .map(|(idx, (route, _))| (idx, route))
+            .map(|(idx, ((route, _), _))| (idx, route))
     }
 
     /// Exposes the normalized/canonical IR routes for callers that need parallel alignment.
@@ -203,18 +218,31 @@ fn port_matches_route(route: &RouteConfig, local_port: Option<u16>) -> bool {
     }
 }
 
-fn path_matches(path: &str, route: &RouteConfig, matcher: &CompiledMatcher) -> bool {
+/// `route_path` in the canonical form `canonicalize_path` gives a request
+/// path, so a `/ü` route keeps matching the `/%C3%BC/x` a client actually
+/// sends. A pattern the canonicaliser refuses is compared verbatim instead of
+/// dropping the route.
+fn canonical_route_prefix(route_path: &str) -> String {
+    exyonq_module_api::canonicalize_path(route_path).unwrap_or_else(|| route_path.to_string())
+}
+
+fn path_matches(
+    path: &str,
+    route: &RouteConfig,
+    matcher: &CompiledMatcher,
+    canonical_prefix: &str,
+) -> bool {
     match matcher {
         CompiledMatcher::Prefix => {
             if route.r#match.exact {
                 // NGINX `location =`: whole-URI equality, no prefix claim.
-                !route.r#match.path.is_empty() && path == route.r#match.path
+                !route.r#match.path.is_empty() && path == canonical_prefix
             } else if route.r#match.literal {
                 // NGINX literal prefix: pattern verbatim, no boundary and no
                 // `/` trim — `/assets/` does not match `/assets`.
-                !route.r#match.path.is_empty() && path.starts_with(&route.r#match.path)
+                !route.r#match.path.is_empty() && path.starts_with(canonical_prefix)
             } else {
-                path_under_route_prefix(path, &route.r#match.path)
+                path_under_route_prefix(path, canonical_prefix)
             }
         }
         CompiledMatcher::Suffix => {
@@ -304,7 +332,7 @@ pub fn match_route<'a>(routes: &'a [RouteConfig], path: &str) -> Option<&'a Rout
         .iter()
         .filter(|route| {
             route.r#match.kind() == Some(RouteMatchKind::Prefix)
-                && path_under_route_prefix(&path, &route.r#match.path)
+                && path_under_route_prefix(&path, &canonical_route_prefix(&route.r#match.path))
         })
         .max_by_key(|route| route.r#match.path.len())
 }
@@ -612,6 +640,28 @@ mod tests {
         ]);
         assert!(index.requires_host_for_port(None));
         assert!(!RouteIndex::new(vec![route("default", "/")]).requires_host_for_port(None));
+    }
+
+    #[test]
+    fn non_ascii_prefix_matches_its_uri_form() {
+        // A request path is canonicalised into URI form, so a route declared
+        // with raw UTF-8 must match both spellings a client can send.
+        let index = RouteIndex::new(vec![route("root", "/"), route("u", "/ü")]);
+        for path in ["/ü/x", "/%C3%BC/x", "/%c3%bc/x", "/ü", "/%C3%BC"] {
+            assert_eq!(index.match_route(path).unwrap().name, "u", "{path}");
+        }
+        assert_eq!(index.match_route("/u/x").unwrap().name, "root");
+
+        // `location =` and a literal NGINX prefix keep their semantics in the
+        // same canonical form.
+        let mut exact = route("exact", "/ü/x");
+        exact.r#match.exact = true;
+        let mut literal = route("literal", "/ü/");
+        literal.r#match.literal = true;
+        let index = RouteIndex::new(vec![route("root", "/"), exact, literal]);
+        assert_eq!(index.match_route("/%C3%BC/x").unwrap().name, "exact");
+        assert_eq!(index.match_route("/ü/x/y").unwrap().name, "literal");
+        assert_eq!(index.match_route("/ü").unwrap().name, "root");
     }
 
     #[test]
