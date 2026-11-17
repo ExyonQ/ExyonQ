@@ -357,4 +357,12 @@ async fn probes_do_not_spend_the_quota() {
         String::from_utf8_lossy(&body)
     );
     assert_eq!(body.as_slice(), b"burst-ok");
+    // The file went wire pre-check -> Hyper on the same connection. Judging it
+    // in both places spent the unit twice and challenged the *first* request;
+    // the CI OL-04 job failed exactly there. One file, one judgement.
+    assert_eq!(
+        gate.calls.load(Ordering::SeqCst),
+        1,
+        "the file must be judged once: the wire pre-check may not spend a unit"
+    );
 }
