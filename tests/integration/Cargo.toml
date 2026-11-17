@@ -90,3 +90,7 @@ path = "ng21_h2_header_limits.rs"
 [[test]]
 name = "path_consumers"
 path = "path_consumers.rs"
+
+[[test]]
+name = "cache_purge_api"
+path = "cache_purge_api.rs"
