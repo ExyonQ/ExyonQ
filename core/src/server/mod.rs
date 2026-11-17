@@ -199,7 +199,15 @@ async fn serve_hyper<S>(
             }
         }
     };
-    let io = TokioIo::new(stream);
+    // NG-21: the committed header deadline also covers HTTP/2. Hyper's H2
+    // builder has no read timeout, so the deadline is armed here and disarmed
+    // by the first request the connection delivers.
+    let headers_delivered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let io = TokioIo::new(io::HeaderDeadlineIo::new(
+        stream,
+        io::header_read_timeout(),
+        Arc::clone(&headers_delivered),
+    ));
     let bad_req_ip = handler::client_ip_from_xff(Some(&x_forwarded_for));
     let bad_req_cfg = reload::read_state(&shared)
         .config
@@ -211,6 +219,7 @@ async fn serve_hyper<S>(
     // Cap057 LA-CAP057-002: refresh live SharedServerState per request (mirror H3).
     // Accept-time Arc pin made FPC HITs survive reload disable / live purge on keep-alive.
     let service = hyper::service::service_fn(move |req| {
+        let headers_delivered = Arc::clone(&headers_delivered);
         let conn_state = reload::read_state(&shared);
         let proxy_client = proxy_client.clone();
         let x_forwarded_for = x_forwarded_for.clone();
@@ -221,6 +230,7 @@ async fn serve_hyper<S>(
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.eq_ignore_ascii_case("close"));
         async move {
+            headers_delivered.store(true, std::sync::atomic::Ordering::Release);
             let mut response = serve_connection(
                 ConnectionContext {
                     state: conn_state,
@@ -253,6 +263,15 @@ async fn serve_hyper<S>(
         http1.header_read_timeout(io::header_read_timeout());
         http1.max_buf_size(io::max_header_cap());
         http1.timer(hyper_util::rt::TokioTimer::new());
+    }
+    {
+        // NG-21: the same committed geometry bounds HTTP/2 request headers. The
+        // `h2` layer enforces this cap while decoding HEADERS, so an oversized
+        // block is refused before the service sees a request, exactly as the H1
+        // pre-parser refuses one: no response is served.
+        let mut http2 = builder.http2();
+        http2.max_header_list_size(io::max_header_cap() as u32);
+        http2.timer(hyper_util::rt::TokioTimer::new());
     }
     if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
         // OL-03 blockBadReq: Hyper rejects malformed request lines before the

@@ -85,6 +85,24 @@ pub fn diagnostics_snapshot() -> QuicheProviderDiagSnapshot {
     DIAG.snapshot()
 }
 
+use std::time::Duration;
+
+/// NG-21: header-block rejections (over budget) and header-deadline cuts.
+static HEADER_REJECTS: AtomicU64 = AtomicU64::new(0);
+static HEADER_DEADLINES: AtomicU64 = AtomicU64::new(0);
+
+/// `H3_REQUEST_REJECTED` (0x010b), the stream error HTTP/3 defines for a
+/// request the server refuses to process.
+const H3_REQUEST_REJECTED_CODE: u64 = 0x010b;
+
+/// `(rejected_over_budget, cut_by_deadline)` for the HTTP/3 header limits.
+pub fn header_limit_stats() -> (u64, u64) {
+    (
+        HEADER_REJECTS.load(Ordering::Relaxed),
+        HEADER_DEADLINES.load(Ordering::Relaxed),
+    )
+}
+
 struct PartialResponse {
     headers: Option<Vec<quiche::h3::Header>>,
     body: Vec<u8>,
@@ -101,6 +119,9 @@ struct Client<L> {
     http3_conn: Option<quiche::h3::Connection>,
     pending_requests: HashMap<u64, PendingRequest>,
     partial_responses: HashMap<u64, PartialResponse>,
+    /// NG-21: request streams seen readable before their header block is
+    /// complete, with the first instant they were observed.
+    unheaded: HashMap<u64, std::time::Instant>,
     /// Held for connection lifetime (PS1A-H3 / P13F admission).
     _lease: Option<L>,
     peer: net::SocketAddr,
@@ -200,12 +221,26 @@ where
     let local_addr = socket.local_addr()?;
 
     loop {
-        let timeout = clients.values().filter_map(|c| c.conn.timeout()).min();
+        // NG-21: wake for the header deadline as well as for QUIC timers.
+        let now = std::time::Instant::now();
+        let header_deadline = exyonq_module_api::http_limits::header_deadline();
+        let header_wait = clients
+            .values()
+            .filter_map(|c| next_unheaded_expiry(c, now, header_deadline))
+            .min();
+        let mut timeout = clients.values().filter_map(|c| c.conn.timeout()).min();
+        if let Some(wait) = header_wait {
+            timeout = Some(timeout.map_or(wait, |current| current.min(wait)));
+        }
         poll.poll(&mut events, timeout)?;
 
         'read: loop {
             if events.is_empty() {
-                clients.values_mut().for_each(|c| c.conn.on_timeout());
+                let now = std::time::Instant::now();
+                for client in clients.values_mut() {
+                    client.conn.on_timeout();
+                    expire_unheaded_headers(&mut client.conn, &mut client.unheaded, now);
+                }
                 break 'read;
             }
 
@@ -283,6 +318,7 @@ where
                     http3_conn: None,
                     pending_requests: HashMap::new(),
                     partial_responses: HashMap::new(),
+                    unheaded: HashMap::new(),
                     _lease: None,
                     peer: from,
                 };
@@ -343,6 +379,7 @@ where
                 loop {
                     match http3_conn.poll(&mut client.conn) {
                         Ok((stream_id, quiche::h3::Event::Headers { list, .. })) => {
+                            client.unheaded.remove(&stream_id);
                             handle_request(
                                 &mut client.conn,
                                 http3_conn,
@@ -374,6 +411,7 @@ where
                             );
                         }
                         Ok((stream_id, quiche::h3::Event::Reset { .. })) => {
+                            client.unheaded.remove(&stream_id);
                             client.pending_requests.remove(&stream_id);
                         }
                         Ok((_, quiche::h3::Event::PriorityUpdate))
@@ -387,6 +425,19 @@ where
                     }
                 }
             }
+
+            // NG-21: a request stream that is readable without a complete header
+            // block is tracked, so the committed deadline can cut it.
+            let readable: Vec<u64> = client.conn.readable().collect();
+            let now = std::time::Instant::now();
+            for stream_id in readable {
+                if !client.pending_requests.contains_key(&stream_id)
+                    && !client.partial_responses.contains_key(&stream_id)
+                {
+                    client.unheaded.entry(stream_id).or_insert(now);
+                }
+            }
+            expire_unheaded_headers(&mut client.conn, &mut client.unheaded, now);
         }
 
         for client in clients.values_mut() {
@@ -420,6 +471,49 @@ fn request_body_cap(drain_cap: usize) -> usize {
     drain_cap.min(PROXY_MAX_REQUEST_BODY_BYTES)
 }
 
+/// NG-21: time left before the oldest incomplete header block must be cut.
+fn next_unheaded_expiry<L>(
+    client: &Client<L>,
+    now: std::time::Instant,
+    deadline: Duration,
+) -> Option<Duration> {
+    client
+        .unheaded
+        .values()
+        .map(|seen| deadline.saturating_sub(now.duration_since(*seen)))
+        .min()
+}
+
+/// NG-21: reset every request stream whose headers missed the deadline.
+fn expire_unheaded_headers(
+    conn: &mut quiche::Connection,
+    unheaded: &mut HashMap<u64, std::time::Instant>,
+    now: std::time::Instant,
+) {
+    if unheaded.is_empty() {
+        return;
+    }
+    let deadline = exyonq_module_api::http_limits::header_deadline();
+    unheaded.retain(|stream_id, seen| {
+        if now.duration_since(*seen) < deadline {
+            return true;
+        }
+        HEADER_DEADLINES.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            stream_id,
+            "quiche http3 header deadline elapsed; resetting stream"
+        );
+        reset_request_stream(conn, *stream_id);
+        false
+    });
+}
+
+/// NG-21: reset both directions of a refused request stream.
+fn reset_request_stream(conn: &mut quiche::Connection, stream_id: u64) {
+    let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Write, H3_REQUEST_REJECTED_CODE);
+    let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, H3_REQUEST_REJECTED_CODE);
+}
+
 fn content_length(req: &Request<()>) -> Option<usize> {
     req.headers()
         .get(http::header::CONTENT_LENGTH)
@@ -442,6 +536,31 @@ fn handle_request(
     pending_requests: &mut HashMap<u64, PendingRequest>,
     partial_responses: &mut HashMap<u64, PartialResponse>,
 ) {
+    // NG-21: the same committed header budget H1 and HTTP/2 apply, measured like
+    // the `h2` protocol measures a decoded header list.
+    let header_bytes: usize = headers
+        .iter()
+        .map(|h| {
+            h.name().len() + h.value().len() + exyonq_module_api::http_limits::HEADER_FIELD_OVERHEAD
+        })
+        .sum();
+    if header_bytes > exyonq_module_api::http_limits::header_budget_bytes() {
+        HEADER_REJECTS.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            stream_id,
+            header_bytes,
+            budget = exyonq_module_api::http_limits::header_budget_bytes(),
+            "quiche http3 header block over budget; resetting stream"
+        );
+        send_materialized_response(
+            conn,
+            http3_conn,
+            stream_id,
+            header_fields_too_large_response(),
+            partial_responses,
+        );
+        return;
+    }
     let req = match headers_to_request(headers) {
         Ok(r) => r,
         Err(e) => {
@@ -623,6 +742,14 @@ fn payload_too_large_response() -> Http3MaterializedResponse {
         status: 413,
         headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
         body: Bytes::from_static(b"payload too large"),
+    }
+}
+
+fn header_fields_too_large_response() -> Http3MaterializedResponse {
+    Http3MaterializedResponse {
+        status: 431,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: Bytes::from_static(b"request header fields too large"),
     }
 }
 

@@ -64,6 +64,18 @@ pub struct S2nProviderDiagSnapshot {
     pub handshake_rejects: u64,
 }
 
+/// NG-21: header-block rejections (over budget) and header-deadline cuts.
+static HEADER_REJECTS: AtomicU64 = AtomicU64::new(0);
+static HEADER_DEADLINES: AtomicU64 = AtomicU64::new(0);
+
+/// `(rejected_over_budget, cut_by_deadline)` for the HTTP/3 header limits.
+pub fn header_limit_stats() -> (u64, u64) {
+    (
+        HEADER_REJECTS.load(Ordering::Relaxed),
+        HEADER_DEADLINES.load(Ordering::Relaxed),
+    )
+}
+
 static DIAG: S2nProviderDiagnostics = S2nProviderDiagnostics {
     clean_finish: AtomicU64::new(0),
     dispatch_errors: AtomicU64::new(0),
@@ -155,9 +167,47 @@ where
     while let Some(resolver) = h3_conn.accept().await? {
         let dispatch = Arc::clone(&dispatch);
         let peer_ip = peer_ip.clone();
-        let Ok((req, mut stream)) = resolver.resolve_request().await else {
+        // NG-21: the committed header geometry applies here too. A client that
+        // does not deliver a complete request head within the deadline is cut
+        // exactly as H1 cuts one (the connection ends without a response),
+        // because the QUIC stream id is only known once `resolve_request` has
+        // produced the head and its `RequestStream`.
+        let resolved = match tokio::time::timeout(
+            exyonq_module_api::http_limits::header_deadline(),
+            resolver.resolve_request(),
+        )
+        .await
+        {
+            Ok(resolved) => resolved,
+            Err(_elapsed) => {
+                HEADER_DEADLINES.fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    peer_ip = %peer_ip,
+                    "s2n http3 header deadline elapsed; closing connection"
+                );
+                return Ok(());
+            }
+        };
+        let Ok((req, mut stream)) = resolved else {
             continue;
         };
+        if !exyonq_module_api::http_limits::header_list_within_budget(req.headers()) {
+            HEADER_REJECTS.fetch_add(1, Ordering::Relaxed);
+            warn!(
+                peer_ip = %peer_ip,
+                header_bytes = exyonq_module_api::http_limits::header_list_bytes(req.headers()),
+                budget = exyonq_module_api::http_limits::header_budget_bytes(),
+                "s2n http3 header block over budget; resetting stream"
+            );
+            // Same observable rejection as HTTP/2: no content is served and the
+            // client gets 431, written through the existing error-response path.
+            let response = header_fields_too_large_response();
+            if let Err(err) = write_h3_response(&mut stream, response, drain_cap).await {
+                DIAG.response_errors.fetch_add(1, Ordering::Relaxed);
+                warn!(%err, "s2n http3 431 write failed");
+            }
+            continue;
+        }
         let req = match collect_request_body(req, &mut stream, drain_cap).await {
             Ok(req) => req,
             Err(RequestBodyReadError::TooLarge) => {
@@ -320,6 +370,17 @@ fn payload_too_large_response() -> Http3MaterializedResponse {
             "text/plain; charset=utf-8".to_string(),
         )],
         body: Bytes::from_static(b"payload too large"),
+    }
+}
+
+fn header_fields_too_large_response() -> Http3MaterializedResponse {
+    Http3MaterializedResponse {
+        status: StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE.as_u16(),
+        headers: vec![(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        )],
+        body: Bytes::from_static(b"request header fields too large"),
     }
 }
 

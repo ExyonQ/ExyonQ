@@ -16,9 +16,11 @@
 //! IO helpers for connection dispatch.
 
 use bytes::Bytes;
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -61,6 +63,77 @@ impl<S: AsyncRead + Unpin> AsyncRead for PrefixedStream<S> {
 }
 
 impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// NG-21: an HTTP/2 connection's header deadline.
+///
+/// Hyper's H2 builder has no `header_read_timeout`, and once the wire hands a
+/// connection over Hyper reads every frame itself, so this wrapper is what
+/// makes the committed deadline apply to H2 exactly as it applies to the H1
+/// pre-parser: a client that has not delivered a complete request head by
+/// `deadline` gets an IO error, and the connection ends without a response.
+///
+/// The deadline is disarmed as soon as the connection delivers its first
+/// request (the service stores `true` in `delivered`), so keep-alive and
+/// multiplexed traffic after the first head is untouched. Every write is
+/// passthrough: the deadline never delays a response.
+pub struct HeaderDeadlineIo<S> {
+    inner: S,
+    deadline: Pin<Box<tokio::time::Sleep>>,
+    delivered: Arc<std::sync::atomic::AtomicBool>,
+    armed: bool,
+}
+
+impl<S> HeaderDeadlineIo<S> {
+    pub fn new(inner: S, timeout: Duration, delivered: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            inner,
+            deadline: Box::pin(tokio::time::sleep(timeout)),
+            delivered,
+            armed: true,
+        }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for HeaderDeadlineIo<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.armed {
+            if self.delivered.load(Ordering::Acquire) {
+                self.armed = false;
+            } else if self.deadline.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "header read timeout",
+                )));
+            }
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for HeaderDeadlineIo<S> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

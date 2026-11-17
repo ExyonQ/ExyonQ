@@ -35,6 +35,7 @@ pub mod hop_by_hop;
 pub mod htaccess_overlay;
 pub mod htaccess_runtime;
 pub mod http3_runtime;
+pub mod http_limits;
 pub mod kernel_control;
 pub mod kernel_observation;
 pub mod observability_runtime;
