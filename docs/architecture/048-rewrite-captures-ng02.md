@@ -42,6 +42,18 @@ Empty `when` → always apply when pattern matches.
 replacement has no `?` of its own, matching nginx/Apache behavior. Internal
 `last`/`break` targets remain absolute paths and never carry a query.
 
+### Matching form
+
+Patterns (and `when.path`) match nginx `$uri`: the request path decoded once and
+normalized, never the request-target as received. The kernel canonicalizes the
+target to URI form (`%20` stays escaped, H-01), so the engine decodes one pass to
+match, runs the rule, and re-encodes the expanded replacement before validating
+or forwarding it. A decoded capture therefore never reaches the upstream as a
+literal space, and a `%` inside a capture is escaped as `%25` instead of being
+read back as an escape. When the decoded bytes are not UTF-8 (for example `%FF`)
+no regex literal can spell them, so the engine matches the URI form and passes
+its captures through unescaped rather than corrupting them.
+
 ### Compilation
 
 Pattern and `when.path` / `when.query` compile at plan build (with match.regex). Never on the hot path. Pattern length ≤ 256.

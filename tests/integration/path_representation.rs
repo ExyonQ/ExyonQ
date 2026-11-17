@@ -240,3 +240,112 @@ async fn proxy_forwards_escaped_path_bytes_to_a_real_upstream() {
         );
     }
 }
+
+fn rewrite_proxy_config(root: &std::path::Path, upstream: SocketAddr) -> AppConfig {
+    let toml = format!(
+        r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:0"
+routes = ["site", "api", "raw"]
+
+[[route]]
+name = "site"
+match = {{ path = "/" }}
+root = {root:?}
+index = "index.html"
+
+[[route]]
+name = "api"
+match = {{ path = "/api" }}
+upstream = "backend"
+rewrite = {{ pattern = "^/api/(a b\\.txt)$", replacement = "/api/space/$1", flag = "break" }}
+
+[[route]]
+name = "raw"
+match = {{ path = "/raw" }}
+upstream = "backend"
+rewrite = {{ pattern = "^/raw/(.*)$", replacement = "/raw/mirror/$1", flag = "break" }}
+
+[[upstream]]
+name = "backend"
+target = "http://{upstream}"
+timeout_ms = 2000
+"#,
+        root = root.display().to_string(),
+    );
+    AppConfig::parse_str(&toml).expect("rewrite proxy config parses")
+}
+
+/// Send `target` and require the upstream request line to be exactly `expected`
+/// bytes (the whole rewritten path, not a prefix of a different one).
+async fn assert_upstream_target(
+    client: &Client<HttpConnector, Full<Bytes>>,
+    listen: SocketAddr,
+    seen: &Arc<Mutex<Vec<u8>>>,
+    target: &str,
+    expected: &str,
+) {
+    seen.lock().unwrap().clear();
+    let (status, body) = get(client, listen, target).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{target} must be proxied: body={:?}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(body.as_ref(), b"upstream-ok", "{target}");
+    let head = seen.lock().unwrap().clone();
+    assert!(
+        head.starts_with(expected.as_bytes()),
+        "{target} must reach the upstream as {expected:?}, got {:?}",
+        String::from_utf8_lossy(&head[..head.len().min(96)])
+    );
+}
+
+/// nginx matches `rewrite` against `$uri`, the decoded path, and re-encodes the
+/// result. A rule written with the decoded literal must therefore match an
+/// escaped target, and what the upstream receives must stay a legal
+/// request-target (no literal space, no double encoding).
+#[tokio::test]
+async fn decoded_literal_rewrite_applies_to_an_escaped_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("index.html"), "site").expect("index file");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let upstream = spawn_recording_upstream(Arc::clone(&seen)).await;
+    let listen = spawn(rewrite_proxy_config(dir.path(), upstream)).await;
+    let client = client();
+
+    // The rule is spelled `a b.txt`; the client sends `a%20b.txt`.
+    assert_upstream_target(
+        &client,
+        listen,
+        &seen,
+        "/api/a%20b.txt",
+        "GET /api/space/a%20b.txt HTTP/1.1\r\n",
+    )
+    .await;
+
+    // Same route and spelling, different name: no match, so the target is
+    // proxied untouched. This is the control for the rewrite above.
+    assert_upstream_target(
+        &client,
+        listen,
+        &seen,
+        "/api/a%20c.txt",
+        "GET /api/a%20c.txt HTTP/1.1\r\n",
+    )
+    .await;
+
+    // `%FF` decodes to bytes no regex literal can hold, so the rule matches the
+    // URI form and the capture must not be escaped a second time.
+    assert_upstream_target(
+        &client,
+        listen,
+        &seen,
+        "/raw/i%FFndex",
+        "GET /raw/mirror/i%FFndex HTTP/1.1\r\n",
+    )
+    .await;
+}

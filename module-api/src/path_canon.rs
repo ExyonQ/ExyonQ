@@ -96,6 +96,26 @@ fn push_decoded(byte: u8, out: &mut Vec<u8>) -> Option<()> {
     Some(())
 }
 
+/// Percent-encode decoded text so it can be used as a URI path or `Location`.
+///
+/// Input is **decoded** text (a rewrite replacement, a capture): legal path
+/// bytes stay literal and everything else — space, `%`, non-ASCII, controls —
+/// is escaped with uppercase hex. nginx does the same when it turns a rewritten
+/// `$uri` back into a request-target or a `Location` header.
+pub fn escape_decoded_uri_bytes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for &byte in text.as_bytes() {
+        if is_literal_path_byte(byte) || matches!(byte, b'/' | b'?' | b'#') {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push(upper_hex(byte >> 4));
+            out.push(upper_hex(byte & 0x0f));
+        }
+    }
+    out
+}
+
 /// Append one decoded path segment in the form it must keep in a URI.
 fn encode_segment(segment: &[u8], out: &mut String) {
     for &byte in segment {
