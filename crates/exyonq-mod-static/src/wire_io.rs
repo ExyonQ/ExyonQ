@@ -62,6 +62,10 @@ pub fn append_bytes(left: Bytes, right: &[u8]) -> Bytes {
 /// invalid / non-u64 → 30s; explicit millis → that duration. Mid-process
 /// env mutation is not observed — set before process start (tests may reset).
 pub fn header_read_timeout() -> Duration {
+    // NG-21: the committed `[tuning].keepalive_timeout_ms`, published by core.
+    if let Some(configured) = exyonq_module_api::runtime_tuning::configured_keepalive_timeout() {
+        return configured;
+    }
     let cached = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {
         return Duration::from_millis(cached - 1);

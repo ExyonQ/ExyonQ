@@ -37,6 +37,12 @@ use tracing::{debug, warn};
 
 const MAX_HEADER: usize = 8192;
 
+/// NG-21: the committed `[tuning].max_header_bytes`, published by core.
+/// Falls back to the historical cap when the key is absent.
+fn max_header() -> usize {
+    exyonq_module_api::runtime_tuning::configured_max_header_bytes().unwrap_or(MAX_HEADER)
+}
+
 fn wire_access_outcome(status: u16) -> &'static str {
     match status {
         304 => "static_wire_not_modified",
@@ -527,7 +533,7 @@ fn ensure_headers_blocking(
         if headers_complete(&carry) {
             return Ok(carry);
         }
-        if carry.len() > MAX_HEADER {
+        if carry.len() > max_header() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",
@@ -793,7 +799,7 @@ async fn ensure_headers_tcp_inner(stream: &mut TcpStream, mut carry: Bytes) -> R
         if headers_complete(&carry) {
             return Ok(carry);
         }
-        if carry.len() > MAX_HEADER {
+        if carry.len() > max_header() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",
@@ -827,7 +833,7 @@ async fn ensure_headers_inner<S: AsyncRead + Unpin>(
         if headers_complete(&carry) {
             return Ok(carry);
         }
-        if carry.len() > MAX_HEADER {
+        if carry.len() > max_header() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",

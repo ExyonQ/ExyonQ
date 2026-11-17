@@ -76,6 +76,13 @@ pub fn waf_wire_inspection_active_published() -> bool {
 /// Publish generation + Cap067 WAF wire-inspection flag from a newly live [`ServerState`].
 pub fn publish_runtime_observe_authority(state: &ServerState) {
     publish_runtime_generation(state.generation);
+    // NG-21: the cell every wire path resolves its header deadline and cap from
+    // follows the generation that just committed, so a rejected reload keeps the
+    // live geometry instead of leaking the candidate's.
+    exyonq_module_api::runtime_tuning::publish(
+        state.config.tuning.keepalive_timeout_ms,
+        state.config.tuning.max_header_bytes,
+    );
     publish_waf_wire_inspection_active(state.waf_wire_inspection_active);
     #[cfg(target_os = "linux")]
     crate::server::sdp_start::publish_projection(state);

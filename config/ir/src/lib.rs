@@ -101,6 +101,11 @@ pub const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_UPSTREAM_TIMEOUT_MS: u64 = 86_400_000;
 /// Inclusive worker-count ceiling for `[tuning]` (matches core geometry).
 pub const MAX_TUNING_WORKERS: usize = 16;
+/// `[tuning].keepalive_timeout_ms` upper bound (10 minutes).
+pub const MAX_TUNING_KEEPALIVE_MS: u64 = 600_000;
+/// `[tuning].max_header_bytes` bounds: the historical cap and 64 KiB.
+pub const MIN_TUNING_HEADER_BYTES: usize = 8192;
+pub const MAX_TUNING_HEADER_BYTES: usize = 65_536;
 
 /// `[tuning]` — runtime geometry knobs with the measured defaults applied.
 ///
@@ -114,6 +119,16 @@ pub struct TuningConfig {
     /// CPU parallelism clamped to `1..=16`.
     #[serde(default)]
     pub accept_workers: Option<usize>,
+    /// Keep-alive idle / header-read deadline in milliseconds.
+    /// Absent → `EXYONQ_READ_TIMEOUT_MS`, else 30 s.
+    /// Skipped when absent so the fingerprint of a config that does not use the
+    /// key is bit-identical to the one it had before the key existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_timeout_ms: Option<u64>,
+    /// Largest request-header block the wire pre-parser accepts.
+    /// Absent → the historical 8192-byte cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_header_bytes: Option<usize>,
 }
 
 fn validate_tuning(tuning: &TuningConfig) -> Result<(), ConfigError> {
@@ -121,6 +136,25 @@ fn validate_tuning(tuning: &TuningConfig) -> Result<(), ConfigError> {
         if !(1..=MAX_TUNING_WORKERS).contains(&workers) {
             return Err(ConfigError::Parse(format!(
                 "tuning.accept_workers must be 1..={MAX_TUNING_WORKERS}, got {workers}"
+            )));
+        }
+    }
+    if let Some(ms) = tuning.keepalive_timeout_ms {
+        if !(1..=MAX_TUNING_KEEPALIVE_MS).contains(&ms) {
+            return Err(ConfigError::Parse(format!(
+                "tuning.keepalive_timeout_ms must be 1..={MAX_TUNING_KEEPALIVE_MS}, got {ms}"
+            )));
+        }
+    }
+    if let Some(bytes) = tuning.max_header_bytes {
+        if !(MIN_TUNING_HEADER_BYTES..=MAX_TUNING_HEADER_BYTES).contains(&bytes) {
+            return Err(ConfigError::Parse(format!(
+                "tuning.max_header_bytes must be {MIN_TUNING_HEADER_BYTES}..={MAX_TUNING_HEADER_BYTES}, got {bytes}"
+            )));
+        }
+        if !bytes.is_power_of_two() {
+            return Err(ConfigError::Parse(format!(
+                "tuning.max_header_bytes must be a power of two, got {bytes}"
             )));
         }
     }

@@ -88,3 +88,58 @@ fn v1_configs_keep_working_without_tuning() {
     assert_eq!(v1.config_version, 1);
     assert_eq!(v1.tuning.accept_workers, None);
 }
+
+#[test]
+fn keepalive_and_header_cap_parse_with_bounds() {
+    let cfg = parse(&format!(
+        "config_version = 2\n[tuning]\nkeepalive_timeout_ms = 400\nmax_header_bytes = 16384\n{SERVER}"
+    ))
+    .expect("tuning geometry parses");
+    assert_eq!(cfg.tuning.keepalive_timeout_ms, Some(400));
+    assert_eq!(cfg.tuning.max_header_bytes, Some(16_384));
+
+    for bad in ["keepalive_timeout_ms = 0", "keepalive_timeout_ms = 600001"] {
+        let err = parse(&format!("config_version = 2\n[tuning]\n{bad}\n{SERVER}"))
+            .expect_err("out-of-range keep-alive must fail");
+        assert!(err.contains("keepalive_timeout_ms"), "got: {err}");
+    }
+    for bad in [
+        "max_header_bytes = 4096",
+        "max_header_bytes = 65535",
+        "max_header_bytes = 131072",
+    ] {
+        let err = parse(&format!("config_version = 2\n[tuning]\n{bad}\n{SERVER}"))
+            .expect_err("out-of-range header cap must fail");
+        assert!(err.contains("max_header_bytes"), "got: {err}");
+    }
+}
+
+#[test]
+fn header_geometry_participates_in_the_fingerprint() {
+    let slow = parse(&format!(
+        "config_version = 2\n[tuning]\nkeepalive_timeout_ms = 1000\n{SERVER}"
+    ))
+    .unwrap();
+    let fast = parse(&format!(
+        "config_version = 2\n[tuning]\nkeepalive_timeout_ms = 2000\n{SERVER}"
+    ))
+    .unwrap();
+    assert_ne!(fingerprint(&slow), fingerprint(&fast));
+
+    let small = parse(&format!(
+        "config_version = 2\n[tuning]\nmax_header_bytes = 8192\n{SERVER}"
+    ))
+    .unwrap();
+    let large = parse(&format!(
+        "config_version = 2\n[tuning]\nmax_header_bytes = 16384\n{SERVER}"
+    ))
+    .unwrap();
+    assert_ne!(fingerprint(&small), fingerprint(&large));
+}
+
+#[test]
+fn absent_geometry_keeps_the_historical_defaults() {
+    let cfg = parse(&format!("config_version = 2\n{SERVER}")).expect("config parses");
+    assert_eq!(cfg.tuning.keepalive_timeout_ms, None);
+    assert_eq!(cfg.tuning.max_header_bytes, None);
+}

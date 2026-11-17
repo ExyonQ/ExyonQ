@@ -46,6 +46,7 @@ pub mod reload_runtime;
 pub mod response_observation;
 pub mod rewrite_engine;
 pub mod route_rules;
+pub mod runtime_tuning;
 pub mod static_dispatch;
 #[cfg(target_os = "linux")]
 pub mod static_epoll;

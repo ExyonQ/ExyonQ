@@ -26,6 +26,12 @@ static HEADER_READ_TIMEOUT_MS_CACHE: AtomicU64 = AtomicU64::new(0);
 
 pub const MAX_HEADER: usize = 8192;
 
+/// NG-21: the committed `[tuning].max_header_bytes`, published by core.
+/// Falls back to the historical cap when the key is absent.
+pub fn max_header_bytes() -> usize {
+    exyonq_module_api::runtime_tuning::configured_max_header_bytes().unwrap_or(MAX_HEADER)
+}
+
 pub fn find_header_end(buf: &[u8]) -> Option<usize> {
     let mut i = 0;
     let limit = buf.len().saturating_sub(3);
@@ -62,6 +68,10 @@ pub fn append_bytes(left: Bytes, right: &[u8]) -> Bytes {
 /// Unset / invalid → 30s. Mid-process env mutation is not observed —
 /// set before process start (tests may reset).
 pub fn header_read_timeout() -> Duration {
+    // NG-21: the committed `[tuning].keepalive_timeout_ms`, published by core.
+    if let Some(configured) = exyonq_module_api::runtime_tuning::configured_keepalive_timeout() {
+        return configured;
+    }
     let cached = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {
         return Duration::from_millis(cached - 1);

@@ -243,7 +243,17 @@ async fn serve_hyper<S>(
     });
 
     let mut builder = ServerBuilder::new(TokioExecutor::new());
-    builder.http1().keep_alive(true);
+    {
+        // NG-21: a connection Hyper owns after the wire hands it over must obey
+        // the same committed geometry as the pre-parser. The header deadline is
+        // also the keep-alive idle deadline for the next request, and the read
+        // buffer is bounded by the same header cap instead of Hyper's default.
+        let mut http1 = builder.http1();
+        http1.keep_alive(true);
+        http1.header_read_timeout(io::header_read_timeout());
+        http1.max_buf_size(io::max_header_cap());
+        http1.timer(hyper_util::rt::TokioTimer::new());
+    }
     if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
         // OL-03 blockBadReq: Hyper rejects malformed request lines before the
         // service is invoked. Count protocol-parse failures (never incomplete

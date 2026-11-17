@@ -105,7 +105,7 @@ async fn read_until_headers_inner<S: AsyncRead + Unpin>(
             let all = Bytes::from(buf);
             return Ok((all.slice(0..head_len), all.slice(head_len..)));
         }
-        if buf.len() >= MAX_HEADER_CAP {
+        if buf.len() >= max_header_cap() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",
@@ -154,7 +154,9 @@ const MAX_HEADER_CAP: usize = 8192;
 
 #[allow(dead_code)]
 pub(crate) fn max_header_cap() -> usize {
-    MAX_HEADER_CAP
+    // NG-21: the committed `[tuning].max_header_bytes` wins over the historical
+    // compile-time cap; an absent key keeps exactly the old behaviour.
+    exyonq_module_api::runtime_tuning::configured_max_header_bytes().unwrap_or(MAX_HEADER_CAP)
 }
 
 /// True when `line` is an HTTP header field whose name equals `name_lower` (ASCII case-insensitive).
@@ -226,6 +228,12 @@ pub(crate) fn request_framing_needs_hyper(head: &[u8]) -> bool {
 /// Shared by core wire I/O and the Linux epoll keepalive/sendfile deadline path
 /// so there is a single process-lifetime observation of this env.
 pub fn header_read_timeout() -> Duration {
+    // NG-21: `[tuning].keepalive_timeout_ms` is the documented knob; the env var
+    // below stays as the fallback for an absent key and for deployments that
+    // already pin it.
+    if let Some(configured) = exyonq_module_api::runtime_tuning::configured_keepalive_timeout() {
+        return configured;
+    }
     let cached = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed);
     if cached != 0 {
         return Duration::from_millis(cached - 1);
@@ -309,7 +317,7 @@ pub(crate) fn read_until_headers_blocking(
             let all = Bytes::from(buf);
             return Ok((all.slice(0..head_len), all.slice(head_len..)));
         }
-        if buf.len() >= MAX_HEADER_CAP {
+        if buf.len() >= max_header_cap() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",

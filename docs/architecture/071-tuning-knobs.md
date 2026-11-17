@@ -11,11 +11,15 @@ config_version = 2
 
 [tuning]
 accept_workers = 4
+keepalive_timeout_ms = 30000
+max_header_bytes = 8192
 ```
 
 | Key | Type | Bound | Default |
 | --- | --- | --- | --- |
 | `accept_workers` | integer | `1..=16` | detected CPU parallelism, clamped to `1..=16` |
+| `keepalive_timeout_ms` | integer (ms) | `1..=600000` | `EXYONQ_READ_TIMEOUT_MS`, else 30000 |
+| `max_header_bytes` | integer (bytes, power of two) | `8192..=65536` | 8192 |
 
 ### `accept_workers`
 
@@ -34,15 +38,40 @@ it.
 Absent `[tuning]`, the server behaves exactly as before this section existed.
 v1 configs keep parsing; the section does not require `config_version = 2`.
 
-## What is deliberately not exposed yet
+### `keepalive_timeout_ms`
 
-NG-21 also names keepalive, timeouts and buffers. Those knobs currently live in
-process-lifetime caches read from `EXYONQ_READ_TIMEOUT_MS` and in a compile-time
-header cap, shared by the Hyper path, the static wire path and the Linux epoll
-keepalive path. Moving them into the IR requires a per-generation runtime
-plumbing refactor across those consumers; publishing the fields before that
-wiring would create config keys that change nothing, which this project does not
-ship. They stay pending in NG-21.
+The keep-alive idle deadline and the header-read deadline are the same wait: a
+connection that stops sending the next header block is closed after it. One
+value governs every HTTP/1.1 path — the core pre-parser
+(`core/src/server/io.rs`), the static wire, the proxy wire and the Hyper
+connection the wire hands over — so a 2 s keep-alive does not expire at 30 s on
+one path and at 2 s on another. HTTP/2 and HTTP/3 keep their own deadlines: the
+HTTP/2 builder does not take this value, and the HTTP/3 providers expose only
+the QUIC idle timeout. That split stays open in NG-21.
+Resolution order: `[tuning].keepalive_timeout_ms`, then `EXYONQ_READ_TIMEOUT_MS`,
+then 30 s. The env var stays for deployments that already pin it; the config key
+wins so a single file describes the server.
+
+### `max_header_bytes`
+
+The largest request-header block the server accepts. It bounds the pre-parser
+buffers, the static and proxy wire readers, the Linux epoll `ConnState` buffer,
+and Hyper's `max_buf_size`, so the cap is the same whichever component reads the
+the next request. Hyper's default buffer is replaced by this value. It must be a
+power of two in `8192..=65536`; a malformed value fails `exyonq validate`
+instead of being clamped.
+
+### Live behaviour
+
+Both values are published by `exyonq_module_api::runtime_tuning` from
+`reload::publish_runtime_observe_authority`, i.e. only when a generation commits.
+A reload that changes either key changes the fingerprint, so it produces a new
+generation; a rejected reload leaves the live geometry untouched. Both keys are
+skipped when absent, so a config that does not set them keeps the exact
+fingerprint it had before they existed, and no stored generation hash is
+invalidated by the upgrade. Connections
+already open keep their own deadline until they close, which is the same
+contract as every other per-generation value.
 
 ## Defaults and measurement
 
@@ -61,6 +90,12 @@ RSS figure is claimed here.
   unknown keys, fingerprint participation, v1 compatibility.
 - `core/tests/tuning_accept_workers.rs` — the config value reaches the runtime
   resolver and wins; defensive clamp at the edges.
+- `core/tests/tuning_header_geometry.rs` — the committed geometry reaches the
+  container header timeout and each commit republishes it.
+- `scripts/e2e/ng21-tuning-e2e.sh` — real binary: a 12 KiB header block is
+  refused with the default cap and served with `max_header_bytes = 16384`,
+  keep-alive reuse inside `keepalive_timeout_ms = 400` and a close after 900 ms
+  idle, plus `validate` rejecting `0`, `600001`, `4096` and `65535`.
 - Real binary: `exyonq serve` with `[tuning] accept_workers = 2` must log
   `workers=2` in the `exyonq listening` line and still serve traffic;
   `exyonq validate` must reject `accept_workers = 17`.

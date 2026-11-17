@@ -72,8 +72,18 @@ fn pretty_canonical_json(cfg: &AppConfig) -> Result<String, String> {
 fn render_canonical_toml(cfg: &AppConfig) -> String {
     let mut out = String::new();
     out.push_str(&format!("config_version = {}\n\n", cfg.config_version));
-    if let Some(workers) = cfg.tuning.accept_workers {
-        out.push_str(&format!("[tuning]\naccept_workers = {workers}\n\n"));
+    if cfg.tuning != exyonq_config_ir::TuningConfig::default() {
+        out.push_str("[tuning]\n");
+        if let Some(workers) = cfg.tuning.accept_workers {
+            out.push_str(&format!("accept_workers = {workers}\n"));
+        }
+        if let Some(ms) = cfg.tuning.keepalive_timeout_ms {
+            out.push_str(&format!("keepalive_timeout_ms = {ms}\n"));
+        }
+        if let Some(bytes) = cfg.tuning.max_header_bytes {
+            out.push_str(&format!("max_header_bytes = {bytes}\n"));
+        }
+        out.push('\n');
     }
 
     for server in &cfg.servers {
