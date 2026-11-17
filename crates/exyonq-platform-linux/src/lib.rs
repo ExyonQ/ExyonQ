@@ -59,6 +59,9 @@ use exyonq_core::server::register_sync_accept_start;
 mod conn_pool;
 #[cfg(target_os = "linux")]
 mod epoll_worker;
+// Compiled on every host so the epoll header geometry is testable off Linux.
+#[cfg(any(target_os = "linux", test))]
+mod header_geometry;
 #[cfg(target_os = "linux")]
 mod io_uring_worker;
 #[cfg(target_os = "linux")]

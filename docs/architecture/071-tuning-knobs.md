@@ -60,7 +60,9 @@ describes the server.
 The largest request-header block the server accepts. It bounds the pre-parser
 buffers, the static and proxy wire readers, the Linux epoll `ConnState` buffer,
 and Hyper's `max_buf_size`, so the cap is the same whichever component reads the
-the next request. Hyper's default buffer is replaced by this value. It must be a
+the next request. The epoll buffer is allocated once per connection at exactly
+this size (`header_geometry::header_block_limit()`), so the default costs the
+same 8 KiB it always did and a raised cap costs what the cap says. Hyper's default buffer is replaced by this value. It must be a
 power of two in `8192..=65536`; a malformed value fails `exyonq validate`
 instead of being clamped.
 
