@@ -9,9 +9,17 @@
 # a clean checkout of that exact commit. The corpus is vendored under
 # scripts/gates/fixtures so the requests do not drift with the upstream repo.
 #
-# Current status (2026-11-04): the gate is green on native Netcup amd64 and
-# Oracle arm64 over CRS v4.25.0: failures=0/4628 with 33 evidence-backed
-# exclusions. The "in CI" clause remains open because
+# Current status: green on native Netcup amd64 and Oracle arm64 over CRS
+# v4.25.0 (2026-11-04), and re-measured green on macOS arm64 on 2026-11-17 over
+# source_revision cfd84c2 (debug binary sha256 691d379c...): block mode
+# failures=0/4628 with the same 33 evidence-backed exclusions, and the dry-run
+# pass failures=0/4628 with real rule hits (violations_949110=5947). The earlier
+# 10/4628 red was a request-pipeline defect, not this harness: the canonical
+# path was returned decoded and re-injected into `http::Uri`, so requests whose
+# path carried `%20`/`%FF` answered 400 before the WAF ran (hits=0) while
+# ModSecurity served the same bytes 200/hits=1; `b10d524` keeps the canonical
+# path in URI form and those ten cases now match the reference. Do not add a
+# product defect to the exclusion list. The "in CI" clause remains open because
 # .github/workflows/crs-diff.yml has not run in GitHub Actions; it requires a
 # push to a configured upstream. The workflow obtains the pinned tree with
 # scripts/gates/crs-fetch.sh (repository + tag + commit, fail-closed) and pins
