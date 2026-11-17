@@ -26,8 +26,9 @@ use crate::upstream::{
 use exyonq_config_ir::{
     deterministic_endpoint_id, AdminEndpointState, AppConfig, Endpoint, EndpointFailoverPolicy,
     EndpointSelectionPolicy, FcgiPoolConfig, MapConfig, MapInputKind, ModulesConfig,
-    ProxyProtocolConfig, RedirectConfig, RouteAccessConfig, RouteAccessEffect, RouteAccessRule,
-    RouteConfig, RouteMatch, ServerConfig, ServerNames, UpstreamConfig, CONFIG_VERSION_V1,
+    ProxyProtocolConfig, RedirectConfig, RespondConfig, RouteAccessConfig, RouteAccessEffect,
+    RouteAccessRule, RouteConfig, RouteMatch, ServerConfig, ServerNames, TlsConfig, UpstreamConfig,
+    CONFIG_VERSION_V1,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -365,7 +366,7 @@ pub fn map_to_ir(
             listen,
             server_name: server_names,
             routes: route_names,
-            tls: None,
+            tls: map_server_tls(server, report),
             http3_listen: None,
             error_pages,
             proxy_protocol: proxy_protocol_flag.then(|| ProxyProtocolConfig {
@@ -600,10 +601,91 @@ fn parse_error_page_args(args: &[String]) -> Result<Vec<(String, String)>, Strin
     Ok(codes.into_iter().map(|c| (c, uri.to_string())).collect())
 }
 
+/// Server-scope `ssl_certificate` + `ssl_certificate_key` as `[server.tls]`.
+///
+/// Both directives are needed: a lone certificate or key cannot start a TLS
+/// listener, so the pair is emitted together or not at all. The paths are
+/// carried verbatim — the operator still owns the files.
+fn map_server_tls(server: &ParsedServer, report: &mut CompatibilityReport) -> Option<TlsConfig> {
+    let mut cert: Option<(String, SourceLoc)> = None;
+    let mut key: Option<(String, SourceLoc)> = None;
+    for d in &server.directives {
+        match d.name.as_str() {
+            "ssl_certificate" => {
+                if let Some(arg) = d.args.first() {
+                    cert = Some((arg.clone(), d.loc.clone()));
+                }
+            }
+            "ssl_certificate_key" => {
+                if let Some(arg) = d.args.first() {
+                    key = Some((arg.clone(), d.loc.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    match (cert, key) {
+        (Some((cert, cert_loc)), Some((key, key_loc))) => {
+            report.push(
+                &cert_loc,
+                "ssl_certificate",
+                CompatStatus::Supported,
+                "certificate mapped to [server.tls].cert",
+                None,
+            );
+            report.push(
+                &key_loc,
+                "ssl_certificate_key",
+                CompatStatus::Supported,
+                "key mapped to [server.tls].key",
+                None,
+            );
+            Some(TlsConfig {
+                cert: PathBuf::from(cert),
+                key: PathBuf::from(key),
+                acme: None,
+                strict_sni: false,
+                protocols: Vec::new(),
+                ciphers: Vec::new(),
+                curves: Vec::new(),
+                ocsp_stapling: None,
+                must_staple: false,
+            })
+        }
+        (Some((_, cert_loc)), None) => {
+            report.push(
+                &cert_loc,
+                "ssl_certificate",
+                CompatStatus::Partial,
+                "no sibling `ssl_certificate_key`: [server.tls] not emitted and TLS stays off",
+                None,
+            );
+            None
+        }
+        (None, Some((_, key_loc))) => {
+            report.push(
+                &key_loc,
+                "ssl_certificate_key",
+                CompatStatus::Partial,
+                "no sibling `ssl_certificate`: [server.tls] not emitted and TLS stays off",
+                None,
+            );
+            None
+        }
+        (None, None) => None,
+    }
+}
+
+fn server_declares_tls(server: &ParsedServer) -> bool {
+    let has = |name: &str| server.directives.iter().any(|d| d.name == name);
+    has("ssl_certificate") && has("ssl_certificate_key")
+}
+
 /// Returns `(listen_addr, proxy_protocol_flag)`.
 fn map_listen(server: &ParsedServer, report: &mut CompatibilityReport) -> (String, bool) {
     let mut listen_value = None;
     let mut proxy_protocol = false;
+    let tls_ready = server_declares_tls(server);
     for d in &server.directives {
         if d.name != "listen" {
             continue;
@@ -612,6 +694,27 @@ fn map_listen(server: &ParsedServer, report: &mut CompatibilityReport) -> (Strin
         let mut parts: Vec<&str> = raw.split_whitespace().collect();
         let addr_port = parts.first().copied().unwrap_or("80");
         for flag in parts.drain(1..) {
+            if flag == "ssl" {
+                // `ssl` on the listener is the switch the certificate pair
+                // turns on; with both paths present the IR carries the TLS
+                // block, so the flag is not lost.
+                report.push(
+                    &d.loc,
+                    "listen",
+                    if tls_ready {
+                        CompatStatus::Supported
+                    } else {
+                        CompatStatus::Partial
+                    },
+                    if tls_ready {
+                        "listen flag `ssl` served by [server.tls] from ssl_certificate/ssl_certificate_key"
+                    } else {
+                        "listen flag `ssl` without ssl_certificate and ssl_certificate_key: TLS stays off"
+                    },
+                    None,
+                );
+                continue;
+            }
             if flag == "proxy_protocol" {
                 proxy_protocol = true;
                 report.push(
@@ -953,7 +1056,13 @@ fn map_location(
         report.push_migration(
             &location.loc,
             "location",
-            CompatStatus::Partial,
+            // `=` maps to match.exact, which is verbatim equality: nothing is
+            // lost. Only `^~` still carries an unmodelled ordering rule.
+            if location.kind == LocationKind::Exact {
+                CompatStatus::Supported
+            } else {
+                CompatStatus::Partial
+            },
             format!(
                 "{} location `{}` mapped as literal path only",
                 location.kind.as_str(),
@@ -1018,6 +1127,7 @@ fn map_location(
             if let Ok(rule) = parse_rewrite(&d.loc, &d.args) {
                 if let Some((status, _from, target)) = is_safe_literal_redirect(&rule) {
                     return Some(RouteConfig {
+                        respond: None,
                         max_request_body_bytes: None,
                         gunzip: None,
                         cache_tags: Vec::new(),
@@ -1053,6 +1163,7 @@ fn map_location(
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
                     return Some(RouteConfig {
+                        respond: None,
                         max_request_body_bytes: None,
                         gunzip: None,
                         cache_tags: Vec::new(),
@@ -1132,6 +1243,7 @@ fn map_location(
         let (fallback_rewrite, try_uri, try_uri_dir) =
             map_location_try_files(location).unwrap_or((None, None, None));
         return Some(RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1191,6 +1303,7 @@ fn map_location(
             Some("[[route]] access = { deny = [\"all\"] }".into()),
         );
         return Some(RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1370,6 +1483,7 @@ fn map_proxy(
     let proxy_set_headers = map_location_proxy_set_headers(location, report);
     let location_rewrite = map_location_proxy_redirects(location, target, route_match, report);
     Some(RouteConfig {
+        respond: None,
         max_request_body_bytes: None,
         gunzip: None,
         cache_tags: Vec::new(),
@@ -2153,6 +2267,7 @@ fn map_fastcgi(
         }
         report_fc(report);
         return Some(RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -2233,6 +2348,7 @@ fn map_fastcgi(
             }
             report_fc(report);
             return Some(RouteConfig {
+                respond: None,
                 max_request_body_bytes: None,
                 gunzip: None,
                 cache_tags: Vec::new(),
@@ -2284,6 +2400,7 @@ fn map_fastcgi(
         )?;
         report_fc(report);
         return Some(RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -2435,6 +2552,7 @@ fn map_return(
                 },
             );
             Some(RouteConfig {
+                respond: None,
                 max_request_body_bytes: None,
                 gunzip: None,
                 cache_tags: Vec::new(),
@@ -2480,33 +2598,135 @@ fn map_return(
             None
         }
         200 | 403 if target.is_some() => {
+            let body = target.unwrap_or_default();
+            if body.contains('$') {
+                // NGINX interpolates variables inside a returned body; an IR
+                // literal body is served verbatim, so mapping this would ship
+                // the wrong text. Keep the loss visible instead.
+                report.push_migration(
+                    &d.loc,
+                    "return",
+                    CompatStatus::Partial,
+                    format!(
+                        "return {status} body `{body}` uses variables; IR literal bodies are not interpolated"
+                    ),
+                    None,
+                    Some("Replace the variable with its value before migrating".into()),
+                    None,
+                    Some(format!("{status} {body}")),
+                    None,
+                );
+                return None;
+            }
             report.push_migration(
                 &d.loc,
                 "return",
-                CompatStatus::Partial,
-                format!(
-                    "return {status} with body `{}` not supported in IR",
-                    target.unwrap_or_default()
+                CompatStatus::Supported,
+                format!("return {status} body `{body}` mapped to route.respond"),
+                Some("route.respond.status/body".into()),
+                Some(
+                    "Served by the literal-response handler; set respond.content_type when the client needs a specific type"
+                        .into(),
                 ),
                 None,
-                Some("Requires static response body support in IR".into()),
-                None,
-                Some(format!(
-                    "{status} {}",
-                    d.args.get(1).unwrap_or(&String::new())
-                )),
+                Some(format!("{status} {body}")),
                 None,
             );
-            None
+            Some(RouteConfig {
+                name: route_name.to_string(),
+                r#match: route_match.clone(),
+                upstream: None,
+                root: None,
+                index: None,
+                max_request_body_bytes: None,
+                redirect: None,
+                respond: Some(RespondConfig {
+                    status,
+                    body,
+                    content_type: None,
+                }),
+                rewrite: None,
+                fastcgi: None,
+                fastcgi_script_root: None,
+                front_controller: None,
+                htaccess: Default::default(),
+                access: None,
+                cache: None,
+                cache_tags: Vec::new(),
+                fallback_rewrite: None,
+                try_uri: None,
+                try_uri_dir: None,
+                proxy_set_headers: Vec::new(),
+                cache_headers: None,
+                response_headers: Vec::new(),
+                location_rewrite: Vec::new(),
+                gunzip: None,
+                root_mode: Default::default(),
+                dir_redirect: false,
+                dir_redirect_absolute: true,
+                dir_redirect_port: true,
+                dir_redirect_host: None,
+            })
         }
-        200 | 403 | 204 => {
+        200 | 403 => {
+            report.push_migration(
+                &d.loc,
+                "return",
+                CompatStatus::Supported,
+                format!("return {status} with an empty body mapped to route.respond"),
+                Some("route.respond.status/body".into()),
+                Some("Served by the literal-response handler".into()),
+                None,
+                Some(status.to_string()),
+                None,
+            );
+            Some(RouteConfig {
+                name: route_name.to_string(),
+                r#match: route_match.clone(),
+                upstream: None,
+                root: None,
+                index: None,
+                max_request_body_bytes: None,
+                redirect: None,
+                respond: Some(RespondConfig {
+                    status,
+                    body: String::new(),
+                    content_type: None,
+                }),
+                rewrite: None,
+                fastcgi: None,
+                fastcgi_script_root: None,
+                front_controller: None,
+                htaccess: Default::default(),
+                access: None,
+                cache: None,
+                cache_tags: Vec::new(),
+                fallback_rewrite: None,
+                try_uri: None,
+                try_uri_dir: None,
+                proxy_set_headers: Vec::new(),
+                cache_headers: None,
+                response_headers: Vec::new(),
+                location_rewrite: Vec::new(),
+                gunzip: None,
+                root_mode: Default::default(),
+                dir_redirect: false,
+                dir_redirect_absolute: true,
+                dir_redirect_port: true,
+                dir_redirect_host: None,
+            })
+        }
+        204 => {
+            // 204 is bodyless by definition and the IR rejects a body-carrying
+            // status there, so an empty 204 would need a separate empty-response
+            // construct. Keep it visible rather than emitting a 200-shaped lie.
             report.push_migration(
                 &d.loc,
                 "return",
                 CompatStatus::Partial,
-                format!("return {status} without representable IR action"),
+                "return 204 has no dedicated IR empty-body response",
                 None,
-                Some("Requires static/empty response support in IR".into()),
+                Some("Map manually to not-found/empty handling".into()),
                 None,
                 Some(status.to_string()),
                 None,
@@ -2545,6 +2765,7 @@ fn server_default_route(
         Some("route.root + root_mode=full-uri".into()),
     );
     Some(RouteConfig {
+        respond: None,
         max_request_body_bytes: None,
         gunzip: None,
         cache_tags: Vec::new(),
@@ -2857,6 +3078,13 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
             }
             out.push_str("]\n");
         }
+        if let Some(tls) = &server.tls {
+            out.push_str(&format!(
+                "tls = {{ cert = {:?}, key = {:?} }}\n",
+                tls.cert.to_string_lossy(),
+                tls.key.to_string_lossy()
+            ));
+        }
         if !server.routes.is_empty() {
             out.push_str("routes = [");
             for (i, r) in server.routes.iter().enumerate() {
@@ -3037,6 +3265,18 @@ fn render_toml(app: &AppConfig, pools: &HashMap<String, FcgiPoolConfig>) -> Stri
                 "redirect = {{ status = {}, location = {:?} }}\n",
                 redirect.status, redirect.location
             ));
+        }
+        if let Some(respond) = &route.respond {
+            match &respond.content_type {
+                Some(content_type) => out.push_str(&format!(
+                    "respond = {{ status = {}, body = {:?}, content_type = {:?} }}\n",
+                    respond.status, respond.body, content_type
+                )),
+                None => out.push_str(&format!(
+                    "respond = {{ status = {}, body = {:?} }}\n",
+                    respond.status, respond.body
+                )),
+            }
         }
         if let Some(rewrite) = &route.rewrite {
             match rewrite {

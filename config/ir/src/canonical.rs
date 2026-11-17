@@ -298,6 +298,24 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
         );
         map.insert("redirect".into(), serde_json::Value::Object(redir));
     }
+    if let Some(respond) = &route.respond {
+        let mut literal = serde_json::Map::new();
+        literal.insert(
+            "status".into(),
+            serde_json::Value::Number(respond.status.into()),
+        );
+        literal.insert(
+            "body".into(),
+            serde_json::Value::String(respond.body.clone()),
+        );
+        if let Some(content_type) = &respond.content_type {
+            literal.insert(
+                "content_type".into(),
+                serde_json::Value::String(content_type.clone()),
+            );
+        }
+        map.insert("respond".into(), serde_json::Value::Object(literal));
+    }
     if let Some(rewrite) = &route.rewrite {
         map.insert("rewrite".into(), canonical_rewrite(rewrite));
     }

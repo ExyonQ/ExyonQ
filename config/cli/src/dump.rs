@@ -138,6 +138,18 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
                 redirect.status, redirect.location
             ));
         }
+        if let Some(respond) = &route.respond {
+            match &respond.content_type {
+                Some(content_type) => out.push_str(&format!(
+                    "respond = {{ status = {}, body = {:?}, content_type = {:?} }}\n",
+                    respond.status, respond.body, content_type
+                )),
+                None => out.push_str(&format!(
+                    "respond = {{ status = {}, body = {:?} }}\n",
+                    respond.status, respond.body
+                )),
+            }
+        }
         if let Some(rewrite) = &route.rewrite {
             match rewrite {
                 exyonq_config_ir::RewriteConfig::Literal(path) => {

@@ -189,9 +189,10 @@ fn count_location_kind(kind: LocationKind, report: &mut CompatibilityReport) {
 fn location_status(kind: LocationKind) -> CompatStatus {
     match kind {
         LocationKind::Prefix
+        | LocationKind::Exact
         | LocationKind::RegexCaseSensitive
         | LocationKind::RegexCaseInsensitive => CompatStatus::Supported,
-        LocationKind::Exact | LocationKind::PreferentialPrefix => CompatStatus::Partial,
+        LocationKind::PreferentialPrefix => CompatStatus::Partial,
         LocationKind::Named => CompatStatus::Unsupported,
     }
 }

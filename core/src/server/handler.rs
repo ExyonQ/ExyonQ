@@ -1262,6 +1262,8 @@ fn insert_route_labels<B>(route: &exyonq_config_ir::RouteConfig, response: &mut 
         "static".to_string()
     } else if route.redirect.is_some() {
         "redirect".to_string()
+    } else if route.respond.is_some() {
+        "respond".to_string()
     } else {
         "-".to_string()
     };
@@ -2028,6 +2030,14 @@ async fn dispatch_core_inner(
             WafBodyGate::Reject(reject) => return reject,
             WafBodyGate::Continue { inspection_limited } => *waf_body_limited |= inspection_limited,
         }
+    }
+
+    // EXY-03: a literal-response route synthesizes its body instead of
+    // dispatching to a backend. It runs after the ACL, auth, zone-limit and
+    // request-WAF gates above, and before any static/index or proxy resolution,
+    // so a literal route wins over an index file at the same path.
+    if let Some(respond) = &route.respond {
+        return literal_response(respond);
     }
 
     // NG-18 Phase D: nginx creates mirror subrequests at PRECONTENT (after the
@@ -4449,6 +4459,30 @@ fn attach_request_id(mut response: Response<BoxBody>, request_id: &str) -> Respo
     response
 }
 
+/// EXY-03: serve a route's literal response (`NGINX return <status> "<body>"`).
+///
+/// The body is sent verbatim: no variable interpolation happens here, which is
+/// why the importer refuses to map a `return` whose body contains `$`. An
+/// absent `content_type` falls back to `text/plain; charset=utf-8`, the
+/// equivalent of the NGINX `default_type` a returned literal inherits.
+fn literal_response(respond: &exyonq_config_ir::RespondConfig) -> Response<BoxBody> {
+    let status = StatusCode::from_u16(respond.status).unwrap_or(StatusCode::OK);
+    let content_type = respond
+        .content_type
+        .as_deref()
+        .unwrap_or("text/plain; charset=utf-8");
+    Response::builder()
+        .status(status)
+        .header("content-type", content_type)
+        .header("content-length", respond.body.len())
+        .body(
+            Full::from(bytes::Bytes::from(respond.body.clone()))
+                .map_err(|never| match never {})
+                .boxed(),
+        )
+        .expect("valid literal response")
+}
+
 fn text_response(status: StatusCode, body: &str) -> Response<BoxBody> {
     Response::builder()
         .status(status)
@@ -5053,6 +5087,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),

@@ -1498,6 +1498,7 @@ mod tests {
 
     fn bench_site_config(root: Option<std::path::PathBuf>) -> AppConfig {
         let site = RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1538,6 +1539,7 @@ mod tests {
             cache: None,
         };
         let api = RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -2533,6 +2535,7 @@ mod ws_tunnel_tests {
 
     pub(super) fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
         let api = RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),

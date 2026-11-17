@@ -512,7 +512,12 @@ fn tier2b_rewrite_internal_last_maps_rule() {
 fn tier2b_return_special_codes() {
     let (toml, report) = migrate_fixture("tier2b-return-codes.conf");
     let cfg = AppConfig::parse_str(&toml).expect("parse");
-    assert!(cfg.routes.is_empty());
+    // EXY-03: the literal body (`/c`) is mapped now; 444 and 204 keep no
+    // construct and stay reported, so exactly one route survives.
+    assert_eq!(cfg.routes.len(), 1, "only the literal 200 body maps");
+    assert_eq!(cfg.routes[0].r#match.path, "/c");
+    let respond = cfg.routes[0].respond.as_ref().expect("literal response");
+    assert_eq!((respond.status, respond.body.as_str()), (200, "ok"));
     assert!(has_entry(&report, "return", "444"));
     assert!(has_entry(&report, "return", "204"));
     assert!(has_entry(&report, "return", "200"));

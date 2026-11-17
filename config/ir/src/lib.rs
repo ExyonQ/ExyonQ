@@ -360,6 +360,11 @@ pub struct RouteConfig {
     pub max_request_body_bytes: Option<u64>,
     #[serde(default)]
     pub redirect: Option<RedirectConfig>,
+    /// EXY-03: literal response (`NGINX return <status> "<body>"`). A route with
+    /// `respond` synthesizes the response instead of dispatching to a backend,
+    /// so it is exclusive with `upstream`/`root`/`fastcgi`/`redirect`.
+    #[serde(default)]
+    pub respond: Option<RespondConfig>,
     /// Cap035 literal path or NG-02 patterned rewrite (ADR-048).
     #[serde(default)]
     pub rewrite: Option<RewriteConfig>,
@@ -888,6 +893,30 @@ pub struct RedirectConfig {
 
 fn default_redirect_status() -> u16 {
     302
+}
+
+/// Upper bound for a literal response body (`return 200 "<body>"`). A literal
+/// response is a small canned answer, not a static file: larger payloads belong
+/// under `root`, where sendfile and the cache can help.
+pub const MAX_LITERAL_RESPONSE_BYTES: usize = 65_536;
+
+/// EXY-03: literal response body served by the route itself (NGINX
+/// `return <status> "<body>"`). `body` is served verbatim — no variable
+/// interpolation — and `content_type` defaults to `text/plain; charset=utf-8`
+/// (the NGINX `default_type` equivalent).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RespondConfig {
+    #[serde(default = "default_respond_status")]
+    pub status: u16,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+fn default_respond_status() -> u16 {
+    200
 }
 
 /// Upstream / logical backend IR (K8S-P2A EndpointSet foundation).
@@ -1992,9 +2021,39 @@ fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
     if route.fastcgi.is_some() {
         terminals += 1;
     }
+    if let Some(respond) = &route.respond {
+        // A literal response carries a body, so the bodyless statuses are
+        // rejected instead of being emitted as a body that clients drop.
+        if !(200..=599).contains(&respond.status) || matches!(respond.status, 204 | 304) {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: respond.status must be 200..=599 and not 204/304, because a literal response carries a body",
+                route.name
+            )));
+        }
+        if respond.body.len() > MAX_LITERAL_RESPONSE_BYTES {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: respond.body is {} bytes; the literal-response bound is {}",
+                route.name,
+                respond.body.len(),
+                MAX_LITERAL_RESPONSE_BYTES
+            )));
+        }
+        if let Some(content_type) = respond.content_type.as_deref() {
+            if content_type.trim().is_empty()
+                || content_type.contains('\n')
+                || content_type.contains('\r')
+            {
+                return Err(ConfigError::Parse(format!(
+                    "route `{}`: respond.content_type must be one non-empty header value",
+                    route.name
+                )));
+            }
+        }
+        terminals += 1;
+    }
 
     if break_colocated {
-        if route.redirect.is_some() || terminals != 1 {
+        if route.redirect.is_some() || route.respond.is_some() || terminals != 1 {
             return Err(ConfigError::RouteConflictingActions {
                 route: route.name.clone(),
             });

@@ -242,6 +242,9 @@ impl ServerState {
                     // (rewrite) or bypass the route redirect entirely.
                     || route.rewrite.is_some()
                     || route.redirect.is_some()
+                    // EXY-03: a literal response is emitted by full dispatch;
+                    // the wire path would answer 404 for the route.
+                    || route.respond.is_some()
                     || route.access.is_some()
                     || modules.auth.routes.contains_key(name)
                     || modules.ratelimit.client.enabled

@@ -1,0 +1,33 @@
+config_version = 1
+
+[[server]]
+listen = "0.0.0.0:80"
+server_name = "spa.example.com"
+routes = ["srv1_loc1", "srv1_loc2", "srv1_loc3"]
+
+[[route]]
+name = "srv1_loc1"
+match = { path = "/", literal = true, listen_port = 80 }
+root = "/var/www/spa/dist"
+root_mode = "full-uri"
+dir_redirect = true
+index = "index.html"
+fallback_rewrite = "/index.html"
+try_uri = true
+try_uri_dir = true
+
+[[route]]
+name = "srv1_loc2"
+match = { path = "/assets/", literal = true, listen_port = 80 }
+root = "/var/www/spa/dist"
+root_mode = "full-uri"
+dir_redirect = true
+index = "index.html"
+[route.cache_headers.by_mime."*"]
+max_age = 31536000
+
+[[route]]
+name = "srv1_loc3"
+match = { path = "/healthz", exact = true, listen_port = 80 }
+respond = { status = 200, body = "ok" }
+

@@ -175,6 +175,14 @@ pub fn ir_json_schema() -> serde_json::Value {
                             "location": { "type": "string" }
                         }
                     },
+                    "respond": {
+                        "type": "object",
+                        "properties": {
+                            "status": { "type": "integer", "minimum": 200, "maximum": 599 },
+                            "body": { "type": "string", "maxLength": 65536 },
+                            "content_type": { "type": "string" }
+                        }
+                    },
                     "rewrite": { "type": "string", "pattern": "^/" },
                     "location_rewrite": {
                         "type": "array",
