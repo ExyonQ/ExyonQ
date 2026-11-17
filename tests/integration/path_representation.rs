@@ -31,7 +31,10 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 fn ephemeral_addr() -> SocketAddr {
@@ -142,4 +145,98 @@ async fn percent_encoded_path_bytes_reach_the_same_file() {
     // Traversal stays refused after decoding, in both spellings.
     let (status, _) = get(&client, listen, "/%2e%2e/plain.html").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Real loopback upstream: records the bytes of the request head it receives
+/// and answers 200 so the proxy path completes.
+async fn spawn_recording_upstream(seen: Arc<Mutex<Vec<u8>>>) -> SocketAddr {
+    let listener = TcpListener::bind(ephemeral_addr()).await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                continue;
+            };
+            let seen = Arc::clone(&seen);
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 2048];
+                let Ok(n) = stream.read(&mut buf).await else {
+                    return;
+                };
+                buf.truncate(n);
+                seen.lock().unwrap().extend_from_slice(&buf);
+                let body = "upstream-ok";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    addr
+}
+
+fn proxy_config(root: &std::path::Path, upstream: SocketAddr) -> AppConfig {
+    let toml = format!(
+        r#"
+config_version = 1
+
+[[server]]
+listen = "127.0.0.1:0"
+routes = ["site", "api"]
+
+[[route]]
+name = "site"
+match = {{ path = "/" }}
+root = {root:?}
+index = "index.html"
+
+[[route]]
+name = "api"
+match = {{ path = "/api" }}
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://{upstream}"
+timeout_ms = 2000
+"#,
+        root = root.display().to_string(),
+    );
+    AppConfig::parse_str(&toml).expect("proxy config parses")
+}
+
+/// The proxy forwards the request-target, not a decoded string: `%20` must stay
+/// an escape and `%FF` must stay the same escape, because a literal space is not
+/// a legal request-target byte and would be a 400 instead of a proxied request.
+#[tokio::test]
+async fn proxy_forwards_escaped_path_bytes_to_a_real_upstream() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("index.html"), "site").expect("index file");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let upstream = spawn_recording_upstream(Arc::clone(&seen)).await;
+    let listen = spawn(proxy_config(dir.path(), upstream)).await;
+    let client = client();
+
+    for target in ["/api/a%20b.txt", "/api/i%FFndex", "/api/a%20b/%FF?q=1"] {
+        seen.lock().unwrap().clear();
+        let (status, body) = get(&client, listen, target).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{target} must be proxied, not rejected: body={:?}",
+            String::from_utf8_lossy(&body)
+        );
+        assert_eq!(body.as_ref(), b"upstream-ok", "{target}");
+
+        let head = seen.lock().unwrap().clone();
+        let expected = format!("GET {target} HTTP/1.1\r\n");
+        assert!(
+            head.starts_with(expected.as_bytes()),
+            "{target} must reach the upstream byte for byte, got {:?}",
+            String::from_utf8_lossy(&head[..head.len().min(96)])
+        );
+    }
 }
