@@ -35,24 +35,15 @@ pub const HEADER_FIELD_OVERHEAD: usize = 32;
 
 /// Committed header budget in the H1 (`max_buf_size`) unit.
 pub fn header_budget_bytes() -> usize {
-    runtime_tuning::configured_max_header_bytes()
-        .unwrap_or(runtime_tuning::DEFAULT_MAX_HEADER_BYTES)
+    runtime_tuning::max_header_bytes()
 }
 
 /// Committed header deadline, the same one H1 applies to a request head.
 ///
-/// The `[tuning].keepalive_timeout_ms` cell wins; otherwise the historical
-/// `EXYONQ_READ_TIMEOUT_MS` fallback H1 parses is honoured (invalid or absent
-/// means 30 s), so no protocol ends up with a laxer deadline than H1.
+/// H2/H3 read the same resolution H1 does, so no protocol ends up with a laxer
+/// deadline than HTTP/1.1.
 pub fn header_deadline() -> Duration {
-    if let Some(configured) = runtime_tuning::configured_keepalive_timeout() {
-        return configured;
-    }
-    std::env::var("EXYONQ_READ_TIMEOUT_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_millis(runtime_tuning::DEFAULT_KEEPALIVE_TIMEOUT_MS))
+    runtime_tuning::header_read_deadline()
 }
 
 /// Size of a decoded header list under the `h2` metric.

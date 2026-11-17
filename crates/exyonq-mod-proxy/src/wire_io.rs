@@ -17,19 +17,16 @@
 
 use bytes::Bytes;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-/// Process-lifetime cache for `EXYONQ_READ_TIMEOUT_MS` (0 = unset; else millis + 1).
-static HEADER_READ_TIMEOUT_MS_CACHE: AtomicU64 = AtomicU64::new(0);
-
+/// Upstream *response*-head buffer used by the raw fast path. `[tuning]
+/// .max_header_bytes` bounds request heads only, so this stays a fixed size.
 pub const MAX_HEADER: usize = 8192;
 
-/// NG-21: the committed `[tuning].max_header_bytes`, published by core.
-/// Falls back to the historical cap when the key is absent.
+/// NG-21: the committed `[tuning].max_header_bytes`, resolved by `runtime_tuning`.
 pub fn max_header_bytes() -> usize {
-    exyonq_module_api::runtime_tuning::configured_max_header_bytes().unwrap_or(MAX_HEADER)
+    exyonq_module_api::runtime_tuning::max_header_bytes()
 }
 
 pub fn find_header_end(buf: &[u8]) -> Option<usize> {
@@ -63,39 +60,15 @@ pub fn append_bytes(left: Bytes, right: &[u8]) -> Bytes {
     merged.freeze()
 }
 
-/// Header-read timeout from `EXYONQ_READ_TIMEOUT_MS` (process-lifetime cache).
-///
-/// Unset / invalid → 30s. Mid-process env mutation is not observed —
-/// set before process start (tests may reset).
+/// Header-read / keep-alive deadline, resolved once in `runtime_tuning`.
 pub fn header_read_timeout() -> Duration {
-    // NG-21: the committed `[tuning].keepalive_timeout_ms`, published by core.
-    if let Some(configured) = exyonq_module_api::runtime_tuning::configured_keepalive_timeout() {
-        return configured;
-    }
-    let cached = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed);
-    if cached != 0 {
-        return Duration::from_millis(cached - 1);
-    }
-    let d = std::env::var("EXYONQ_READ_TIMEOUT_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(30));
-    let encoded = d.as_millis() as u64 + 1;
-    let _ = HEADER_READ_TIMEOUT_MS_CACHE.compare_exchange(
-        0,
-        encoded,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    let final_ms = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed) - 1;
-    Duration::from_millis(final_ms)
+    exyonq_module_api::runtime_tuning::header_read_deadline()
 }
 
-/// Test-only: clear process-lifetime cache (simulates a fresh process).
+/// Test-only: forget the observed env deadline (simulates a fresh process).
 #[doc(hidden)]
 pub fn reset_header_read_timeout_cache_for_tests() {
-    HEADER_READ_TIMEOUT_MS_CACHE.store(0, Ordering::Relaxed);
+    exyonq_module_api::runtime_tuning::reset_env_cache_for_tests();
 }
 
 pub async fn write_all_async<S: AsyncWrite + Unpin>(stream: &mut S, buf: &[u8]) -> io::Result<()> {

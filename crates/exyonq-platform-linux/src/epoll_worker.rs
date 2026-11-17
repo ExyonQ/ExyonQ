@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -422,34 +422,19 @@ fn keepalive_worker_loop(
     Ok(())
 }
 
-/// Platform-local process-lifetime cache for `EXYONQ_READ_TIMEOUT_MS`.
-static HEADER_READ_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
-static HEADER_READ_TIMEOUT_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-fn parse_header_read_timeout_ms(raw: Option<&str>) -> Duration {
-    raw.and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(30))
-}
-
-/// `EXYONQ_READ_TIMEOUT_MS` → deadline span.
+/// Deadline span for the epoll slowloris guard.
 ///
-/// This platform path owns a layer-local process-lifetime observation. Core and
-/// modules retain equivalent caches for their own paths. No `getenv` occurs per request.
+/// The same resolution core, the wires and Hyper use — `[tuning]
+/// .keepalive_timeout_ms`, else `EXYONQ_READ_TIMEOUT_MS`, else 30 s — so the
+/// guard cannot close a connection later than the deadline H1 armed for it.
 fn header_read_deadline_duration() -> Duration {
-    if !HEADER_READ_TIMEOUT_INITIALIZED.load(Ordering::Acquire) {
-        let timeout =
-            parse_header_read_timeout_ms(std::env::var("EXYONQ_READ_TIMEOUT_MS").ok().as_deref());
-        HEADER_READ_TIMEOUT_MS.store(timeout.as_millis() as u64, Ordering::Relaxed);
-        HEADER_READ_TIMEOUT_INITIALIZED.store(true, Ordering::Release);
-    }
-    Duration::from_millis(HEADER_READ_TIMEOUT_MS.load(Ordering::Relaxed))
+    exyonq_module_api::runtime_tuning::header_read_deadline()
 }
 
 #[cfg(test)]
 fn reset_header_read_deadline_cache_for_tests() {
-    HEADER_READ_TIMEOUT_MS.store(0, Ordering::Relaxed);
-    HEADER_READ_TIMEOUT_INITIALIZED.store(false, Ordering::Release);
+    exyonq_module_api::runtime_tuning::reset_env_cache_for_tests();
+    exyonq_module_api::runtime_tuning::reset_for_tests();
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
@@ -1889,7 +1874,7 @@ fn detach_conn_for_handoff(
 #[cfg(test)]
 mod tests {
     use super::{
-        header_read_deadline_duration, keepalive_pool_threads, parse_header_read_timeout_ms,
+        header_read_deadline_duration, keepalive_pool_threads,
         reset_header_read_deadline_cache_for_tests, response_status_from_wire, HeaderBuf, PeerIp,
     };
     use std::sync::Mutex;
@@ -1942,31 +1927,6 @@ mod tests {
             assert_eq!(keepalive_pool_threads(32), 16);
             assert_eq!(keepalive_pool_threads(2), 2);
         });
-    }
-
-    #[test]
-    fn header_read_timeout_parse_matches_shared_env_contract() {
-        assert_eq!(parse_header_read_timeout_ms(None), Duration::from_secs(30));
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("")),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("invalid")),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("-1")),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("0")),
-            Duration::from_millis(0)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("125")),
-            Duration::from_millis(125)
-        );
     }
 
     #[test]

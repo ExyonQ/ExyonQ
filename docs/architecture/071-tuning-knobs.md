@@ -43,14 +43,17 @@ v1 configs keep parsing; the section does not require `config_version = 2`.
 The keep-alive idle deadline and the header-read deadline are the same wait: a
 connection that stops sending the next header block is closed after it. One
 value governs every HTTP/1.1 path — the core pre-parser
-(`core/src/server/io.rs`), the static wire, the proxy wire and the Hyper
-connection the wire hands over — so a 2 s keep-alive does not expire at 30 s on
-one path and at 2 s on another. HTTP/2 and HTTP/3 keep their own deadlines: the
-HTTP/2 builder does not take this value, and the HTTP/3 providers expose only
-the QUIC idle timeout. That split stays open in NG-21.
-Resolution order: `[tuning].keepalive_timeout_ms`, then `EXYONQ_READ_TIMEOUT_MS`,
-then 30 s. The env var stays for deployments that already pin it; the config key
-wins so a single file describes the server.
+(`core/src/server/io.rs`), the static wire, the proxy wire, the Hyper connection
+the wire hands over and the Linux epoll slowloris guard
+(`expire_stale_header_reads`) — so a 2 s keep-alive does not expire at 30 s on
+one path and at 2 s on another. HTTP/3 reads it through
+`http_limits::header_deadline()`; the HTTP/2 builder takes the header cap but no
+deadline, and that remainder stays open in NG-21.
+Resolution order: `[tuning].keepalive_timeout_ms`, then `EXYONQ_READ_TIMEOUT_MS`
+(observed once per process), then 30 s — resolved only in
+`exyonq_module_api::runtime_tuning`, so no path owns a copy of it. The env var
+stays for deployments that already pin it; the config key wins so a single file
+describes the server.
 
 ### `max_header_bytes`
 

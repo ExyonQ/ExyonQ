@@ -35,12 +35,9 @@ use tokio::io::AsyncWriteExt;
 #[cfg(target_os = "linux")]
 use tracing::{debug, warn};
 
-const MAX_HEADER: usize = 8192;
-
-/// NG-21: the committed `[tuning].max_header_bytes`, published by core.
-/// Falls back to the historical cap when the key is absent.
+/// NG-21: the committed `[tuning].max_header_bytes`, resolved by `runtime_tuning`.
 fn max_header() -> usize {
-    exyonq_module_api::runtime_tuning::configured_max_header_bytes().unwrap_or(MAX_HEADER)
+    exyonq_module_api::runtime_tuning::max_header_bytes()
 }
 
 fn wire_access_outcome(status: u16) -> &'static str {
