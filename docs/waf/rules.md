@@ -23,6 +23,9 @@ and swapped on commit.
 Optional under a ruleset:
 
 ```toml
+[[waf.ruleset]]
+id = "default"
+
 [waf.ruleset.builtins]
 sql_injection = "block"      # off | log | block
 xss = "block"

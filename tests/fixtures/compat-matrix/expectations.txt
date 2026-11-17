@@ -1,0 +1,27 @@
+# COMPAT matrix expectations (measured by the importers, not asserted).
+#
+# <source> <metric> <value>
+#
+# nginx         : the five-config migration corpus (tests/fixtures/migrations/)
+# apache        : the equivalent-importer fixture (apache.conf)
+# openlitespeed : the perClientConnLimit throttle fragment (ols-throttle.conf)
+#
+# `directives` is the number of distinct directives the NGINX reports mention,
+# `directives` for apache is the number of directive instances in the fixture and
+# `fields` is the number of keys the OLS fragment emits.
+#
+# Any drift means an importer changed what it maps: review the diff, then update
+# this file, docs/compat/COMPAT_*.md and docs/architecture/079-compat-matrix-review.md
+# in the same change.
+nginx           exact         79
+nginx           approximated  13
+nginx           unsupported   5
+nginx           directives    21
+apache          exact         0
+apache          approximated  1
+apache          unsupported   0
+apache          directives    17
+openlitespeed   exact         0
+openlitespeed   approximated  0
+openlitespeed   unsupported   0
+openlitespeed   fields        9
