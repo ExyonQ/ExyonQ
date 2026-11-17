@@ -35,6 +35,15 @@ operational smoke category in this workspace (FORBIDDEN).
 | `oci-runtime-e2e.sh` | container runtime (not version-only) | C |
 | `run-linux-matrix.sh` | dual-arch orchestrator | — |
 
+`scripts/e2e/http3-product-e2e.sh` runs the committed product build (s2n) by
+default. Another compiled provider is exercised without editing the harness by
+exporting `EXYONQ_E2E_FEATURES` and/or `EXYONQ_E2E_NO_DEFAULT_FEATURES` (the
+cargo feature set) and, for the modern alternate, `EXYONQ_E2E_H3_PROVIDER=quiche`
+(the IR `[http3] provider` key). The Quinn rollback build is selected by feature
+alone and ignores the IR key. Every run prints `provider_under_test` and the
+`listener_banner` the provider itself logs (`s2n-quic provider`, `quiche
+provider`), so the provider under test is evidence, not an assumption.
+
 The OL-04/OL-03 artifact-bound runner is the artifact-bound E2E entry point in CI
 (`.github/workflows/e2e.yml`). The job builds `exyonq` and `exyonq-compat`, runs
 the runner, and fails on `ARTIFACT_DRIFT`, `ARTIFACT_LOG_UNBOUND` or

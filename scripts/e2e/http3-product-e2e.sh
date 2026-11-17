@@ -7,7 +7,20 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 pass() { echo "PASS $*"; }
-fail() { echo "FAIL $*"; exit 1; }
+# Every exit path stops the server under test: an EXIT trap alone is not
+# guaranteed to run before the gate returns, and a leaked `exyonq` keeps its TCP
+# and UDP ports, so the next restart or run would talk to the old process.
+fail() {
+  declare -F stop_server >/dev/null && stop_server
+  echo "FAIL $*"
+  # Keep the server's own view of the failure: without it a closed stream
+  # (`000`) cannot be told apart from a missing response.
+  if [[ -n "${LOG:-}" && -f "$LOG" ]]; then
+    echo "--- server log tail ($LOG) ---"
+    tail -40 "$LOG"
+  fi
+  exit 1
+}
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   fail "product E2E close requires Linux (got $(uname -s)); run on Netcup/Oracle"
@@ -25,8 +38,44 @@ RUN_ID="${P1_3B_E2E_RUN_ID:-p13b-e2e-$(date -u +%Y%m%dT%H%M%SZ)}"
 # connection error before the application budget is consulted.
 H3_MAX_HEADER_BYTES="${H3_MAX_HEADER_BYTES:-8192}"
 
+# Provider under test. The committed product build is s2n only, so leaving these
+# unset keeps the gate exactly as CI runs it. Setting them exercises another
+# compiled provider without editing the harness: `http3-provider-quiche` (with
+# `[http3] provider = "quiche"`) for the modern alternate and
+# `http3-provider-quinn-legacy` with `--no-default-features` for the rollback
+# provider, whose public IR key is deliberately ignored.
+E2E_CARGO_ARGS=(-p exyonq)
+if [[ "${EXYONQ_E2E_NO_DEFAULT_FEATURES:-0}" == "1" ]]; then
+  E2E_CARGO_ARGS+=(--no-default-features)
+fi
+if [[ -n "${EXYONQ_E2E_FEATURES:-}" ]]; then
+  E2E_CARGO_ARGS+=(--features "${EXYONQ_E2E_FEATURES}")
+fi
+H3_PROVIDER="${EXYONQ_E2E_H3_PROVIDER:-}"
+# Resolve the binary the build produces and run it directly: `cargo run` keeps a
+# wrapper process between the gate and the server, so the PID the gate has is not
+# the listener's and a restart can leave the old server owning the ports.
+E2E_TARGET_DIR="$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
+SRV_BIN="${EXYONQ_BIN:-${E2E_TARGET_DIR:-$ROOT/target}/debug/exyonq}"
+
 docker_run() {
   docker run --rm --platform "$CLIENT_PLATFORM" "$@"
+}
+
+# Stop the listener itself, bounded, and from every exit path: a survivor keeps
+# its TCP and UDP ports, so the restart phase would answer from the old process
+# and the next gate would inherit a leaked listener.
+stop_server() {
+  [[ -n "${SRV_PID:-}" ]] || return 0
+  kill -TERM "$SRV_PID" 2>/dev/null || true
+  local i
+  for i in $(seq 1 100); do
+    kill -0 "$SRV_PID" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -KILL "$SRV_PID" 2>/dev/null || true
+  SRV_PID=""
 }
 
 docker image inspect "$CLIENT_IMAGE" >/dev/null 2>&1 \
@@ -43,7 +92,7 @@ fi
 pass "client_http3 image=$CLIENT_IMAGE digest=$CLIENT_DIGEST"
 
 TMP="$(mktemp -d)"
-trap '[[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null || true; [[ -n "${UP_PID:-}" ]] && kill "$UP_PID" 2>/dev/null || true; rm -rf "$TMP"' EXIT
+trap 'stop_server; [[ -n "${UP_PID:-}" ]] && kill "$UP_PID" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 # Ephemeral TLS (EXYONQ-SEC-PRIVATE-MATERIAL-ZERO)
 # shellcheck source=scripts/e2e/lib/tls.sh
@@ -199,13 +248,18 @@ target = "http://127.0.0.1:${UP_PORT}"
 timeout_ms = 2000
 EOF
 
+if [[ -n "$H3_PROVIDER" ]]; then
+  printf '\n[http3]\nprovider = "%s"\n' "$H3_PROVIDER" >>"$CFG"
+fi
+
 CONFIG_HASH="$(sha256sum "$CFG" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$CFG" | awk '{print $1}')"
 HARNESS_HASH="$(sha256sum "$0" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$0" | awk '{print $1}')"
 
-cargo build -q -p exyonq 2>/dev/null || cargo build -p exyonq
+pass "provider_under_test ir=${H3_PROVIDER:-<build default>} features=${EXYONQ_E2E_FEATURES:-<crate default>} no_default_features=${EXYONQ_E2E_NO_DEFAULT_FEATURES:-0}"
+cargo build -q "${E2E_CARGO_ARGS[@]}" 2>/dev/null || cargo build "${E2E_CARGO_ARGS[@]}"
 export EXYONQ_CONFIG="$CFG"
 export EXYONQ_CONTROL_SOCKET="$CTRL"
-cargo run -q -p exyonq -- serve -c "$CFG" >"$LOG" 2>&1 &
+"$SRV_BIN" serve -c "$CFG" >"$LOG" 2>&1 &
 SRV_PID=$!
 
 for _ in $(seq 1 100); do
@@ -225,6 +279,10 @@ for _ in $(seq 1 50); do
 done
 [[ -S "$CTRL" ]] || fail "control socket not created at $CTRL (need EXYONQ_CONTROL_SOCKET)"
 pass "listener_ready ALPN=h3"
+# Which provider actually bound the socket, taken from the banner each provider
+# emits (`s2n-quic provider`, `quiche provider`); Quinn logs the bare message.
+LISTENER_BANNER="$(grep -m1 -oE 'HTTP/3 listening[^"]*' "$LOG" 2>/dev/null || true)"
+pass "listener_banner ${LISTENER_BANNER:-<none>}"
 
 H3_URL="https://127.0.0.1:${UDP_PORT}"
 DOCKER_NET=(--network host)
@@ -422,13 +480,12 @@ pass "DRAIN_REJECT_NEW_$code"
 ctrl_cmd drain >/dev/null || true
 pass "DUPLICATE_DRAIN_OK"
 
-kill "$SRV_PID" 2>/dev/null || true
-wait "$SRV_PID" 2>/dev/null || true
+stop_server
 sleep 0.5
 : >"$LOG"
 export EXYONQ_CONFIG="$CFG"
 export EXYONQ_CONTROL_SOCKET="$CTRL"
-cargo run -q -p exyonq -- serve -c "$CFG" >"$LOG" 2>&1 &
+"$SRV_BIN" serve -c "$CFG" >"$LOG" 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 100); do
   rg -q "HTTP/3 listening" "$LOG" 2>/dev/null && break
@@ -461,4 +518,5 @@ pass "H3_PROXY_HEADER_TRANSLATION"
 pass "H3_DRAIN"
 pass "QUIC_SHUTDOWN"
 pass "DUPLICATE_DRAIN_REGRESSION"
+stop_server
 echo "RUN_OK=1"
