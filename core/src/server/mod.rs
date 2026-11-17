@@ -879,6 +879,16 @@ async fn run_on_impl(
     #[cfg(target_os = "linux")]
     epoll_start::install_static_wire_hooks();
 
+    // A blocking static wire thread has no Hyper: let it replay a returned head
+    // on the async runtime instead of answering with a fabricated 404.
+    #[cfg(target_os = "linux")]
+    wire_dispatch::install_blocking_wire_handoff(
+        reload::SharedServerState::clone(&shared),
+        proxy_client.clone(),
+        Arc::clone(&ops),
+        tokio::runtime::Handle::current(),
+    );
+
     // PS3A-F3 I7 / PS1C-FACADE / PS3A-PM1: composition builds executor; sync_accept takes facade Arc.
     #[cfg(target_os = "linux")]
     let connection_executor =

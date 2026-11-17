@@ -248,7 +248,20 @@ impl CoreConnectionExecutor {
                 && static_wire::static_use_blocking_pool(head.as_ref())
             {
                 match static_wire::serve_blocking_sync(site_slot, &mut conn.stream, head, rest) {
-                    Ok(()) => return ConnectionServeOutcome::Completed,
+                    Ok(static_wire::StaticWireBlockingOutcome::Served) => {
+                        return ConnectionServeOutcome::Completed;
+                    }
+                    Ok(static_wire::StaticWireBlockingOutcome::Handoff { head, rest }) => {
+                        // The wire only answers its probes: replay the head it
+                        // returned on Hyper, which owns the socket from here.
+                        return self.spawn_hyper(
+                            conn,
+                            Some((head, rest)),
+                            view,
+                            token,
+                            client_guard,
+                        );
+                    }
                     Err(err) => match classify_accepted_socket_io(err) {
                         Ok(cerr) => return ConnectionServeOutcome::ConnectionClosed(cerr),
                         Err(err) => {

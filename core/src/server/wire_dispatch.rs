@@ -160,6 +160,50 @@ pub(crate) fn emit_wire_access(
     Some(identity.internal_request_id)
 }
 
+/// A blocking static wire thread has no Hyper. Install the sink that replays a
+/// head the wire handed back on Hyper over the same socket (Linux).
+#[cfg(target_os = "linux")]
+pub(crate) fn install_blocking_wire_handoff(
+    shared: crate::reload::SharedServerState,
+    proxy_client: exyonq_mod_proxy::ProxyClient,
+    ops: std::sync::Arc<crate::lifecycle::LifecycleState>,
+    runtime: tokio::runtime::Handle,
+) {
+    use crate::kernel::generation::GenerationView;
+    use crate::kernel::handoff::HyperHandoff;
+    exyonq_module_api::static_wire::install_blocking_handoff_hook(Box::new(
+        move |stream: std::net::TcpStream, head: bytes::Bytes, rest: bytes::Bytes| {
+            let peer = match stream.peer_addr() {
+                Ok(peer) => peer,
+                Err(_) => return Err(stream),
+            };
+            let token = match crate::lifecycle::admit_connection(&ops) {
+                Ok(token) => token,
+                Err(_) => return Err(stream),
+            };
+            let state = crate::reload::read_state(&shared);
+            let view = GenerationView::pinned(
+                state.generation,
+                state.modules_enabled(),
+                state.site_static_slot,
+            );
+            match crate::server::hyper_handoff::spawn_hyper_handoff(
+                HyperHandoff::new(stream, peer, Some((head, rest)), view, token),
+                &shared,
+                proxy_client.clone(),
+                &ops,
+                &runtime,
+            ) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    warn!(%err, "static blocking wire handoff failed");
+                    Ok(())
+                }
+            }
+        },
+    ));
+}
+
 /// Cap061: bridge static-wire terminal statuses from module-api into access events.
 pub fn install_static_wire_access_bridge() {
     let _ = exyonq_module_api::static_wire::install_access_notice_hook(|notice| {

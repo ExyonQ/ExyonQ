@@ -119,6 +119,36 @@ pub fn register_sendfile_from_tokio_first(
     (epoll_hooks().register_sendfile_from_tokio_first)(stream, head, carry)
 }
 
+/// Core-owned handoff sink for a blocking wire call that has no Hyper of its own.
+#[cfg(target_os = "linux")]
+pub type BlockingHandoffHook = Box<
+    dyn Fn(std::net::TcpStream, bytes::Bytes, bytes::Bytes) -> Result<(), std::net::TcpStream>
+        + Send
+        + Sync,
+>;
+
+#[cfg(target_os = "linux")]
+static BLOCKING_HANDOFF: std::sync::OnceLock<BlockingHandoffHook> = std::sync::OnceLock::new();
+
+/// Installed by core (Linux): replays a wire-returned head on Hyper.
+#[cfg(target_os = "linux")]
+pub fn install_blocking_handoff_hook(hook: BlockingHandoffHook) {
+    let _ = BLOCKING_HANDOFF.set(hook);
+}
+
+/// Give a connection back to Hyper. `Err(stream)` means nobody could take it.
+#[cfg(target_os = "linux")]
+pub fn handoff_blocking_to_hyper(
+    stream: std::net::TcpStream,
+    head: bytes::Bytes,
+    rest: bytes::Bytes,
+) -> Result<(), std::net::TcpStream> {
+    match BLOCKING_HANDOFF.get() {
+        Some(hook) => hook(stream, head, rest),
+        None => Err(stream),
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn register_keepalive_from_tokio_first(
     stream: tokio::net::TcpStream,
@@ -159,7 +189,7 @@ pub struct StaticWireServeHooks {
         stream: &mut std::net::TcpStream,
         head: bytes::Bytes,
         rest: bytes::Bytes,
-    ) -> io::Result<()>,
+    ) -> io::Result<StaticWireBlockingOutcome>,
     pub try_spawn_blocking_static: fn(
         site_slot: u32,
         stream: std::net::TcpStream,
@@ -197,7 +227,7 @@ pub fn serve_blocking_sync(
     stream: &mut std::net::TcpStream,
     head: bytes::Bytes,
     rest: bytes::Bytes,
-) -> io::Result<()> {
+) -> io::Result<StaticWireBlockingOutcome> {
     (serve_hooks().serve_blocking_sync)(site_slot, stream, head, rest)
 }
 
@@ -254,6 +284,18 @@ pub enum StaticWireTcpOutcome {
 /// [`StaticWireTcpOutcome`]-carrying future (clippy: type complexity).
 pub type StaticWireSiteTcpFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<StaticWireTcpOutcome>> + Send>>;
+
+/// Outcome of one blocking wire serve.
+///
+/// The caller owns the socket, so a head the wire does not serve comes back with
+/// the bytes already read instead of a fabricated terminal 404.
+pub enum StaticWireBlockingOutcome {
+    Served,
+    Handoff {
+        head: bytes::Bytes,
+        rest: bytes::Bytes,
+    },
+}
 
 /// Async wire serve (Tokio path) — owned stream (no connection internals in core).
 pub struct StaticWireAsyncHooks {

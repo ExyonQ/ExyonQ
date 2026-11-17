@@ -384,14 +384,47 @@ fn blocking_queue_capacity() -> usize {
 
 #[cfg(target_os = "linux")]
 fn run_blocking_static_job(job: BlockingStaticJob) {
-    let Ok(mut std_stream) = job.stream.into_std() else {
-        return;
+    use std::os::fd::AsFd;
+
+    // The loop works on a duplicate of the socket so the original Tokio stream
+    // can still be handed back to the async wire when the head is not ours.
+    let owned = match job.stream.as_fd().try_clone_to_owned() {
+        Ok(owned) => owned,
+        Err(err) => {
+            debug!(%err, "static blocking job: socket clone failed");
+            return;
+        }
     };
-    if std_stream.set_nonblocking(false).is_err() {
+    let mut loop_stream = std::net::TcpStream::from(owned);
+    if loop_stream.set_nonblocking(false).is_err() {
         return;
     }
-    let _ = std_stream.set_read_timeout(Some(header_read_timeout()));
-    let _ = serve_blocking_sync(&job.site, &mut std_stream, job.first_head, job.carry);
+    let _ = loop_stream.set_read_timeout(Some(header_read_timeout()));
+    match serve_blocking_sync(&job.site, &mut loop_stream, job.first_head, job.carry) {
+        Ok(BlockingServeOutcome::Served) => {}
+        Ok(BlockingServeOutcome::Handoff { head, rest }) => {
+            // A blocking pool thread has no Hyper of its own: hand the
+            // connection back to core, which replays the head on Hyper over
+            // this very socket.
+            drop(loop_stream);
+            match job.stream.into_std() {
+                Ok(std_stream) => {
+                    if let Err(stream) = exyonq_module_api::static_wire::handoff_blocking_to_hyper(
+                        std_stream, head, rest,
+                    ) {
+                        debug!("static blocking handoff has no Hyper sink; closing");
+                        drop(stream);
+                    }
+                }
+                Err(err) => {
+                    warn!(%err, "static blocking handoff: stream conversion failed");
+                }
+            }
+        }
+        Err(err) => {
+            debug!(%err, "static blocking serve failed");
+        }
+    }
 }
 
 /// Linux: run the full keep-alive static loop on a blocking thread (legacy API).
@@ -420,7 +453,7 @@ pub fn serve_blocking_sync(
     stream: &mut std::net::TcpStream,
     first_head: Bytes,
     mut carry: Bytes,
-) -> Result<()> {
+) -> Result<BlockingServeOutcome> {
     use std::os::unix::io::AsRawFd;
 
     let fd = stream.as_raw_fd();
@@ -441,6 +474,15 @@ pub fn serve_blocking_sync(
 
         carry = discard_request_body_blocking(stream, head.as_ref(), carry)?;
 
+        if !wire_owns_head(head.as_ref()) {
+            // Probes are the wire's only business: a site file (or any other
+            // route) belongs to the caller, which keeps the socket. Returning
+            // the bytes read is the same contract as `serve`; writing
+            // `NOT_FOUND_KEEP_ALIVE` here fabricated a 404 for a request the
+            // wire never answered.
+            return Ok(BlockingServeOutcome::Handoff { head, rest: carry });
+        }
+
         let started = Instant::now();
         match write_static_response_blocking(site, fd, head.as_ref())? {
             None => {
@@ -458,7 +500,7 @@ pub fn serve_blocking_sync(
         // Cap061 LA-008: no filename-keyed keep-alive tight loops. Subsequent
         // requests continue this notified loop (health/metrics only on wire).
     }
-    Ok(())
+    Ok(BlockingServeOutcome::Served)
 }
 
 #[cfg(target_os = "linux")]
@@ -507,6 +549,7 @@ fn ensure_headers_blocking(
 ///
 /// `Handoff` carries the connection back to the caller because the wire only
 /// answers its own probes; site files belong to Hyper/static.
+#[derive(Debug)]
 pub enum ServeOutcome {
     Served,
     Handoff {
@@ -514,6 +557,20 @@ pub enum ServeOutcome {
         head: Bytes,
         rest: Bytes,
     },
+}
+
+/// What an async wire serve over a generic stream leaves behind.
+#[derive(Debug)]
+pub enum AsyncServeOutcome<S> {
+    Served,
+    Handoff { stream: S, head: Bytes, rest: Bytes },
+}
+
+/// What a blocking wire serve leaves behind. The caller keeps the socket.
+#[derive(Debug)]
+pub enum BlockingServeOutcome {
+    Served,
+    Handoff { head: Bytes, rest: Bytes },
 }
 
 /// Heads this wire answers itself. Everything else is Hyper's.
@@ -608,10 +665,10 @@ pub async fn serve(
 
 pub async fn serve_async<S>(
     site: Arc<StaticRoot>,
-    stream: &mut S,
+    mut stream: S,
     first_head: Bytes,
     mut carry: Bytes,
-) -> Result<()>
+) -> Result<AsyncServeOutcome<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -620,7 +677,7 @@ where
         let head = if let Some(head) = pending_head.take() {
             head
         } else {
-            carry = ensure_headers(stream, carry).await?;
+            carry = ensure_headers(&mut stream, carry).await?;
             if !headers_complete(&carry) {
                 break;
             }
@@ -629,15 +686,25 @@ where
             head
         };
 
-        carry = discard_request_body_async(stream, head.as_ref(), carry).await?;
+        carry = discard_request_body_async(&mut stream, head.as_ref(), carry).await?;
+
+        if !wire_owns_head(head.as_ref()) {
+            // Same contract as `serve`: the caller owns heads the wire does not
+            // answer, and it owns the stream too.
+            return Ok(AsyncServeOutcome::Handoff {
+                stream,
+                head,
+                rest: carry,
+            });
+        }
 
         let started = Instant::now();
-        match write_static_response_async(&site, stream, head.as_ref()).await? {
+        match write_static_response_async(&site, &mut stream, head.as_ref()).await? {
             None => {
                 if head.is_empty() {
                     break;
                 }
-                conn_io::write_all_async(stream, &wire::NOT_FOUND_KEEP_ALIVE).await?;
+                conn_io::write_all_async(&mut stream, &wire::NOT_FOUND_KEEP_ALIVE).await?;
                 notify_wire_access(head.as_ref(), 404, "static_wire_not_found", started);
             }
             Some(code) => {
@@ -645,7 +712,7 @@ where
             }
         }
     }
-    Ok(())
+    Ok(AsyncServeOutcome::Served)
 }
 
 async fn write_static_response_tcp(
@@ -896,12 +963,14 @@ mod tests {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
 
-        fn head_64k_get() -> Bytes {
-            Bytes::from("GET /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n")
-        }
-
         fn head_64k_head() -> Bytes {
             Bytes::from("HEAD /site/64k.bin HTTP/1.1\r\nHost: x\r\n\r\n")
+        }
+
+        /// Wire-owned head: served with 200 and then kept alive, so a worker
+        /// stays occupied until the header timeout (used to saturate the pool).
+        fn head_health_get() -> Bytes {
+            Bytes::from("GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
         }
 
         fn minimal_site() -> (tempfile::TempDir, Arc<StaticRoot>) {
@@ -954,7 +1023,7 @@ mod tests {
 
             let (stream1, mut client1) = tcp_pair();
             assert!(matches!(
-                pool.try_submit(site.clone(), stream1, head_64k_get(), Bytes::new(), None),
+                pool.try_submit(site.clone(), stream1, head_health_get(), Bytes::new(), None),
                 BlockingAdmission::Accepted
             ));
 
@@ -963,20 +1032,21 @@ mod tests {
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
             let n = client1.read(&mut buf).expect("first response");
-            // The blocking serve shim only emits /health; file paths get the wire 404.
+            // The worker is held by a wire-owned probe, not by a site file:
+            // foreign heads are handed back instead of served with a 404.
             assert!(std::str::from_utf8(&buf[..n])
                 .unwrap()
-                .contains("HTTP/1.1 404"));
+                .starts_with("HTTP/1.1 200"));
 
             let (stream2, _client2) = tcp_pair();
             assert!(matches!(
-                pool.try_submit(site.clone(), stream2, head_64k_get(), Bytes::new(), None),
+                pool.try_submit(site.clone(), stream2, head_health_get(), Bytes::new(), None),
                 BlockingAdmission::Accepted
             ));
 
             let (stream3, mut client3) = tcp_pair();
             let start = Instant::now();
-            let result = pool.try_submit(site, stream3, head_64k_get(), Bytes::new(), None);
+            let result = pool.try_submit(site, stream3, head_health_get(), Bytes::new(), None);
             assert!(
                 matches!(result, BlockingAdmission::Rejected(_)),
                 "expected reject, got {result:?}"
@@ -1007,12 +1077,12 @@ mod tests {
             let (_dir, site) = minimal_site();
             let (stream, mut client) = tcp_pair();
             assert!(matches!(
-                pool.try_submit(site.clone(), stream, head_64k_get(), Bytes::new(), None),
+                pool.try_submit(site.clone(), stream, head_health_get(), Bytes::new(), None),
                 BlockingAdmission::Accepted
             ));
 
             let (stream2, mut client2) = tcp_pair();
-            let result = pool.try_submit(site, stream2, head_64k_get(), Bytes::new(), None);
+            let result = pool.try_submit(site, stream2, head_health_get(), Bytes::new(), None);
             assert!(matches!(result, BlockingAdmission::Rejected(_)));
             if let BlockingAdmission::Rejected(stream) = result {
                 shed_in_test(stream);
@@ -1030,7 +1100,7 @@ mod tests {
             let n = client.read(&mut buf).unwrap();
             assert!(std::str::from_utf8(&buf[..n])
                 .unwrap()
-                .contains("HTTP/1.1 404"));
+                .starts_with("HTTP/1.1 200"));
 
             client2
                 .set_read_timeout(Some(Duration::from_secs(1)))
@@ -1041,7 +1111,7 @@ mod tests {
         }
 
         #[test]
-        fn head_static_request_still_served_when_admitted() {
+        fn head_static_request_is_handed_off_when_admitted() {
             let pool = BlockingStaticPool::new(2, 2);
             let (_dir, site) = minimal_site();
             let (stream, mut client) = tcp_pair();
@@ -1054,14 +1124,25 @@ mod tests {
             client
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let n = client.read(&mut buf).expect("read HEAD response");
-            let response = std::str::from_utf8(&buf[..n]).expect("utf8");
-            assert!(response.starts_with("HTTP/1.1 404"));
-            assert!(response.contains("Content-Length:"));
+            // A static HEAD is not the wire's head: the worker returns the
+            // connection instead of answering `not found`. Without epoll hooks
+            // installed it closes, and the client sees EOF — never a 404.
+            let n = client.read(&mut buf).expect("read until close");
+            assert_eq!(
+                n,
+                0,
+                "blocking wire must not answer a foreign head: {:?}",
+                String::from_utf8_lossy(&buf[..n])
+            );
         }
+
+        /// The shed write-error counter is process-global: tests that assert on
+        /// it must not interleave with each other.
+        static SHED_ERROR_COUNTER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
         #[tokio::test]
         async fn async_shed_writes_503_without_blocking_submit() {
+            let _counter = SHED_ERROR_COUNTER.lock().await;
             let before = shed_blocking_admission_write_errors();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
@@ -1094,6 +1175,7 @@ mod tests {
         async fn shed_write_failure_returns_err_on_real_rst() {
             use std::os::fd::AsRawFd;
 
+            let _counter = SHED_ERROR_COUNTER.lock().await;
             let before = shed_blocking_admission_write_errors();
             let mut observed = before;
             for _ in 0..80 {
@@ -1145,7 +1227,7 @@ mod tests {
 
             let (stream1, mut client1) = tcp_pair();
             assert!(matches!(
-                pool.try_submit(site.clone(), stream1, head_64k_get(), Bytes::new(), None),
+                pool.try_submit(site.clone(), stream1, head_health_get(), Bytes::new(), None),
                 BlockingAdmission::Accepted
             ));
             let mut buf = [0u8; 65536];
@@ -1156,7 +1238,7 @@ mod tests {
 
             let (stream2, _client2) = tcp_pair();
             assert!(matches!(
-                pool.try_submit(site.clone(), stream2, head_64k_get(), Bytes::new(), None),
+                pool.try_submit(site.clone(), stream2, head_health_get(), Bytes::new(), None),
                 BlockingAdmission::Accepted
             ));
 
@@ -1168,7 +1250,7 @@ mod tests {
                         let (stream, _) = tcp_pair();
                         let start = Instant::now();
                         let result =
-                            pool.try_submit(site, stream, head_64k_get(), Bytes::new(), None);
+                            pool.try_submit(site, stream, head_health_get(), Bytes::new(), None);
                         (result, start.elapsed())
                     })
                 })

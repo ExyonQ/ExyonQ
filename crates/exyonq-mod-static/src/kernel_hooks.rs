@@ -146,12 +146,20 @@ fn serve_blocking_sync_hook(
     stream: &mut std::net::TcpStream,
     head: bytes::Bytes,
     rest: bytes::Bytes,
-) -> std::io::Result<()> {
+) -> std::io::Result<exyonq_module_api::static_wire::StaticWireBlockingOutcome> {
+    use exyonq_module_api::static_wire::StaticWireBlockingOutcome;
     let runtime = crate::epoll_session::runtime_for_hooks();
     let root = runtime
         .root_for_slot_public(site_slot)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "site slot"))?;
-    crate::wire_conn::serve_blocking_sync(&root, stream, head, rest)
+    Ok(
+        match crate::wire_conn::serve_blocking_sync(&root, stream, head, rest)? {
+            crate::wire_conn::BlockingServeOutcome::Served => StaticWireBlockingOutcome::Served,
+            crate::wire_conn::BlockingServeOutcome::Handoff { head, rest } => {
+                StaticWireBlockingOutcome::Handoff { head, rest }
+            }
+        },
+    )
 }
 
 #[cfg(target_os = "linux")]
