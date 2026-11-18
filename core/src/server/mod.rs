@@ -1107,15 +1107,9 @@ async fn maybe_bootstrap_acme(
 }
 
 #[cfg(test)]
-mod acme_pending_fail_closed {
-    use super::*;
-    use std::time::Duration;
-    use tokio::io::AsyncReadExt;
-    use tokio::net::TcpStream;
-
-    fn toml_with_listen(addr: std::net::SocketAddr, tls_block: &str) -> String {
-        format!(
-            r#"config_version = 1
+fn test_config_with_listen(addr: std::net::SocketAddr, tls_block: &str) -> String {
+    format!(
+        r#"config_version = 1
 
 [[server]]
 listen = "{addr}"
@@ -1127,8 +1121,15 @@ match = {{ path = "/" }}
 root = "tests/fixtures/www"
 index = "index.html"
 "#
-        )
-    }
+    )
+}
+
+#[cfg(test)]
+mod acme_pending_fail_closed {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpStream;
 
     const TLS_PENDING: &str = r#"
 [server.tls]
@@ -1159,7 +1160,7 @@ domains = ["example.test"]
     async fn tls_pending_listener_drops_connections() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let config: AppConfig = toml_with_listen(addr, TLS_PENDING).parse().unwrap();
+        let config: AppConfig = test_config_with_listen(addr, TLS_PENDING).parse().unwrap();
         spawn_accept_loop(listener, config).await;
 
         let mut conn = TcpStream::connect(addr).await.unwrap();
@@ -1175,7 +1176,7 @@ domains = ["example.test"]
     async fn reload_removing_tls_reopens_cleartext() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let config: AppConfig = toml_with_listen(addr, TLS_PENDING).parse().unwrap();
+        let config: AppConfig = test_config_with_listen(addr, TLS_PENDING).parse().unwrap();
         let state = ServerState::new(config, build_incoming_client())
             .await
             .unwrap();
@@ -1200,7 +1201,7 @@ domains = ["example.test"]
         drop(conn);
 
         // Reload swaps in a config without server.tls: cleartext intended.
-        let no_tls: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        let no_tls: AppConfig = test_config_with_listen(addr, "").parse().unwrap();
         let state = ServerState::new(no_tls, build_incoming_client())
             .await
             .unwrap();
@@ -1218,7 +1219,7 @@ domains = ["example.test"]
     async fn cleartext_listener_still_serves() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let config: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        let config: AppConfig = test_config_with_listen(addr, "").parse().unwrap();
         spawn_accept_loop(listener, config).await;
 
         // No request written: only assert the gate does not drop a cleartext
@@ -1231,5 +1232,54 @@ domains = ["example.test"]
             got.is_err(),
             "cleartext listener must keep the connection open, got {got:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod run_on_pins_listen {
+    use super::*;
+    use std::net::TcpListener as StdTcpListener;
+    use std::time::Duration;
+    use tokio::net::TcpStream;
+
+    /// Regression: `run_on` used to pass the config through untouched, so a
+    /// configured `listen` other than the one handed in got its own socket.
+    /// When that address is already taken on the host the extra bind failed and
+    /// the call never served the address it was given. Here the config points at
+    /// a port this test holds open, so the old code failed with EADDRINUSE.
+    #[tokio::test]
+    async fn serves_the_given_address_when_the_configured_listen_is_busy() {
+        let busy = StdTcpListener::bind("127.0.0.1:0").expect("busy port");
+        let busy_addr = busy.local_addr().expect("busy addr");
+
+        let probe = StdTcpListener::bind("127.0.0.1:0").expect("probe port");
+        let listen = probe.local_addr().expect("probe addr");
+        drop(probe);
+
+        let config: AppConfig = test_config_with_listen(busy_addr, "")
+            .parse()
+            .expect("config");
+        let server = tokio::spawn(async move { run_on(listen, config).await });
+
+        let mut served = false;
+        for _ in 0..100 {
+            if TcpStream::connect(listen).await.is_ok() {
+                served = true;
+                break;
+            }
+            if server.is_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if !served {
+            // Nothing ever accepted on the given address: report why, so a
+            // regression names the failed bind instead of just timing out here.
+            let outcome = tokio::time::timeout(Duration::from_secs(5), server).await;
+            panic!(
+                "run_on must serve {listen} while the configured listen {busy_addr} is taken; task outcome: {outcome:?}"
+            );
+        }
+        server.abort();
     }
 }
