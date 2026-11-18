@@ -517,8 +517,12 @@ async fn read_proxy_header_inner(
 }
 
 /// Run on an explicit listen address (used in tests).
+///
+/// The caller owns the address, so every configured `listen` is pinned to it:
+/// otherwise a fixture's placeholder address would get its own socket and the
+/// run would claim a port of the host (EADDRINUSE on a busy machine).
 pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
-    run_on_impl(listen, None, config).await
+    run_on_impl(listen, None, pin_listen(config, listen)).await
 }
 
 /// `run_on` over a pre-bound listener (tests only): keeping the socket bound
@@ -530,7 +534,15 @@ pub(crate) async fn run_on_with_listener(
     listener: TcpListener,
     config: AppConfig,
 ) -> anyhow::Result<()> {
-    run_on_impl(listen, Some(listener), config).await
+    run_on_impl(listen, Some(listener), pin_listen(config, listen)).await
+}
+
+fn pin_listen(mut config: AppConfig, listen: SocketAddr) -> AppConfig {
+    let listen = listen.to_string();
+    for server in &mut config.servers {
+        server.listen.clone_from(&listen);
+    }
+    config
 }
 
 async fn run_on_impl(
