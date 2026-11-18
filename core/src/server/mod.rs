@@ -1238,6 +1238,7 @@ domains = ["example.test"]
 #[cfg(test)]
 mod run_on_pins_listen {
     use super::*;
+    use crate::kernel::test_hooks::wire_hooks_gate;
     use std::net::TcpListener as StdTcpListener;
     use std::time::Duration;
     use tokio::net::TcpStream;
@@ -1249,6 +1250,11 @@ mod run_on_pins_listen {
     /// a port this test holds open, so the old code failed with EADDRINUSE.
     #[tokio::test]
     async fn serves_the_given_address_when_the_configured_listen_is_busy() {
+        // Starting a server applies its config into the process-global module
+        // runtimes (proxy cluster generation and bindings). Hold the shared
+        // gate so a sibling wire test serving concurrently cannot see its
+        // generation flipped mid-request and fail with an unrelated 503.
+        let _gate = wire_hooks_gate().await;
         let busy = StdTcpListener::bind("127.0.0.1:0").expect("busy port");
         let busy_addr = busy.local_addr().expect("busy addr");
 
