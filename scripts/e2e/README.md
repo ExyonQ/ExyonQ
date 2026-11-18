@@ -44,6 +44,14 @@ alone and ignores the IR key. Every run prints `provider_under_test` and the
 `listener_banner` the provider itself logs (`s2n-quic provider`, `quiche
 provider`), so the provider under test is evidence, not an assumption.
 
+On an arm64 Linux host the same gate certifies the arm64 **server**: the product
+binary is built and executed there by that host's own toolchain. The
+`client_http3` line records the client image and the digest it resolved to. The
+pinned `ymuski/curl-http3` image publishes only `linux/amd64`, so on an arm64
+host the pinned client runs under that host's binfmt emulation (`--platform
+linux/amd64`, the gate default) while the server under test stays native. Read
+that run as arm64 server evidence, not as native arm64 client evidence.
+
 The OL-04/OL-03 artifact-bound runner is the artifact-bound E2E entry point in CI
 (`.github/workflows/e2e.yml`). The job builds `exyonq` and `exyonq-compat`, runs
 the runner, and fails on `ARTIFACT_DRIFT`, `ARTIFACT_LOG_UNBOUND` or
