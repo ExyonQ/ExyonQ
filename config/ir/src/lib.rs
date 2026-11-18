@@ -27,6 +27,7 @@ mod full_page_cache;
 mod logging;
 pub mod modules;
 mod registry;
+mod rfc3339;
 mod static_preload;
 mod stream;
 mod upstream_health;
@@ -66,6 +67,7 @@ pub use modules::{
     SliceConfig, SliceRouteConfig, SubFilterConfig, SubFilterRouteConfig, SubFilterRule,
 };
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
+pub use rfc3339::{parse_rfc3339_utc, TimestampError};
 pub use static_preload::{
     StaticEncodingCacheConfig, StaticPreloadConfig, StaticSectionConfig,
     DEFAULT_ENCODING_CACHE_DIR, DEFAULT_ENCODING_CACHE_LEVEL, DEFAULT_ENCODING_CACHE_MAX_BYTES,
@@ -83,8 +85,8 @@ pub use upstream_health::UpstreamHealthCheckConfig;
 pub use waf::{
     WafAbuseConfig, WafAbuseMode, WafBuiltinToggles, WafCaptchaProvider, WafConfig,
     WafCustomRuleConfig, WafDetectorModeIr, WafEngineIr, WafExclusionConfig, WafFailPolicyIr,
-    WafIpFilterConfig, WafModeIr, WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr,
-    WafRulesetConfig,
+    WafIpConfig, WafIpEntryDetailIr, WafIpEntryIr, WafIpFilterConfig, WafModeIr,
+    WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr, WafRulesetConfig,
 };
 
 use modules::ModulesConfig as RawModulesConfig;

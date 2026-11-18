@@ -179,6 +179,7 @@ impl CompiledWafSnapshot {
                             field: Some(rule.matcher.field_label()),
                             matched: None,
                             transforms: Vec::new(),
+                            ip_entry: None,
                         },
                     },
                     rule.action,
@@ -277,6 +278,7 @@ impl CompiledWafSnapshot {
                             field: Some(rule.matcher.field_label()),
                             matched: None,
                             transforms: Vec::new(),
+                            ip_entry: None,
                         },
                     },
                     if detection_only {
@@ -315,6 +317,7 @@ impl CompiledWafSnapshot {
                             field: None,
                             matched: None,
                             transforms: Vec::new(),
+                            ip_entry: None,
                         },
                     },
                     if detection_only {
@@ -414,6 +417,7 @@ impl CompiledWafSnapshot {
                             field: Some(rule.matcher.field_label()),
                             matched: None,
                             transforms: Vec::new(),
+                            ip_entry: None,
                         },
                     },
                     if detection_only {
@@ -452,6 +456,7 @@ impl CompiledWafSnapshot {
                             field: None,
                             matched: None,
                             transforms: Vec::new(),
+                            ip_entry: None,
                         },
                     },
                     if detection_only {

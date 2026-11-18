@@ -298,6 +298,7 @@ fn emit_decision(phase: WafPhase, decision: &WafDecision) {
             action = ?decision.action,
             truncated = decision.inspection_truncated,
             field = ?v.evidence.field,
+            ip_entry = ?v.evidence.ip_entry,
             enforce = waf_enforce_enabled(),
             message = %v.message,
             "waf violation"

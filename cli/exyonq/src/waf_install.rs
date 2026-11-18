@@ -19,22 +19,23 @@
 //! hooks, abuse gate, and real challenge handler. Core depends only on waf-api.
 
 use exyonq_config_ir::{
-    AppConfig, WafAbuseMode, WafCaptchaProvider, WafConfig, WafDetectorModeIr, WafModeIr,
-    WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr,
+    AppConfig, WafAbuseMode, WafCaptchaProvider, WafConfig, WafDetectorModeIr, WafIpConfig,
+    WafIpEntryIr, WafModeIr, WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr,
 };
 use exyonq_core::WafRuntimeBinding;
 use exyonq_ratelimit::SyncTokenBucket;
 use exyonq_waf::{
     BuiltinDetectors, ChallengeProvider, ChallengeService, DetectorToggle, ExclusionInput,
-    FailPolicy, FixedWafEngine, IpFilterInput, MatchTarget, RuleInput, RulesetInput,
+    FailPolicy, FixedWafEngine, IpFilterEntry, IpFilterInput, MatchTarget, RuleInput, RulesetInput,
     WafCompileInput,
 };
 use exyonq_waf_api::{
-    InspectionLimits, OnInspectionLimit, WafAbuseGate, WafAction, WafDecision, WafEngine, WafMode,
-    WafPhase,
+    InspectionLimits, OnInspectionLimit, WafAbuseGate, WafAction, WafDecision, WafEngine,
+    WafIpList, WafMode, WafPhase,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tracing::{info, warn};
 
 /// Install native WAF + abuse + challenge before the server starts.
@@ -72,7 +73,9 @@ fn challenge_provider(config: &AppConfig) -> Option<ChallengeProvider> {
 
 fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBinding> {
     let (mode, enforce) = resolve_mode_and_enforce(config);
-    let engine: Arc<dyn WafEngine> = if !config.waf.enabled || mode == WafMode::Disabled {
+    let signature_active = config.waf.enabled && mode != WafMode::Disabled;
+    let mut ip_metrics: Vec<(WafIpList, String, Option<SystemTime>)> = Vec::new();
+    let engine: Arc<dyn WafEngine> = if !signature_active {
         let input = WafCompileInput {
             enabled: false,
             mode: WafMode::Disabled,
@@ -85,6 +88,7 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
     } else {
         let input = waf_compile_input_from_config(config)
             .map_err(|e| anyhow::anyhow!("waf IR convert: {e}"))?;
+        ip_metrics = ip_filter_metrics(&input.builtins.ip_filter);
         let crs = waf_crs_rulesets_from_ir(&config.waf)
             .map_err(|e| anyhow::anyhow!("waf CRS load: {e}"))?;
         Arc::new(
@@ -92,9 +96,11 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
                 .map_err(|e| anyhow::anyhow!("waf compile failed (fail closed): {e}"))?,
         )
     };
+    // Entry-level metrics describe the filter that was just compiled (install or
+    // reload prepare); the engine is the authority for what actually matches.
+    exyonq_core::register_ip_entries(&ip_metrics);
     let abuse = build_abuse_gate_from_config(config)?;
     // ARCH-002: same effective-active predicate as engine compile (+ independent abuse).
-    let signature_active = config.waf.enabled && mode != WafMode::Disabled;
     let wire_inspection_active =
         exyonq_core::compute_wire_inspection_active(signature_active, abuse.is_some(), enforce);
     Ok(WafRuntimeBinding {
@@ -193,6 +199,9 @@ pub fn waf_compile_input_from_ir(waf: &WafConfig) -> Result<WafCompileInput, Str
             bot_ua: DetectorToggle::off(),
             ip_filter: IpFilterInput::default(),
         };
+    }
+    if waf.enabled {
+        merge_global_ip_entries(&mut builtins.ip_filter, &waf.ip)?;
     }
 
     let exclusions = waf
@@ -340,11 +349,54 @@ fn map_builtins(t: &exyonq_config_ir::WafBuiltinToggles) -> BuiltinDetectors {
             .as_ref()
             .map(|ip| IpFilterInput {
                 enabled: ip.enabled,
-                whitelist: ip.whitelist.clone(),
-                blacklist: ip.blacklist.clone(),
+                whitelist: ip.whitelist.iter().map(IpFilterEntry::plain).collect(),
+                blacklist: ip.blacklist.iter().map(IpFilterEntry::plain).collect(),
             })
             .unwrap_or_default(),
     }
+}
+
+/// Union `[waf.ip]` entries into the effective filter (no-op when WAF is off).
+fn merge_global_ip_entries(filter: &mut IpFilterInput, ip: &WafIpConfig) -> Result<(), String> {
+    for entry in &ip.whitelist {
+        filter.whitelist.push(ip_filter_entry(entry)?);
+    }
+    for entry in &ip.blacklist {
+        filter.blacklist.push(ip_filter_entry(entry)?);
+    }
+    if !filter.whitelist.is_empty() || !filter.blacklist.is_empty() {
+        // A declared list is active policy; an absent `builtins.ip_filter` no
+        // longer keeps it off.
+        filter.enabled = true;
+    }
+    Ok(())
+}
+
+fn ip_filter_entry(entry: &WafIpEntryIr) -> Result<IpFilterEntry, String> {
+    Ok(IpFilterEntry {
+        network: entry.network().trim().to_string(),
+        until: entry
+            .until_system_time()
+            .map_err(|e| format!("waf.ip entry `{}`: {e}", entry.network()))?,
+        reason: entry.reason().map(str::to_string),
+    })
+}
+
+fn ip_filter_metrics(filter: &IpFilterInput) -> Vec<(WafIpList, String, Option<SystemTime>)> {
+    let mut out = Vec::with_capacity(filter.whitelist.len() + filter.blacklist.len());
+    out.extend(
+        filter
+            .whitelist
+            .iter()
+            .map(|e| (WafIpList::Whitelist, e.network.clone(), e.until)),
+    );
+    out.extend(
+        filter
+            .blacklist
+            .iter()
+            .map(|e| (WafIpList::Blacklist, e.network.clone(), e.until)),
+    );
+    out
 }
 
 /// Build abuse gate from IR (+ env overrides). `None` means abuse off.

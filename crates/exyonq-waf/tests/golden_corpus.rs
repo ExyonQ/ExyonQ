@@ -16,13 +16,14 @@
 //! Golden allow/block corpora for built-in EXY-* detectors (WAF3).
 
 use exyonq_waf::{
-    BuiltinDetectors, DetectorToggle, ExclusionInput, IpFilterInput, MapHeaders, NativeWafEngine,
-    WafCompileInput,
+    BuiltinDetectors, DetectorToggle, ExclusionInput, IpFilterEntry, IpFilterInput, MapHeaders,
+    NativeWafEngine, WafCompileInput,
 };
 use exyonq_waf_api::{
-    EmptyHeaders, HeaderView, WafAction, WafEngine, WafMode, WafPhase, WafRequest,
+    EmptyHeaders, HeaderView, WafAction, WafEngine, WafIpList, WafMode, WafPhase, WafRequest,
 };
 use std::net::{IpAddr, Ipv4Addr};
+use std::time::{Duration, SystemTime};
 
 fn engine_block() -> NativeWafEngine {
     let input = WafCompileInput {
@@ -167,7 +168,7 @@ fn golden_ip_blacklist() {
             ip_filter: IpFilterInput {
                 enabled: true,
                 whitelist: vec![],
-                blacklist: vec!["10.0.0.0/8".into()],
+                blacklist: vec![IpFilterEntry::plain("10.0.0.0/8")],
             },
             // Avoid header anomaly noise
             header_anomaly: DetectorToggle::off(),
@@ -184,6 +185,137 @@ fn golden_ip_blacklist() {
     );
     assert_eq!(d.action, WafAction::Block);
     assert_eq!(d.violations[0].rule_id.as_str(), "EXY-IP-1001");
+}
+
+fn ip_filter_input(
+    whitelist: Vec<IpFilterEntry>,
+    blacklist: Vec<IpFilterEntry>,
+) -> WafCompileInput {
+    WafCompileInput {
+        mode: WafMode::Block,
+        builtins: BuiltinDetectors {
+            ip_filter: IpFilterInput {
+                enabled: true,
+                whitelist,
+                blacklist,
+            },
+            header_anomaly: DetectorToggle::off(),
+            bot_ua: DetectorToggle::off(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn golden_ip_blacklist_carries_entry_and_reason() {
+    let engine = NativeWafEngine::compile(ip_filter_input(
+        vec![],
+        vec![IpFilterEntry {
+            network: "203.0.113.0/24".into(),
+            until: None,
+            reason: Some("repeated 404 scanning".into()),
+        }],
+    ))
+    .unwrap();
+    let headers = EmptyHeaders;
+    let d = engine.inspect(
+        WafPhase::RequestHeaders,
+        &req(
+            "/",
+            None,
+            &headers,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+        ),
+    );
+    assert_eq!(d.action, WafAction::Block);
+    let v = &d.violations[0];
+    assert_eq!(v.rule_id.as_str(), "EXY-IP-1001");
+    assert_eq!(v.evidence.matched.as_deref(), Some("203.0.113.0/24"));
+    let entry = v.evidence.ip_entry.as_ref().expect("ip entry evidence");
+    assert_eq!(entry.list, WafIpList::Blacklist);
+    assert_eq!(entry.entry, "203.0.113.0/24");
+    assert_eq!(entry.reason.as_deref(), Some("repeated 404 scanning"));
+}
+
+#[test]
+fn golden_ip_blacklist_expired_entry_stops_matching() {
+    let engine = NativeWafEngine::compile(ip_filter_input(
+        vec![],
+        vec![IpFilterEntry {
+            network: "203.0.113.0/24".into(),
+            until: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)),
+            reason: Some("expired ban".into()),
+        }],
+    ))
+    .unwrap();
+    let headers = EmptyHeaders;
+    let d = engine.inspect(
+        WafPhase::RequestHeaders,
+        &req(
+            "/",
+            None,
+            &headers,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+        ),
+    );
+    assert_eq!(
+        d.action,
+        WafAction::Allow,
+        "expired deny entry must not block"
+    );
+    assert!(d.violations.is_empty());
+}
+
+#[test]
+fn golden_ip_future_expiry_still_blocks() {
+    let engine = NativeWafEngine::compile(ip_filter_input(
+        vec![],
+        vec![IpFilterEntry {
+            network: "203.0.113.10".into(),
+            until: Some(SystemTime::now() + Duration::from_secs(3600)),
+            reason: None,
+        }],
+    ))
+    .unwrap();
+    let headers = EmptyHeaders;
+    let d = engine.inspect(
+        WafPhase::RequestHeaders,
+        &req(
+            "/",
+            None,
+            &headers,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+        ),
+    );
+    assert_eq!(d.action, WafAction::Block);
+    assert_eq!(d.violations[0].rule_id.as_str(), "EXY-IP-1001");
+}
+
+#[test]
+fn golden_ip_whitelist_is_fail_closed_with_expired_entry() {
+    let engine = NativeWafEngine::compile(ip_filter_input(
+        vec![IpFilterEntry {
+            network: "203.0.113.10".into(),
+            until: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)),
+            reason: None,
+        }],
+        vec![],
+    ))
+    .unwrap();
+    let headers = EmptyHeaders;
+    // The only allow entry expired: the whitelist must keep blocking.
+    let d = engine.inspect(
+        WafPhase::RequestHeaders,
+        &req(
+            "/",
+            None,
+            &headers,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+        ),
+    );
+    assert_eq!(d.action, WafAction::Block);
+    assert_eq!(d.violations[0].rule_id.as_str(), "EXY-IP-1002");
 }
 
 #[test]

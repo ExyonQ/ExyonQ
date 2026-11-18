@@ -71,7 +71,7 @@ pub use waf::{
     stage_waf_runtime_binding, waf_binding_for_new_state, waf_enforce_enabled, WafRuntimeBinding,
     WAF_CHALLENGE_VERIFY_PATH,
 };
-pub use waf_metrics::append_waf_prometheus;
+pub use waf_metrics::{append_waf_prometheus, register_ip_entries};
 pub use worker_memory::append_worker_memory_prometheus;
 
 /// Exposed for fuzz targets and tests.

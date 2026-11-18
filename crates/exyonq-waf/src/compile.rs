@@ -23,7 +23,9 @@ use crate::snapshot::{CompiledRule, CompiledRuleset, CompiledWafSnapshot, Litera
 use exyonq_waf_api::{InspectionLimits, OnInspectionLimit, WafAction, WafMode, WafPhase};
 use thiserror::Error;
 
-pub use crate::detect::{BuiltinDetectorsInput as BuiltinDetectors, DetectorToggle, IpFilterInput};
+pub use crate::detect::{
+    BuiltinDetectorsInput as BuiltinDetectors, DetectorToggle, IpFilterEntry, IpFilterInput,
+};
 
 /// Policy when rule compilation fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

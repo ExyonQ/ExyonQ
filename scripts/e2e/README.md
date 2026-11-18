@@ -24,6 +24,7 @@ operational smoke category in this workspace (FORBIDDEN).
 | `ol04-ol03-artifact-e2e.sh` | OL-04 + OL-03 under one artifact hash: records both binaries, runs focused tests, re-hashes after tests and after each E2E, and rejects a log whose `binary_sha256` or `compat_sha256` differs (`scripts/gates/artifact-integrity.sh`) | C+ |
 | `ws-real-apps-e2e.sh` | Real Home Assistant auth handshake and authenticated n8n push/run frames through ExyonQ (requires running apps and `N8N_COOKIE_FILE`) | E2E |
 | `ol05-waf-metrics-e2e.sh` | OL-05/Q-10: real CRS 942100 hit, per-rule Prometheus counter, block and detection-only modes | C+ |
+| `ip82-waf-ip-filter-e2e.sh` | GitHub #82: `[waf.ip]` allow/deny list — blocking, CIDR entries, TTL expiry, `reason` and matched entry in the violation log, per-entry counters and active/expired gauges, whitelist fail-closed, fail-closed config validation | C+ |
 | `f6-wp02-saturation-e2e.sh` | FastCGI saturation envelope (16 vs 40, 20 concurrent, per-pool metrics); Linux required | C+ |
 | `f6-wp03-config-e2e.sh` | Published WordPress config copy: cache headers, wp-config deny, front controller; Linux required | C+ |
 | `sec-h03-cache-forwarded-e2e.sh` | H-03: a cached response must not replay client-supplied forwarding headers (`X-Forwarded-Host`/`-Port`, `X-Real-IP`, `Forwarded`); two clean requests must not hit the origin again | C+ |
