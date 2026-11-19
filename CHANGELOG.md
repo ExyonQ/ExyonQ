@@ -21,6 +21,24 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Access events now carry the request `host`, and WAF violation events carry
+  `client_ip`, `host`, `method`, `path` and `user_agent`, so a violation can be
+  attributed to a site and correlated with its access line without inferring it
+  from the path (issue #84).
+- The packaged healthcheck discovers the active `php*fpm*` unit instead of
+  hardcoding a versioned unit name, accepts an exact unit override, optionally
+  probes the PHP-FPM Unix socket, and lists the candidates it considered when it
+  fails (issue #81).
+
+### Security
+
+- `wasmtime` 49.0.6 replaces 49.0.5, clearing RUSTSEC-2026-0566 through
+  -0572; `cargo deny check` and `cargo audit` pass with no waivers added.
+
 ## [0.9.2] — binaries in the GitHub Release and images in GHCR, Docker Hub mirror pending
 
 ```text
