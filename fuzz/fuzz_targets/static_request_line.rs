@@ -13,7 +13,7 @@ fuzz_target!(|data: &[u8]| {
     if let Some(end) = exyonq_core::find_header_end(data) {
         let head_len = end + 4;
         if head_len <= data.len() {
-            let _ = exyonq_core::request_headers_safe_for_wire(&data[..head_len]);
+            let _ = exyonq_core::request_framing_ambiguous(&data[..head_len]);
         }
     }
     // First-line UTF-8 probe (method/target/version shape) without accepting invalid state.

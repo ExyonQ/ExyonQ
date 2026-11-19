@@ -274,7 +274,7 @@ fn header_field_name_count(head: &[u8], name_lower: &[u8]) -> usize {
 /// Duplicate Content-Length and TE+CL are ambiguous (request smuggling) and are
 /// rejected. `Transfer-Encoding` alone is not ambiguous: it must be handed to
 /// Hyper, whose HTTP/1 decoder handles chunked framing.
-pub(crate) fn request_framing_ambiguous(head: &[u8]) -> bool {
+pub fn request_framing_ambiguous(head: &[u8]) -> bool {
     let cl = header_field_name_count(head, b"content-length");
     let te = header_field_name_count(head, b"transfer-encoding");
     cl > 1 || (te >= 1 && cl >= 1)

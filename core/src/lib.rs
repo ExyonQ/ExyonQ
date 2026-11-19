@@ -79,6 +79,15 @@ pub fn find_header_end(buf: &[u8]) -> Option<usize> {
     server::io::find_header_end(buf)
 }
 
+/// True when a complete HTTP/1 header block carries ambiguous framing
+/// (duplicate `Content-Length`, or `Transfer-Encoding` + `Content-Length`),
+/// which the wire path rejects as a request-smuggling attempt.
+/// Exposed for fuzz targets and tests; call only with bytes that include the
+/// terminating blank line.
+pub fn request_framing_ambiguous(head: &[u8]) -> bool {
+    server::io::request_framing_ambiguous(head)
+}
+
 pub use exyonq_cache::{
     append_fpc_prometheus, build_cache_key, build_storage_cache_key, global_response_cache,
     global_singleflight, normalize_host, set_singleflight_follower_hook_for_tests, CacheKey,
