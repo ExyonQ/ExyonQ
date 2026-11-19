@@ -49,3 +49,4 @@ bench = false
 libfuzzer-sys = "0.4"
 exyonq-core = { path = "../core", default-features = false, features = ["http3-provider-s2n"] }
 exyonq-mod-fastcgi = { path = "../crates/exyonq-mod-fastcgi" }
+exyonq-mod-static = { path = "../crates/exyonq-mod-static" }
