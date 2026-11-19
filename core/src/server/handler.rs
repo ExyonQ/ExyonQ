@@ -595,7 +595,10 @@ async fn serve_connection_inner(
     // NG-11: trusted-peer chain resolution; defaults to the socket peer.
     let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
     let client_ip = xff.to_str().unwrap_or("unknown").to_string();
-    let protocol = "http"; // Hyper path: HTTP/1.1 or HTTP/2
+    // EXQ-089: report the listener scheme. This was hardcoded to "http", so an
+    // HTTPS request over HTTP/1.1 or HTTP/2 logged `protocol=http` and every
+    // metric or audit report built on that field was wrong.
+    let protocol = ctx.scheme;
     let span = match (otel_needed, identity.as_ref()) {
         (true, Some(id)) => {
             crate::observability::request_span(id, method.as_str(), &request_path, protocol)

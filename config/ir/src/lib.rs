@@ -908,9 +908,16 @@ impl RouteMatch {
         }
     }
 
-    /// kind_rank: regex/suffix (3) > prefix (1) > catch-all `/` (0). ADR-047.
+    /// kind_rank: exact whole-URI (4) > regex/suffix (3) > prefix (1) >
+    /// catch-all `/` (0). ADR-047.
+    ///
+    /// EXQ-091: an `exact` prefix is a whole-URI equality (`location =`), so it
+    /// is strictly more specific than any regex or suffix rule. Ranking it with
+    /// plain prefixes let a generic `^/(.+)\\.html$` rewrite shadow an exact
+    /// route even when the exact route was listed first.
     pub fn kind_rank(&self) -> u8 {
         match self.kind() {
+            Some(RouteMatchKind::Prefix) if self.exact => 4,
             Some(RouteMatchKind::Regex) | Some(RouteMatchKind::Suffix) => 3,
             Some(RouteMatchKind::Prefix) if self.path == "/" => 0,
             Some(RouteMatchKind::Prefix) => 1,

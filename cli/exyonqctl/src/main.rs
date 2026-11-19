@@ -1744,25 +1744,59 @@ fn invoke_purge(socket_path: &Path, command: &str) -> std::io::Result<PurgeRespo
 
 /// Cap052 default control endpoint when neither `--socket` nor env is set.
 const DEFAULT_CONTROL_SOCKET: &str = "/tmp/exyonq.sock";
+/// EXQ-092: operator-visible exit codes. `2` stays "bad invocation or missing
+/// file"; an invalid configuration and an unreachable control socket are
+/// distinguished so a wrapper can retry one and not the other.
+const EXIT_CONFIG_INVALID: u8 = 3;
+const EXIT_SOCKET_UNAVAILABLE: u8 = 4;
 
 /// Bound for connect/read/write on the operational control Unix socket.
 /// An accepting-but-silent peer must not hang the CLI forever.
 const CONTROL_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn control_socket(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
-    if let Some(path) = explicit {
-        return Ok(path);
-    }
-    match std::env::var_os("EXYONQ_CONTROL_SOCKET") {
-        Some(os) => {
-            if os.is_empty() {
-                return Err(
-                    "EXYONQ_CONTROL_SOCKET is set but empty; pass --socket or unset the env".into(),
-                );
+    let (path, origin) = match explicit {
+        Some(path) => (path, "from --socket".to_string()),
+        None => match std::env::var_os("EXYONQ_CONTROL_SOCKET") {
+            Some(os) => {
+                if os.is_empty() {
+                    return Err(
+                        "EXYONQ_CONTROL_SOCKET is set but empty; pass --socket <path> or unset it"
+                            .into(),
+                    );
+                }
+                (PathBuf::from(os), "from EXYONQ_CONTROL_SOCKET".to_string())
             }
-            Ok(PathBuf::from(os))
-        }
-        None => Ok(PathBuf::from(DEFAULT_CONTROL_SOCKET)),
+            None => (
+                PathBuf::from(DEFAULT_CONTROL_SOCKET),
+                format!("default path {DEFAULT_CONTROL_SOCKET}"),
+            ),
+        },
+    };
+    // EXQ-092: report "not configured / not created" instead of handing the
+    // connect() ENOENT to the operator as `No such file or directory`.
+    if !path.exists() {
+        return Err(format!(
+            "control socket not found: {} ({origin}). Pass --socket <path> or set EXYONQ_CONTROL_SOCKET to the running server's control socket",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+/// EXQ-092: a socket that is absent, refused or unreachable is an availability
+/// failure, not a generic error; anything else keeps exit 1.
+fn socket_exit_code(err: &std::io::Error) -> u8 {
+    use std::io::ErrorKind;
+    match err.kind() {
+        ErrorKind::NotFound
+        | ErrorKind::ConnectionRefused
+        | ErrorKind::ConnectionAborted
+        | ErrorKind::ConnectionReset
+        | ErrorKind::PermissionDenied
+        | ErrorKind::TimedOut
+        | ErrorKind::UnexpectedEof => EXIT_SOCKET_UNAVAILABLE,
+        _ => 1,
     }
 }
 
@@ -1815,18 +1849,45 @@ fn run_reload(config: Option<PathBuf>, socket: Option<PathBuf>) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // EXQ-092: validate before asking the server to reload. Otherwise the
+    // operator sees a generic socket error (or a bare `Job failed`) and has to
+    // run `config test` separately to find the TOML error.
+    let pre = test_config(
+        &config_path,
+        &CheckOptions {
+            format: ConfigOut::Human,
+            strict: false,
+            color: true,
+            warn: false,
+        },
+    );
+    if pre.exit != exyonq_config_cli::CliExit::Ok {
+        eprint!("{}", pre.stderr);
+        eprintln!(
+            "exyonqctl reload: config invalid: {}; the server was not asked to reload (exit {EXIT_CONFIG_INVALID} = invalid config)",
+            config_path.display()
+        );
+        return ExitCode::from(EXIT_CONFIG_INVALID);
+    }
+
     let socket_path = match control_socket(socket) {
         Ok(p) => p,
         Err(err) => {
             eprintln!("exyonqctl reload: {err}");
-            return ExitCode::from(2);
+            return ExitCode::from(EXIT_SOCKET_UNAVAILABLE);
         }
     };
     match invoke_control(&socket_path, "reload\n") {
         Ok(response) => print_response(response, ControlOutFormat::Human),
         Err(err) => {
-            eprintln!("exyonqctl reload: {err}");
-            ExitCode::from(1)
+            eprintln!(
+                "exyonqctl reload: control socket {}: {err}",
+                socket_path.display()
+            );
+            eprintln!(
+                "hint: pass --socket <path> or set EXYONQ_CONTROL_SOCKET to the running server's control socket"
+            );
+            ExitCode::from(socket_exit_code(&err))
         }
     }
 }
@@ -1891,14 +1952,20 @@ fn run_control(command: &str, socket: Option<PathBuf>, format: ControlOutFormat)
         Ok(p) => p,
         Err(err) => {
             eprintln!("exyonqctl {command}: {err}");
-            return ExitCode::from(2);
+            return ExitCode::from(EXIT_SOCKET_UNAVAILABLE);
         }
     };
     match invoke_control(&socket_path, &format!("{command}\n")) {
         Ok(response) => print_response(response, format),
         Err(err) => {
-            eprintln!("exyonqctl {command}: {err}");
-            ExitCode::from(1)
+            eprintln!(
+                "exyonqctl {command}: control socket {}: {err}",
+                socket_path.display()
+            );
+            eprintln!(
+                "hint: pass --socket <path> or set EXYONQ_CONTROL_SOCKET to the running server's control socket"
+            );
+            ExitCode::from(socket_exit_code(&err))
         }
     }
 }

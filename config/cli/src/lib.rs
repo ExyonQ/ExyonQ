@@ -47,7 +47,7 @@ pub use reload::{
 };
 
 use exyonq_config_ir::{render_human, Diagnostic, DiagnosticCode, DiagnosticDocument, Severity};
-use exyonq_config_merge::load_with_includes;
+use exyonq_config_merge::load_with_includes_reporting;
 use std::path::Path;
 
 /// Options shared by lint/test.
@@ -185,8 +185,11 @@ fn load_for_check(
         }
     } else {
         // TOML IR — prefer include-aware load when path is a file.
-        match load_with_includes(path) {
-            Ok(c) => Ok(c),
+        match load_with_includes_reporting(path) {
+            Ok((c, origins)) => {
+                diags.extend(unreferenced_route_diags(&c, &origins, path));
+                Ok(c)
+            }
             Err(e) => {
                 let mut d = e.to_diagnostic();
                 d.source = Some(path.display().to_string());
@@ -195,6 +198,52 @@ fn load_for_check(
             }
         }
     }
+}
+
+/// EXQ-090: a route no `[[server]].routes` entry names is dead config — it
+/// validates, reloads and appears in `dump-ir`, but never matches. Report it
+/// with the file that defined it (root file or the include fragment). Emitted
+/// as a warning on every check surface, not only with `--warn`, because it is
+/// the only signal that the route is inactive.
+fn unreferenced_route_diags(
+    cfg: &exyonq_config_ir::AppConfig,
+    origins: &[exyonq_config_merge::RouteOrigin],
+    root: &Path,
+) -> Vec<Diagnostic> {
+    let referenced: std::collections::BTreeSet<&str> = cfg
+        .servers
+        .iter()
+        .flat_map(|s| s.routes.iter().map(String::as_str))
+        .collect();
+    cfg.routes
+        .iter()
+        .filter(|route| !referenced.contains(route.name.as_str()))
+        .map(|route| {
+            let fragment = origins
+                .iter()
+                .find(|o| o.route == route.name)
+                .and_then(|o| o.fragment.as_ref());
+            let (source, where_from) = match fragment {
+                Some(path) => (
+                    path.display().to_string(),
+                    format!("defined in include `{}`", path.display()),
+                ),
+                None => (
+                    root.display().to_string(),
+                    "defined in the root file".to_string(),
+                ),
+            };
+            Diagnostic::warning(
+                DiagnosticCode::UnreferencedRoute,
+                format!(
+                    "route `{}` is {where_from} but is not listed in any [[server]].routes, so it never matches; add \"{}\" to server.routes or remove the route",
+                    route.name, route.name
+                ),
+            )
+            .with_source(source)
+            .with_documentation("docs/architecture/082-route-evaluation-order.md")
+        })
+        .collect()
 }
 
 fn finish_check(diags: Vec<Diagnostic>, opts: &CheckOptions, _compiled: bool) -> ToolResult {
@@ -523,6 +572,57 @@ target = "http://127.0.0.1:9001"
         );
         assert_eq!(r.exit, CliExit::DiagnosticError);
         assert!(!r.stderr.contains('\u{0007}'));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unreferenced_route_in_include_is_a_visible_warning() {
+        // EXQ-090: a route from an include that no server lists validated and
+        // reloaded cleanly, so the operator believed it was active.
+        let dir = std::env::temp_dir().join(format!("exy-q090-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("frag")).unwrap();
+        fs::write(
+            dir.join("frag/routes.toml"),
+            r#"[[route]]
+name = "ret_verification"
+match = { path = "/verification-file.html", exact = true }
+root = "/tmp"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("root.toml"),
+            r#"config_version = 2
+include = ["frag/routes.toml"]
+
+[[server]]
+listen = "127.0.0.1:18093"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/tmp"
+"#,
+        )
+        .unwrap();
+
+        let human = |strict: bool| CheckOptions {
+            format: OutputFormat::Human,
+            strict,
+            color: false,
+            warn: false,
+        };
+        let r = test_config(&dir.join("root.toml"), &human(false));
+        assert_eq!(r.exit, CliExit::Ok, "{}", r.stderr);
+        assert!(r.stderr.contains("EXY-CONFIG-0016"), "{}", r.stderr);
+        assert!(r.stderr.contains("ret_verification"), "{}", r.stderr);
+        assert!(r.stderr.contains("frag/routes.toml"), "{}", r.stderr);
+
+        // --strict turns the same warning into a failure for CI.
+        let strict = lint(&dir.join("root.toml"), &human(true));
+        assert_eq!(strict.exit, CliExit::DiagnosticError, "{}", strict.stderr);
         let _ = fs::remove_dir_all(dir);
     }
 }

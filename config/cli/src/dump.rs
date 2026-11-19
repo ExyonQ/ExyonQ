@@ -61,6 +61,41 @@ pub fn dump_ir(path: &Path, format: DumpIrFormat) -> ToolResult {
     }
 }
 
+/// EXQ-091: render every set arm of `match`. Emitting only `path`/`host`
+/// turned a `match.regex` route into `match = { path = "" }` and dropped
+/// `exact`, so `dump-ir` could not be used to debug routing.
+fn render_route_match(m: &exyonq_config_ir::RouteMatch) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !m.path.is_empty() {
+        parts.push(format!("path = {:?}", m.path));
+    }
+    if let Some(host) = &m.host {
+        parts.push(format!("host = {host:?}"));
+    }
+    if let Some(suffix) = &m.suffix {
+        parts.push(format!("suffix = {suffix:?}"));
+    }
+    if let Some(regex) = &m.regex {
+        parts.push(format!("regex = {regex:?}"));
+    }
+    if let Some(header) = &m.header {
+        parts.push(format!("header = {header:?}"));
+    }
+    if let Some(value) = &m.header_value {
+        parts.push(format!("header_value = {value:?}"));
+    }
+    if m.literal {
+        parts.push("literal = true".to_string());
+    }
+    if m.exact {
+        parts.push("exact = true".to_string());
+    }
+    if let Some(port) = m.listen_port {
+        parts.push(format!("listen_port = {port}"));
+    }
+    format!("match = {{ {} }}", parts.join(", "))
+}
+
 fn pretty_canonical_json(cfg: &AppConfig) -> Result<String, String> {
     let compact = canonical_json(cfg);
     let value: serde_json::Value =
@@ -128,11 +163,8 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
     for route in &cfg.routes {
         out.push_str("[[route]]\n");
         out.push_str(&format!("name = {:?}\n", route.name));
-        out.push_str(&format!("match = {{ path = {:?}", route.r#match.path));
-        if let Some(host) = &route.r#match.host {
-            out.push_str(&format!(", host = {host:?}"));
-        }
-        out.push_str(" }\n");
+        out.push_str(&render_route_match(&route.r#match));
+        out.push('\n');
         if let Some(upstream) = &route.upstream {
             out.push_str(&format!("upstream = {upstream:?}\n"));
         }
@@ -376,6 +408,49 @@ root = "/tmp"
         fs::write(&p, "config_version = 2\nnot_a_real_field = 1\n").unwrap();
         let r = dump_ir(&p, DumpIrFormat::Toml);
         assert_eq!(r.exit, CliExit::DiagnosticError);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dump_ir_preserves_regex_and_exact_match() {
+        // EXQ-091: dump-ir used to render every route as `match = { path = "" }`,
+        // dropping `regex` and `exact`, so route debugging showed nothing.
+        let dir = std::env::temp_dir().join(format!("exy-dump-match-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("cfg.toml");
+        fs::write(
+            &p,
+            r#"config_version = 1
+[[server]]
+listen = "127.0.0.1:18555"
+routes = ["exact", "regex"]
+
+[[route]]
+name = "exact"
+match = { path = "/verification-file.html", exact = true }
+root = "/tmp"
+
+[[route]]
+name = "regex"
+match = { regex = "^/api/" }
+respond = { status = 200, body = "ok" }
+"#,
+        )
+        .unwrap();
+
+        let r = dump_ir(&p, DumpIrFormat::Toml);
+        assert_eq!(r.exit, CliExit::Ok, "{}", r.stderr);
+        assert!(r.stdout.contains("exact = true"), "{}", r.stdout);
+        assert!(r.stdout.contains("regex = \"^/api/\""), "{}", r.stdout);
+
+        let reparsed =
+            exyonq_config_ir::AppConfig::parse_str(&r.stdout).expect("dump-ir parses back");
+        let exact = reparsed.routes.iter().find(|r| r.name == "exact").unwrap();
+        assert!(exact.r#match.exact);
+        assert_eq!(exact.r#match.path, "/verification-file.html");
+        let regex = reparsed.routes.iter().find(|r| r.name == "regex").unwrap();
+        assert_eq!(regex.r#match.regex.as_deref(), Some("^/api/"));
         let _ = fs::remove_dir_all(dir);
     }
 }
