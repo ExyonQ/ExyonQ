@@ -18,13 +18,13 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 
-const BASE = (process.env.WP_BASE || '').replace(/\/+$/, '');
-const PASSWORD = process.env.WP_ADMIN_PASSWORD || '';
-const OUT = process.env.WP_OUT || '/out';
-const USER = 'admin';
-const SITE_TITLE = 'ExyonQ browser journey';
+const baseUrl = (process.env.WP_BASE || '').replace(/\/+$/, '');
+const adminPassword = process.env.WP_ADMIN_PASSWORD || '';
+const outDir = process.env.WP_OUT || '/out';
+const adminUser = 'admin';
+const siteTitle = 'ExyonQ browser journey';
 
-if (!BASE || !PASSWORD) {
+if (!baseUrl || !adminPassword) {
   console.error('BROWSER_JOURNEY=FAIL missing WP_BASE or WP_ADMIN_PASSWORD');
   process.exit(2);
 }
@@ -34,7 +34,7 @@ function record(name, ok, detail) {
   results.push({ name, ok, detail });
   console.log(`${ok ? 'STEP=PASS' : 'STEP=FAIL'} ${name}${detail ? ' — ' + detail : ''}`);
   if (!ok) {
-    fs.writeFileSync(path.join(OUT, 'browser-journey.json'), JSON.stringify({ base: BASE, results }, null, 2));
+    fs.writeFileSync(path.join(outDir, 'browser-journey.json'), JSON.stringify({ base: baseUrl, results }, null, 2));
     throw new Error(`${name} failed${detail ? ': ' + detail : ''}`);
   }
 }
@@ -45,7 +45,7 @@ function headerValue(headers, name) {
 }
 
 async function main() {
-  fs.mkdirSync(OUT, { recursive: true });
+  fs.mkdirSync(outDir, { recursive: true });
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
@@ -53,7 +53,7 @@ async function main() {
   const uid = `${Date.now()}`;
 
   // 1. Installer: language step.
-  await page.goto(`${BASE}/wp-admin/install.php`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${baseUrl}/wp-admin/install.php`, { waitUntil: 'domcontentloaded' });
   const langSelect = await page.$('#language');
   record('installer language step reachable', !!langSelect, `url=${page.url()}`);
   // The bundled catalog marks English as installed and gives it value=""; pick
@@ -64,16 +64,16 @@ async function main() {
 
   // 2. Installer: site and admin account.
   await page.waitForSelector('#weblog_title', { state: 'visible' });
-  await page.fill('#weblog_title', SITE_TITLE);
+  await page.fill('#weblog_title', siteTitle);
   // The installer's admin-user input is name="user_name" but carries id
   // "user_login" in current WordPress; address it by name.
-  await page.fill('input[name="user_name"]', USER);
-  await page.fill('#pass1', PASSWORD);
+  await page.fill('input[name="user_name"]', adminUser);
+  await page.fill('#pass1', adminPassword);
   // The repeat-password row carries class "hide-if-js": with JavaScript on,
   // WordPress replaces it with the strength check and the weak-password
   // confirmation. Fill it only when the no-JS fallback is actually shown.
   if (await page.locator('#pass2').isVisible().catch(() => false)) {
-    await page.fill('#pass2', PASSWORD);
+    await page.fill('#pass2', adminPassword);
   }
   await page.fill('#admin_email', `admin+${uid}@example.test`);
   await Promise.all([page.waitForLoadState('domcontentloaded'), page.click('#submit')]);
@@ -88,23 +88,23 @@ async function main() {
 
   // 3. Continue to the login form. The success page links there, but the link
   //    markup differs between WordPress versions, so navigate to it directly.
-  await page.goto(`${BASE}/wp-login.php`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${baseUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#user_login', { state: 'visible' });
   record('login form rendered', page.url().includes('wp-login.php'), `url=${page.url()}`);
 
   // 4. Real credential typing and submit.
-  await page.fill('#user_login', USER);
-  await page.fill('#user_pass', PASSWORD);
+  await page.fill('#user_login', adminUser);
+  await page.fill('#user_pass', adminPassword);
   await Promise.all([page.waitForLoadState('domcontentloaded'), page.click('#wp-submit')]);
   await page.waitForSelector('#wpadminbar', { state: 'visible' });
   const bodyText = await page.locator('body').innerText();
   record('login reached wp-admin', /wp-admin/.test(page.url()) && /Dashboard/.test(bodyText), `url=${page.url()}`);
   const version = (bodyText.match(/Version\s+(\d+\.\d+(?:\.\d+)?)/) || [])[1] || 'unknown';
   record('dashboard rendered with a session', /At a Glance|Site Health|Dashboard/.test(bodyText), `wordpress=${version}`);
-  await page.screenshot({ path: path.join(OUT, 'dashboard.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'dashboard.png'), fullPage: true });
 
   // 5. Logged-in navigation must bypass the shared cache (ExyonQ in the path).
-  const loggedInResponse = await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  const loggedInResponse = await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   const loggedInHeaders = loggedInResponse ? loggedInResponse.headers() : {};
   record(
     'logged-in front page bypasses the cache',
@@ -113,11 +113,11 @@ async function main() {
   );
 
   // 6. Logout through the admin-bar link, then prove the session is gone.
-  await Promise.all([page.waitForLoadState('domcontentloaded'), page.goto(`${BASE}/wp-login.php?action=logout`)]);
+  await Promise.all([page.waitForLoadState('domcontentloaded'), page.goto(`${baseUrl}/wp-login.php?action=logout`)]);
   const confirm = page.locator('a', { hasText: /log out/i }).first();
   await Promise.all([page.waitForLoadState('domcontentloaded'), confirm.click()]);
   record('logout completed', /loggedout=true/.test(page.url()), `url=${page.url()}`);
-  await page.goto(`${BASE}/wp-admin/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${baseUrl}/wp-admin/`, { waitUntil: 'domcontentloaded' });
   record(
     'logged-out wp-admin redirects to the login form',
     page.url().includes('wp-login.php') && !!(await page.$('#user_login')),
@@ -131,15 +131,15 @@ async function main() {
   const firstVisitor = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const firstPage = await firstVisitor.newPage();
   firstPage.setDefaultTimeout(30000);
-  const first = await firstPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  const first = await firstPage.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   const firstHeaders = first ? first.headers() : {};
-  await firstPage.screenshot({ path: path.join(OUT, 'front-page.png'), fullPage: true });
+  await firstPage.screenshot({ path: path.join(outDir, 'front-page.png'), fullPage: true });
   await firstVisitor.close();
 
   const secondVisitor = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const secondPage = await secondVisitor.newPage();
   secondPage.setDefaultTimeout(30000);
-  const second = await secondPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  const second = await secondPage.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   const secondHeaders = second ? second.headers() : {};
   await secondVisitor.close();
 
@@ -156,8 +156,8 @@ async function main() {
 
   await browser.close();
   fs.writeFileSync(
-    path.join(OUT, 'browser-journey.json'),
-    JSON.stringify({ base: BASE, wordpress_version: version, results }, null, 2)
+    path.join(outDir, 'browser-journey.json'),
+    JSON.stringify({ base: baseUrl, wordpress_version: version, results }, null, 2)
   );
   console.log(`BROWSER_JOURNEY=PASS steps=${results.length}`);
 }
