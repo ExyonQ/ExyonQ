@@ -28,7 +28,9 @@ VERSION = 0.9.2
 PUBLICATION_STATUS = BINARIES_IN_GITHUB_RELEASE_V0.9.2_AND_GHCR_IMAGES_VERIFIED_BY_DIGEST
 TAG = PUSHED (v0.9.2 -> audit seal 4e3338a)
 DOCKERHUB_MIRROR = ABSENT (repository secrets missing)
-GITHUB_RELEASE = v0.9.2 (9 artifacts + SHA256SUMS.txt + release-manifest.json + THIRD_PARTY_NOTICES.md + sbom.cdx.json)
+GITHUB_RELEASE = v0.9.2 (10 artifacts incl. the COMPAT matrix + release-manifest.json + SHA256SUMS.txt + compliance files; SHA256SUMS covers every asset except the sums file)
+COMPAT_MATRIX = COMPAT_MATRIX_v0.9.2.md (measured from the release binaries: macOS arm64, Linux arm64, Linux amd64; P1_OPEN=0 P2_OPEN=0)
+STABILITY = NOT_DECLARED (AUTHENTICITY_VERIFIED=NO, tag v0.9.2 unsigned)
 PREVIOUS_PUBLIC = 0.9.1
 BASE_TAG = v0.9.1
 RELEASE_NOTES = docs/release/v0.9.2.md
@@ -44,6 +46,18 @@ RELEASE_NOTES = docs/release/v0.9.2.md
 > without the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` repository secrets (run
 > `44404288845`), so the Release was created from that run's artifacts with the
 > job's layout. **The Docker Hub mirror is still absent.**
+
+### Stability
+
+0.9.2 is **not declared stable**. The stability declaration in
+`docs/release/v0.9.2.md` promises the config compatibility V1 surface and the
+three importer matrices measured from the published binaries on macOS arm64,
+Linux arm64 and Linux amd64 (NGINX 79/13/5/21, Apache 0/1/0/17, OpenLiteSpeed 9
+fields, `P1_OPEN=0 P2_OPEN=0`, `RESULT=PASS COMPAT_MATRICES_GATE`). It explicitly
+does **not** promise total nginx/Apache substitution, runtime behaviour of an
+imported config, or anything outside the declared corpora, and it stays open on
+`AUTHENTICITY_VERIFIED=NO` because the artifacts are checksummed but unsigned and
+the tag `v0.9.2` has no signature.
 
 This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 `docs/release/v0.9.0.md` and `docs/release/v0.9.1.md`.
