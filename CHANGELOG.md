@@ -21,19 +21,25 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
-## [0.9.2] — RELEASE CANDIDATE (not published)
+## [0.9.2] — images published to GHCR, GitHub Release pending
 
 ```text
 VERSION = 0.9.2
-PUBLICATION_STATUS = NOT_PUBLISHED
-TAG = LOCAL ONLY, OWNER-GATED
+PUBLICATION_STATUS = GHCR_IMAGES_PUBLISHED_AND_VERIFIED_BY_DIGEST
+TAG = PUSHED (v0.9.2 -> audit seal 4e3338a)
+DOCKERHUB_MIRROR = ABSENT (repository secrets missing)
+GITHUB_RELEASE = ABSENT (job skipped, depends on the mirror)
 PREVIOUS_PUBLIC = 0.9.1
 BASE_TAG = v0.9.1
 RELEASE_NOTES = docs/release/v0.9.2.md
 ```
 
-> **Candidate only.** No published `v0.9.2` tag, GitHub Release, GHCR image,
-> or Docker Hub mirror exists. Do not present this entry as a shipped release.
+> **Partially published.** Tag `v0.9.2` is on `origin` and both multi-arch
+> images are live in GHCR (`exyonq` and `exyonq-wordpress`), verified by
+> immutable digest on native amd64 and arm64. There is still no GitHub Release
+> and no Docker Hub mirror: `dockerhub-mirror` fails closed without the
+> `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` repository secrets and
+> `github-release` depends on it (run `44404288845`).
 
 This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 `docs/release/v0.9.0.md` and `docs/release/v0.9.1.md`.
@@ -116,9 +122,28 @@ This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
   body on a 2 MiB route answers `413` in well under a second with zero origin
   hits, while the same body on the unset route is still inspected and accepted;
   the 2 MiB boundary stays `200` and a 942100 tail stays `403`.
-- Full 0.9.2 release qualification is **NOT EXECUTED**: no tag candidate, full
-  CI/security run, release build, image build, or signature verification has
-  been run for this draft.
+- Release workflow [`44404288845`](https://github.com/ExyonQ/ExyonQ/actions/runs/44404288845)
+  on tag `v0.9.2` → audit seal `4e3338a`: `security-release`,
+  `compliance-artifacts`, the three build targets, both `package deb/rpm` jobs,
+  `checksums`, `docker` and `docker-wordpress` **success**;
+  `dockerhub-mirror` **failure** (missing repository secrets) and
+  `github-release` **skipped**.
+- `bash scripts/verify-release-audit.sh 0.9.2` → `RELEASE_AUDIT_GATE=PASS`,
+  `audit-v0.9.2.md @ 64b8388`, exit 0.
+- `SHA256SUMS.txt` of the `checksums` artifact: 10/10 `OK`.
+- Published binaries report `product_version=0.9.2`, `source_tag=v0.9.2`,
+  `source_revision=4e3338a…` on both architectures; the published images pass a
+  digest-pinned E2E (`--version`, `validate`, static `200`/`404`, `USER=nonroot`,
+  clean stop) on native amd64 and arm64, and
+  `scripts/gates/wordpress-container-e2e.sh` passes against the published
+  WordPress digest on arm64.
+- Tag signature: `v0.9.2` is annotated but unsigned; the audit gate binds the
+  tag to the audited commit without asserting a signature.
+- **glibc floor differs per architecture in the 0.9.2 artifacts.** The x86_64
+  build job used `ubuntu-latest` (Ubuntu 26.04, glibc 2.42) while arm64 used
+  `ubuntu-24.04-arm` (glibc 2.39); the amd64 tarball aborts on Ubuntu 24.04 with
+  `GLIBC_2.42 not found`. The GHCR images are unaffected (Wolfi). The workflow
+  now pins `ubuntu-24.04` for the x86_64 build.
 
 ### Limitations (honest)
 
