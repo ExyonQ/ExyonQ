@@ -21,7 +21,7 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
-## [Unreleased]
+## [0.9.3] — 2026-11-19 — log context, PHP-FPM healthcheck and wasmtime 49.0.6
 
 ### Fixed
 
