@@ -47,6 +47,7 @@ exyonq-linux-ffi = { path = "../crates/exyonq-linux-ffi" }
 
 [dev-dependencies]
 tempfile = "3"
+tracing-subscriber = { workspace = true }
 sha1 = "0.10"
 bcrypt = "0.18"
 base64 = "0.22"

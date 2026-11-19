@@ -285,15 +285,51 @@ pub fn parse_client_ip(raw: Option<&str>) -> IpAddr {
     .unwrap_or_else(|| IpAddr::from_str("127.0.0.1").expect("localhost"))
 }
 
-fn emit_decision(phase: WafPhase, decision: &WafDecision) {
+/// EXQ-031: request context shared by every WAF log event so a violation can
+/// be correlated with the access event without parsing prose.
+#[derive(Clone, Copy)]
+struct WafLogContext<'a> {
+    client_ip: IpAddr,
+    host: Option<&'a str>,
+    method: &'a str,
+    path: &'a str,
+    user_agent: Option<&'a [u8]>,
+}
+
+fn log_context<'a>(
+    client_ip: IpAddr,
+    host: Option<&'a str>,
+    method: &'a str,
+    path: &'a str,
+    headers: &'a dyn HeaderView,
+) -> WafLogContext<'a> {
+    WafLogContext {
+        client_ip,
+        host,
+        method,
+        path,
+        user_agent: headers.get("user-agent"),
+    }
+}
+
+fn emit_decision(phase: WafPhase, decision: &WafDecision, ctx: WafLogContext<'_>) {
     crate::waf_metrics::note_decision(decision);
     if decision.violations.is_empty() && decision.action == WafAction::Allow {
         return;
     }
+    let user_agent = ctx
+        .user_agent
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+        .unwrap_or_else(|| "-".to_string());
     for v in &decision.violations {
         warn!(
             target: "exyonq_waf",
             phase = ?phase,
+            client_ip = %ctx.client_ip,
+            host = ctx.host.unwrap_or("-"),
+            method = %ctx.method,
+            path = %ctx.path,
+            user_agent = %user_agent,
             rule_id = %v.rule_id,
             action = ?decision.action,
             truncated = decision.inspection_truncated,
@@ -308,6 +344,11 @@ fn emit_decision(phase: WafPhase, decision: &WafDecision) {
         debug!(
             target: "exyonq_waf",
             phase = ?phase,
+            client_ip = %ctx.client_ip,
+            host = ctx.host.unwrap_or("-"),
+            method = %ctx.method,
+            path = %ctx.path,
+            user_agent = %user_agent,
             action = ?decision.action,
             "waf inspection truncated"
         );
@@ -358,13 +399,11 @@ const RATE_LIMIT_BODY: &[u8] = b"rate limited\n";
 fn finish(
     phase: WafPhase,
     decision: WafDecision,
-    client_ip: IpAddr,
-    host: Option<&str>,
-    path: &str,
+    ctx: WafLogContext<'_>,
     generation: u64,
     enforce: bool,
 ) -> WafHookResult {
-    emit_decision(phase, &decision);
+    emit_decision(phase, &decision, ctx);
     if enforce && decision.is_blocking() {
         let rule_id = decision
             .violations
@@ -382,7 +421,7 @@ fn finish(
             },
             WafAction::Challenge => {
                 if let Some(handler) = INSTALLED_CHALLENGE.get() {
-                    let issue = handler.issue(client_ip, host, path, generation);
+                    let issue = handler.issue(ctx.client_ip, ctx.host, ctx.path, generation);
                     WafReject {
                         status: http::StatusCode::from_u16(issue.status)
                             .unwrap_or(http::StatusCode::FORBIDDEN),
@@ -445,9 +484,7 @@ pub fn abuse_trace_enabled() -> bool {
 
 fn finish_abuse(
     phase: WafPhase,
-    client_ip: IpAddr,
-    host: Option<&str>,
-    path: &str,
+    ctx: WafLogContext<'_>,
     route_id: Option<&str>,
     cookie_header: Option<&[u8]>,
     generation: u64,
@@ -460,8 +497,10 @@ fn finish_abuse(
             target: "exyonq::waf_abuse_trace",
             ?phase,
             skip_abuse,
-            client_ip = %client_ip,
-            path,
+            client_ip = %ctx.client_ip,
+            host = ctx.host.unwrap_or("-"),
+            method = %ctx.method,
+            path = %ctx.path,
             route_id = route_id.unwrap_or("-"),
             has_cookie = cookie_header.is_some(),
             gate_installed = abuse.is_some(),
@@ -472,14 +511,14 @@ fn finish_abuse(
         return WafHookResult::Continue;
     }
     if let Some(handler) = INSTALLED_CHALLENGE.get() {
-        if handler.grant_allows(client_ip, host, cookie_header, generation) {
+        if handler.grant_allows(ctx.client_ip, ctx.host, cookie_header, generation) {
             return WafHookResult::Continue;
         }
     }
     let Some(gate) = abuse else {
         return WafHookResult::Continue;
     };
-    let Some(decision) = gate.check(client_ip, route_id) else {
+    let Some(decision) = gate.check(ctx.client_ip, route_id) else {
         return WafHookResult::Continue;
     };
     debug_assert!(
@@ -487,7 +526,7 @@ fn finish_abuse(
         "abuse gate must return Challenge or RateLimit"
     );
     // Abuse is independent of the signature engine's monitor/block enforce flag.
-    finish(phase, decision, client_ip, host, path, generation, true)
+    finish(phase, decision, ctx, generation, true)
 }
 
 /// H1 / H2 / H4 / H5: header-phase inspection.
@@ -516,26 +555,17 @@ pub(crate) fn inspect_request_headers(
         client_ip,
         route_id,
     };
+    let ctx = log_context(client_ip, host, method, path, headers);
     let started = std::time::Instant::now();
     let decision = waf.inspect(WafPhase::RequestHeaders, &req);
     crate::waf_metrics::note_inspection(WafPhase::RequestHeaders, started.elapsed());
-    match finish(
-        WafPhase::RequestHeaders,
-        decision,
-        client_ip,
-        host,
-        path,
-        generation,
-        enforce,
-    ) {
+    match finish(WafPhase::RequestHeaders, decision, ctx, generation, enforce) {
         reject @ WafHookResult::Reject(_) => reject,
         WafHookResult::Continue => {
             let cookie = headers.get("cookie");
             finish_abuse(
                 WafPhase::RequestHeaders,
-                client_ip,
-                host,
-                path,
+                ctx,
                 route_id,
                 cookie,
                 generation,
@@ -575,15 +605,14 @@ pub(crate) fn inspect_response_headers(
         headers: response_headers,
         body: None,
     };
+    let ctx = log_context(client_ip, host, method, path, headers);
     let started = std::time::Instant::now();
     let decision = waf.inspect_response(WafPhase::ResponseHeaders, &req, &resp);
     crate::waf_metrics::note_inspection(WafPhase::ResponseHeaders, started.elapsed());
     finish(
         WafPhase::ResponseHeaders,
         decision,
-        client_ip,
-        host,
-        path,
+        ctx,
         generation,
         enforce,
     )
@@ -619,15 +648,14 @@ pub(crate) fn inspect_response_body(
         headers: response_headers,
         body: Some(body),
     };
+    let ctx = log_context(client_ip, host, method, path, headers);
     let started = std::time::Instant::now();
     let decision = waf.inspect_response(WafPhase::ResponseBodyChunk, &req, &resp);
     crate::waf_metrics::note_inspection(WafPhase::ResponseBodyChunk, started.elapsed());
     finish(
         WafPhase::ResponseBodyChunk,
         decision,
-        client_ip,
-        host,
-        path,
+        ctx,
         generation,
         enforce,
     )
@@ -656,6 +684,7 @@ pub(crate) fn inspect_request_body(
         client_ip,
         route_id,
     };
+    let ctx = log_context(client_ip, host, method, path, headers);
     let mut state = BodyInspectionState::default();
     let started = std::time::Instant::now();
     let decision = waf.inspect_body_chunk(&req, body, true, &mut state);
@@ -669,9 +698,7 @@ pub(crate) fn inspect_request_body(
         finish(
             WafPhase::RequestBodyComplete,
             decision,
-            client_ip,
-            host,
-            path,
+            ctx,
             generation,
             enforce,
         ),
@@ -701,11 +728,12 @@ pub(crate) async fn handle_waf_challenge_verify(
         client_ip,
         route_id: None,
     };
+    let ctx = log_context(client_ip, host, method, WAF_CHALLENGE_VERIFY_PATH, headers);
     let started = std::time::Instant::now();
     let decision = waf.inspect(WafPhase::RequestHeaders, &req);
     crate::waf_metrics::note_inspection(WafPhase::RequestHeaders, started.elapsed());
     if enforce && decision.action == WafAction::Block {
-        emit_decision(WafPhase::RequestHeaders, &decision);
+        emit_decision(WafPhase::RequestHeaders, &decision, ctx);
         return WafReject {
             status: http::StatusCode::FORBIDDEN,
             body: WafRejectBody::Static(BLOCK_BODY),
@@ -719,7 +747,7 @@ pub(crate) async fn handle_waf_challenge_verify(
             location: None,
         };
     }
-    emit_decision(WafPhase::RequestHeaders, &decision);
+    emit_decision(WafPhase::RequestHeaders, &decision, ctx);
 
     let Some(handler) = INSTALLED_CHALLENGE.get() else {
         return WafReject {
@@ -883,12 +911,17 @@ mod tests {
     #[test]
     fn finish_abuse_rate_limit_is_429_with_retry_after() {
         let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let ctx = WafLogContext {
+            client_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            host: None,
+            method: "GET",
+            path: "/",
+            user_agent: None,
+        };
         let r = finish(
             WafPhase::RequestHeaders,
             WafDecision::abuse_rate_limit(WafPhase::RequestHeaders),
-            IpAddr::from_str("127.0.0.1").unwrap(),
-            None,
-            "/",
+            ctx,
             1,
             true,
         );
@@ -906,12 +939,17 @@ mod tests {
     #[test]
     fn finish_abuse_challenge_without_handler_is_plain_403() {
         let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let ctx = WafLogContext {
+            client_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            host: None,
+            method: "GET",
+            path: "/",
+            user_agent: None,
+        };
         let r = finish(
             WafPhase::RequestHeaders,
             WafDecision::abuse_challenge(WafPhase::RequestHeaders),
-            IpAddr::from_str("127.0.0.1").unwrap(),
-            None,
-            "/",
+            ctx,
             1,
             true,
         );
@@ -1046,5 +1084,67 @@ mod tests {
         ABUSE_MODE.store(0, Ordering::SeqCst);
         assert!(matches!(r, WafHookResult::Continue));
         assert_eq!(ABUSE_CHECKS.load(Ordering::SeqCst), 0);
+    }
+
+    struct UserAgentHeaders;
+
+    impl HeaderView for UserAgentHeaders {
+        fn get(&self, name: &str) -> Option<&[u8]> {
+            if name.eq_ignore_ascii_case("user-agent") {
+                Some(b"probe/1.0")
+            } else {
+                None
+            }
+        }
+
+        fn for_each(&self, f: &mut dyn FnMut(&[u8], &[u8])) {
+            f(b"user-agent", b"probe/1.0");
+        }
+    }
+
+    #[test]
+    fn violation_event_carries_request_context() {
+        let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let headers = UserAgentHeaders;
+        let out = crate::observability::log_capture::capture(|| {
+            let r = inspect_request_headers(
+                &BlockingEngine,
+                "GET",
+                Some("example.com"),
+                "/assets/.env",
+                None,
+                &headers,
+                IpAddr::from_str("203.0.113.5").unwrap(),
+                None,
+                1,
+                true,
+                true,
+                None,
+            );
+            assert!(matches!(r, WafHookResult::Reject(_)));
+        });
+        // The fmt layer quotes string fields: `host="example.com"`.
+        let out = out.replace('"', "");
+        assert!(
+            out.contains("rule_id=EXY-TEST-BLOCK"),
+            "violation event missing rule_id: {out}"
+        );
+        assert!(
+            out.contains("host=example.com"),
+            "violation lost host: {out}"
+        );
+        assert!(out.contains("method=GET"), "violation lost method: {out}");
+        assert!(
+            out.contains("path=/assets/.env"),
+            "violation lost path: {out}"
+        );
+        assert!(
+            out.contains("client_ip=203.0.113.5"),
+            "violation lost client_ip: {out}"
+        );
+        assert!(
+            out.contains("user_agent=probe/1.0"),
+            "violation lost user_agent: {out}"
+        );
     }
 }
