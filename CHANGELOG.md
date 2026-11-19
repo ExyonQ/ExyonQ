@@ -21,25 +21,29 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
-## [0.9.2] — images published to GHCR, GitHub Release pending
+## [0.9.2] — binaries in the GitHub Release and images in GHCR, Docker Hub mirror pending
 
 ```text
 VERSION = 0.9.2
-PUBLICATION_STATUS = GHCR_IMAGES_PUBLISHED_AND_VERIFIED_BY_DIGEST
+PUBLICATION_STATUS = BINARIES_IN_GITHUB_RELEASE_V0.9.2_AND_GHCR_IMAGES_VERIFIED_BY_DIGEST
 TAG = PUSHED (v0.9.2 -> audit seal 4e3338a)
 DOCKERHUB_MIRROR = ABSENT (repository secrets missing)
-GITHUB_RELEASE = ABSENT (job skipped, depends on the mirror)
+GITHUB_RELEASE = v0.9.2 (9 artifacts + SHA256SUMS.txt + release-manifest.json + THIRD_PARTY_NOTICES.md + sbom.cdx.json)
 PREVIOUS_PUBLIC = 0.9.1
 BASE_TAG = v0.9.1
 RELEASE_NOTES = docs/release/v0.9.2.md
 ```
 
-> **Partially published.** Tag `v0.9.2` is on `origin` and both multi-arch
-> images are live in GHCR (`exyonq` and `exyonq-wordpress`), verified by
-> immutable digest on native amd64 and arm64. There is still no GitHub Release
-> and no Docker Hub mirror: `dockerhub-mirror` fails closed without the
-> `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` repository secrets and
-> `github-release` depends on it (run `44404288845`).
+> **Published except the Docker Hub mirror.** Tag `v0.9.2` is on `origin`, both
+> multi-arch images are live in GHCR (`exyonq` and `exyonq-wordpress`) and
+> verified by immutable digest on native amd64 and arm64, and the GitHub
+> Release `v0.9.2` carries the nine checksummed artifacts plus
+> `SHA256SUMS.txt`, `release-manifest.json`, `THIRD_PARTY_NOTICES.md` and
+> `sbom.cdx.json` (`INTEGRITY_VERIFIED=YES`). The workflow's `github-release`
+> job never ran because it depends on `dockerhub-mirror`, which fails closed
+> without the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` repository secrets (run
+> `44404288845`), so the Release was created from that run's artifacts with the
+> job's layout. **The Docker Hub mirror is still absent.**
 
 This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 `docs/release/v0.9.0.md` and `docs/release/v0.9.1.md`.
