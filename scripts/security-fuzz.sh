@@ -17,9 +17,12 @@ if [[ "$CI" == "--ci" ]]; then
   FUZZ_ARGS=(-runs=10000)
 fi
 
+# rust-toolchain.toml pins the stable channel, which overrides the nightly
+# default that CI installs; sanitizer coverage (-Zsanitizer) only exists on
+# nightly, so fuzz targets are always built with the nightly toolchain.
 for target in "${TARGETS[@]}"; do
   echo "Fuzzing $target ..."
-  cargo fuzz run "$target" -- "${FUZZ_ARGS[@]}"
+  cargo +nightly fuzz run "$target" -- "${FUZZ_ARGS[@]}"
 done
 
 echo "Fuzz complete."
