@@ -17,7 +17,15 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// #86: default ceiling for a response body collected by the module chain
+/// (the historical hard-coded `MODULE_BODY_LIMIT` of 4 MiB).
+pub const DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES: u64 = 4 * 1024 * 1024;
+/// #86: smallest ceiling an operator may configure (1 KiB).
+pub const MIN_MODULE_RESPONSE_BODY_LIMIT_BYTES: u64 = 1024;
+/// #86: largest ceiling an operator may configure (256 MiB).
+pub const MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModulesConfig {
     #[serde(default)]
@@ -43,6 +51,47 @@ pub struct ModulesConfig {
     /// 0.5: nginx `auth_basic` per route.
     #[serde(default, skip_serializing_if = "AuthConfig::is_default")]
     pub auth: AuthConfig,
+    /// #86: ceiling for the response body the module chain collects before
+    /// `on_response` runs. Larger bodies fail with `500` instead of being
+    /// silently truncated. Omitted → [`DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES`].
+    #[serde(
+        default = "default_module_response_body_limit_bytes",
+        skip_serializing_if = "is_default_module_response_body_limit_bytes"
+    )]
+    pub response_body_limit_bytes: u64,
+}
+
+impl Default for ModulesConfig {
+    fn default() -> Self {
+        Self {
+            metrics: MetricsConfig::default(),
+            compression: CompressionConfig::default(),
+            ratelimit: RateLimitConfig::default(),
+            real_ip: RealIpConfig::default(),
+            gunzip: GunzipConfig::default(),
+            sub_filter: SubFilterConfig::default(),
+            mirror: MirrorConfig::default(),
+            slice: SliceConfig::default(),
+            auth: AuthConfig::default(),
+            response_body_limit_bytes: default_module_response_body_limit_bytes(),
+        }
+    }
+}
+
+impl ModulesConfig {
+    /// #86: a ceiling outside the supported range is a config error, not a
+    /// silent clamp — the operator must know the response can never be served.
+    pub fn validate_response_body_limit(&self) -> Result<(), String> {
+        let value = self.response_body_limit_bytes;
+        if !(MIN_MODULE_RESPONSE_BODY_LIMIT_BYTES..=MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES)
+            .contains(&value)
+        {
+            return Err(format!(
+                "modules.response_body_limit_bytes must be {MIN_MODULE_RESPONSE_BODY_LIMIT_BYTES}..={MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES}, got {value}"
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -610,6 +659,14 @@ fn default_false() -> bool {
     false
 }
 
+fn default_module_response_body_limit_bytes() -> u64 {
+    DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES
+}
+
+fn is_default_module_response_body_limit_bytes(value: &u64) -> bool {
+    *value == DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES
+}
+
 fn default_metrics_path() -> String {
     "/metrics".to_string()
 }
@@ -648,6 +705,42 @@ fn default_rate_limit_log_level() -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// #86: the module chain ceiling defaults to 4 MiB, parses from TOML, stays
+    /// out of the canonical form when default, and fails closed out of range.
+    #[test]
+    fn module_response_body_limit_defaults_parses_and_validates() {
+        let cfg = ModulesConfig::default();
+        assert_eq!(
+            cfg.response_body_limit_bytes,
+            DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES
+        );
+        assert!(cfg.validate_response_body_limit().is_ok());
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        assert!(
+            !json.contains("response_body_limit_bytes"),
+            "the default must not change the canonical IR: {json}"
+        );
+
+        let parsed: ModulesConfig =
+            toml::from_str("response_body_limit_bytes = 8388608\n").expect("parse");
+        assert_eq!(parsed.response_body_limit_bytes, 8 * 1024 * 1024);
+        assert!(parsed.validate_response_body_limit().is_ok());
+
+        for bad in [
+            MIN_MODULE_RESPONSE_BODY_LIMIT_BYTES - 1,
+            MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES + 1,
+        ] {
+            let cfg = ModulesConfig {
+                response_body_limit_bytes: bad,
+                ..ModulesConfig::default()
+            };
+            let err = cfg
+                .validate_response_body_limit()
+                .expect_err("out-of-range ceiling must be rejected");
+            assert!(err.contains("response_body_limit_bytes"), "{err}");
+        }
+    }
 
     #[test]
     fn external_auth_is_exclusive_and_validated() {

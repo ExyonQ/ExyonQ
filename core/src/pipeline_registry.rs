@@ -60,13 +60,16 @@ where
 }
 
 fn module_error_response(err: anyhow::Error) -> Response<BoxBody> {
+    // #86: the cause (including `modules.response_body_limit_bytes` overflows)
+    // stays in the server log; the client only ever sees a generic 500.
+    tracing::error!(error = %err, "module pipeline failed");
     use http_body_util::Full;
     use hyper::StatusCode;
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .header("content-type", "text/plain; charset=utf-8")
         .body(
-            Full::from(bytes::Bytes::from(format!("module error: {err}")))
+            Full::from(bytes::Bytes::from_static(b"internal server error"))
                 .map_err(|never| match never {})
                 .boxed(),
         )

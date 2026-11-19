@@ -48,6 +48,25 @@ pub fn module_request_from_parts(
     Ok(out)
 }
 
+/// #86: a collected response body exceeded `[modules] response_body_limit_bytes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleBodyLimitExceeded {
+    pub body_bytes: usize,
+    pub limit_bytes: usize,
+}
+
+impl std::fmt::Display for ModuleBodyLimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "response body of {} bytes exceeds modules.response_body_limit_bytes ({})",
+            self.body_bytes, self.limit_bytes
+        )
+    }
+}
+
+impl std::error::Error for ModuleBodyLimitExceeded {}
+
 pub async fn module_response_from_boxed(
     response: Response<BoxBody>,
     limit: usize,
@@ -58,7 +77,11 @@ pub async fn module_response_from_boxed(
         .map_err(|err| anyhow::anyhow!("collect response body: {err}"))?
         .to_bytes();
     if bytes.len() > limit {
-        anyhow::bail!("response body exceeds module processing limit");
+        // Never truncate silently: a bigger body needs an operator decision.
+        return Err(anyhow::Error::new(ModuleBodyLimitExceeded {
+            body_bytes: bytes.len(),
+            limit_bytes: limit,
+        }));
     }
     Ok(Response::from_parts(parts, Body::from(bytes)))
 }

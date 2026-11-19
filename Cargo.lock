@@ -1599,6 +1599,7 @@ dependencies = [
  "hyper",
  "semver",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

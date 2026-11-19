@@ -17,7 +17,7 @@
 
 mod convert;
 
-pub use convert::{inject_client_ip, module_request_from_parts};
+pub use convert::{inject_client_ip, module_request_from_parts, ModuleBodyLimitExceeded};
 
 use convert::{
     boxed_from_module_response, module_request_from_incoming, module_response_from_boxed,
@@ -35,8 +35,6 @@ use std::future::Future;
 use std::sync::Arc;
 
 type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
-
-const MODULE_BODY_LIMIT: usize = 4 * 1024 * 1024;
 
 /// Cap032: SSE responses must stay streaming — never enter module body collect.
 fn response_is_event_stream(response: &Response<BoxBody>) -> bool {
@@ -59,6 +57,8 @@ pub struct CrossCuttingPipeline {
     wire_ratelimit_requests_per_second: u32,
     wire_ratelimit_burst: u32,
     wire_metrics_enabled: bool,
+    /// #86: `[modules] response_body_limit_bytes`, captured at snapshot build.
+    response_body_limit_bytes: usize,
 }
 
 impl CrossCuttingPipeline {
@@ -103,6 +103,8 @@ impl CrossCuttingPipeline {
             wire_ratelimit_requests_per_second: config.ratelimit.requests_per_second,
             wire_ratelimit_burst: config.ratelimit.burst,
             wire_metrics_enabled: config.metrics.enabled,
+            response_body_limit_bytes: usize::try_from(config.response_body_limit_bytes)
+                .unwrap_or(usize::MAX),
         })
     }
 
@@ -203,7 +205,29 @@ impl CrossCuttingPipeline {
             parts.headers = obs.headers().clone();
             return Ok(Response::from_parts(parts, body));
         }
-        let module_resp = module_response_from_boxed(response, MODULE_BODY_LIMIT).await?;
+        let route = module_req
+            .extensions()
+            .get::<exyonq_module_api::RouteLabels>()
+            .map(|labels| labels.route.clone())
+            .unwrap_or_default();
+        let module_resp =
+            match module_response_from_boxed(response, self.response_body_limit_bytes).await {
+                Ok(response) => response,
+                Err(err) => {
+                    if let Some(over) = err.downcast_ref::<ModuleBodyLimitExceeded>() {
+                        exyonq_module_api::module_limits::record_module_body_limit_hit();
+                        // #86: operators need route + real size, not a bare 500.
+                        tracing::error!(
+                            event = "module_body_limit",
+                            route = %route,
+                            body_bytes = over.body_bytes,
+                            limit_bytes = over.limit_bytes,
+                            "module response body exceeded modules.response_body_limit_bytes"
+                        );
+                    }
+                    return Err(err);
+                }
+            };
         let mut obs = ResponseObservation::from_http_response(module_resp);
         for module in self.registry.modules() {
             module
@@ -295,6 +319,7 @@ mod tests {
             mirror: Default::default(),
             slice: Default::default(),
             auth: AuthConfig::default(),
+            response_body_limit_bytes: 4 * 1024 * 1024,
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         let names: Vec<_> = pipeline
@@ -338,6 +363,7 @@ mod tests {
             mirror: Default::default(),
             slice: Default::default(),
             auth: AuthConfig::default(),
+            response_body_limit_bytes: 4 * 1024 * 1024,
         };
         let pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         assert_eq!(pipeline.module_count(), 2);
@@ -410,6 +436,7 @@ mod tests {
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
             wire_metrics_enabled: false,
+            response_body_limit_bytes: 4 * 1024 * 1024,
         };
 
         let event_payload = Bytes::from_static(b"data: event-one\n\ndata: event-two\n\n");
@@ -517,6 +544,7 @@ mod tests {
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
             wire_metrics_enabled: false,
+            response_body_limit_bytes: 4 * 1024 * 1024,
         };
 
         let mut response = http::Response::builder()
@@ -606,6 +634,7 @@ mod tests {
             mirror: Default::default(),
             slice: Default::default(),
             auth: AuthConfig::default(),
+            response_body_limit_bytes: 4 * 1024 * 1024,
         };
         let mut pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         pipeline.registry.register(Arc::new(Hostile));
@@ -699,6 +728,7 @@ mod tests {
             mirror: Default::default(),
             slice: Default::default(),
             auth: AuthConfig::default(),
+            response_body_limit_bytes: 4 * 1024 * 1024,
         };
         let mut pipeline = CrossCuttingPipeline::from_config(&config, "0.4.4").expect("pipeline");
         pipeline.registry.register(probe.clone());
@@ -778,6 +808,7 @@ mod tests {
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
             wire_metrics_enabled: false,
+            response_body_limit_bytes: 4 * 1024 * 1024,
         };
 
         let response = http::Response::builder()
@@ -800,6 +831,78 @@ mod tests {
         assert_eq!(
             probe.seen.lock().expect("lock").clone(),
             Some(ResponseBodyState::Empty)
+        );
+    }
+
+    /// #86: the module chain ceiling comes from config, is counted and exposes
+    /// the real size instead of a hard-coded 4 MiB with a bare failure.
+    #[tokio::test]
+    async fn configured_response_body_limit_rejects_and_counts_larger_bodies() {
+        use async_trait::async_trait;
+        use bytes::Bytes;
+        use exyonq_module_api::{
+            Body, BoxError, HttpRequest, Module, ModuleInfo, ResponseObservation,
+        };
+        use http::{Request, StatusCode};
+        use http_body_util::BodyExt;
+
+        struct Noop;
+        #[async_trait]
+        impl Module for Noop {
+            fn info(&self) -> ModuleInfo {
+                ModuleInfo {
+                    name: "noop",
+                    version: "0.0.0",
+                    api_version: "1.0",
+                }
+            }
+            async fn on_response(
+                &self,
+                _req: &HttpRequest,
+                _obs: &mut ResponseObservation,
+            ) -> Result<(), BoxError> {
+                Ok(())
+            }
+        }
+
+        let mut registry = ModuleRegistry::new();
+        registry.register(Arc::new(Noop));
+        let pipeline = CrossCuttingPipeline {
+            registry,
+            wire_ratelimit_enabled: false,
+            wire_ratelimit_requests_per_second: 1,
+            wire_ratelimit_burst: 1,
+            wire_metrics_enabled: false,
+            response_body_limit_bytes: 1024,
+        };
+
+        let mut req = Request::builder()
+            .uri("http://127.0.0.1/big.bin")
+            .body(Body::from(Bytes::new()))
+            .unwrap();
+        let response = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(
+                http_body_util::Full::from(Bytes::from(vec![b'x'; 2048]))
+                    .map_err(|never| match never {})
+                    .boxed(),
+            )
+            .unwrap();
+
+        let before = exyonq_module_api::module_limits::module_body_limit_hits_total();
+        let err = pipeline
+            .transform_response(&mut req, response)
+            .await
+            .expect_err("2048 bytes must exceed a 1024-byte ceiling");
+        let over = err
+            .downcast_ref::<ModuleBodyLimitExceeded>()
+            .expect("typed body-limit error");
+        assert_eq!(over.body_bytes, 2048);
+        assert_eq!(over.limit_bytes, 1024);
+        assert_eq!(
+            exyonq_module_api::module_limits::module_body_limit_hits_total(),
+            before + 1,
+            "a limit hit must be counted"
         );
     }
 }

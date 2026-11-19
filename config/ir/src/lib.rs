@@ -65,6 +65,8 @@ pub use modules::{
     GunzipConfig, MetricsConfig, MirrorConfig, MirrorRouteConfig, ModulesConfig, RateLimitConfig,
     RateLimitLimit, RateLimitRouteOptions, RateLimitRoutePolicy, RateLimitZoneConfig, RealIpConfig,
     SliceConfig, SliceRouteConfig, SubFilterConfig, SubFilterRouteConfig, SubFilterRule,
+    DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES, MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES,
+    MIN_MODULE_RESPONSE_BODY_LIMIT_BYTES,
 };
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
 pub use rfc3339::{parse_rfc3339_utc, TimestampError};
@@ -1527,6 +1529,9 @@ impl AppConfig {
         raw.modules.mirror.validate()?;
         raw.modules.slice.validate()?;
         raw.modules.auth.validate()?;
+        raw.modules
+            .validate_response_body_limit()
+            .map_err(ConfigError::Parse)?;
         validate_module_route_names(&raw.modules, &route_names)?;
         if let Err(message) = validate_logging(&raw.logging) {
             return Err(ConfigError::Parse(message));

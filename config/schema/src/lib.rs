@@ -276,6 +276,12 @@ pub fn ir_json_schema() -> serde_json::Value {
             "modules": {
                 "type": "object",
                 "properties": {
+                    "response_body_limit_bytes": {
+                        "type": "integer",
+                        "minimum": exyonq_config_ir::MIN_MODULE_RESPONSE_BODY_LIMIT_BYTES,
+                        "maximum": exyonq_config_ir::MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES,
+                        "description": "Ceiling for the response body the module chain collects; default 4 MiB"
+                    },
                     "metrics": {
                         "type": "object",
                         "properties": {

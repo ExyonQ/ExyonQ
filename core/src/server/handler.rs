@@ -4190,10 +4190,9 @@ fn proxy_method_from_http(method: &Method) -> exyonq_module_api::proxy_dispatch:
 }
 
 fn module_error_response(err: anyhow::Error) -> Response<BoxBody> {
-    text_response(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        &format!("module error: {err}"),
-    )
+    // #86: log the cause, never put internal error text in the response body.
+    tracing::error!(error = %err, "module pipeline failed");
+    text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
 }
 
 async fn proxy_route_target(

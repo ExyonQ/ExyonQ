@@ -40,12 +40,23 @@ impl From<KernelObservationRegisterError> for ObservabilityRegisterError {
     }
 }
 
+/// #86: responses rejected by `[modules] response_body_limit_bytes`.
+fn append_module_body_limit_prometheus(out: &mut String) {
+    let hits = exyonq_module_api::module_limits::module_body_limit_hits_total();
+    if hits == 0 {
+        return;
+    }
+    out.push_str("# TYPE exyonq_module_body_limit_total counter\n");
+    out.push_str(&format!("exyonq_module_body_limit_total {hits}\n"));
+}
+
 /// Register kernel observation + cold-path Prometheus append hooks (once per process).
 pub fn register_observability_runtime() -> Result<(), ObservabilityRegisterError> {
     register_kernel_observation_service(Arc::new(KernelShellMetrics))?;
 
     register_prometheus_appender(kernel_shell_metrics::append_prometheus);
     register_prometheus_appender(bench_trace::append_prometheus);
+    register_prometheus_appender(append_module_body_limit_prometheus);
 
     #[cfg(target_os = "linux")]
     register_prometheus_appender(exyonq_module_api::static_epoll::append_prometheus);

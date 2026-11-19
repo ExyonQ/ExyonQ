@@ -38,6 +38,7 @@ pub mod http3_runtime;
 pub mod http_limits;
 pub mod kernel_control;
 pub mod kernel_observation;
+pub mod module_limits;
 pub mod observability_runtime;
 pub mod path_canon;
 pub mod proxy_dispatch;
