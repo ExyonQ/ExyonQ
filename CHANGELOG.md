@@ -26,11 +26,13 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 ```text
 VERSION = 0.9.2
 PUBLICATION_STATUS = BINARIES_IN_GITHUB_RELEASE_V0.9.2_AND_GHCR_IMAGES_VERIFIED_BY_DIGEST
-TAG = PUSHED (v0.9.2 -> audit seal 4e3338a)
+TAG = PUSHED, ANNOTATED AND SSH-SIGNED (v0.9.2 -> tag object 648cf617 -> audit seal 4e3338a)
+TAG_SIGNATURE = EXYONQ_RELEASE_TAG_SSH_V2, principal exyonq-release, verified
+ARTIFACT_SIGNATURE = SHA256SUMS.txt.sig (SSH, namespace file), verified
 DOCKERHUB_MIRROR = ABSENT (repository secrets missing)
 GITHUB_RELEASE = v0.9.2 (10 artifacts incl. the COMPAT matrix + release-manifest.json + SHA256SUMS.txt + compliance files; SHA256SUMS covers every asset except the sums file)
 COMPAT_MATRIX = COMPAT_MATRIX_v0.9.2.md (measured from the release binaries: macOS arm64, Linux arm64, Linux amd64; P1_OPEN=0 P2_OPEN=0)
-STABILITY = NOT_DECLARED (AUTHENTICITY_VERIFIED=NO, tag v0.9.2 unsigned)
+STABILITY = NOT_DECLARED (cosign layer absent, CI on the tag pending, owner sign-off pending)
 PREVIOUS_PUBLIC = 0.9.1
 BASE_TAG = v0.9.1
 RELEASE_NOTES = docs/release/v0.9.2.md
@@ -55,9 +57,13 @@ three importer matrices measured from the published binaries on macOS arm64,
 Linux arm64 and Linux amd64 (NGINX 79/13/5/21, Apache 0/1/0/17, OpenLiteSpeed 9
 fields, `P1_OPEN=0 P2_OPEN=0`, `RESULT=PASS COMPAT_MATRICES_GATE`). It explicitly
 does **not** promise total nginx/Apache substitution, runtime behaviour of an
-imported config, or anything outside the declared corpora, and it stays open on
-`AUTHENTICITY_VERIFIED=NO` because the artifacts are checksummed but unsigned and
-the tag `v0.9.2` has no signature.
+imported config, or anything outside the declared corpora. The SSH signature
+layer was added on 2026-11-19: tag `v0.9.2` (object `648cf617…`) and
+`SHA256SUMS.txt.sig` verify against `security/signing/`, while
+`verify-checksums.sh` keeps printing `AUTHENTICITY_VERIFIED=NO` because it
+verifies integrity only. Stability stays undeclared: the cosign layer that the
+trust policy requires for an official release is absent, the CI run on the tag is
+pending and the sign-off belongs to the owner.
 
 This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 `docs/release/v0.9.0.md` and `docs/release/v0.9.1.md`.
