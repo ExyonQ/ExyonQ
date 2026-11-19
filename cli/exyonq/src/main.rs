@@ -358,8 +358,10 @@ async fn async_main() -> anyhow::Result<()> {
                 std::process::exit(2);
             };
             eprintln!(
-                "warning: `exyonq validate` is transitional; prefer `exyonqctl config lint` \
-                 (or `exyonqctl config test` for RuntimePlan compile)"
+                "warning: `exyonq validate {0}` is transitional and is removed in 0.11.0; \
+                 use `exyonqctl config lint {0}` (or `exyonqctl config test {0}` for \
+                 RuntimePlan compile). See docs/architecture/081-cli-deprecations.md",
+                config.display()
             );
             // Historical semantics: parse+validate only (no RuntimePlan) → lint.
             let result = lint(
