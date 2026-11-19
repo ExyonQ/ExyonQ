@@ -1,0 +1,33 @@
+# COMPAT gaps: every approximated or refused directive the importers report.
+#
+# <source> <directive> <priority> <status> <reason>
+#
+# status:
+#   workaround  the gap is covered by another ExyonQ surface; the operator keeps
+#               the behaviour after the documented edit
+#   open        no equivalent yet. An `open` line with priority P1 or P2 fails
+#               scripts/gates/compat-matrices-gate.sh, which is how "0 brechas
+#               abiertas P1/P2" stays a measurement instead of a claim.
+#
+# A line is required for every lossy *and* every refused entry the importers
+# report; the gate measures the reports, not this file.
+#
+# --- nginx: lossy entries (13 measured on 2026-11-16) ---------------------
+# `listen`, `ssl_certificate`, `ssl_certificate_key` and `return` are exact as of
+# 2026-11-16: the certificate pair is mapped to [server.tls], the `ssl` listen
+# flag is served by it, and `return <status> "<body>"` maps to `route.respond`,
+# served by the literal-response handler. A `return` body with `$` variables
+# stays lossy on purpose (an IR literal body is not interpolated).
+nginx    expires                P3  workaround  expires N maps to cache_headers.by_mime."*" max_age for static responses (ADR-061); `expires off` and negative values have no IR form, so leave them out and let the runtime default apply
+nginx    index                  P3  workaround  Only the first filename reaches route.index (the runtime resolves one index, crates/exyonq-mod-static/src/root.rs); list the primary index first or add an explicit route for the others
+nginx    location               P2  workaround  NGINX `~`/`~*` regex locations can intercept a prefix match and `^~` orders prefixes; ExyonQ matches prefix/suffix/exact in a fixed order, so declare the same set as explicit routes (match.prefix / match.suffix / match.exact) and keep the intended precedence — a bare migrated prefix route alone can answer a URI nginx would have sent to the regex block
+nginx    try_files              P3  workaround  Variable forms ($uri/$uri/.../$query_string) and terminal `=404` are carried as front_controller or the default 404; a `=NNN` terminal that is not 404 has no IR action
+
+# --- nginx: refused entries (5 measured on 2026-11-16) --------------------
+nginx    add_header             P3  workaround  Cache-Control is carried by [cache]/expires; the runtime rewrites those headers itself (ADR-062 denylist)
+nginx    client_max_body_size   P3  workaround  The request body cap lives in the route body budget, not in a server-level nginx knob
+nginx    proxy_set_header       P3  workaround  Upgrade/Connection are hop-by-hop and owned by the runtime (ADR-051)
+nginx    keepalive              P3  workaround  Upstream connection reuse comes from the IR pool policy, not the nginx directive
+
+# --- apache ---------------------------------------------------------------
+apache   DirectoryIndex         P3  workaround  The runtime resolves a single index (crates/exyonq-mod-static/src/root.rs); the importer sets route.index to the first filename, so list the primary index first — the remaining filenames are NOT served by generic static resolution

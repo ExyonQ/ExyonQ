@@ -45,6 +45,7 @@ pub mod pipeline_registry;
 pub mod platform;
 pub mod reload;
 pub mod server;
+pub mod stream_proxy;
 pub mod structural_route_rules;
 mod sub_filter;
 pub mod waf;
@@ -56,6 +57,10 @@ mod zone_ratelimit;
 /// TLS runtime (KD4.5 — implementation in `exyonq-mod-tls`).
 pub use exyonq_mod_tls as tls;
 
+/// Test-only re-export of the WAF seam types a test needs to install a
+/// `WafRuntimeBinding` (the field types of the public binding).
+#[cfg(feature = "test-utils")]
+pub use exyonq_waf_api::{WafAbuseGate, WafDecision, WafPhase};
 pub use mirror::append_mirror_prometheus;
 pub use waf::{
     clear_waf_abuse_gate, commit_staged_waf_binding, commit_waf_reload,
@@ -66,7 +71,7 @@ pub use waf::{
     stage_waf_runtime_binding, waf_binding_for_new_state, waf_enforce_enabled, WafRuntimeBinding,
     WAF_CHALLENGE_VERIFY_PATH,
 };
-pub use waf_metrics::append_waf_prometheus;
+pub use waf_metrics::{append_waf_prometheus, register_ip_entries};
 pub use worker_memory::append_worker_memory_prometheus;
 
 /// Exposed for fuzz targets and tests.

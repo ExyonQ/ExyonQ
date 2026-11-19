@@ -334,6 +334,7 @@ fn emit_decision(phase: WafPhase, decision: &WafDecision, ctx: WafLogContext<'_>
             action = ?decision.action,
             truncated = decision.inspection_truncated,
             field = ?v.evidence.field,
+            ip_entry = ?v.evidence.ip_entry,
             enforce = waf_enforce_enabled(),
             message = %v.message,
             "waf violation"
@@ -470,6 +471,17 @@ fn finish(
     WafHookResult::Continue
 }
 
+/// Abuse-gate tracing, off unless `EXYONQ_WAF_ABUSE_TRACE` is set at startup.
+///
+/// The OL-04 differential needs to know *who* consults the gate for one client
+/// request and in which phase; the token bucket itself cannot say that. This is
+/// diagnostic only: it never changes a decision and costs one relaxed atomic
+/// load when the variable is absent.
+pub fn abuse_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("EXYONQ_WAF_ABUSE_TRACE").is_some())
+}
+
 fn finish_abuse(
     phase: WafPhase,
     ctx: WafLogContext<'_>,
@@ -479,6 +491,22 @@ fn finish_abuse(
     skip_abuse: bool,
     abuse: Option<&dyn WafAbuseGate>,
 ) -> WafHookResult {
+    let trace = abuse_trace_enabled();
+    if trace {
+        tracing::warn!(
+            target: "exyonq::waf_abuse_trace",
+            ?phase,
+            skip_abuse,
+            client_ip = %ctx.client_ip,
+            host = ctx.host.unwrap_or("-"),
+            method = %ctx.method,
+            path = %ctx.path,
+            route_id = route_id.unwrap_or("-"),
+            has_cookie = cookie_header.is_some(),
+            gate_installed = abuse.is_some(),
+            "abuse gate consulted"
+        );
+    }
     if skip_abuse {
         return WafHookResult::Continue;
     }
@@ -1263,5 +1291,67 @@ mod tests {
         ABUSE_MODE.store(0, Ordering::SeqCst);
         assert!(matches!(r, WafHookResult::Continue));
         assert_eq!(ABUSE_CHECKS.load(Ordering::SeqCst), 0);
+    }
+
+    struct UserAgentHeaders;
+
+    impl HeaderView for UserAgentHeaders {
+        fn get(&self, name: &str) -> Option<&[u8]> {
+            if name.eq_ignore_ascii_case("user-agent") {
+                Some(b"probe/1.0")
+            } else {
+                None
+            }
+        }
+
+        fn for_each(&self, f: &mut dyn FnMut(&[u8], &[u8])) {
+            f(b"user-agent", b"probe/1.0");
+        }
+    }
+
+    #[test]
+    fn violation_event_carries_request_context() {
+        let _guard = WAF_HOST_TEST_LOCK.lock().expect("waf host test lock");
+        let headers = UserAgentHeaders;
+        let out = crate::observability::log_capture::capture(|| {
+            let r = inspect_request_headers(
+                &BlockingEngine,
+                "GET",
+                Some("example.com"),
+                "/assets/.env",
+                None,
+                &headers,
+                IpAddr::from_str("203.0.113.5").unwrap(),
+                None,
+                1,
+                true,
+                true,
+                None,
+            );
+            assert!(matches!(r, WafHookResult::Reject(_)));
+        });
+        // The fmt layer quotes string fields: `host="example.com"`.
+        let out = out.replace('"', "");
+        assert!(
+            out.contains("rule_id=EXY-TEST-BLOCK"),
+            "violation event missing rule_id: {out}"
+        );
+        assert!(
+            out.contains("host=example.com"),
+            "violation lost host: {out}"
+        );
+        assert!(out.contains("method=GET"), "violation lost method: {out}");
+        assert!(
+            out.contains("path=/assets/.env"),
+            "violation lost path: {out}"
+        );
+        assert!(
+            out.contains("client_ip=203.0.113.5"),
+            "violation lost client_ip: {out}"
+        );
+        assert!(
+            out.contains("user_agent=probe/1.0"),
+            "violation lost user_agent: {out}"
+        );
     }
 }

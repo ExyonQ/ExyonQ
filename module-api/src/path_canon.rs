@@ -16,17 +16,57 @@
 //! H-01: canonical request path used by routing and every policy gate.
 //!
 //! The route that grants or denies access must see the same path as static,
-//! proxy and WAF. This function decodes percent escapes once, removes dot
-//! segments, collapses repeated separators and rejects ambiguous spellings
-//! (backslashes, controls, malformed escapes, traversal above root).
+//! proxy and WAF. This function percent-decodes once, removes dot segments,
+//! collapses repeated separators and rejects ambiguous spellings (backslashes,
+//! controls, malformed escapes, traversal above root).
+//!
+//! The result is the **URI form**, not a decoded display string: bytes that
+//! cannot appear literally in an origin-form request-target are re-encoded. A
+//! request-target is opaque bytes (nginx semantics), so `/a%20b` must keep
+//! working and rebuild as a legal `http::Uri` instead of being rejected with
+//! 400; consumers that need path *semantics* (the static filesystem resolver)
+//! decode with [`decode_percent_path`] at the point where they touch the disk.
+//! Keeping the canonical form self-consistent also makes the function
+//! idempotent: `canonicalize_path(canonicalize_path(p)?)? == canonicalize_path(p)?`.
 
 /// Canonicalize an HTTP request path. `None` means the request must be
 /// rejected with 400 rather than interpreted by a downstream component.
 pub fn canonicalize_path(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return Some("/".to_string());
+    let decoded = decode_percent_path(path)?;
+    let trailing_slash = decoded.last() == Some(&b'/');
+
+    let mut segments: Vec<&[u8]> = Vec::new();
+    for segment in decoded.split(|byte| *byte == b'/') {
+        match segment {
+            b"" | b"." => {}
+            b".." => {
+                // Above-root traversal is ambiguous across backends; fail closed.
+                segments.pop()?;
+            }
+            _ => segments.push(segment),
+        }
     }
 
+    let mut canonical = String::with_capacity(decoded.len() + 1);
+    canonical.push('/');
+    for (index, segment) in segments.iter().enumerate() {
+        if index > 0 {
+            canonical.push('/');
+        }
+        encode_segment(segment, &mut canonical);
+    }
+    if trailing_slash && !segments.is_empty() {
+        canonical.push('/');
+    }
+    Some(canonical)
+}
+
+/// Percent-decode a request path or canonical path into its raw bytes.
+///
+/// `None` for a malformed escape, a NUL/control byte or a backslash: those are
+/// the spellings H-01 refuses instead of guessing what a backend would do.
+/// Non-UTF-8 bytes are **not** rejected — a request-target is opaque bytes.
+pub fn decode_percent_path(path: &str) -> Option<Vec<u8>> {
     let bytes = path.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut i = 0usize;
@@ -44,42 +84,80 @@ pub fn canonicalize_path(path: &str) -> Option<String> {
             i += 1;
         }
     }
-
-    let decoded = String::from_utf8(decoded).ok()?;
-    let trailing_slash = decoded.ends_with('/');
-    let mut segments: Vec<&str> = Vec::new();
-    for segment in decoded.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                // Above-root traversal is ambiguous across backends; fail closed.
-                segments.pop()?;
-            }
-            _ => segments.push(segment),
-        }
-    }
-
-    let mut canonical = String::with_capacity(decoded.len() + 1);
-    canonical.push('/');
-    canonical.push_str(&segments.join("/"));
-    if trailing_slash && !segments.is_empty() {
-        canonical.push('/');
-    }
-    Some(canonical)
+    Some(decoded)
 }
 
 fn push_decoded(byte: u8, out: &mut Vec<u8>) -> Option<()> {
-    if byte == 0 || byte < 0x20 || byte == 0x7f || byte == b'\\' {
+    // NUL is already covered by `< 0x20`; the check is a single range on purpose.
+    if byte < 0x20 || byte == 0x7f || byte == b'\\' {
         return None;
     }
-    match byte {
-        // Keep the decoded spelling unambiguous if the path is rebuilt as a URI.
-        b'%' => out.extend_from_slice(b"%25"),
-        b'?' => out.extend_from_slice(b"%3F"),
-        b'#' => out.extend_from_slice(b"%23"),
-        _ => out.push(byte),
-    }
+    out.push(byte);
     Some(())
+}
+
+/// Percent-encode decoded text so it can be used as a URI path or `Location`.
+///
+/// Input is **decoded** text (a rewrite replacement, a capture): legal path
+/// bytes stay literal and everything else — space, `%`, non-ASCII, controls —
+/// is escaped with uppercase hex. nginx does the same when it turns a rewritten
+/// `$uri` back into a request-target or a `Location` header.
+pub fn escape_decoded_uri_bytes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for &byte in text.as_bytes() {
+        if is_literal_path_byte(byte) || matches!(byte, b'/' | b'?' | b'#') {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push(upper_hex(byte >> 4));
+            out.push(upper_hex(byte & 0x0f));
+        }
+    }
+    out
+}
+
+/// Append one decoded path segment in the form it must keep in a URI.
+fn encode_segment(segment: &[u8], out: &mut String) {
+    for &byte in segment {
+        if is_literal_path_byte(byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push(upper_hex(byte >> 4));
+            out.push(upper_hex(byte & 0x0f));
+        }
+    }
+}
+
+/// RFC 3986 `pchar` minus `pct-encoded`: unreserved / sub-delims / `:` / `@`.
+fn is_literal_path_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b':'
+                | b'@'
+        )
+}
+
+const fn upper_hex(nibble: u8) -> char {
+    match nibble {
+        0..=9 => (b'0' + nibble) as char,
+        _ => (b'A' + (nibble - 10)) as char,
+    }
 }
 
 fn hex(byte: u8) -> Option<u8> {
@@ -93,7 +171,7 @@ fn hex(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::canonicalize_path;
+    use super::{canonicalize_path, decode_percent_path};
 
     #[test]
     fn collapses_dot_and_duplicate_segments() {
@@ -103,13 +181,87 @@ mod tests {
     }
 
     #[test]
-    fn decodes_unreserved_bytes_once() {
+    fn decodes_escapes_once_and_keeps_the_uri_form() {
         assert_eq!(canonicalize_path("/%61dmin").as_deref(), Some("/admin"));
         assert_eq!(
             canonicalize_path("/admin%2fsecret").as_deref(),
             Some("/admin/secret")
         );
-        assert_eq!(canonicalize_path("/caf%C3%A9").as_deref(), Some("/café"));
+        // Non-ASCII stays percent-encoded: the canonical form is a URI, and it
+        // must round-trip through a legal origin-form request-target.
+        assert_eq!(
+            canonicalize_path("/caf%C3%A9").as_deref(),
+            Some("/caf%C3%A9")
+        );
+    }
+
+    #[test]
+    fn keeps_bytes_a_uri_cannot_carry_literally() {
+        // `%20` is legal in a request-target and must not become a 400.
+        assert_eq!(
+            canonicalize_path("/%20index.html").as_deref(),
+            Some("/%20index.html")
+        );
+        // `(` is a sub-delim: legal literally, so it is decoded to its literal form.
+        assert_eq!(
+            canonicalize_path("/fn%28%29.html").as_deref(),
+            Some("/fn().html")
+        );
+        // Invalid UTF-8 is opaque bytes, not a parse error.
+        assert_eq!(
+            canonicalize_path("/i%FFndex.html").as_deref(),
+            Some("/i%FFndex.html")
+        );
+        assert_eq!(
+            canonicalize_path("/a%25b").as_deref(),
+            Some("/a%25b"),
+            "a literal percent must stay escaped"
+        );
+    }
+
+    #[test]
+    fn canonical_form_is_idempotent() {
+        for path in [
+            "/%20index.html",
+            "/fn%28%29.html",
+            "/i%FFndex.html",
+            "/caf%C3%A9",
+            "/a%25b",
+            "/a/b/",
+        ] {
+            let once = canonicalize_path(path).expect(path);
+            assert_eq!(
+                canonicalize_path(&once).as_deref(),
+                Some(once.as_str()),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_restores_filesystem_bytes() {
+        assert_eq!(
+            decode_percent_path("/hello%20world.html").as_deref(),
+            Some(&b"/hello world.html"[..])
+        );
+        assert_eq!(
+            decode_percent_path("/i%FFndex.html").as_deref(),
+            Some(&b"/i\xFFndex.html"[..])
+        );
+    }
+
+    #[test]
+    fn double_encoding_stays_literal() {
+        // One decode leaves `%2e` as text, so the second encoding is inert: the
+        // canonical form keeps it escaped and never becomes a dot segment.
+        assert_eq!(
+            canonicalize_path("/%252e%252e/x").as_deref(),
+            Some("/%252e%252e/x")
+        );
+        // The same escape, once decoded, is a dot segment and fails closed.
+        for path in ["/.%2e/x", "/%2e./x"] {
+            assert!(canonicalize_path(path).is_none(), "{path}");
+        }
     }
 
     #[test]
@@ -121,6 +273,8 @@ mod tests {
             "/%zz",
             "/%00",
             "/bad%0dname",
+            "/a\u{0}b",
+            "/a\u{7f}b",
         ] {
             assert!(canonicalize_path(path).is_none(), "{path}");
         }
@@ -131,5 +285,10 @@ mod tests {
         assert_eq!(canonicalize_path("/admin/").as_deref(), Some("/admin/"));
         assert_eq!(canonicalize_path("/").as_deref(), Some("/"));
         assert_eq!(canonicalize_path("//").as_deref(), Some("/"));
+        assert_eq!(
+            canonicalize_path("").as_deref(),
+            Some("/"),
+            "an empty target normalizes like a bare slash"
+        );
     }
 }

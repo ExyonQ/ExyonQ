@@ -163,6 +163,50 @@ pub(crate) fn emit_wire_access(
     Some(identity.internal_request_id)
 }
 
+/// A blocking static wire thread has no Hyper. Install the sink that replays a
+/// head the wire handed back on Hyper over the same socket (Linux).
+#[cfg(target_os = "linux")]
+pub(crate) fn install_blocking_wire_handoff(
+    shared: crate::reload::SharedServerState,
+    proxy_client: exyonq_mod_proxy::ProxyClient,
+    ops: std::sync::Arc<crate::lifecycle::LifecycleState>,
+    runtime: tokio::runtime::Handle,
+) {
+    use crate::kernel::generation::GenerationView;
+    use crate::kernel::handoff::HyperHandoff;
+    exyonq_module_api::static_wire::install_blocking_handoff_hook(Box::new(
+        move |stream: std::net::TcpStream, head: bytes::Bytes, rest: bytes::Bytes| {
+            let peer = match stream.peer_addr() {
+                Ok(peer) => peer,
+                Err(_) => return Err(stream),
+            };
+            let token = match crate::lifecycle::admit_connection(&ops) {
+                Ok(token) => token,
+                Err(_) => return Err(stream),
+            };
+            let state = crate::reload::read_state(&shared);
+            let view = GenerationView::pinned(
+                state.generation,
+                state.modules_enabled(),
+                state.site_static_slot,
+            );
+            match crate::server::hyper_handoff::spawn_hyper_handoff(
+                HyperHandoff::new(stream, peer, Some((head, rest)), view, token),
+                &shared,
+                proxy_client.clone(),
+                &ops,
+                &runtime,
+            ) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    warn!(%err, "static blocking wire handoff failed");
+                    Ok(())
+                }
+            }
+        },
+    ));
+}
+
 /// Cap061: bridge static-wire terminal statuses from module-api into access events.
 pub fn install_static_wire_access_bridge() {
     let _ = exyonq_module_api::static_wire::install_access_notice_hook(|notice| {
@@ -427,11 +471,17 @@ pub(crate) fn waf_wire_materialization_active(state: &ServerState) -> bool {
 }
 
 /// Cap015: evaluate generation-frozen WAF on wire heads before static/proxy serve.
+///
+/// `skip_abuse` is for pre-checks whose request will then be handed to Hyper:
+/// Hyper runs the same header gate again and owns the abuse decision, so
+/// counting there as well spent two quota units per request (with `burst = 1`
+/// that challenged every client's first request — the OL-04 E2E failure).
 pub(crate) fn evaluate_wire_waf(
     state: &ServerState,
     generation: u64,
     head: &[u8],
     x_forwarded_for: &HeaderValue,
+    skip_abuse: bool,
 ) -> crate::waf::WafHookResult {
     // ARCH-002: skip parse_wire_header_pairs / owned Strings / engine inspect when WAF is off.
     if !waf_wire_materialization_active(state) {
@@ -458,6 +508,16 @@ pub(crate) fn evaluate_wire_waf(
             Some(trust) => trust.resolve_from_pairs(peer_ip, &header_pairs),
             None => peer_ip,
         };
+    if crate::waf::abuse_trace_enabled() {
+        tracing::warn!(
+            target: "exyonq::waf_abuse_trace",
+            caller = "wire-pre-check",
+            skip_abuse,
+            path = %path,
+            client_ip = %client_ip,
+            "abuse judgement site"
+        );
+    }
     let decision = crate::waf::inspect_request_headers(
         state.waf.as_ref(),
         parse_wire_method(head),
@@ -468,7 +528,7 @@ pub(crate) fn evaluate_wire_waf(
         client_ip,
         None,
         generation,
-        false,
+        skip_abuse,
         state.waf_enforce,
         state.waf_abuse.as_deref(),
     );
@@ -611,11 +671,15 @@ fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<WireW
     if !(head.starts_with(b"GET ") || head.starts_with(b"HEAD ")) {
         return None;
     }
+    // Pre-check only: this rejected request never reaches Hyper, but an allowed
+    // one always does, and Hyper runs the full gate including abuse. Judging the
+    // quota here would charge the client twice for one request.
     match evaluate_wire_waf(
         &ctx.state,
         ctx.pinned_generation,
         head,
         &ctx.x_forwarded_for,
+        true,
     ) {
         crate::waf::WafHookResult::Reject(reject) => Some(WireWafReject {
             bytes: format_waf_reject_http(&reject),
@@ -700,7 +764,8 @@ where
     }
 
     // Cap015: proxy wire must not bypass signature/abuse WAF (same contract as Hyper path).
-    match evaluate_wire_waf(state, generation, head.as_ref(), &x_forwarded_for) {
+    // The wire answers this request itself, so its gate is the authoritative one.
+    match evaluate_wire_waf(state, generation, head.as_ref(), &x_forwarded_for, false) {
         crate::waf::WafHookResult::Reject(reject) => {
             let started = Instant::now();
             complete_waf_reject_wire(
@@ -1002,7 +1067,7 @@ async fn execute_wire_plan(plan: WirePlan<TcpStream>, ctx: WireDispatchContext) 
                     {
                         // Cap061 LA-CAP061-001: do NOT hardcode 200 here.
                         // `/health` is the only exempt inline wire owner.
-                        let _ = serve_static_tcp(site_slot, stream, head, rest).await;
+                        let _ = serve_static_tcp(site_slot, stream, head, rest, ctx).await;
                     } else {
                         // Cap067 declined terminal ownership before admission. Hyper now
                         // owns admission, WAF, static dispatch, metrics, and any fallback.
@@ -1086,6 +1151,7 @@ async fn serve_static_tcp(
     stream: TcpStream,
     head: Bytes,
     rest: Bytes,
+    ctx: WireDispatchContext,
 ) -> std::io::Result<()> {
     if !epoll_sendfile_eligible(head.as_ref())
         && static_wire::static_tcp_blocking_pool_admission(head.as_ref())
@@ -1121,7 +1187,17 @@ async fn serve_static_tcp(
             }
         }
     }
-    static_wire::serve_wire_site_tcp(site_slot, stream, head, rest).await
+    // The wire owns the probes only. A head it does not serve comes back with
+    // the bytes already read so Hyper — which owns admission, WAF and static
+    // dispatch — answers it on this same connection. Answering 404 in the wire
+    // is what turned the request after `/health` into `404 not found`.
+    match static_wire::serve_wire_site_tcp(site_slot, stream, head, rest).await? {
+        static_wire::StaticWireTcpOutcome::Served => Ok(()),
+        static_wire::StaticWireTcpOutcome::Handoff { stream, head, rest } => {
+            serve_hyper_fallback(stream, head, rest, ctx).await;
+            Ok(())
+        }
+    }
 }
 
 async fn serve_hyper_fallback<S>(stream: S, head: Bytes, rest: Bytes, ctx: WireDispatchContext)
@@ -1458,6 +1534,7 @@ mod tests {
 
     fn bench_site_config(root: Option<std::path::PathBuf>) -> AppConfig {
         let site = RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1498,6 +1575,7 @@ mod tests {
             cache: None,
         };
         let api = RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -1566,6 +1644,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         }
     }
 
@@ -2492,6 +2571,7 @@ mod ws_tunnel_tests {
 
     pub(super) fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
         let api = RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -2540,6 +2620,7 @@ mod ws_tunnel_tests {
             config_version: 1,
             includes: Vec::new(),
             tuning: Default::default(),
+            streams: Vec::new(),
             servers: vec![ServerConfig {
                 listen: format!("127.0.0.1:{listen_port}"),
                 server_name: ServerNames::None,

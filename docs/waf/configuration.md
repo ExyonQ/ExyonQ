@@ -69,7 +69,31 @@ Rate-limit response: HTTP **429** with **`Retry-After`** from
 `SyncTokenBucket::retry_after_secs` (minimum 1 second).
 
 Abuse is independent of the signature `mode`: `monitor` still enforces the
-configured Challenge/429. It is evaluated once per request.
+configured Challenge/429. It is evaluated **exactly once per request**.
+
+That is enforced by the code, not by hope (2026-11-16): the wire fast-path
+pre-checks exist so the raw request-target is inspected before Hyper drops a
+`#fragment`, but a request they allow is handed to Hyper, which runs the same
+header gate. The pre-checks therefore pass `skip_abuse = true`
+(`wire_waf_reject_bytes`, and the two `connection_executor` branches that always
+end in `spawn_hyper`); the wire paths that answer the request themselves — the
+wire proxy fast path, wire static, the epoll keepalive gate — stay authoritative
+and do charge the bucket. Liveness/readiness probes (`/health`, `/live`,
+`/ready`) never reach the gate. Before this fix one request spent two tokens, so
+`burst = 1` challenged every client's *first* request; `scripts/e2e/
+ol04-challenge-e2e.sh` measured `pass=7 fail=6` (six phases failing
+`first request reaches protected route expected=200 actual=403`) and now measures
+`pass=13 fail=0` with all six phases at `failures=0`.
+
+To keep that visible, set `EXYONQ_WAF_ABUSE_TRACE=1` on the server process: every
+judgement then logs one WARN line under target `exyonq::waf_abuse_trace` from
+`finish_abuse` (phase, `skip_abuse`, client IP, path, `gate_installed`) and one
+from the gate itself (`abuse bucket charge`: key, `allowed`, `retry_after`, a
+per-process `attempt` counter). The trace is diagnostic only — it never changes a
+decision and costs one cached `OnceLock` load when the variable is unset. With
+`burst = 1`, one request must show exactly one `abuse gate consulted
+skip_abuse=false` followed by one `abuse bucket charge allowed=true`; two charges
+before the client sees the response are the defect this section describes.
 
 ### Violation counting and bans (EXQ-032)
 
@@ -208,6 +232,7 @@ When set (non-empty), env overrides IR at the composition root:
 | `EXYONQ_WAF_ABUSE` | `off` \| `rate_limit` \| `challenge` (**unknown → fail closed**) |
 | `EXYONQ_WAF_ABUSE_RPS` / `EXYONQ_WAF_ABUSE_BURST` | Numeric overrides |
 | `EXYONQ_WAF_CHALLENGE_KEY_FILE` | Path to exactly 32 raw key bytes |
+| `EXYONQ_WAF_ABUSE_TRACE` | Diagnostic only: logs every abuse judgement and bucket charge (see above); never changes a decision |
 
 ```text
 PRECEDENCE = ENV overrides IR when set

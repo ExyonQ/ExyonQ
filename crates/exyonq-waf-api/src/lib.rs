@@ -142,6 +142,41 @@ pub enum WafTransform {
     Other(String),
 }
 
+/// Which `[waf.ip]` list produced an `EXY-IP-*` hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WafIpList {
+    Whitelist,
+    Blacklist,
+}
+
+impl WafIpList {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Whitelist => "whitelist",
+            Self::Blacklist => "blacklist",
+        }
+    }
+}
+
+impl fmt::Display for WafIpList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The IP/CIDR list entry that produced an `EXY-IP-*` hit.
+///
+/// Carried so the host can log the matched entry, its operator `reason` and
+/// count hits per entry without re-parsing the violation message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WafIpEntryEvidence {
+    pub list: WafIpList,
+    /// Entry text exactly as configured (`203.0.113.0/24`).
+    pub entry: String,
+    /// Operator-supplied reason for the entry, when set.
+    pub reason: Option<String>,
+}
+
 /// Evidence attached to a violation.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WafEvidence {
@@ -150,6 +185,8 @@ pub struct WafEvidence {
     /// Optional matched excerpt (host may redact).
     pub matched: Option<String>,
     pub transforms: Vec<WafTransform>,
+    /// IP/CIDR list entry for `EXY-IP-1001` / `EXY-IP-1002` hits.
+    pub ip_entry: Option<WafIpEntryEvidence>,
 }
 
 /// A single rule hit.
@@ -206,6 +243,7 @@ impl WafDecision {
                     field: Some("client_ip".into()),
                     matched: None,
                     transforms: Vec::new(),
+                    ip_entry: None,
                 },
             }],
             inspection_truncated: false,
@@ -225,6 +263,7 @@ impl WafDecision {
                     field: Some("client_ip".into()),
                     matched: None,
                     transforms: Vec::new(),
+                    ip_entry: None,
                 },
             }],
             inspection_truncated: false,
@@ -244,6 +283,7 @@ impl WafDecision {
                     field: Some("client_ip".into()),
                     matched: None,
                     transforms: Vec::new(),
+                    ip_entry: None,
                 },
             }],
             inspection_truncated: false,

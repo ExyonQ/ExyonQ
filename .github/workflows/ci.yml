@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
 
 permissions:
   contents: read
@@ -125,7 +125,7 @@ jobs:
           path: ~/.cargo/bin
           key: cargo-tools-deny-${{ runner.os }}
       - name: install cargo-deny
-        run: cargo install cargo-deny --locked --version 0.20.2
+        run: cargo install cargo-deny --locked --version 0.20.2 --force
       - name: cargo deny check
         run: cargo deny check
 
@@ -149,7 +149,7 @@ jobs:
           path: ~/.cargo/bin
           key: cargo-tools-semver-${{ runner.os }}
       - name: install cargo-semver-checks
-        run: cargo install cargo-semver-checks --locked --version 0.50.0
+        run: cargo install cargo-semver-checks --locked --version 0.50.0 --force
       - name: addon-api semver
         # exyonq-addon-api 1.0.0 is not yet published to crates.io and has no
         # tagged baseline, so a release comparison has nothing to diff against.
@@ -157,8 +157,10 @@ jobs:
         continue-on-error: true
         run: cargo semver-checks check-release -p exyonq-addon-api
 
-  # build-tier1 only runs on push to main (not on PRs) to avoid
-  # burning expensive macOS (10x) runner minutes.
+  # build-tier1 only runs on push (not on PRs) to avoid burning expensive
+  # runner minutes. Release branches are verified on native Linux only (owner
+  # rule): their tier-1 leg is the Linux target below, and the macOS leg stays
+  # on main pushes.
   # No Windows builds by policy: windows-latest is excluded on purpose.
   build-tier1:
     if: github.event_name == 'push'
@@ -171,8 +173,6 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-15
-            target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
@@ -183,3 +183,21 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo build --release -p exyonq --target ${{ matrix.target }} --locked
+
+  build-macos-tier1:
+    # Tier-1 macOS build is a main-only leg: a release branch must not depend on
+    # a macOS runner to be green.
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    name: build aarch64-apple-darwin
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: 1.99.1
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - run: cargo build --release -p exyonq --target aarch64-apple-darwin --locked

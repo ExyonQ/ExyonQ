@@ -1273,6 +1273,8 @@ fn insert_route_labels<B>(route: &exyonq_config_ir::RouteConfig, response: &mut 
         "static".to_string()
     } else if route.redirect.is_some() {
         "redirect".to_string()
+    } else if route.respond.is_some() {
+        "respond".to_string()
     } else {
         "-".to_string()
     };
@@ -2056,6 +2058,14 @@ async fn dispatch_core_inner(
             WafBodyGate::Reject(reject) => return reject,
             WafBodyGate::Continue { inspection_limited } => *waf_body_limited |= inspection_limited,
         }
+    }
+
+    // EXY-03: a literal-response route synthesizes its body instead of
+    // dispatching to a backend. It runs after the ACL, auth, zone-limit and
+    // request-WAF gates above, and before any static/index or proxy resolution,
+    // so a literal route wins over an index file at the same path.
+    if let Some(respond) = &route.respond {
+        return literal_response(respond);
     }
 
     // NG-18 Phase D: nginx creates mirror subrequests at PRECONTENT (after the
@@ -4477,6 +4487,30 @@ fn attach_request_id(mut response: Response<BoxBody>, request_id: &str) -> Respo
     response
 }
 
+/// EXY-03: serve a route's literal response (`NGINX return <status> "<body>"`).
+///
+/// The body is sent verbatim: no variable interpolation happens here, which is
+/// why the importer refuses to map a `return` whose body contains `$`. An
+/// absent `content_type` falls back to `text/plain; charset=utf-8`, the
+/// equivalent of the NGINX `default_type` a returned literal inherits.
+fn literal_response(respond: &exyonq_config_ir::RespondConfig) -> Response<BoxBody> {
+    let status = StatusCode::from_u16(respond.status).unwrap_or(StatusCode::OK);
+    let content_type = respond
+        .content_type
+        .as_deref()
+        .unwrap_or("text/plain; charset=utf-8");
+    Response::builder()
+        .status(status)
+        .header("content-type", content_type)
+        .header("content-length", respond.body.len())
+        .body(
+            Full::from(bytes::Bytes::from(respond.body.clone()))
+                .map_err(|never| match never {})
+                .boxed(),
+        )
+        .expect("valid literal response")
+}
+
 fn text_response(status: StatusCode, body: &str) -> Response<BoxBody> {
     Response::builder()
         .status(status)
@@ -4846,6 +4880,16 @@ fn waf_header_gate(
     client_ip: std::net::IpAddr,
     skip_abuse: bool,
 ) -> Option<Response<BoxBody>> {
+    if crate::waf::abuse_trace_enabled() {
+        tracing::warn!(
+            target: "exyonq::waf_abuse_trace",
+            caller = "hyper-gate",
+            skip_abuse,
+            path,
+            client_ip = %client_ip,
+            "abuse judgement site"
+        );
+    }
     match crate::waf::inspect_request_headers(
         state.waf.as_ref(),
         method.as_str(),
@@ -5084,6 +5128,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -5204,6 +5249,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5254,6 +5300,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5306,6 +5353,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5371,6 +5419,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let policy = state
@@ -5464,6 +5513,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5520,6 +5570,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5587,6 +5638,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5653,6 +5705,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let (assets_idx, _assets_route) = state
@@ -5795,6 +5848,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(state.snapshot.static_slot_for_route_backend(0).is_some());
@@ -5851,6 +5905,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(state.snapshot.proxy_cluster_for_route(0).is_none());
@@ -5890,6 +5945,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5945,6 +6001,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let path = "/site/index.html";
@@ -6042,6 +6099,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
 
@@ -6146,6 +6204,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let denied = dispatch_core(
@@ -6277,6 +6336,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         for (idx, expected) in [
@@ -6329,6 +6389,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(
@@ -6380,6 +6441,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let gate = crate::server::wire_dispatch::build_keepalive_route_gate(&state);
@@ -6437,6 +6499,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
 
@@ -6536,6 +6599,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(
@@ -6586,6 +6650,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         // FPC is generation-wide → every wire head requires full dispatch.
@@ -6802,6 +6867,7 @@ mod tests {
             config_version: 1,
             includes: Vec::new(),
             tuning: Default::default(),
+            streams: Vec::new(),
             servers: vec![ServerConfig {
                 listen: "127.0.0.1:8080".into(),
                 server_name: ServerNames::None,

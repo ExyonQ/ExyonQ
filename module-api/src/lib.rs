@@ -35,6 +35,7 @@ pub mod hop_by_hop;
 pub mod htaccess_overlay;
 pub mod htaccess_runtime;
 pub mod http3_runtime;
+pub mod http_limits;
 pub mod kernel_control;
 pub mod kernel_observation;
 pub mod observability_runtime;
@@ -46,6 +47,7 @@ pub mod reload_runtime;
 pub mod response_observation;
 pub mod rewrite_engine;
 pub mod route_rules;
+pub mod runtime_tuning;
 pub mod static_dispatch;
 #[cfg(target_os = "linux")]
 pub mod static_epoll;
@@ -157,7 +159,7 @@ pub use observability_runtime::{
     freeze_prometheus_appenders, register_prometheus_appender, register_test_prometheus_appender,
     PrometheusAppendFn, PrometheusAppenderTestGuard,
 };
-pub use path_canon::canonicalize_path;
+pub use path_canon::{canonicalize_path, decode_percent_path, escape_decoded_uri_bytes};
 pub use reload_runtime::{
     clear_reload_runtime_for_tests, register_reload_runtime_service,
     reload_runtime_registration_test_gate, reload_runtime_service, ReloadRuntimeRegisterError,

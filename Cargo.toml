@@ -93,9 +93,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "ring"] }
-wasmtime = { version = "=49.0.5", default-features = false, features = ["cranelift", "pooling-allocator", "runtime"] }
+wasmtime = { version = "=49.0.6", default-features = false, features = ["cranelift", "pooling-allocator", "runtime"] }
 dashmap = "6"
 
+# Internal workspace crates are path-only on purpose: they are consumed in-tree
+# and no step publishes crates (the release workflow builds binaries and images).
+# Cargo only reads `version` here to make a dependent publishable, so these
+# entries stay pinned by path and inherit `[workspace.package].version`.
 exyonq-core = { path = "core", default-features = false }
 exyonq-platform-linux = { path = "crates/exyonq-platform-linux", default-features = false }
 exyonq-wasm-host = { path = "wasm/exyonq-wasm-host" }

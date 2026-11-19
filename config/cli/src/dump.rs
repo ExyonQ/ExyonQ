@@ -72,8 +72,18 @@ fn pretty_canonical_json(cfg: &AppConfig) -> Result<String, String> {
 fn render_canonical_toml(cfg: &AppConfig) -> String {
     let mut out = String::new();
     out.push_str(&format!("config_version = {}\n\n", cfg.config_version));
-    if let Some(workers) = cfg.tuning.accept_workers {
-        out.push_str(&format!("[tuning]\naccept_workers = {workers}\n\n"));
+    if cfg.tuning != exyonq_config_ir::TuningConfig::default() {
+        out.push_str("[tuning]\n");
+        if let Some(workers) = cfg.tuning.accept_workers {
+            out.push_str(&format!("accept_workers = {workers}\n"));
+        }
+        if let Some(ms) = cfg.tuning.keepalive_timeout_ms {
+            out.push_str(&format!("keepalive_timeout_ms = {ms}\n"));
+        }
+        if let Some(bytes) = cfg.tuning.max_header_bytes {
+            out.push_str(&format!("max_header_bytes = {bytes}\n"));
+        }
+        out.push('\n');
     }
 
     for server in &cfg.servers {
@@ -137,6 +147,18 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
                 "redirect = {{ status = {}, location = {:?} }}\n",
                 redirect.status, redirect.location
             ));
+        }
+        if let Some(respond) = &route.respond {
+            match &respond.content_type {
+                Some(content_type) => out.push_str(&format!(
+                    "respond = {{ status = {}, body = {:?}, content_type = {:?} }}\n",
+                    respond.status, respond.body, content_type
+                )),
+                None => out.push_str(&format!(
+                    "respond = {{ status = {}, body = {:?} }}\n",
+                    respond.status, respond.body
+                )),
+            }
         }
         if let Some(rewrite) = &route.rewrite {
             match rewrite {
@@ -228,6 +250,24 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
             out.push_str(&format!("target = {:?}\n", upstream.target));
         }
         out.push_str(&format!("timeout_ms = {}\n\n", upstream.timeout_ms));
+    }
+
+    let mut stream_names: Vec<_> = cfg.streams.iter().collect();
+    stream_names.sort_by(|a, b| a.name.cmp(&b.name));
+    for stream in stream_names {
+        out.push_str("[[stream]]\n");
+        out.push_str(&format!("name = {:?}\n", stream.name));
+        out.push_str(&format!("listen = {:?}\n", stream.listen));
+        out.push_str(&format!(
+            "protocol = {:?}\n",
+            match stream.protocol {
+                exyonq_config_ir::StreamProtocol::Tcp => "tcp",
+                exyonq_config_ir::StreamProtocol::Udp => "udp",
+            }
+        ));
+        out.push_str(&format!("upstream = {:?}\n", stream.upstream));
+        out.push_str(&format!("idle_timeout_ms = {}\n", stream.idle_timeout_ms));
+        out.push_str(&format!("max_sessions = {}\n\n", stream.max_sessions));
     }
 
     let mut pool_names: Vec<_> = cfg.pools_fcgi.keys().collect();

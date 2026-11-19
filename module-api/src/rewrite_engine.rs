@@ -16,8 +16,10 @@
 //! NG-02 / ADR-048: patterned rewrite evaluation (compiled regex, $1..$9).
 //! ADR-062 / F1-R07: also `$uri` (path) and `$host` (normalized).
 
+use crate::path_canon::{decode_percent_path, escape_decoded_uri_bytes};
 use exyonq_config_ir::{RewriteCondConfig, RewriteConfig, RewriteFlagConfig, RewriteRuleConfig};
 use regex::Regex;
+use std::borrow::Cow;
 
 /// Request context for rewrite evaluation (no socket types).
 #[derive(Debug, Clone, Copy)]
@@ -151,6 +153,16 @@ pub fn apply_compiled_rewrite(
             flag,
             when,
         } => {
+            // nginx matches against `$uri`, the decoded normalized path, and
+            // re-encodes what it forwards. The canonical path keeps its escapes,
+            // so decode one pass here; a decoded path that is not UTF-8 cannot be
+            // spelled by a regex literal, so it keeps the URI form and its
+            // captures pass through unescaped.
+            let (haystack, decoded) = match_haystack(req.path);
+            let req = RewriteRequest {
+                path: haystack.as_ref(),
+                ..req
+            };
             if !when_match(when, req) {
                 return RewriteApplyOutcome::NoChange;
             }
@@ -159,6 +171,11 @@ pub fn apply_compiled_rewrite(
             };
             let Ok(expanded) = expand_replacement(replacement, &caps, req) else {
                 return RewriteApplyOutcome::Rejected;
+            };
+            let expanded = if decoded {
+                escape_decoded_uri_bytes(&expanded)
+            } else {
+                expanded
             };
             match flag {
                 RewriteFlagConfig::Last => {
@@ -205,6 +222,18 @@ pub fn apply_compiled_rewrite(
                 }
             }
         }
+    }
+}
+
+/// Path the rule matches, plus whether it is the decoded form.
+///
+/// `true` means the pattern matched nginx `$uri` and the replacement must be
+/// escaped again; `false` means the decoded bytes are not UTF-8 and the URI form
+/// was matched as-is.
+fn match_haystack(path: &str) -> (Cow<'_, str>, bool) {
+    match decode_percent_path(path).and_then(|bytes| String::from_utf8(bytes).ok()) {
+        Some(decoded) => (Cow::Owned(decoded), true),
+        None => (Cow::Borrowed(path), false),
     }
 }
 
@@ -331,6 +360,79 @@ mod tests {
             out,
             RewriteApplyOutcome::Internal {
                 path: "/posts/hello".into(),
+                rematch: true,
+            }
+        );
+    }
+
+    fn request(path: &str) -> RewriteRequest<'_> {
+        RewriteRequest {
+            path,
+            host: None,
+            query: "",
+            headers: &[],
+        }
+    }
+
+    /// nginx matches `rewrite` against `$uri`, the decoded path, so a rule
+    /// written with the decoded literal must match an escaped request-target and
+    /// its replacement must come back in URI form.
+    #[test]
+    fn decoded_literal_matches_an_escaped_target() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/(a b\.txt)$".into(),
+            replacement: "/dst/$1".into(),
+            flag: RewriteFlagConfig::Last,
+            when: vec![],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(&compiled, request("/a%20b.txt"));
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Internal {
+                path: "/dst/a%20b.txt".into(),
+                rematch: true,
+            }
+        );
+    }
+
+    /// The capture is decoded text, so a redirect `Location` is escaped too
+    /// instead of carrying a space.
+    #[test]
+    fn redirect_location_escapes_a_decoded_capture() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/(a b\.txt)$".into(),
+            replacement: "https://example.com/$1".into(),
+            flag: RewriteFlagConfig::Permanent,
+            when: vec![],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(&compiled, request("/a%20b.txt"));
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Redirect {
+                status: 301,
+                location: "https://example.com/a%20b.txt".into(),
+            }
+        );
+    }
+
+    /// Bytes that are not UTF-8 cannot be spelled by a regex literal, so the
+    /// rule matches the URI form and the capture is not escaped a second time.
+    #[test]
+    fn non_utf8_target_matches_its_uri_form() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/raw/(.*)$".into(),
+            replacement: "/mirror/$1".into(),
+            flag: RewriteFlagConfig::Last,
+            when: vec![],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(&compiled, request("/raw/i%FFndex"));
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Internal {
+                path: "/mirror/i%FFndex".into(),
                 rematch: true,
             }
         );

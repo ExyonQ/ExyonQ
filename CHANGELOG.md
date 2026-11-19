@@ -21,25 +21,78 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
-## [0.9.2] — RELEASE CANDIDATE (not published)
+## [Unreleased]
+
+### Fixed
+
+- Access events now carry the request `host`, and WAF violation events carry
+  `client_ip`, `host`, `method`, `path` and `user_agent`, so a violation can be
+  attributed to a site and correlated with its access line without inferring it
+  from the path (issue #84).
+- The packaged healthcheck discovers the active `php*fpm*` unit instead of
+  hardcoding a versioned unit name, accepts an exact unit override, optionally
+  probes the PHP-FPM Unix socket, and lists the candidates it considered when it
+  fails (issue #81).
+
+### Security
+
+- `wasmtime` 49.0.6 replaces 49.0.5, clearing RUSTSEC-2026-0566 through
+  -0572; `cargo deny check` and `cargo audit` pass with no waivers added.
+
+## [0.9.2] — binaries in the GitHub Release and images in GHCR, Docker Hub mirror pending
 
 ```text
 VERSION = 0.9.2
-PUBLICATION_STATUS = NOT_PUBLISHED
-TAG = LOCAL ONLY, OWNER-GATED
+PUBLICATION_STATUS = BINARIES_IN_GITHUB_RELEASE_V0.9.2_AND_GHCR_IMAGES_VERIFIED_BY_DIGEST
+TAG = PUSHED, ANNOTATED AND SSH-SIGNED (v0.9.2 -> tag object 648cf617 -> audit seal 4e3338a)
+TAG_SIGNATURE = EXYONQ_RELEASE_TAG_SSH_V2, principal exyonq-release, verified
+ARTIFACT_SIGNATURE = SHA256SUMS.txt.sig (SSH, namespace file), verified
+DOCKERHUB_MIRROR = ABSENT (repository secrets missing)
+GITHUB_RELEASE = v0.9.2 (10 artifacts incl. the COMPAT matrix + release-manifest.json + SHA256SUMS.txt + compliance files; SHA256SUMS covers every asset except the sums file)
+COMPAT_MATRIX = COMPAT_MATRIX_v0.9.2.md (measured from the release binaries: macOS arm64, Linux arm64, Linux amd64; P1_OPEN=0 P2_OPEN=0)
+STABILITY = NOT_DECLARED (cosign layer absent, CI on the tag pending, owner sign-off pending)
 PREVIOUS_PUBLIC = 0.9.1
 BASE_TAG = v0.9.1
 RELEASE_NOTES = docs/release/v0.9.2.md
 ```
 
-> **Candidate only.** No published `v0.9.2` tag, GitHub Release, GHCR image,
-> or Docker Hub mirror exists. Do not present this entry as a shipped release.
+> **Published except the Docker Hub mirror.** Tag `v0.9.2` is on `origin`, both
+> multi-arch images are live in GHCR (`exyonq` and `exyonq-wordpress`) and
+> verified by immutable digest on native amd64 and arm64, and the GitHub
+> Release `v0.9.2` carries the nine checksummed artifacts plus
+> `SHA256SUMS.txt`, `release-manifest.json`, `THIRD_PARTY_NOTICES.md` and
+> `sbom.cdx.json` (`INTEGRITY_VERIFIED=YES`). The workflow's `github-release`
+> job never ran because it depends on `dockerhub-mirror`, which fails closed
+> without the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` repository secrets (run
+> `44404288845`), so the Release was created from that run's artifacts with the
+> job's layout. **The Docker Hub mirror is still absent.**
+
+### Stability
+
+0.9.2 is **not declared stable**. The stability declaration in
+`docs/release/v0.9.2.md` promises the config compatibility V1 surface and the
+three importer matrices measured from the published binaries on macOS arm64,
+Linux arm64 and Linux amd64 (NGINX 79/13/5/21, Apache 0/1/0/17, OpenLiteSpeed 9
+fields, `P1_OPEN=0 P2_OPEN=0`, `RESULT=PASS COMPAT_MATRICES_GATE`). It explicitly
+does **not** promise total nginx/Apache substitution, runtime behaviour of an
+imported config, or anything outside the declared corpora. The SSH signature
+layer was added on 2026-11-19: tag `v0.9.2` (object `648cf617…`) and
+`SHA256SUMS.txt.sig` verify against `security/signing/`, while
+`verify-checksums.sh` keeps printing `AUTHENTICITY_VERIFIED=NO` because it
+verifies integrity only. Stability stays undeclared: the cosign layer that the
+trust policy requires for an official release is absent, the CI run on the tag is
+pending and the sign-off belongs to the owner.
 
 This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 `docs/release/v0.9.0.md` and `docs/release/v0.9.1.md`.
 
 ### Added
 
+- **L4 stream proxy (`[[stream]]`, NG-20).** Raw TCP/UDP forwarding to a
+  named upstream with weighted round-robin and per-connection / per-source
+  affinity, fail-closed validation and restart-only reload. MySQL 8.4, Redis
+  and QUIC-UDP verified end to end on native Linux amd64 and arm64. See
+  `docs/architecture/072-l4-stream.md`.
 - **WordPress cache invalidation as a normal plugin.** The integration is
   loaded through the standard plugin lifecycle instead of as a must-use plugin.
   (`ab0e166`)
@@ -111,14 +164,39 @@ This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
   body on a 2 MiB route answers `413` in well under a second with zero origin
   hits, while the same body on the unset route is still inspected and accepted;
   the 2 MiB boundary stays `200` and a 942100 tail stays `403`.
-- Full 0.9.2 release qualification is **NOT EXECUTED**: no tag candidate, full
-  CI/security run, release build, image build, or signature verification has
-  been run for this draft.
+- Release workflow [`44404288845`](https://github.com/ExyonQ/ExyonQ/actions/runs/44404288845)
+  on tag `v0.9.2` → audit seal `4e3338a`: `security-release`,
+  `compliance-artifacts`, the three build targets, both `package deb/rpm` jobs,
+  `checksums`, `docker` and `docker-wordpress` **success**;
+  `dockerhub-mirror` **failure** (missing repository secrets) and
+  `github-release` **skipped**.
+- `bash scripts/verify-release-audit.sh 0.9.2` → `RELEASE_AUDIT_GATE=PASS`,
+  `audit-v0.9.2.md @ 64b8388`, exit 0.
+- `SHA256SUMS.txt` of the `checksums` artifact: 10/10 `OK`.
+- Published binaries report `product_version=0.9.2`, `source_tag=v0.9.2`,
+  `source_revision=4e3338a…` on both architectures; the published images pass a
+  digest-pinned E2E (`--version`, `validate`, static `200`/`404`, `USER=nonroot`,
+  clean stop) on native amd64 and arm64, and
+  `scripts/gates/wordpress-container-e2e.sh` passes against the published
+  WordPress digest on arm64.
+- Tag signature: `v0.9.2` is annotated but unsigned; the audit gate binds the
+  tag to the audited commit without asserting a signature.
+- **glibc floor differs per architecture in the 0.9.2 artifacts.** The x86_64
+  build job used `ubuntu-latest` (Ubuntu 26.04, glibc 2.42) while arm64 used
+  `ubuntu-24.04-arm` (glibc 2.39); the amd64 tarball aborts on Ubuntu 24.04 with
+  `GLIBC_2.42 not found`. The GHCR images are unaffected (Wolfi). The workflow
+  now pins `ubuntu-24.04` for the x86_64 build.
 
 ### Limitations (honest)
 
-- The WordPress production-browser journey remains open.
-- The positive reCAPTCHA v3 path remains **NOT EXECUTED** without a real v3 key.
+- The WordPress **production-site** browser journey (owner's live site) remains
+  open. The container-level journey was executed in a real headless Chromium
+  (`scripts/gates/wordpress-browser-e2e.sh`) against the published WordPress
+  digests on amd64 and arm64: installer, login, `wp-admin`, logout and anonymous
+  cache miss/hit, `BROWSER_JOURNEY=PASS steps=10` on both.
+- The positive reCAPTCHA v3 path remains **NOT EXECUTED** without a real v3 key;
+  it needs `OL04_RECAPTCHA_V3_SITE_KEY`, `OL04_RECAPTCHA_V3_SECRET` and a fresh
+  `OL04_RECAPTCHA_V3_TOKEN` for action `challenge` (score ≥ 0.5).
 - No Windows build is produced, by policy.
 - NGINX/Apache/OpenLiteSpeed compatibility remains the documented scope; this
   draft does not claim total parity.

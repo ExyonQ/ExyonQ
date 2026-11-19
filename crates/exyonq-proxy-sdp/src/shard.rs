@@ -761,6 +761,7 @@ mod sdp001_waf_theater_tests {
                         field: None,
                         matched: None,
                         transforms: Vec::new(),
+                        ip_entry: None,
                     },
                 }],
                 inspection_truncated: false,

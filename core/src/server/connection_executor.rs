@@ -184,8 +184,11 @@ impl CoreConnectionExecutor {
             if waf_wire_materialization_active(&state) {
                 let xff = HeaderValue::from_str(&conn.peer.ip().to_string())
                     .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
+                // Every request in this branch is served by Hyper (`spawn_hyper`
+                // below), which runs the same gate and owns the abuse decision:
+                // charging the quota here counted one request twice.
                 if let crate::waf::WafHookResult::Reject(reject) =
-                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff)
+                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff, true)
                 {
                     let bytes = format_waf_reject_http(&reject);
                     let _ = conn.stream.set_nodelay(true);
@@ -204,12 +207,16 @@ impl CoreConnectionExecutor {
         if let Some(site_slot) = view.site_static_slot {
             // Cap015 / WAF-LOGIC-P1-E: sync/epoll static must not bypass WAF.
             // ARCH-002: when WAF is disabled, skip XFF/HeaderValue + wire materialization.
+            // Abuse is charged here only when the wire is what will answer; a
+            // request that falls through to `spawn_hyper` is judged again there.
+            let wire_answers = might_use_static_wire(head.as_ref())
+                && static_wire::static_use_blocking_pool(head.as_ref());
             let state = reload::read_state(&self.shared);
             if waf_wire_materialization_active(&state) {
                 let xff = HeaderValue::from_str(&conn.peer.ip().to_string())
                     .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
                 if let crate::waf::WafHookResult::Reject(reject) =
-                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff)
+                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff, !wire_answers)
                 {
                     let bytes = format_waf_reject_http(&reject);
                     let _ = conn.stream.set_nodelay(true);
@@ -241,7 +248,20 @@ impl CoreConnectionExecutor {
                 && static_wire::static_use_blocking_pool(head.as_ref())
             {
                 match static_wire::serve_blocking_sync(site_slot, &mut conn.stream, head, rest) {
-                    Ok(()) => return ConnectionServeOutcome::Completed,
+                    Ok(static_wire::StaticWireBlockingOutcome::Served) => {
+                        return ConnectionServeOutcome::Completed;
+                    }
+                    Ok(static_wire::StaticWireBlockingOutcome::Handoff { head, rest }) => {
+                        // The wire only answers its probes: replay the head it
+                        // returned on Hyper, which owns the socket from here.
+                        return self.spawn_hyper(
+                            conn,
+                            Some((head, rest)),
+                            view,
+                            token,
+                            client_guard,
+                        );
+                    }
                     Err(err) => match classify_accepted_socket_io(err) {
                         Ok(cerr) => return ConnectionServeOutcome::ConnectionClosed(cerr),
                         Err(err) => {
@@ -288,7 +308,8 @@ impl CoreConnectionExecutor {
         }
         let xff = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
-        match evaluate_wire_waf(&state, generation, head, &xff) {
+        // Wire keepalive answers the request itself: authoritative, abuse included.
+        match evaluate_wire_waf(&state, generation, head, &xff, false) {
             crate::waf::WafHookResult::Reject(reject) => Some(format_waf_reject_http(&reject)),
             crate::waf::WafHookResult::Continue => None,
         }

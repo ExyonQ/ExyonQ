@@ -769,15 +769,9 @@ fn classify_server_directive(
             analyze_real_ip_directive(directive, out, report, true);
         }
         "include" => {}
-        "ssl_certificate" | "ssl_certificate_key" => {
-            report.push(
-                &directive.loc,
-                &directive.name,
-                CompatStatus::Partial,
-                "TLS paths noted; manual review recommended",
-                None,
-            );
-        }
+        // EXY-03: the certificate pair becomes `[server.tls]` in map_ir, which
+        // is also where it is reported (Supported when both paths are present).
+        "ssl_certificate" | "ssl_certificate_key" => {}
         _ => report_unknown(directive, "server", report),
     }
 }

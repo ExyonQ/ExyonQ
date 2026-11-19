@@ -32,11 +32,11 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tracing::warn;
 
 const EPOLLIN: u32 = 0x001;
@@ -48,7 +48,6 @@ const EPOLL_CTL_DEL: i32 = 2;
 const EPOLL_CTL_MOD: i32 = 3;
 
 const MAX_EVENTS: usize = 128;
-const MAX_HEADER: usize = 8192;
 const ACCEPT_BATCH_LIMIT: usize = 64;
 const ACCEPT_PEEK_LEN: usize = 128;
 /// Kernel cold-path flag — local to epoll worker (not part of module public API).
@@ -422,36 +421,6 @@ fn keepalive_worker_loop(
     Ok(())
 }
 
-/// Platform-local process-lifetime cache for `EXYONQ_READ_TIMEOUT_MS`.
-static HEADER_READ_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
-static HEADER_READ_TIMEOUT_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-fn parse_header_read_timeout_ms(raw: Option<&str>) -> Duration {
-    raw.and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(30))
-}
-
-/// `EXYONQ_READ_TIMEOUT_MS` → deadline span.
-///
-/// This platform path owns a layer-local process-lifetime observation. Core and
-/// modules retain equivalent caches for their own paths. No `getenv` occurs per request.
-fn header_read_deadline_duration() -> Duration {
-    if !HEADER_READ_TIMEOUT_INITIALIZED.load(Ordering::Acquire) {
-        let timeout =
-            parse_header_read_timeout_ms(std::env::var("EXYONQ_READ_TIMEOUT_MS").ok().as_deref());
-        HEADER_READ_TIMEOUT_MS.store(timeout.as_millis() as u64, Ordering::Relaxed);
-        HEADER_READ_TIMEOUT_INITIALIZED.store(true, Ordering::Release);
-    }
-    Duration::from_millis(HEADER_READ_TIMEOUT_MS.load(Ordering::Relaxed))
-}
-
-#[cfg(test)]
-fn reset_header_read_deadline_cache_for_tests() {
-    HEADER_READ_TIMEOUT_MS.store(0, Ordering::Relaxed);
-    HEADER_READ_TIMEOUT_INITIALIZED.store(false, Ordering::Release);
-}
-
 fn find_header_end(buf: &[u8]) -> Option<usize> {
     // Local copy of core `server::io::find_header_end` (D1: no broad server::io import).
     let mut i = 0;
@@ -581,14 +550,17 @@ fn write_response_fd_local(fd: RawFd, buf: &[u8]) -> io::Result<()> {
 }
 
 fn renew_read_deadline(state: &mut ConnState) {
-    state.read_deadline = Instant::now() + header_read_deadline_duration();
+    state.read_deadline = crate::header_geometry::renew_read_deadline(Instant::now());
 }
 
 /// Wall-clock guard for slowloris: only while `Reading` with incomplete headers.
 fn conn_header_read_expired(state: &ConnState, now: Instant) -> bool {
-    matches!(state.phase, ConnPhase::Reading)
-        && find_header_end(&state.buf[..state.len]).is_none()
-        && now >= state.read_deadline
+    crate::header_geometry::header_read_expired(
+        matches!(state.phase, ConnPhase::Reading),
+        find_header_end(&state.buf[..state.len]).is_some(),
+        now,
+        state.read_deadline,
+    )
 }
 
 /// O(n) over live epoll conns; n is bounded by pool/worker load (typically small).
@@ -648,7 +620,9 @@ fn add_registered_conn(
 }
 
 struct ConnState {
-    buf: [u8; MAX_HEADER],
+    /// Sized from `[tuning].max_header_bytes` once per connection, so the cap
+    /// the pre-parser, the wires and Hyper apply is the one enforced here.
+    buf: Vec<u8>,
     len: usize,
     /// Wall-clock deadline for completing the current request headers (`Reading` only).
     read_deadline: Instant,
@@ -673,9 +647,9 @@ impl ConnState {
     ) -> Self {
         let now = Instant::now();
         ConnState {
-            buf: [0u8; MAX_HEADER],
+            buf: vec![0u8; crate::header_geometry::header_block_limit()],
             len: carry_len,
-            read_deadline: now + header_read_deadline_duration(),
+            read_deadline: crate::header_geometry::renew_read_deadline(now),
             phase: ConnPhase::Reading,
             sendfile,
             peer,
@@ -1052,7 +1026,7 @@ fn serve_epoll_fd(fd: RawFd, state: Option<&mut ConnState>) -> Result<ServeResul
     let mut served = false;
     loop {
         let Some(end) = find_header_end(&state.buf[..state.len]) else {
-            if state.len >= MAX_HEADER {
+            if state.len >= state.buf.len() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "request headers too large",
@@ -1523,7 +1497,7 @@ fn sendfile_read_and_serve(
             return ReadServe::Closed;
         };
         let Some(end) = find_header_end(&c.buf[..c.len]) else {
-            if c.len >= MAX_HEADER {
+            if c.len >= c.buf.len() {
                 remove_conn(epfd, fd, conns);
                 return ReadServe::Closed;
             }
@@ -1888,12 +1862,8 @@ fn detach_conn_for_handoff(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        header_read_deadline_duration, keepalive_pool_threads, parse_header_read_timeout_ms,
-        reset_header_read_deadline_cache_for_tests, response_status_from_wire, HeaderBuf, PeerIp,
-    };
+    use super::{keepalive_pool_threads, response_status_from_wire, HeaderBuf, PeerIp};
     use std::sync::Mutex;
-    use std::time::Duration;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1941,46 +1911,6 @@ mod tests {
         with_env("EXYONQ_EPOLL_POOL_THREADS", Some("99"), || {
             assert_eq!(keepalive_pool_threads(32), 16);
             assert_eq!(keepalive_pool_threads(2), 2);
-        });
-    }
-
-    #[test]
-    fn header_read_timeout_parse_matches_shared_env_contract() {
-        assert_eq!(parse_header_read_timeout_ms(None), Duration::from_secs(30));
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("")),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("invalid")),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("-1")),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("0")),
-            Duration::from_millis(0)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("125")),
-            Duration::from_millis(125)
-        );
-    }
-
-    #[test]
-    fn header_read_timeout_is_cached_until_test_reset() {
-        with_env("EXYONQ_READ_TIMEOUT_MS", Some("73"), || {
-            reset_header_read_deadline_cache_for_tests();
-            assert_eq!(header_read_deadline_duration(), Duration::from_millis(73));
-
-            std::env::set_var("EXYONQ_READ_TIMEOUT_MS", "91");
-            assert_eq!(header_read_deadline_duration(), Duration::from_millis(73));
-
-            reset_header_read_deadline_cache_for_tests();
-            assert_eq!(header_read_deadline_duration(), Duration::from_millis(91));
-            reset_header_read_deadline_cache_for_tests();
         });
     }
 

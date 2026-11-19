@@ -1,0 +1,13 @@
+# Migration corpus expectations.
+#
+# <file> <expected --strict exit> <unsupported directives, comma separated or ->
+#
+# `--strict` is fail-closed on any warning (EXY-IMPORT-0003), so a realistic
+# config with warnings must exit 1. Each unsupported directive is listed with
+# its reason in docs/architecture/078-migration-corpus.md; a new warning or a
+# new corpus file without an entry fails the gate.
+wordpress     1  add_header,client_max_body_size
+laravel       1  -
+spa           1  add_header
+home-assistant 1 proxy_set_header
+n8n           1  keepalive

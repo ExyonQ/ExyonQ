@@ -28,13 +28,13 @@ A route may carry one access policy:
 name = "private"
 match = { path = "/private" }
 
-access = {
-  allow = ["10.0.0.0/8", "2001:db8::/32"],
-  deny = ["10.1.0.0/16"],
-  methods = ["GET", "HEAD"],
-  schedule = { days = ["mon", "tue"], start = "22:00", end = "02:00" },
-}
+root = "/srv/private"
+access = { allow = ["10.0.0.0/8", "2001:db8::/32"], deny = ["10.1.0.0/16"], methods = ["GET", "HEAD"], schedule = { days = ["mon", "tue"], start = "22:00", end = "02:00" } }
 ```
+
+TOML inline tables must stay on one line; spreading `access` over several lines makes the
+config unparseable (`invalid inline table`). Use `[route.access]` only when the route is not
+an inline `[[route]]` element you also want to keep short.
 
 - `allow` and `deny` accept IPv4/IPv6 addresses, CIDRs, or `all`.
 - `rules` is an ordered first-match list of `{ effect = "allow"|"deny", source

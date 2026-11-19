@@ -1,0 +1,16 @@
+# Q-13 doc-example allowlist.
+#
+# One entry per line: `<path>#<n> <reason>`, where `<path>#<n>` is the label the
+# gate prints for a fenced ```toml block (n counts blocks inside the file).
+#
+# Only use this for an example that is deliberately not a valid standalone or
+# composable config — for instance a block that documents a shape the engine
+# only accepts through another entry point. A doc example that the binary
+# rejects because the doc is wrong must be fixed in the doc, not listed here;
+# the gate also reports Q13_ALLOWLIST_STALE for entries that stopped matching,
+# so a fixed example cannot silently keep a stale exemption.
+#
+# Empty on 2026-11-16: after fixing `docs/architecture/056-route-access-acl-ap05.md`
+# (multi-line inline table) and `docs/waf/rules.md` (missing `[[waf.ruleset]]`
+# header), every block either validates or is a bare-key fragment the gate
+# reports as SKIP.

@@ -22,8 +22,8 @@ use exyonq_cfd_gen::{
     CompositeProjection, GenError, Generation, RouteTable, WafProjError,
 };
 use exyonq_waf::{
-    compile_waf, BuiltinDetectors, DetectorToggle, ExclusionInput, IpFilterInput, MatchTarget,
-    RuleInput, RulesetInput, WafCompileInput,
+    compile_waf, BuiltinDetectors, DetectorToggle, ExclusionInput, IpFilterEntry, IpFilterInput,
+    MatchTarget, RuleInput, RulesetInput, WafCompileInput,
 };
 use exyonq_waf_api::{WafAction, WafMode, WafPhase};
 use thiserror::Error;
@@ -68,10 +68,24 @@ pub fn projection_from_compile_input(
         header_anomaly: toggle(&input.builtins.header_anomaly),
         bot_ua: toggle(&input.builtins.bot_ua),
     };
+    // CFD carries plain network text: TTL/reason stay host-side (the CFD
+    // projection has no clock or log surface for per-entry evidence).
     let ip_filter = CfdIpFilter {
         enabled: input.builtins.ip_filter.enabled,
-        whitelist: input.builtins.ip_filter.whitelist.clone(),
-        blacklist: input.builtins.ip_filter.blacklist.clone(),
+        whitelist: input
+            .builtins
+            .ip_filter
+            .whitelist
+            .iter()
+            .map(|e| e.network.clone())
+            .collect(),
+        blacklist: input
+            .builtins
+            .ip_filter
+            .blacklist
+            .iter()
+            .map(|e| e.network.clone())
+            .collect(),
     };
     let mut rules = Vec::new();
     for rs in &input.rulesets {
@@ -184,8 +198,18 @@ pub fn compile_input_from_projection(
             bot_ua: toggle_from(&p.builtins.bot_ua)?,
             ip_filter: IpFilterInput {
                 enabled: p.ip_filter.enabled,
-                whitelist: p.ip_filter.whitelist.clone(),
-                blacklist: p.ip_filter.blacklist.clone(),
+                whitelist: p
+                    .ip_filter
+                    .whitelist
+                    .iter()
+                    .map(IpFilterEntry::plain)
+                    .collect(),
+                blacklist: p
+                    .ip_filter
+                    .blacklist
+                    .iter()
+                    .map(IpFilterEntry::plain)
+                    .collect(),
             },
         },
         rulesets: vec![RulesetInput {
@@ -256,7 +280,7 @@ pub fn representative_phase3_waf_input() -> WafCompileInput {
                 enabled: true,
                 whitelist: vec![],
                 // Test / adversarial deny IP (documentation); production peers rarely match.
-                blacklist: vec!["203.0.113.99/32".into()],
+                blacklist: vec![IpFilterEntry::plain("203.0.113.99/32")],
             },
         },
         rulesets: vec![RulesetInput {

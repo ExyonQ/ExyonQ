@@ -24,6 +24,7 @@ operational smoke category in this workspace (FORBIDDEN).
 | `ol04-ol03-artifact-e2e.sh` | OL-04 + OL-03 under one artifact hash: records both binaries, runs focused tests, re-hashes after tests and after each E2E, and rejects a log whose `binary_sha256` or `compat_sha256` differs (`scripts/gates/artifact-integrity.sh`) | C+ |
 | `ws-real-apps-e2e.sh` | Real Home Assistant auth handshake and authenticated n8n push/run frames through ExyonQ (requires running apps and `N8N_COOKIE_FILE`) | E2E |
 | `ol05-waf-metrics-e2e.sh` | OL-05/Q-10: real CRS 942100 hit, per-rule Prometheus counter, block and detection-only modes | C+ |
+| `ip82-waf-ip-filter-e2e.sh` | GitHub #82: `[waf.ip]` allow/deny list — blocking, CIDR entries, TTL expiry, `reason` and matched entry in the violation log, per-entry counters and active/expired gauges, whitelist fail-closed, fail-closed config validation | C+ |
 | `f6-wp02-saturation-e2e.sh` | FastCGI saturation envelope (16 vs 40, 20 concurrent, per-pool metrics); Linux required | C+ |
 | `f6-wp03-config-e2e.sh` | Published WordPress config copy: cache headers, wp-config deny, front controller; Linux required | C+ |
 | `sec-h03-cache-forwarded-e2e.sh` | H-03: a cached response must not replay client-supplied forwarding headers (`X-Forwarded-Host`/`-Port`, `X-Real-IP`, `Forwarded`); two clean requests must not hit the origin again | C+ |
@@ -34,6 +35,39 @@ operational smoke category in this workspace (FORBIDDEN).
 | `http3-protocol-e2e.sh` | HTTP/3 wire product path | C |
 | `oci-runtime-e2e.sh` | container runtime (not version-only) | C |
 | `run-linux-matrix.sh` | dual-arch orchestrator | — |
+
+`scripts/e2e/http3-product-e2e.sh` runs the committed product build (s2n) by
+default. Another compiled provider is exercised without editing the harness by
+exporting `EXYONQ_E2E_FEATURES` and/or `EXYONQ_E2E_NO_DEFAULT_FEATURES` (the
+cargo feature set) and, for the modern alternate, `EXYONQ_E2E_H3_PROVIDER=quiche`
+(the IR `[http3] provider` key). The Quinn rollback build is selected by feature
+alone and ignores the IR key. Every run prints `provider_under_test` and the
+`listener_banner` the provider itself logs (`s2n-quic provider`, `quiche
+provider`), so the provider under test is evidence, not an assumption.
+
+On an arm64 Linux host the same gate certifies the arm64 **server**: the product
+binary is built and executed there by that host's own toolchain. The
+`client_http3` line records the client backend and, for the container client,
+the digest it resolved to.
+
+The pinned `ymuski/curl-http3` image publishes only `linux/amd64`, so the
+default (`EXYONQ_E2E_CLIENT=curl`) runs under the host's binfmt emulation on
+arm64 while the server stays native. `EXYONQ_E2E_CLIENT=ngtcp2` replaces it
+with a native client binary on the host (`EXYONQ_H3_NATIVE_CLIENT`, default
+`gtlsclient` from the distro's `ngtcp2-client` package): same QUIC exchange and
+same assertions, no docker and no emulation. That client cannot set request
+headers, so `HEADER_TRANSLATION_SPOTCHECK`, `H3_HEADER_WITHIN_BUDGET_200` and
+`H3_HEADER_OVER_BUDGET_431` print `NOT_EXECUTED ... client=ngtcp2` in that mode
+(never PASS) and must be read from a `curl`-mode run. It also cannot send an
+explicit zero-length body, so the empty POST is issued without data.
+
+Known gap of the native client on the Quinn rollback provider: `gtlsclient`
+does not observe the `413` for the 64 MiB oversize POST (`POST oversize
+expected 413 got 000`, deterministic). The product does emit it — the same
+provider and host pass `POST_413` with the `curl` client — because Quinn resets
+the request stream right after the early error response and this client drops a
+response whose stream was reset. Run the Quinn pass with `EXYONQ_E2E_CLIENT=curl`
+when `POST_413` must be part of the evidence.
 
 The OL-04/OL-03 artifact-bound runner is the artifact-bound E2E entry point in CI
 (`.github/workflows/e2e.yml`). The job builds `exyonq` and `exyonq-compat`, runs

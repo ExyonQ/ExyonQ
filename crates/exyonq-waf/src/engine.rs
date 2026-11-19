@@ -287,6 +287,7 @@ fn inspect_body_with_snap(
                             field: Some("body".into()),
                             matched: None,
                             transforms: Vec::new(),
+                            ip_entry: None,
                         },
                     },
                     WafAction::Block,
@@ -385,6 +386,7 @@ fn limit_violation(phase: WafPhase, message: &str) -> WafViolation {
             field: Some("body".into()),
             matched: None,
             transforms: Vec::new(),
+            ip_entry: None,
         },
     }
 }

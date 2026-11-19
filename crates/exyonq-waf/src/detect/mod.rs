@@ -18,12 +18,14 @@
 use crate::exclusion::CompiledExclusion;
 use crate::normalize::{normalize_text, NormalizeBudget};
 use exyonq_waf_api::{
-    WafAction, WafEvidence, WafPhase, WafRequest, WafRuleId, WafTransform, WafViolation,
+    WafAction, WafEvidence, WafIpEntryEvidence, WafIpList, WafPhase, WafRequest, WafRuleId,
+    WafTransform, WafViolation,
 };
 use ipnetwork::IpNetwork;
 use regex::Regex;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::time::SystemTime;
 
 /// Toggle for one built-in detector family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,12 +57,39 @@ impl DetectorToggle {
     }
 }
 
+/// One client-IP allow/deny entry (compiled into snapshot).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IpFilterEntry {
+    /// IP or CIDR text, kept verbatim for logs and metrics.
+    pub network: String,
+    /// Instant after which the entry no longer applies (TTL expiry).
+    pub until: Option<SystemTime>,
+    /// Operator reason recorded with the violation.
+    pub reason: Option<String>,
+}
+
+impl IpFilterEntry {
+    /// Entry with no expiry and no reason (`[waf.ruleset.builtins.ip_filter]`).
+    pub fn plain(network: impl Into<String>) -> Self {
+        Self {
+            network: network.into(),
+            until: None,
+            reason: None,
+        }
+    }
+
+    /// True while the entry applies at `now` (no `until` means forever).
+    pub fn is_active_at(&self, now: SystemTime) -> bool {
+        self.until.is_none_or(|until| now < until)
+    }
+}
+
 /// IP / CIDR filter config (compiled into snapshot).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IpFilterInput {
     pub enabled: bool,
-    pub whitelist: Vec<String>,
-    pub blacklist: Vec<String>,
+    pub whitelist: Vec<IpFilterEntry>,
+    pub blacklist: Vec<IpFilterEntry>,
 }
 
 /// Built-in detector pack (exyonq-core ruleset).
@@ -109,10 +138,24 @@ pub(crate) struct CompiledDetectors {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct CompiledIpEntry {
+    pub net: IpNetwork,
+    pub entry: String,
+    pub until: Option<SystemTime>,
+    pub reason: Option<String>,
+}
+
+impl CompiledIpEntry {
+    fn is_active_at(&self, now: SystemTime) -> bool {
+        self.until.is_none_or(|until| now < until)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct CompiledIpFilter {
     pub action: WafAction,
-    pub whitelist: Vec<IpNetwork>,
-    pub blacklist: Vec<IpNetwork>,
+    pub whitelist: Vec<CompiledIpEntry>,
+    pub blacklist: Vec<CompiledIpEntry>,
 }
 
 const SAFE_HEADERS: &[&str] = &[
@@ -193,18 +236,27 @@ fn compile_patterns(specs: &[(&'static str, &'static str)]) -> Result<Vec<Patter
 }
 
 fn compile_ip_filter(input: &IpFilterInput) -> Result<CompiledIpFilter, String> {
-    let mut whitelist = Vec::new();
-    for s in &input.whitelist {
-        whitelist.push(parse_ip_or_cidr(s)?);
+    let mut whitelist = Vec::with_capacity(input.whitelist.len());
+    for e in &input.whitelist {
+        whitelist.push(compile_ip_entry(e)?);
     }
-    let mut blacklist = Vec::new();
-    for s in &input.blacklist {
-        blacklist.push(parse_ip_or_cidr(s)?);
+    let mut blacklist = Vec::with_capacity(input.blacklist.len());
+    for e in &input.blacklist {
+        blacklist.push(compile_ip_entry(e)?);
     }
     Ok(CompiledIpFilter {
         action: WafAction::Block,
         whitelist,
         blacklist,
+    })
+}
+
+fn compile_ip_entry(entry: &IpFilterEntry) -> Result<CompiledIpEntry, String> {
+    Ok(CompiledIpEntry {
+        net: parse_ip_or_cidr(&entry.network)?,
+        entry: entry.network.clone(),
+        until: entry.until,
+        reason: entry.reason.clone(),
     })
 }
 
@@ -432,6 +484,7 @@ fn violation(
             field: Some(field.into()),
             matched: None,
             transforms: transforms.to_vec(),
+            ip_entry: None,
         },
     }
 }
@@ -442,7 +495,24 @@ fn is_safe_header(name: &str) -> bool {
 }
 
 fn check_ip(filter: &CompiledIpFilter, ip: IpAddr) -> Option<WafViolation> {
-    if !filter.whitelist.is_empty() && !filter.whitelist.iter().any(|n| n.contains(ip)) {
+    check_ip_at(filter, ip, SystemTime::now())
+}
+
+/// Clock-explicit variant (deterministic TTL tests).
+///
+/// Expired entries stop matching. A non-empty whitelist stays fail-closed when
+/// every entry has expired: an expired allow entry must not open the gate.
+fn check_ip_at(filter: &CompiledIpFilter, ip: IpAddr, now: SystemTime) -> Option<WafViolation> {
+    // Fail-closed: a non-empty whitelist blocks every address outside it, and
+    // an expired allow entry stops allowing (it never opens the gate).
+    if !filter.whitelist.is_empty()
+        && !filter
+            .whitelist
+            .iter()
+            .any(|e| e.is_active_at(now) && e.net.contains(ip))
+    {
+        // No entry matched the client, so there is no per-entry evidence to
+        // attach: the hit is counted under EXY-IP-1002.
         return Some(violation(
             "EXY-IP-1002",
             WafPhase::RequestHeaders,
@@ -451,14 +521,25 @@ fn check_ip(filter: &CompiledIpFilter, ip: IpAddr) -> Option<WafViolation> {
             &[],
         ));
     }
-    if filter.blacklist.iter().any(|n| n.contains(ip)) {
-        return Some(violation(
+    if let Some(entry) = filter
+        .blacklist
+        .iter()
+        .find(|e| e.is_active_at(now) && e.net.contains(ip))
+    {
+        let mut v = violation(
             "EXY-IP-1001",
             WafPhase::RequestHeaders,
             "client_ip",
             "client IP blacklisted",
             &[],
-        ));
+        );
+        v.evidence.matched = Some(entry.entry.clone());
+        v.evidence.ip_entry = Some(WafIpEntryEvidence {
+            list: WafIpList::Blacklist,
+            entry: entry.entry.clone(),
+            reason: entry.reason.clone(),
+        });
+        return Some(v);
     }
     None
 }

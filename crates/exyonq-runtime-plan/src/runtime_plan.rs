@@ -896,6 +896,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            respond: None,
             max_request_body_bytes: None,
             gunzip: None,
             cache_tags: Vec::new(),
@@ -988,6 +989,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let snap = compile_config(config);
         assert!(snap.route_backend_id(0).is_none());
@@ -1030,6 +1032,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            streams: Vec::new(),
         };
         let snap = compile_config(config);
         let api_id = snap.route_backend_id(0).unwrap();

@@ -27,7 +27,9 @@ mod full_page_cache;
 mod logging;
 pub mod modules;
 mod registry;
+mod rfc3339;
 mod static_preload;
+mod stream;
 mod upstream_health;
 mod waf;
 
@@ -65,6 +67,7 @@ pub use modules::{
     SliceConfig, SliceRouteConfig, SubFilterConfig, SubFilterRouteConfig, SubFilterRule,
 };
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
+pub use rfc3339::{parse_rfc3339_utc, TimestampError};
 pub use static_preload::{
     StaticEncodingCacheConfig, StaticPreloadConfig, StaticSectionConfig,
     DEFAULT_ENCODING_CACHE_DIR, DEFAULT_ENCODING_CACHE_LEVEL, DEFAULT_ENCODING_CACHE_MAX_BYTES,
@@ -74,12 +77,16 @@ pub use static_preload::{
     ENCODING_CACHE_MAX_ENTRIES_CEILING, ENCODING_CACHE_MAX_TOTAL_BYTES_CEILING,
     PRELOAD_MAX_ENTRIES_CEILING, PRELOAD_MAX_FILE_BYTES_CEILING, PRELOAD_MAX_TOTAL_BYTES_CEILING,
 };
+pub use stream::{
+    StreamConfig, StreamProtocol, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_STREAM_MAX_SESSIONS,
+    MAX_STREAMS, MAX_STREAM_IDLE_TIMEOUT_MS, MAX_STREAM_MAX_SESSIONS, MIN_STREAM_IDLE_TIMEOUT_MS,
+};
 pub use upstream_health::UpstreamHealthCheckConfig;
 pub use waf::{
     WafAbuseConfig, WafAbuseMode, WafBuiltinToggles, WafCaptchaProvider, WafConfig,
     WafCustomRuleConfig, WafDetectorModeIr, WafEngineIr, WafExclusionConfig, WafFailPolicyIr,
-    WafIpFilterConfig, WafModeIr, WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr,
-    WafRulesetConfig,
+    WafIpConfig, WafIpEntryDetailIr, WafIpEntryIr, WafIpFilterConfig, WafModeIr,
+    WafOnInspectionLimitIr, WafPhaseIr, WafRuleActionIr, WafRulesetConfig,
 };
 
 use modules::ModulesConfig as RawModulesConfig;
@@ -96,6 +103,11 @@ pub const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_UPSTREAM_TIMEOUT_MS: u64 = 86_400_000;
 /// Inclusive worker-count ceiling for `[tuning]` (matches core geometry).
 pub const MAX_TUNING_WORKERS: usize = 16;
+/// `[tuning].keepalive_timeout_ms` upper bound (10 minutes).
+pub const MAX_TUNING_KEEPALIVE_MS: u64 = 600_000;
+/// `[tuning].max_header_bytes` bounds: the historical cap and 64 KiB.
+pub const MIN_TUNING_HEADER_BYTES: usize = 8192;
+pub const MAX_TUNING_HEADER_BYTES: usize = 65_536;
 
 /// `[tuning]` — runtime geometry knobs with the measured defaults applied.
 ///
@@ -109,6 +121,16 @@ pub struct TuningConfig {
     /// CPU parallelism clamped to `1..=16`.
     #[serde(default)]
     pub accept_workers: Option<usize>,
+    /// Keep-alive idle / header-read deadline in milliseconds.
+    /// Absent → `EXYONQ_READ_TIMEOUT_MS`, else 30 s.
+    /// Skipped when absent so the fingerprint of a config that does not use the
+    /// key is bit-identical to the one it had before the key existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_timeout_ms: Option<u64>,
+    /// Largest request-header block the wire pre-parser accepts.
+    /// Absent → the historical 8192-byte cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_header_bytes: Option<usize>,
 }
 
 fn validate_tuning(tuning: &TuningConfig) -> Result<(), ConfigError> {
@@ -116,6 +138,25 @@ fn validate_tuning(tuning: &TuningConfig) -> Result<(), ConfigError> {
         if !(1..=MAX_TUNING_WORKERS).contains(&workers) {
             return Err(ConfigError::Parse(format!(
                 "tuning.accept_workers must be 1..={MAX_TUNING_WORKERS}, got {workers}"
+            )));
+        }
+    }
+    if let Some(ms) = tuning.keepalive_timeout_ms {
+        if !(1..=MAX_TUNING_KEEPALIVE_MS).contains(&ms) {
+            return Err(ConfigError::Parse(format!(
+                "tuning.keepalive_timeout_ms must be 1..={MAX_TUNING_KEEPALIVE_MS}, got {ms}"
+            )));
+        }
+    }
+    if let Some(bytes) = tuning.max_header_bytes {
+        if !(MIN_TUNING_HEADER_BYTES..=MAX_TUNING_HEADER_BYTES).contains(&bytes) {
+            return Err(ConfigError::Parse(format!(
+                "tuning.max_header_bytes must be {MIN_TUNING_HEADER_BYTES}..={MAX_TUNING_HEADER_BYTES}, got {bytes}"
+            )));
+        }
+        if !bytes.is_power_of_two() {
+            return Err(ConfigError::Parse(format!(
+                "tuning.max_header_bytes must be a power of two, got {bytes}"
             )));
         }
     }
@@ -147,6 +188,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     /// `[tuning]` — worker geometry with measured defaults (NG-21).
     pub tuning: TuningConfig,
+    /// NG-20: `[[stream]]` L4 TCP/UDP listeners.
+    pub streams: Vec<StreamConfig>,
 }
 
 /// Top-level `[http3]` IR (neutral; no provider crate types).
@@ -353,6 +396,11 @@ pub struct RouteConfig {
     pub max_request_body_bytes: Option<u64>,
     #[serde(default)]
     pub redirect: Option<RedirectConfig>,
+    /// EXY-03: literal response (`NGINX return <status> "<body>"`). A route with
+    /// `respond` synthesizes the response instead of dispatching to a backend,
+    /// so it is exclusive with `upstream`/`root`/`fastcgi`/`redirect`.
+    #[serde(default)]
+    pub respond: Option<RespondConfig>,
     /// Cap035 literal path or NG-02 patterned rewrite (ADR-048).
     #[serde(default)]
     pub rewrite: Option<RewriteConfig>,
@@ -883,6 +931,30 @@ fn default_redirect_status() -> u16 {
     302
 }
 
+/// Upper bound for a literal response body (`return 200 "<body>"`). A literal
+/// response is a small canned answer, not a static file: larger payloads belong
+/// under `root`, where sendfile and the cache can help.
+pub const MAX_LITERAL_RESPONSE_BYTES: usize = 65_536;
+
+/// EXY-03: literal response body served by the route itself (NGINX
+/// `return <status> "<body>"`). `body` is served verbatim — no variable
+/// interpolation — and `content_type` defaults to `text/plain; charset=utf-8`
+/// (the NGINX `default_type` equivalent).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RespondConfig {
+    #[serde(default = "default_respond_status")]
+    pub status: u16,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+fn default_respond_status() -> u16 {
+    200
+}
+
 /// Upstream / logical backend IR (K8S-P2A EndpointSet foundation).
 ///
 /// Legacy `target` sugar remains for TOML compatibility. After normalize,
@@ -1193,6 +1265,7 @@ pub struct RawConfigInput {
     pub waf: WafConfig,
     pub logging: LoggingConfig,
     pub tuning: TuningConfig,
+    pub stream: Vec<StreamConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1227,6 +1300,8 @@ struct RawConfig {
     logging: LoggingConfig,
     #[serde(default)]
     tuning: TuningConfig,
+    #[serde(default)]
+    stream: Vec<StreamConfig>,
 }
 
 impl std::str::FromStr for AppConfig {
@@ -1269,6 +1344,7 @@ impl AppConfig {
             waf: raw.waf,
             logging: raw.logging,
             tuning: raw.tuning,
+            stream: raw.stream,
         })
     }
 
@@ -1419,6 +1495,7 @@ impl AppConfig {
             // Endpoint set already validated in UpstreamConfig::try_from_parts.
             let _ = upstream.user_backend_id()?;
         }
+        validate_streams(&raw.stream, &raw.server, &upstreams)?;
 
         for pool in pools_fcgi.values() {
             validate_fcgi_pool_address(&pool.name, &pool.address)?;
@@ -1465,6 +1542,7 @@ impl AppConfig {
             waf: raw.waf,
             logging: raw.logging,
             tuning: raw.tuning,
+            streams: raw.stream,
         })
     }
 
@@ -1979,9 +2057,39 @@ fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
     if route.fastcgi.is_some() {
         terminals += 1;
     }
+    if let Some(respond) = &route.respond {
+        // A literal response carries a body, so the bodyless statuses are
+        // rejected instead of being emitted as a body that clients drop.
+        if !(200..=599).contains(&respond.status) || matches!(respond.status, 204 | 304) {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: respond.status must be 200..=599 and not 204/304, because a literal response carries a body",
+                route.name
+            )));
+        }
+        if respond.body.len() > MAX_LITERAL_RESPONSE_BYTES {
+            return Err(ConfigError::Parse(format!(
+                "route `{}`: respond.body is {} bytes; the literal-response bound is {}",
+                route.name,
+                respond.body.len(),
+                MAX_LITERAL_RESPONSE_BYTES
+            )));
+        }
+        if let Some(content_type) = respond.content_type.as_deref() {
+            if content_type.trim().is_empty()
+                || content_type.contains('\n')
+                || content_type.contains('\r')
+            {
+                return Err(ConfigError::Parse(format!(
+                    "route `{}`: respond.content_type must be one non-empty header value",
+                    route.name
+                )));
+            }
+        }
+        terminals += 1;
+    }
 
     if break_colocated {
-        if route.redirect.is_some() || terminals != 1 {
+        if route.redirect.is_some() || route.respond.is_some() || terminals != 1 {
             return Err(ConfigError::RouteConflictingActions {
                 route: route.name.clone(),
             });
@@ -3070,6 +3178,90 @@ fn validate_server_name(name: &str, server_idx: usize) -> Result<(), ConfigError
 /// NG-15: `[[server]]` blocks that share a `listen` collapse into one socket.
 /// Enforce the invariants that keep every block meaningful — otherwise the
 /// runtime would silently ignore configured servers/certificates.
+/// NG-20: validate `[[stream]]` listeners against the HTTP TCP / HTTP/3 UDP
+/// bind sets and their named upstreams. This is deliberately fail-closed: an
+/// unroutable listener must be a config error, not a silent runtime no-op.
+fn validate_streams(
+    streams: &[StreamConfig],
+    servers: &[ServerConfig],
+    upstreams: &HashMap<String, UpstreamConfig>,
+) -> Result<(), ConfigError> {
+    if streams.len() > MAX_STREAMS {
+        return Err(ConfigError::Parse(format!(
+            "at most {MAX_STREAMS} [[stream]] listeners allowed (found {})",
+            streams.len()
+        )));
+    }
+    unique_names(streams.iter().map(|stream| stream.name.as_str()), "stream")?;
+
+    // TCP and UDP are separate port spaces. In particular, HTTPS on TCP/443
+    // and QUIC on UDP/443 (or an L4 UDP tunnel beside an HTTP TCP listener)
+    // are valid and must not be rejected as duplicate binds.
+    let mut tcp_bound = HashSet::new();
+    let mut udp_bound = HashSet::new();
+    for server in servers {
+        tcp_bound.insert(parse_listen(&server.listen)?);
+        if let Some(http3) = &server.http3_listen {
+            if let Ok(addr) = parse_listen(http3) {
+                udp_bound.insert(addr);
+            }
+        }
+    }
+    for stream in streams {
+        UserBackendId::new(stream.name.clone())?;
+        let addr = parse_listen(&stream.listen)?;
+        let bound = match stream.protocol {
+            StreamProtocol::Tcp => &mut tcp_bound,
+            StreamProtocol::Udp => &mut udp_bound,
+        };
+        if !bound.insert(addr) {
+            let transport = match stream.protocol {
+                StreamProtocol::Tcp => "TCP",
+                StreamProtocol::Udp => "UDP",
+            };
+            return Err(ConfigError::Parse(format!(
+                "stream `{}` {transport} listen address {} is already bound by another listener",
+                stream.name, stream.listen
+            )));
+        }
+        if !(MIN_STREAM_IDLE_TIMEOUT_MS..=MAX_STREAM_IDLE_TIMEOUT_MS)
+            .contains(&stream.idle_timeout_ms)
+        {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}`: idle_timeout_ms must be {MIN_STREAM_IDLE_TIMEOUT_MS}..={MAX_STREAM_IDLE_TIMEOUT_MS}, got {}",
+                stream.name, stream.idle_timeout_ms
+            )));
+        }
+        if !(1..=MAX_STREAM_MAX_SESSIONS).contains(&stream.max_sessions) {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}`: max_sessions must be 1..={MAX_STREAM_MAX_SESSIONS}, got {}",
+                stream.name, stream.max_sessions
+            )));
+        }
+        let upstream = upstreams.get(&stream.upstream).ok_or_else(|| {
+            ConfigError::Parse(format!(
+                "stream `{}` references unknown upstream `{}`",
+                stream.name, stream.upstream
+            ))
+        })?;
+        if upstream.endpoint_set.is_empty() {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}` upstream `{}` has no endpoints",
+                stream.name, stream.upstream
+            )));
+        }
+        if !upstream.endpoint_set.endpoints().iter().any(|endpoint| {
+            endpoint.admin_state == AdminEndpointState::Enabled && endpoint.weight > 0
+        }) {
+            return Err(ConfigError::Parse(format!(
+                "stream `{}` upstream `{}` has no enabled endpoint with weight > 0",
+                stream.name, stream.upstream
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError> {
     if servers.iter().skip(1).any(|s| s.http3_listen.is_some()) {
         return Err(ConfigError::Parse(

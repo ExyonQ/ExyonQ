@@ -76,6 +76,13 @@ pub fn waf_wire_inspection_active_published() -> bool {
 /// Publish generation + Cap067 WAF wire-inspection flag from a newly live [`ServerState`].
 pub fn publish_runtime_observe_authority(state: &ServerState) {
     publish_runtime_generation(state.generation);
+    // NG-21: the cell every wire path resolves its header deadline and cap from
+    // follows the generation that just committed, so a rejected reload keeps the
+    // live geometry instead of leaking the candidate's.
+    exyonq_module_api::runtime_tuning::publish(
+        state.config.tuning.keepalive_timeout_ms,
+        state.config.tuning.max_header_bytes,
+    );
     publish_waf_wire_inspection_active(state.waf_wire_inspection_active);
     #[cfg(target_os = "linux")]
     crate::server::sdp_start::publish_projection(state);
@@ -336,6 +343,26 @@ fn reject_listen_bind_changes(current: &AppConfig, candidate: &AppConfig) -> any
         if cur.http3_listen != cand.http3_listen {
             return Err(anyhow::anyhow!(
                 "EXY-RELOAD-0005: http3_listen bind change requires restart (server[{idx}])"
+            ));
+        }
+    }
+    // NG-20: L4 listeners own long-lived sockets and a compiled endpoint
+    // selector. Changing their bind/upstream set without rebinding would keep
+    // the old dataplane alive, so require a restart instead of a silent
+    // generation NO_OP.
+    if current.streams != candidate.streams {
+        return Err(anyhow::anyhow!(
+            "EXY-RELOAD-0005: stream listener change requires restart"
+        ));
+    }
+    for stream in &current.streams {
+        let cur = current.upstreams.get(&stream.upstream);
+        let cand = candidate.upstreams.get(&stream.upstream);
+        if cur != cand {
+            return Err(anyhow::anyhow!(
+                "EXY-RELOAD-0005: upstream `{}` is used by stream `{}`; changing it requires restart",
+                stream.upstream,
+                stream.name
             ));
         }
     }

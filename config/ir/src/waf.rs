@@ -26,6 +26,7 @@
 use crate::ConfigError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::time::SystemTime;
 
 fn default_waf_enabled() -> bool {
     true
@@ -96,6 +97,13 @@ pub struct WafConfig {
     pub rulesets: Vec<WafRulesetConfig>,
     #[serde(default, rename = "exclusion")]
     pub exclusions: Vec<WafExclusionConfig>,
+    /// `[waf.ip]` — global client-IP allow/deny list (same detector as
+    /// `[waf.ruleset.builtins.ip_filter]`).
+    ///
+    /// Skipped when empty so configs that do not use the table keep the same
+    /// IR fingerprint.
+    #[serde(default, skip_serializing_if = "WafIpConfig::is_empty")]
+    pub ip: WafIpConfig,
 }
 
 impl Default for WafConfig {
@@ -110,6 +118,86 @@ impl Default for WafConfig {
             abuse: WafAbuseConfig::default(),
             rulesets: Vec::new(),
             exclusions: Vec::new(),
+            ip: WafIpConfig::default(),
+        }
+    }
+}
+
+/// `[waf.ip]` — global client-IP allow/deny list.
+///
+/// Declared entries populate the built-in `EXY-IP-1001` (blacklist) and
+/// `EXY-IP-1002` (whitelist, fail-closed) detector; the list is active as soon
+/// as it has an entry. It is unioned with any
+/// `[waf.ruleset.builtins.ip_filter]` lists; blacklist wins when an address is
+/// in both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WafIpConfig {
+    #[serde(default)]
+    pub whitelist: Vec<WafIpEntryIr>,
+    #[serde(default)]
+    pub blacklist: Vec<WafIpEntryIr>,
+}
+
+impl WafIpConfig {
+    /// True when neither list declares an entry.
+    pub fn is_empty(&self) -> bool {
+        self.whitelist.is_empty() && self.blacklist.is_empty()
+    }
+}
+
+/// One `[waf.ip]` entry: a bare `"203.0.113.0/24"` or the expanded table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WafIpEntryIr {
+    Plain(String),
+    Detailed(WafIpEntryDetailIr),
+}
+
+/// Expanded `[waf.ip]` entry with optional expiry and operator reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WafIpEntryDetailIr {
+    pub ip: String,
+    /// RFC 3339 instant after which the entry no longer applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    /// Why the entry exists; recorded with the violation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl WafIpEntryIr {
+    /// IP or CIDR text of the entry.
+    pub fn network(&self) -> &str {
+        match self {
+            Self::Plain(network) => network,
+            Self::Detailed(entry) => &entry.ip,
+        }
+    }
+
+    /// RFC 3339 expiry text, when present.
+    pub fn until(&self) -> Option<&str> {
+        match self {
+            Self::Plain(_) => None,
+            Self::Detailed(entry) => entry.until.as_deref(),
+        }
+    }
+
+    /// Operator reason, when present.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Plain(_) => None,
+            Self::Detailed(entry) => entry.reason.as_deref(),
+        }
+    }
+
+    /// Parsed expiry for the compiled filter. Validation already rejected
+    /// unparsable text, so an error here means the config bypassed validation.
+    pub fn until_system_time(&self) -> Result<Option<SystemTime>, crate::TimestampError> {
+        match self.until() {
+            Some(raw) => crate::parse_rfc3339_utc(raw).map(Some),
+            None => Ok(None),
         }
     }
 }
@@ -359,6 +447,7 @@ pub(crate) fn validate_waf(waf: &WafConfig) -> Result<(), ConfigError> {
     }
 
     validate_waf_abuse(&waf.abuse)?;
+    validate_waf_ip(&waf.ip)?;
 
     let mut ruleset_ids = HashSet::new();
     let mut rule_ids = HashSet::new();
@@ -391,6 +480,38 @@ pub(crate) fn validate_waf(waf: &WafConfig) -> Result<(), ConfigError> {
         validate_exclusion(exclusion)?;
     }
 
+    Ok(())
+}
+
+fn validate_waf_ip(ip: &WafIpConfig) -> Result<(), ConfigError> {
+    for (list, entries) in [("whitelist", &ip.whitelist), ("blacklist", &ip.blacklist)] {
+        for entry in entries {
+            let network = entry.network().trim();
+            if network.is_empty() {
+                return Err(ConfigError::Parse(format!(
+                    "waf.ip.{list} entry must not be empty"
+                )));
+            }
+            crate::parse_network(network).ok_or_else(|| {
+                ConfigError::Parse(format!(
+                    "waf.ip.{list} entry `{network}` is not a valid IP address or CIDR"
+                ))
+            })?;
+            if let Some(until) = entry.until() {
+                crate::parse_rfc3339_utc(until).map_err(|_| {
+                    ConfigError::Parse(format!(
+                        "waf.ip.{list} entry `{network}`: until `{until}` is not an RFC 3339 UTC \
+                         timestamp (expected e.g. 2026-11-14T08:30:00Z)"
+                    ))
+                })?;
+            }
+            if entry.reason().is_some_and(|r| r.trim().is_empty()) {
+                return Err(ConfigError::Parse(format!(
+                    "waf.ip.{list} entry `{network}`: reason must not be empty when set"
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -548,6 +669,96 @@ upstream = "backend"
 name = "backend"
 target = "http://127.0.0.1:9000"
 "#;
+
+    #[test]
+    fn waf_ip_entries_parse_plain_and_detailed() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.ip]
+whitelist = ["10.0.0.0/8", "192.0.2.7"]
+blacklist = [
+  "198.51.100.0/24",
+  {{ ip = "203.0.113.10", until = "2099-11-14T08:30:00Z", reason = "repeated 404 scanning" }},
+]
+"#
+        );
+        let config: AppConfig = input.parse().expect("parse [waf.ip]");
+        assert_eq!(config.waf.ip.whitelist.len(), 2);
+        assert_eq!(config.waf.ip.blacklist.len(), 2);
+        assert_eq!(config.waf.ip.blacklist[0].network(), "198.51.100.0/24");
+        assert_eq!(config.waf.ip.blacklist[1].network(), "203.0.113.10");
+        assert_eq!(
+            config.waf.ip.blacklist[1].reason(),
+            Some("repeated 404 scanning")
+        );
+        assert!(config.waf.ip.blacklist[1]
+            .until_system_time()
+            .expect("parsed expiry")
+            .is_some());
+        assert!(config.waf.ip.whitelist[0].until().is_none());
+    }
+
+    #[test]
+    fn waf_ip_absent_is_empty_and_defaults_still_parse() {
+        let config: AppConfig = MINIMAL.parse().expect("parse");
+        assert!(config.waf.ip.whitelist.is_empty());
+        assert!(config.waf.ip.blacklist.is_empty());
+    }
+
+    #[test]
+    fn waf_ip_invalid_network_rejected() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.ip]
+blacklist = ["not-an-address"]
+"#
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(
+            err.to_string().contains("waf.ip.blacklist"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn waf_ip_invalid_until_rejected() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.ip]
+blacklist = [{{ ip = "203.0.113.10", until = "tomorrow" }}]
+"#
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(err.to_string().contains("RFC 3339"), "{err}");
+    }
+
+    #[test]
+    fn waf_ip_empty_reason_rejected() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.ip]
+whitelist = [{{ ip = "10.0.0.0/8", reason = "  " }}]
+"#
+        );
+        let err = input.parse::<AppConfig>().unwrap_err();
+        assert!(err.to_string().contains("reason"), "{err}");
+    }
+
+    #[test]
+    fn waf_ip_unknown_entry_field_rejected() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf.ip]
+blacklist = [{{ ip = "203.0.113.10", ttl = 60 }}]
+"#
+        );
+        assert!(input.parse::<AppConfig>().is_err());
+    }
 
     #[test]
     fn absent_waf_defaults() {

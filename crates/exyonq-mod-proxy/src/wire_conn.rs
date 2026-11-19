@@ -1381,7 +1381,7 @@ async fn read_next_get_head<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Opti
     loop {
         if let Some(end) = wire_io::find_header_end(&buf) {
             let head_end = end + 4;
-            if head_end > wire_io::MAX_HEADER {
+            if head_end > wire_io::max_header_bytes() {
                 return Err(io::Error::other("headers too large"));
             }
             let head = buf.split_to(head_end).freeze();
@@ -1391,7 +1391,7 @@ async fn read_next_get_head<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Opti
             }
             return Ok(Some(head));
         }
-        if buf.len() >= wire_io::MAX_HEADER {
+        if buf.len() >= wire_io::max_header_bytes() {
             return Err(io::Error::other("headers too large"));
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());

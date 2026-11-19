@@ -53,6 +53,11 @@ pub fn ir_json_schema() -> serde_json::Value {
                 "type": "array",
                 "items": { "$ref": "#/definitions/upstream" }
             },
+            "stream": {
+                "type": "array",
+                "maxItems": exyonq_config_ir::MAX_STREAMS,
+                "items": { "$ref": "#/definitions/stream" }
+            },
             "modules": { "$ref": "#/definitions/modules" },
             "static": { "$ref": "#/definitions/static" }
         },
@@ -170,6 +175,14 @@ pub fn ir_json_schema() -> serde_json::Value {
                             "location": { "type": "string" }
                         }
                     },
+                    "respond": {
+                        "type": "object",
+                        "properties": {
+                            "status": { "type": "integer", "minimum": 200, "maximum": 599 },
+                            "body": { "type": "string", "maxLength": 65536 },
+                            "content_type": { "type": "string" }
+                        }
+                    },
                     "rewrite": { "type": "string", "pattern": "^/" },
                     "location_rewrite": {
                         "type": "array",
@@ -237,6 +250,27 @@ pub fn ir_json_schema() -> serde_json::Value {
                 },
                 "not": {
                     "required": ["target", "endpoints"]
+                }
+            },
+            "stream": {
+                "type": "object",
+                "required": ["name", "listen", "upstream"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" },
+                    "listen": { "type": "string" },
+                    "protocol": { "enum": ["tcp", "udp"], "default": "tcp" },
+                    "upstream": { "type": "string" },
+                    "idle_timeout_ms": {
+                        "type": "integer",
+                        "minimum": exyonq_config_ir::MIN_STREAM_IDLE_TIMEOUT_MS,
+                        "maximum": exyonq_config_ir::MAX_STREAM_IDLE_TIMEOUT_MS
+                    },
+                    "max_sessions": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": exyonq_config_ir::MAX_STREAM_MAX_SESSIONS
+                    }
                 }
             },
             "modules": {
@@ -485,6 +519,23 @@ fn render_toml(
             out.push_str(&format!("to = {:?}\n", lr.to));
         }
         out.push('\n');
+    }
+    let mut streams = config.streams.iter().collect::<Vec<_>>();
+    streams.sort_by(|a, b| a.name.cmp(&b.name));
+    for stream in streams {
+        out.push_str("[[stream]]\n");
+        out.push_str(&format!("name = {:?}\n", stream.name));
+        out.push_str(&format!("listen = {:?}\n", stream.listen));
+        out.push_str(&format!(
+            "protocol = {:?}\n",
+            match stream.protocol {
+                exyonq_config_ir::StreamProtocol::Tcp => "tcp",
+                exyonq_config_ir::StreamProtocol::Udp => "udp",
+            }
+        ));
+        out.push_str(&format!("upstream = {:?}\n", stream.upstream));
+        out.push_str(&format!("idle_timeout_ms = {}\n", stream.idle_timeout_ms));
+        out.push_str(&format!("max_sessions = {}\n\n", stream.max_sessions));
     }
     for upstream in config.upstreams.values() {
         out.push_str("[[upstream]]\n");

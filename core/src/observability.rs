@@ -335,6 +335,44 @@ pub fn duration_ms(started: Instant) -> u64 {
 }
 
 #[cfg(test)]
+pub(crate) mod log_capture {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    pub(crate) struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log sink lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Run `f` under a capturing `fmt` subscriber and return the rendered lines.
+    ///
+    /// Unit-level evidence only: it asserts the fields this crate emits, not
+    /// that the real binary's configured sink writes them to disk.
+    pub(crate) fn capture<F: FnOnce()>(f: F) -> String {
+        let sink = Sink::default();
+        let writer = sink.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = sink.0.lock().expect("log sink lock").clone();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -412,5 +450,47 @@ mod tests {
             outcome: Some("ok"),
         });
         set_access_logging_enabled(prev);
+    }
+
+    #[test]
+    fn access_event_carries_host_and_client_ip() {
+        let _gate = crate::kernel::test_hooks::wire_hooks_gate_blocking();
+        if env_access_override() == 3 {
+            return;
+        }
+        let prev = access_logging_enabled();
+        set_access_logging_enabled(true);
+        let out = log_capture::capture(|| {
+            emit_access_terminal(AccessTerminal {
+                method: "GET",
+                path: "/assets/.env",
+                host: Some("example.com"),
+                status: 403,
+                protocol: "https",
+                duration_ms: 1,
+                bytes_sent: None,
+                client_ip: Some("203.0.113.5"),
+                external_request_id: Some("req-1"),
+                internal_request_id: "0123456789abcdef0123456789abcdef",
+                upstream: None,
+                error_class: None,
+                outcome: Some("forbidden"),
+            });
+        });
+        set_access_logging_enabled(prev);
+        // The fmt layer quotes string fields: `host="example.com"`.
+        let out = out.replace('"', "");
+        assert!(
+            out.contains("host=example.com"),
+            "access event lost the host field: {out}"
+        );
+        assert!(
+            out.contains("client_ip=203.0.113.5"),
+            "access event lost client_ip: {out}"
+        );
+        assert!(
+            out.contains("path=/assets/.env"),
+            "access event lost the path: {out}"
+        );
     }
 }

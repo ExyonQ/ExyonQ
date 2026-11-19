@@ -106,6 +106,40 @@ index = "index.html"
     std::fs::write(path, body).unwrap();
 }
 
+fn write_config_with_stream(path: &std::path::Path, idle_ms: u64) {
+    let body = format!(
+        r#"config_version = 1
+
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = {{ path = "/site" }}
+root = "tests/fixtures/www"
+index = "index.html"
+
+[[upstream]]
+name = "l4"
+timeout_ms = 1000
+
+[[upstream.endpoints]]
+id = "l4-a"
+address = "127.0.0.1"
+port = 19000
+
+[[stream]]
+name = "l4-stream"
+listen = "127.0.0.1:19001"
+protocol = "tcp"
+upstream = "l4"
+idle_timeout_ms = {idle_ms}
+"#
+    );
+    std::fs::write(path, body).unwrap();
+}
+
 fn write_config_with_root(path: &std::path::Path, root: &str) {
     let body = format!(
         r#"config_version = 1
@@ -355,6 +389,33 @@ async fn http3_listen_bind_change_rejects_with_exy_reload_0005() {
     let err = reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .expect_err("http3_listen change must reject");
+    assert!(
+        err.to_string().contains("EXY-RELOAD-0005"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(read_state(&shared).generation, gen_before);
+}
+
+#[tokio::test]
+async fn stream_change_rejects_with_exy_reload_0005() {
+    let _gate = lock_reload_suite();
+    reset_reload_test_hooks();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("exyonq.toml");
+    write_config_with_stream(&path, 1000);
+
+    let config = exyonq_runtime_plan::load_config_for_reload(&path).unwrap();
+    let proxy = build_incoming_client();
+    let state = ServerState::new(config, proxy.clone()).await.unwrap();
+    let shared = wrap_state(state);
+    let gen_before = read_state(&shared).generation;
+    let tls = SharedTlsAcceptor::new();
+    let cache = TlsSessionCache::default();
+
+    write_config_with_stream(&path, 2000);
+    let err = reload_from_path(&path, &shared, &proxy, &tls, &cache)
+        .await
+        .expect_err("stream change must reject without rebinding");
     assert!(
         err.to_string().contains("EXY-RELOAD-0005"),
         "unexpected error: {err}"

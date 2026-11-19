@@ -1,0 +1,18 @@
+[Unit]
+Description=ExyonQ and PHP-FPM healthcheck
+Documentation=https://github.com/ExyonQ/ExyonQ
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/exyonq/healthcheck.env
+ExecStart=/usr/libexec/exyonq/exyonq-healthcheck.sh
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=-/var/lib/exyonq
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TimeoutStartSec=30

@@ -103,9 +103,39 @@ where
 
     while let Some(resolver) = h3_conn.accept().await? {
         let dispatch = Arc::clone(&dispatch);
-        let Ok((req, mut stream)) = resolver.resolve_request().await else {
+        // NG-21: same committed header geometry as H1 / HTTP/2.
+        let resolved = match tokio::time::timeout(
+            exyonq_module_api::http_limits::header_deadline(),
+            resolver.resolve_request(),
+        )
+        .await
+        {
+            Ok(resolved) => resolved,
+            Err(_elapsed) => {
+                warn!(
+                    peer_ip = %peer_ip,
+                    "http3 header deadline elapsed; closing connection"
+                );
+                return Ok(());
+            }
+        };
+        let Ok((req, mut stream)) = resolved else {
             continue;
         };
+        if !exyonq_module_api::http_limits::header_list_within_budget(req.headers()) {
+            warn!(
+                peer_ip = %peer_ip,
+                header_bytes = exyonq_module_api::http_limits::header_list_bytes(req.headers()),
+                budget = exyonq_module_api::http_limits::header_budget_bytes(),
+                "http3 header block over budget; resetting stream"
+            );
+            let response = header_fields_too_large_response();
+            if let Err(err) = write_h3_response(&mut stream, response).await {
+                RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
+                warn!(%err, "http3 431 write failed");
+            }
+            continue;
+        }
         let req = match collect_request_body(req, &mut stream).await {
             Ok(req) => req,
             Err(RequestBodyReadError::TooLarge) => {
@@ -261,6 +291,17 @@ fn payload_too_large_response() -> Http3MaterializedResponse {
             "text/plain; charset=utf-8".to_string(),
         )],
         body: Bytes::from_static(b"payload too large"),
+    }
+}
+
+fn header_fields_too_large_response() -> Http3MaterializedResponse {
+    Http3MaterializedResponse {
+        status: StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE.as_u16(),
+        headers: vec![(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        )],
+        body: Bytes::from_static(b"request header fields too large"),
     }
 }
 

@@ -1409,6 +1409,39 @@ mod tests {
     }
 
     #[test]
+    fn fpc_key_agrees_with_the_canonical_uri_form() {
+        // Store keys are computed from the canonical path (URI form) and purge
+        // keys from the URL the operator submits; both pass through
+        // `fpc_canonicalize_path`, so the two spellings of the same URL must
+        // reach the same decoded key.
+        for raw in [
+            "/hello%20world.html",
+            "/%68ello%20world.html",
+            "/fn%28%29.html",
+            "/caf%C3%A9/menu",
+            "/a%2525b",
+        ] {
+            let canonical = crate::path_canon::canonicalize_path(raw).expect(raw);
+            assert_eq!(
+                fpc_canonicalize_path(&canonical),
+                fpc_canonicalize_path(raw),
+                "{raw}"
+            );
+        }
+        // The one deliberate divergence: an encoded separator is a separator
+        // after canonicalization, and the purge spelling refuses to guess.
+        assert_eq!(
+            crate::path_canon::canonicalize_path("/a%2fb").as_deref(),
+            Some("/a/b")
+        );
+        assert_eq!(fpc_canonicalize_path("/a%2fb"), None);
+        assert_eq!(
+            fpc_canonicalize_path(&crate::path_canon::canonicalize_path("/a%2fb").expect("canon")),
+            Some("/a/b".into())
+        );
+    }
+
+    #[test]
     fn fpc_path_encoding_bypass_and_query_policy() {
         assert_eq!(fpc_canonicalize_path("/wp-admin/%2e%2e/x"), None);
         assert_eq!(

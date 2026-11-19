@@ -199,7 +199,15 @@ async fn serve_hyper<S>(
             }
         }
     };
-    let io = TokioIo::new(stream);
+    // NG-21: the committed header deadline also covers HTTP/2. Hyper's H2
+    // builder has no read timeout, so the deadline is armed here and disarmed
+    // by the first request the connection delivers.
+    let headers_delivered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let io = TokioIo::new(io::HeaderDeadlineIo::new(
+        stream,
+        io::header_read_timeout(),
+        Arc::clone(&headers_delivered),
+    ));
     let bad_req_ip = handler::client_ip_from_xff(Some(&x_forwarded_for));
     let bad_req_cfg = reload::read_state(&shared)
         .config
@@ -211,6 +219,7 @@ async fn serve_hyper<S>(
     // Cap057 LA-CAP057-002: refresh live SharedServerState per request (mirror H3).
     // Accept-time Arc pin made FPC HITs survive reload disable / live purge on keep-alive.
     let service = hyper::service::service_fn(move |req| {
+        let headers_delivered = Arc::clone(&headers_delivered);
         let conn_state = reload::read_state(&shared);
         let proxy_client = proxy_client.clone();
         let x_forwarded_for = x_forwarded_for.clone();
@@ -221,6 +230,7 @@ async fn serve_hyper<S>(
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.eq_ignore_ascii_case("close"));
         async move {
+            headers_delivered.store(true, std::sync::atomic::Ordering::Release);
             let mut response = serve_connection(
                 ConnectionContext {
                     state: conn_state,
@@ -243,7 +253,26 @@ async fn serve_hyper<S>(
     });
 
     let mut builder = ServerBuilder::new(TokioExecutor::new());
-    builder.http1().keep_alive(true);
+    {
+        // NG-21: a connection Hyper owns after the wire hands it over must obey
+        // the same committed geometry as the pre-parser. The header deadline is
+        // also the keep-alive idle deadline for the next request, and the read
+        // buffer is bounded by the same header cap instead of Hyper's default.
+        let mut http1 = builder.http1();
+        http1.keep_alive(true);
+        http1.header_read_timeout(io::header_read_timeout());
+        http1.max_buf_size(io::max_header_cap());
+        http1.timer(hyper_util::rt::TokioTimer::new());
+    }
+    {
+        // NG-21: the same committed geometry bounds HTTP/2 request headers. The
+        // `h2` layer enforces this cap while decoding HEADERS, so an oversized
+        // block is refused before the service sees a request, exactly as the H1
+        // pre-parser refuses one: no response is served.
+        let mut http2 = builder.http2();
+        http2.max_header_list_size(io::max_header_cap() as u32);
+        http2.timer(hyper_util::rt::TokioTimer::new());
+    }
     if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
         // OL-03 blockBadReq: Hyper rejects malformed request lines before the
         // service is invoked. Count protocol-parse failures (never incomplete
@@ -492,8 +521,12 @@ async fn read_proxy_header_inner(
 }
 
 /// Run on an explicit listen address (used in tests).
+///
+/// The caller owns the address, so every configured `listen` is pinned to it:
+/// otherwise a fixture's placeholder address would get its own socket and the
+/// run would claim a port of the host (EADDRINUSE on a busy machine).
 pub async fn run_on(listen: SocketAddr, config: AppConfig) -> anyhow::Result<()> {
-    run_on_impl(listen, None, config).await
+    run_on_impl(listen, None, pin_listen(config, listen)).await
 }
 
 /// `run_on` over a pre-bound listener (tests only): keeping the socket bound
@@ -505,7 +538,15 @@ pub(crate) async fn run_on_with_listener(
     listener: TcpListener,
     config: AppConfig,
 ) -> anyhow::Result<()> {
-    run_on_impl(listen, Some(listener), config).await
+    run_on_impl(listen, Some(listener), pin_listen(config, listen)).await
+}
+
+fn pin_listen(mut config: AppConfig, listen: SocketAddr) -> AppConfig {
+    let listen = listen.to_string();
+    for server in &mut config.servers {
+        server.listen.clone_from(&listen);
+    }
+    config
 }
 
 async fn run_on_impl(
@@ -530,6 +571,11 @@ async fn run_on_impl(
     // this process, and DNS-01/renewal do not block startup either. Spawn it
     // behind a readiness gate instead of awaiting it here.
     let ops = LifecycleState::new();
+
+    // NG-20: bind the L4 listeners before the HTTP accept path starts. A bad
+    // stream listener is a startup error, never a silently absent surface.
+    crate::stream_proxy::start_streams(&config.streams, &config.upstreams, Arc::clone(&ops))
+        .await?;
 
     // NG-25: every distinct `listen` gets its own socket. Servers sharing an
     // address are SNI/certificate variants of one listener (NG-24); a server
@@ -871,6 +917,16 @@ async fn run_on_impl(
     #[cfg(target_os = "linux")]
     epoll_start::install_static_wire_hooks();
 
+    // A blocking static wire thread has no Hyper: let it replay a returned head
+    // on the async runtime instead of answering with a fabricated 404.
+    #[cfg(target_os = "linux")]
+    wire_dispatch::install_blocking_wire_handoff(
+        reload::SharedServerState::clone(&shared),
+        proxy_client.clone(),
+        Arc::clone(&ops),
+        tokio::runtime::Handle::current(),
+    );
+
     // PS3A-F3 I7 / PS1C-FACADE / PS3A-PM1: composition builds executor; sync_accept takes facade Arc.
     #[cfg(target_os = "linux")]
     let connection_executor =
@@ -1058,15 +1114,9 @@ async fn maybe_bootstrap_acme(
 }
 
 #[cfg(test)]
-mod acme_pending_fail_closed {
-    use super::*;
-    use std::time::Duration;
-    use tokio::io::AsyncReadExt;
-    use tokio::net::TcpStream;
-
-    fn toml_with_listen(addr: std::net::SocketAddr, tls_block: &str) -> String {
-        format!(
-            r#"config_version = 1
+fn test_config_with_listen(addr: std::net::SocketAddr, tls_block: &str) -> String {
+    format!(
+        r#"config_version = 1
 
 [[server]]
 listen = "{addr}"
@@ -1078,8 +1128,15 @@ match = {{ path = "/" }}
 root = "tests/fixtures/www"
 index = "index.html"
 "#
-        )
-    }
+    )
+}
+
+#[cfg(test)]
+mod acme_pending_fail_closed {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpStream;
 
     const TLS_PENDING: &str = r#"
 [server.tls]
@@ -1110,7 +1167,7 @@ domains = ["example.test"]
     async fn tls_pending_listener_drops_connections() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let config: AppConfig = toml_with_listen(addr, TLS_PENDING).parse().unwrap();
+        let config: AppConfig = test_config_with_listen(addr, TLS_PENDING).parse().unwrap();
         spawn_accept_loop(listener, config).await;
 
         let mut conn = TcpStream::connect(addr).await.unwrap();
@@ -1126,7 +1183,7 @@ domains = ["example.test"]
     async fn reload_removing_tls_reopens_cleartext() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let config: AppConfig = toml_with_listen(addr, TLS_PENDING).parse().unwrap();
+        let config: AppConfig = test_config_with_listen(addr, TLS_PENDING).parse().unwrap();
         let state = ServerState::new(config, build_incoming_client())
             .await
             .unwrap();
@@ -1151,7 +1208,7 @@ domains = ["example.test"]
         drop(conn);
 
         // Reload swaps in a config without server.tls: cleartext intended.
-        let no_tls: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        let no_tls: AppConfig = test_config_with_listen(addr, "").parse().unwrap();
         let state = ServerState::new(no_tls, build_incoming_client())
             .await
             .unwrap();
@@ -1169,7 +1226,7 @@ domains = ["example.test"]
     async fn shutdown_keeps_listener_open_for_drain_boundary() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let config: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        let config: AppConfig = test_config_with_listen(addr, "").parse().unwrap();
         let state = ServerState::new(config, build_incoming_client())
             .await
             .unwrap();
@@ -1225,7 +1282,7 @@ domains = ["example.test"]
     async fn cleartext_listener_still_serves() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let config: AppConfig = toml_with_listen(addr, "").parse().unwrap();
+        let config: AppConfig = test_config_with_listen(addr, "").parse().unwrap();
         spawn_accept_loop(listener, config).await;
 
         // No request written: only assert the gate does not drop a cleartext
@@ -1238,5 +1295,60 @@ domains = ["example.test"]
             got.is_err(),
             "cleartext listener must keep the connection open, got {got:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod run_on_pins_listen {
+    use super::*;
+    use crate::kernel::test_hooks::wire_hooks_gate;
+    use std::net::TcpListener as StdTcpListener;
+    use std::time::Duration;
+    use tokio::net::TcpStream;
+
+    /// Regression: `run_on` used to pass the config through untouched, so a
+    /// configured `listen` other than the one handed in got its own socket.
+    /// When that address is already taken on the host the extra bind failed and
+    /// the call never served the address it was given. Here the config points at
+    /// a port this test holds open, so the old code failed with EADDRINUSE.
+    #[tokio::test]
+    async fn serves_the_given_address_when_the_configured_listen_is_busy() {
+        // Starting a server applies its config into the process-global module
+        // runtimes (proxy cluster generation and bindings). Hold the shared
+        // gate so a sibling wire test serving concurrently cannot see its
+        // generation flipped mid-request and fail with an unrelated 503.
+        let _gate = wire_hooks_gate().await;
+        let busy = StdTcpListener::bind("127.0.0.1:0").expect("busy port");
+        let busy_addr = busy.local_addr().expect("busy addr");
+
+        let probe = StdTcpListener::bind("127.0.0.1:0").expect("probe port");
+        let listen = probe.local_addr().expect("probe addr");
+        drop(probe);
+
+        let config: AppConfig = test_config_with_listen(busy_addr, "")
+            .parse()
+            .expect("config");
+        let server = tokio::spawn(async move { run_on(listen, config).await });
+
+        let mut served = false;
+        for _ in 0..100 {
+            if TcpStream::connect(listen).await.is_ok() {
+                served = true;
+                break;
+            }
+            if server.is_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if !served {
+            // Nothing ever accepted on the given address: report why, so a
+            // regression names the failed bind instead of just timing out here.
+            let outcome = tokio::time::timeout(Duration::from_secs(5), server).await;
+            panic!(
+                "run_on must serve {listen} while the configured listen {busy_addr} is taken; task outcome: {outcome:?}"
+            );
+        }
+        server.abort();
     }
 }

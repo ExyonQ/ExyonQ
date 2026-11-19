@@ -23,6 +23,9 @@ and swapped on commit.
 Optional under a ruleset:
 
 ```toml
+[[waf.ruleset]]
+id = "default"
+
 [waf.ruleset.builtins]
 sql_injection = "block"      # off | log | block
 xss = "block"
@@ -36,6 +39,51 @@ enabled = true
 whitelist = ["10.0.0.0/8"]
 blacklist = ["203.0.113.0/24"]
 ```
+
+### `[waf.ip]` — global client-IP allow/deny list
+
+The same detector (`EXY-IP-1001` / `EXY-IP-1002`) is configurable at product
+level, so an operator does not need a ruleset or an external firewall:
+
+```toml
+[waf.ip]
+whitelist = ["198.51.100.0/24"]
+blacklist = [
+  "203.0.113.0/24",
+  { ip = "192.0.2.10", until = "2026-11-21T08:30:00Z", reason = "repeated 404 scanning" },
+]
+```
+
+| Field | Meaning |
+| --- | --- |
+| entry string | IP or CIDR, no expiry, no reason |
+| `ip` | IP or CIDR of an expanded entry |
+| `until` | RFC 3339 UTC instant after which the entry stops applying (`Z` or `±HH:MM`) |
+| `reason` | Operator note recorded with the violation |
+
+Semantics:
+
+- A declared list is active policy: `[waf.ip]` with entries enables the filter
+  even when no `[waf.ruleset.builtins.ip_filter]` is declared. `[waf.ip]`
+  entries are unioned with the ruleset lists; blacklist still wins.
+- `enabled = false` (whole `[waf]`) turns the filter off; there is no second
+  switch on `[waf.ip]`.
+- Expiry: an expired blacklist entry stops blocking. A non-empty whitelist is
+  **fail-closed**: an expired allow entry stops allowing, and a client outside
+  the list is still rejected (`EXY-IP-1002`).
+- The violation log line carries `ip_entry=Some(WafIpEntryEvidence { list: …, entry: …, reason: … })`,
+  so the matched list entry and the operator reason are auditable.
+- Invalid IP/CIDR, a non-RFC 3339 `until` or an empty `reason` fail
+  `exyonq validate` (fail-closed).
+- Metrics: `exyonq_waf_ip_filter_entries{list,state}` (gauge, `active`/
+  `expired` at scrape) and `exyonq_waf_ip_entry_hits_total{list,entry}`
+  (blacklist matches; capped like the rule series, overflow counted in
+  `exyonq_waf_ip_entry_hits_labeled_dropped_total`).
+- The CFD projection carries only the network text: TTL and reasons stay
+  host-side.
+
+Custom-rule `target = "client_ip"` is still **not** implemented; the issue's
+list scope is covered by `[waf.ip]` and `builtins.ip_filter`.
 
 ### Defaults when enabled and no builtins table
 

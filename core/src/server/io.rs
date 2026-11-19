@@ -16,15 +16,14 @@
 //! IO helpers for connection dispatch.
 
 use bytes::Bytes;
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-/// Process-lifetime cache for `EXYONQ_READ_TIMEOUT_MS` (0 = unset; else millis + 1).
-static HEADER_READ_TIMEOUT_MS_CACHE: AtomicU64 = AtomicU64::new(0);
 
 /// AsyncRead that serves a prefix before continuing on the inner stream.
 pub struct PrefixedStream<S> {
@@ -81,6 +80,77 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
     }
 }
 
+/// NG-21: an HTTP/2 connection's header deadline.
+///
+/// Hyper's H2 builder has no `header_read_timeout`, and once the wire hands a
+/// connection over Hyper reads every frame itself, so this wrapper is what
+/// makes the committed deadline apply to H2 exactly as it applies to the H1
+/// pre-parser: a client that has not delivered a complete request head by
+/// `deadline` gets an IO error, and the connection ends without a response.
+///
+/// The deadline is disarmed as soon as the connection delivers its first
+/// request (the service stores `true` in `delivered`), so keep-alive and
+/// multiplexed traffic after the first head is untouched. Every write is
+/// passthrough: the deadline never delays a response.
+pub struct HeaderDeadlineIo<S> {
+    inner: S,
+    deadline: Pin<Box<tokio::time::Sleep>>,
+    delivered: Arc<std::sync::atomic::AtomicBool>,
+    armed: bool,
+}
+
+impl<S> HeaderDeadlineIo<S> {
+    pub fn new(inner: S, timeout: Duration, delivered: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            inner,
+            deadline: Box::pin(tokio::time::sleep(timeout)),
+            delivered,
+            armed: true,
+        }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for HeaderDeadlineIo<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.armed {
+            if self.delivered.load(Ordering::Acquire) {
+                self.armed = false;
+            } else if self.deadline.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "header read timeout",
+                )));
+            }
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for HeaderDeadlineIo<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
 pub async fn read_until_headers_async<S: AsyncRead + Unpin>(
     stream: &mut S,
 ) -> io::Result<(Bytes, Bytes)> {
@@ -105,7 +175,7 @@ async fn read_until_headers_inner<S: AsyncRead + Unpin>(
             let all = Bytes::from(buf);
             return Ok((all.slice(0..head_len), all.slice(head_len..)));
         }
-        if buf.len() >= MAX_HEADER_CAP {
+        if buf.len() >= max_header_cap() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",
@@ -150,11 +220,9 @@ pub fn find_header_end(buf: &[u8]) -> Option<usize> {
     None
 }
 
-const MAX_HEADER_CAP: usize = 8192;
-
 #[allow(dead_code)]
 pub(crate) fn max_header_cap() -> usize {
-    MAX_HEADER_CAP
+    exyonq_module_api::runtime_tuning::max_header_bytes()
 }
 
 /// True when `line` is an HTTP header field whose name equals `name_lower` (ASCII case-insensitive).
@@ -218,46 +286,20 @@ pub(crate) fn request_framing_needs_hyper(head: &[u8]) -> bool {
     header_field_name_count(head, b"transfer-encoding") >= 1
 }
 
-/// Header-read timeout from `EXYONQ_READ_TIMEOUT_MS` (process-lifetime cache).
-///
-/// Unset / invalid → 30s. Mid-process env mutation is not observed —
-/// set the env before process start (or reset cache in tests).
-///
-/// Shared by core wire I/O and the Linux epoll keepalive/sendfile deadline path
-/// so there is a single process-lifetime observation of this env.
+/// Header-read / keep-alive deadline, resolved once in `runtime_tuning` so the
+/// core wire, the static wire, the proxy wire and the epoll deadline cannot
+/// disagree.
 pub fn header_read_timeout() -> Duration {
-    let cached = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed);
-    if cached != 0 {
-        return Duration::from_millis(cached - 1);
-    }
-    let d = parse_header_read_timeout_ms(std::env::var("EXYONQ_READ_TIMEOUT_MS").ok().as_deref());
-    let encoded = d.as_millis() as u64 + 1;
-    let _ = HEADER_READ_TIMEOUT_MS_CACHE.compare_exchange(
-        0,
-        encoded,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
-    let final_ms = HEADER_READ_TIMEOUT_MS_CACHE.load(Ordering::Relaxed) - 1;
-    Duration::from_millis(final_ms)
+    exyonq_module_api::runtime_tuning::header_read_deadline()
 }
 
-fn parse_header_read_timeout_ms(raw: Option<&str>) -> Duration {
-    raw.and_then(|s| s.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(30))
-}
-
-/// Test-only: clear process-lifetime cache (simulates a fresh process).
-/// Also clears static/proxy wire caches used on related request paths.
+/// Test-only: forget the observed env deadline (simulates a fresh process).
 ///
 /// Compiled only for unit tests or when the explicit `test-utils` feature is enabled.
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub fn reset_header_read_timeout_cache_for_tests() {
-    HEADER_READ_TIMEOUT_MS_CACHE.store(0, Ordering::Relaxed);
-    exyonq_mod_static::reset_header_read_timeout_cache_for_tests();
-    exyonq_mod_proxy::wire_io::reset_header_read_timeout_cache_for_tests();
+    exyonq_module_api::runtime_tuning::reset_env_cache_for_tests();
 }
 
 /// `SO_RCVTIMEO` on a blocking socket read surfaces as `WouldBlock` / EAGAIN on Linux.
@@ -309,7 +351,7 @@ pub(crate) fn read_until_headers_blocking(
             let all = Bytes::from(buf);
             return Ok((all.slice(0..head_len), all.slice(head_len..)));
         }
-        if buf.len() >= MAX_HEADER_CAP {
+        if buf.len() >= max_header_cap() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers too large",
@@ -436,17 +478,18 @@ mod tests {
         header.extend(std::iter::repeat_n(b'a', 600));
         header.extend_from_slice(b"\r\n\r\n");
         assert!(header.len() > 512);
-        assert!(header.len() < MAX_HEADER_CAP);
+        assert!(header.len() < max_header_cap());
         assert!(find_header_end(&header).is_some());
         assert!(!request_framing_ambiguous(&header));
         assert!(!request_framing_needs_hyper(&header));
     }
 
     #[test]
-    fn wire_safe_rejects_oversized_header_cap() {
-        assert_eq!(max_header_cap(), 8192);
-        let len_at_cap = MAX_HEADER_CAP;
-        assert!(len_at_cap > MAX_HEADER_CAP - 1);
+    fn header_cap_defaults_to_the_historical_value() {
+        assert_eq!(
+            max_header_cap(),
+            exyonq_module_api::runtime_tuning::DEFAULT_MAX_HEADER_BYTES
+        );
     }
 
     #[test]
@@ -495,23 +538,6 @@ mod tests {
         let head = b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
         assert!(!request_framing_ambiguous(head));
         assert!(!request_framing_needs_hyper(head));
-    }
-
-    #[test]
-    fn parse_header_read_timeout_ms_semantics() {
-        assert_eq!(parse_header_read_timeout_ms(None), Duration::from_secs(30));
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("bogus")),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("100")),
-            Duration::from_millis(100)
-        );
-        assert_eq!(
-            parse_header_read_timeout_ms(Some("0")),
-            Duration::from_millis(0)
-        );
     }
 
     #[cfg(target_os = "linux")]

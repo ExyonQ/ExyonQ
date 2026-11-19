@@ -159,17 +159,45 @@ fn tier2a_wildcard_server_name_is_partial_not_literal() {
     assert!(!toml.contains("*.example.com"));
 }
 
+/// EXY-03 changed this contract: a literal body used to be dropped (the route
+/// vanished and `/ok` answered 404). The IR now carries `route.respond`, so the
+/// importer maps the body exactly instead of reporting it as a partial loss.
 #[test]
-fn tier2a_return_body_is_partial_not_mapped() {
+fn tier2a_return_body_maps_to_literal_response() {
     let (toml, report) = migrate_fixture("tier2a-return-body.conf");
     let cfg = AppConfig::parse_str(&toml).expect("parse");
-    assert!(cfg.routes.is_empty());
+    assert_eq!(cfg.routes.len(), 2, "both literal locations must be mapped");
+
+    let ok = cfg
+        .routes
+        .iter()
+        .find(|route| route.r#match.path == "/ok")
+        .expect("/ok route");
+    let ok_respond = ok.respond.as_ref().expect("/ok respond");
+    assert_eq!((ok_respond.status, ok_respond.body.as_str()), (200, "ok"));
+
+    let forbidden = cfg
+        .routes
+        .iter()
+        .find(|route| route.r#match.path == "/forbidden")
+        .expect("/forbidden route");
+    let forbidden_respond = forbidden.respond.as_ref().expect("/forbidden respond");
+    assert_eq!(
+        (forbidden_respond.status, forbidden_respond.body.as_str()),
+        (403, "forbidden")
+    );
+
+    let returns: Vec<_> = report
+        .entries
+        .iter()
+        .filter(|e| e.directive == "return")
+        .collect();
+    assert_eq!(returns.len(), 2);
     assert!(
-        report.entries.iter().any(
-            |e| e.status == exyonq_compat_nginx::NginxCompatStatus::Partial
-                && e.directive == "return"
-        ),
-        "expected PARTIAL return body diagnostics"
+        returns
+            .iter()
+            .all(|e| e.status == exyonq_compat_nginx::NginxCompatStatus::Supported),
+        "literal bodies are exact now: {returns:#?}"
     );
 }
 
