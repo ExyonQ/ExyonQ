@@ -550,6 +550,7 @@ pub(crate) fn evaluate_wire_waf(
                 b"",
                 generation,
                 state.waf_enforce,
+                state.waf_abuse.as_deref(),
             );
             return hook;
         }

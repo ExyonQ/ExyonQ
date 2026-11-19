@@ -57,6 +57,19 @@ Abuse is evaluated once per request and is independent of signature `mode`;
 `monitor` still applies the configured Challenge/429. A valid challenge grant never
 bypasses an independent signature Block.
 
+### Violation threshold bans
+
+With `waf.abuse.violation_threshold > 0` the gate also counts enforced signature
+Blocks per client IP. Reaching the threshold inside `violation_window_seconds`
+bans the IP for `ban_seconds`: it receives `429` + `Retry-After` **before**
+signature inspection, so a violating client can no longer accumulate 403s for
+free. Only enforced Blocks count; monitor-mode hits and abuse decisions do not.
+The counter keeps at most 10.000 IPs, never evicts an active ban, and resets when
+a reload replaces the abuse generation.
+
+Stable event for fail2ban: the `exyonq_waf` warning
+`rule_id=EXY-ABUSE-BAN-1001`.
+
 ## Challenge providers and no-JS
 
 - Native HMAC-PoW remains the default; `provider = "recaptcha"` (v2 checkbox),
