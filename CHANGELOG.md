@@ -147,8 +147,14 @@ This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 
 ### Limitations (honest)
 
-- The WordPress production-browser journey remains open.
-- The positive reCAPTCHA v3 path remains **NOT EXECUTED** without a real v3 key.
+- The WordPress **production-site** browser journey (owner's live site) remains
+  open. The container-level journey was executed in a real headless Chromium
+  (`scripts/gates/wordpress-browser-e2e.sh`) against the published WordPress
+  digests on amd64 and arm64: installer, login, `wp-admin`, logout and anonymous
+  cache miss/hit, `BROWSER_JOURNEY=PASS steps=10` on both.
+- The positive reCAPTCHA v3 path remains **NOT EXECUTED** without a real v3 key;
+  it needs `OL04_RECAPTCHA_V3_SITE_KEY`, `OL04_RECAPTCHA_V3_SECRET` and a fresh
+  `OL04_RECAPTCHA_V3_TOKEN` for action `challenge` (score ≥ 0.5).
 - No Windows build is produced, by policy.
 - NGINX/Apache/OpenLiteSpeed compatibility remains the documented scope; this
   draft does not claim total parity.
