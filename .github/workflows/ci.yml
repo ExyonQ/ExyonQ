@@ -125,7 +125,7 @@ jobs:
           path: ~/.cargo/bin
           key: cargo-tools-deny-${{ runner.os }}
       - name: install cargo-deny
-        run: cargo install cargo-deny --locked --version 0.20.2
+        run: cargo install cargo-deny --locked --version 0.20.2 --force
       - name: cargo deny check
         run: cargo deny check
 
@@ -149,7 +149,7 @@ jobs:
           path: ~/.cargo/bin
           key: cargo-tools-semver-${{ runner.os }}
       - name: install cargo-semver-checks
-        run: cargo install cargo-semver-checks --locked --version 0.50.0
+        run: cargo install cargo-semver-checks --locked --version 0.50.0 --force
       - name: addon-api semver
         # exyonq-addon-api 1.0.0 is not yet published to crates.io and has no
         # tagged baseline, so a release comparison has nothing to diff against.
