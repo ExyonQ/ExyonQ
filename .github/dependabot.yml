@@ -9,6 +9,17 @@ updates:
       time: "09:00"
       timezone: Europe/Madrid
     open-pull-requests-limit: 5
+    # One PR per group. Each cargo PR rewrites Cargo.lock, so five independent
+    # bumps collide with each other and have to be re-resolved by hand after
+    # every merge (`fix(deps): re-resolve the lock after the dependency merges`).
+    # Majors stay separate on purpose: they need their own review.
+    groups:
+      rust-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - rust
@@ -24,9 +35,11 @@ updates:
       time: "09:00"
       timezone: Europe/Madrid
     open-pull-requests-limit: 5
-    labels:
-      - dependencies
-      - github-actions
+    # Action bumps are independent of Cargo.lock and safe in one PR.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     commit-message:
       prefix: deps
       include: scope
