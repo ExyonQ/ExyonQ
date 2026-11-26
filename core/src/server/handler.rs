@@ -363,7 +363,7 @@ async fn serve_http3_request_bytes(
             Some(&xff),
             &request_headers,
             budget,
-            post_body,
+            post_body.map(DispatchBody::Memory),
             &ctx.ops,
         )
         .await;
@@ -482,7 +482,7 @@ async fn serve_http3_with_modules(
             Some(&xff),
             &headers,
             budget,
-            post_body,
+            post_body.map(DispatchBody::Memory),
             &ctx.ops,
         )
         .await;
@@ -1636,22 +1636,62 @@ async fn handle_core_request_with_body(
     let declared_len = parse_proxy_request_content_length(req.headers());
     let uri = req.uri().clone();
 
-    // F-01: proxy bodies stay on the direct path so a spooled body never has
-    // to be flattened into `Bytes` for the generic dispatcher.
+    // F-01: collect a proxy body once (spool-aware) and pass it through the
+    // normal dispatcher. The file-backed variant survives ACL/auth/rewrite and
+    // cache phases without being flattened into `Bytes`.
     if is_proxy_route {
         let Some((route_idx, _)) = matched_route else {
             return text_response(StatusCode::NOT_FOUND, "not found");
         };
-        let Some(cluster_id) = state.snapshot.proxy_cluster_for_route(route_idx) else {
-            return text_response(StatusCode::NOT_FOUND, "not found");
+        use crate::server::proxy_request_body::collect_proxy_request_body_with_deadline;
+
+        let route = state.config.routes.get(route_idx);
+        let throttle_cfg = state.config.modules.ratelimit.client.clone();
+        let body = crate::client_throttle::wrap_request_body(
+            req.into_body(),
+            None,
+            client_ip,
+            &throttle_cfg,
+        );
+        let collected = match collect_proxy_request_body_with_deadline(
+            declared_len,
+            body,
+            body_limit,
+            route_request_body_timeout(route),
+            route_request_body_spool(route),
+        )
+        .await
+        {
+            Ok(collected) => collected,
+            Err(ProxyRequestBodyReadError::TooLarge) => {
+                return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
+            }
+            Err(ProxyRequestBodyReadError::Body | ProxyRequestBodyReadError::Spool) => {
+                return execute_backend::proxy_outcome_to_hyper(
+                    exyonq_module_api::proxy_dispatch::ProxyDispatchOutcome::BadGateway,
+                );
+            }
+            Err(ProxyRequestBodyReadError::Deadline) => {
+                return text_response(StatusCode::REQUEST_TIMEOUT, "request body timeout");
+            }
         };
-        return proxy_route_target(
+        if collected.spooled {
+            tracing::debug!(bytes = collected.body.len(), "proxy request body spooled");
+        }
+        return dispatch_core_with_limit(
             state,
-            route_idx,
+            scheme,
+            local_port,
             proxy_client,
-            cluster_id,
-            req,
+            &method,
+            &uri,
+            host,
             x_forwarded_for,
+            &headers,
+            Some(exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES),
+            Some(DispatchBody::Proxy(collected.body)),
+            ops,
+            false,
         )
         .await;
     }
@@ -1696,11 +1736,62 @@ async fn handle_core_request_with_body(
         x_forwarded_for,
         &headers,
         Some(exyonq_module_api::static_dispatch::DEFAULT_STATIC_MATERIALIZATION_BUDGET_BYTES),
-        Some(bytes::Bytes::from(body)),
+        Some(DispatchBody::Memory(bytes::Bytes::from(body))),
         ops,
         waf_body_limited,
     )
     .await
+}
+
+/// Request body at the core dispatch boundary.
+///
+/// A spooled proxy body stays file-backed through ACL/auth/rewrite/cache
+/// phases; only the proxy contract consumes it. Non-proxy routes always use
+/// `Memory`.
+enum DispatchBody {
+    Memory(Bytes),
+    Proxy(exyonq_module_api::proxy_dispatch::ProxyRequestBody),
+}
+
+impl DispatchBody {
+    fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Memory(bytes) => Some(bytes),
+            Self::Proxy(_) => None,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Memory(bytes) => bytes.is_empty(),
+            Self::Proxy(body) => body.is_empty(),
+        }
+    }
+
+    fn into_proxy(self) -> exyonq_module_api::proxy_dispatch::ProxyRequestBody {
+        match self {
+            Self::Memory(bytes) => {
+                exyonq_module_api::proxy_dispatch::ProxyRequestBody::memory(bytes.to_vec())
+            }
+            Self::Proxy(body) => body,
+        }
+    }
+
+    fn mirror_body(&self) -> Option<Bytes> {
+        match self {
+            Self::Memory(bytes) => Some(bytes.clone()),
+            Self::Proxy(exyonq_module_api::proxy_dispatch::ProxyRequestBody::Memory(bytes)) => {
+                Some(Bytes::copy_from_slice(bytes))
+            }
+            Self::Proxy(exyonq_module_api::proxy_dispatch::ProxyRequestBody::Spool(_)) => None,
+        }
+    }
+}
+
+impl From<Bytes> for DispatchBody {
+    fn from(bytes: Bytes) -> Self {
+        Self::Memory(bytes)
+    }
 }
 
 // TECH_DEBT_HANDLER_ARITY = DEFERRED_POST_V043
@@ -1718,7 +1809,7 @@ async fn dispatch_core(
     x_forwarded_for: Option<&HeaderValue>,
     request_headers: &[(String, String)],
     materialization_budget_bytes: Option<u64>,
-    request_body: Option<Bytes>,
+    request_body: Option<DispatchBody>,
     ops: &Arc<crate::lifecycle::LifecycleState>,
 ) -> Response<BoxBody> {
     dispatch_core_with_limit(
@@ -1757,7 +1848,7 @@ async fn dispatch_core_with_limit(
     x_forwarded_for: Option<&HeaderValue>,
     request_headers: &[(String, String)],
     materialization_budget_bytes: Option<u64>,
-    request_body: Option<Bytes>,
+    request_body: Option<DispatchBody>,
     ops: &Arc<crate::lifecycle::LifecycleState>,
     waf_body_limited: bool,
 ) -> Response<BoxBody> {
@@ -1805,7 +1896,7 @@ async fn dispatch_core_inner(
     x_forwarded_for: Option<&HeaderValue>,
     request_headers: &[(String, String)],
     materialization_budget_bytes: Option<u64>,
-    request_body: Option<Bytes>,
+    request_body: Option<DispatchBody>,
     ops: &Arc<crate::lifecycle::LifecycleState>,
     waf_body_limited: &mut bool,
 ) -> Response<BoxBody> {
@@ -1838,7 +1929,10 @@ async fn dispatch_core_inner(
                 "method not allowed",
             );
         }
-        let body = request_body.as_deref().unwrap_or(&[]);
+        let body = request_body
+            .as_ref()
+            .and_then(DispatchBody::as_bytes)
+            .unwrap_or(&[]);
         return waf_reject_response(
             crate::waf::handle_waf_challenge_verify(
                 state.waf.as_ref(),
@@ -1864,7 +1958,7 @@ async fn dispatch_core_inner(
             .route_index
             .match_route_index_with_host_port(path, host.as_deref(), local_port)
             .is_some_and(|(idx, _)| state.route_requires_full_dispatch(idx));
-        let has_collected_body = request_body.as_deref().is_some_and(|body| !body.is_empty());
+        let has_collected_body = request_body.as_ref().is_some_and(|body| !body.is_empty());
         if !has_collected_body
             && !route_forces_dispatch
             && !state.wire_incompatible_features_active()
@@ -2066,16 +2160,32 @@ async fn dispatch_core_inner(
         return reject;
     }
     if let Some(body) = request_body.as_ref() {
-        match waf_body_gate(
-            state,
-            method,
-            host.as_deref(),
-            path,
-            uri.query(),
-            &header_view,
-            client_ip,
-            body.as_ref(),
-        ) {
+        let gate = match body {
+            DispatchBody::Memory(bytes) => waf_body_gate(
+                state,
+                method,
+                host.as_deref(),
+                path,
+                uri.query(),
+                &header_view,
+                client_ip,
+                bytes.as_ref(),
+            ),
+            DispatchBody::Proxy(body) => {
+                waf_body_gate_proxy(
+                    state,
+                    method,
+                    host.as_deref(),
+                    path,
+                    uri.query(),
+                    &header_view,
+                    client_ip,
+                    body,
+                )
+                .await
+            }
+        };
+        match gate {
             WafBodyGate::Reject(reject) => return reject,
             WafBodyGate::Continue { inspection_limited } => *waf_body_limited |= inspection_limited,
         }
@@ -2113,16 +2223,19 @@ async fn dispatch_core_inner(
         request_headers,
         uri.query(),
     );
-    let mirror_body = request_body.clone().unwrap_or_default();
-    crate::mirror::maybe_mirror_body(
-        &mirror_ctx,
-        path,
-        host.as_deref(),
-        method,
-        request_headers,
-        uri.query(),
-        &mirror_body,
-    );
+    if let Some(mirror_body) = request_body.as_ref().and_then(DispatchBody::mirror_body) {
+        crate::mirror::maybe_mirror_body(
+            &mirror_ctx,
+            path,
+            host.as_deref(),
+            method,
+            request_headers,
+            uri.query(),
+            &mirror_body,
+        );
+    } else if request_body.is_some() {
+        tracing::debug!("mirror_request_body skipped for file-backed body");
+    }
 
     let mut route_idx = route_idx;
     let mut path = path.to_string();
@@ -2330,7 +2443,25 @@ async fn dispatch_core_inner(
     // WC2E: FPC fill for proxy (NG-15 keys/bypass/vary live in the FPC gate).
     if let Some(cluster_id) = state.snapshot.proxy_cluster_for_route(route_idx) {
         let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+        let proxy_body = request_body.map(DispatchBody::into_proxy);
         if let Some(ctx) = fpc_miss {
+            if let Some(body) = proxy_body {
+                return fpc_bypassed!(
+                    proxy_dispatch_maybe_cached(
+                        state,
+                        route_idx,
+                        cluster_id,
+                        method,
+                        &uri,
+                        host.as_deref(),
+                        path_and_query,
+                        request_headers,
+                        x_forwarded_for,
+                        Some(body),
+                    )
+                    .await
+                );
+            }
             return fpc_bypassed!(
                 proxy_dispatch_fpc_fill(
                     state,
@@ -2355,7 +2486,7 @@ async fn dispatch_core_inner(
                 path_and_query,
                 request_headers,
                 x_forwarded_for,
-                request_body,
+                proxy_body,
             )
             .await
         );
@@ -2369,7 +2500,8 @@ async fn dispatch_core_inner(
     // Passing Vec::new() here dropped every POST/PUT body (php://input always empty).
     let fcgi_body = request_body
         .as_ref()
-        .map(|b| b.to_vec())
+        .and_then(DispatchBody::as_bytes)
+        .map(<[u8]>::to_vec)
         .unwrap_or_default();
     if let Some(ctx) = fpc_miss {
         if matches!(
@@ -3613,7 +3745,7 @@ async fn proxy_dispatch_maybe_cached(
     path_and_query: &str,
     request_headers: &[(String, String)],
     x_forwarded_for: Option<&HeaderValue>,
-    request_body: Option<Bytes>,
+    request_body: Option<exyonq_module_api::proxy_dispatch::ProxyRequestBody>,
 ) -> Response<BoxBody> {
     let Some(policy) = state.snapshot.cache_policy_for_route(route_idx) else {
         return proxy_contract_target(
@@ -4223,7 +4355,7 @@ async fn proxy_contract_target(
     request_headers: &[(String, String)],
     x_forwarded_for: Option<&HeaderValue>,
     method: exyonq_module_api::proxy_dispatch::ProxyMethod,
-    request_body: Option<Bytes>,
+    request_body: Option<exyonq_module_api::proxy_dispatch::ProxyRequestBody>,
 ) -> Response<BoxBody> {
     use crate::Backend;
     use exyonq_module_api::proxy_dispatch::ProxyDispatchOutcome;
@@ -4235,15 +4367,13 @@ async fn proxy_contract_target(
     let remote_addr = x_forwarded_for
         .and_then(|value| value.to_str().ok())
         .unwrap_or("127.0.0.1");
-    let body = request_body
-        .map(|b| exyonq_module_api::proxy_dispatch::ProxyRequestBody::memory(b.to_vec()));
     let request = execute_backend::build_proxy_dispatch_request(
         *cluster_id,
         method,
         path_and_query,
         host.map(str::to_string),
         request_headers.to_vec(),
-        body,
+        request_body,
         remote_addr,
         scheme,
     );
