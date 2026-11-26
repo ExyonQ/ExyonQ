@@ -2,4 +2,21 @@
 # EXYONQ-SEC-PRIVATE-MATERIAL-ZERO: fail-closed staged-index gate.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
+
+# Local-only codemap gate matrix (scripts/ops/ is not published). It runs when
+# this checkout has it, so a change to the codemap scripts cannot silently break
+# their exit codes. 1 = mismatch, blocks the commit; 3 = codemap absent, which is
+# NOT_EXECUTED and only warns: a machine without the binary can still commit.
+selftest="$ROOT/scripts/ops/codemap-gates-selftest.sh"
+if [[ -f "$selftest" ]]; then
+  rc=0
+  bash "$selftest" || rc=$?
+  case $rc in
+    0) ;;
+    3) echo "pre-commit: codemap selftest NOT_EXECUTED (codemap not installed)" >&2 ;;
+    *) echo "pre-commit: codemap selftest failed (exit $rc) — fix the gates before committing" >&2
+       exit 1 ;;
+  esac
+fi
+
 exec bash "$ROOT/scripts/security/scan-private-material.sh" --git-index --repo "$ROOT"

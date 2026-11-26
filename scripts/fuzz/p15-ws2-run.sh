@@ -39,24 +39,29 @@ mkdir -p "$EV_DIR"
 
 # Budget per target (seconds or runs) — not one global arbitrary duration.
 # probe: short CI-like; main: bounded campaign.
-declare -A BUDGET_PROBE BUDGET_MAIN
-BUDGET_PROBE[header_end]="-runs=5000"
-BUDGET_PROBE[static_request_line]="-runs=5000"
-BUDGET_PROBE[config_parse]="-runs=3000"
-BUDGET_PROBE[path_resolve]="-runs=5000"
-BUDGET_PROBE[fcgi_record]="-runs=5000"
-BUDGET_PROBE[proxy_headers]="-runs=5000"
-BUDGET_PROBE[nginx_migrate]="-runs=2000"
-BUDGET_PROBE[htaccess_parse]="-runs=2000"
-
-BUDGET_MAIN[header_end]="-max_total_time=90"
-BUDGET_MAIN[static_request_line]="-max_total_time=60"
-BUDGET_MAIN[config_parse]="-max_total_time=90"
-BUDGET_MAIN[path_resolve]="-max_total_time=60"
-BUDGET_MAIN[fcgi_record]="-max_total_time=60"
-BUDGET_MAIN[proxy_headers]="-max_total_time=60"
-BUDGET_MAIN[nginx_migrate]="-max_total_time=45"
-BUDGET_MAIN[htaccess_parse]="-max_total_time=45"
+#
+# Plain `case` lookups, not `declare -A`: associative arrays are bash >= 4, and
+# with them this whole matrix aborted on the macOS bash 3.2 before running a
+# single target (`declare: -A: invalid option`). `scripts/gates/portable-shell-gate.sh`
+# keeps this file and the other tracked scripts free of bash-4-only constructs.
+budget_for() { # budget_for <mode> <target>; prints the libFuzzer budget
+  local mode="$1" target="$2"
+  if [[ "$mode" == "main" ]]; then
+    case "$target" in
+      header_end|config_parse) echo "-max_total_time=90" ;;
+      static_request_line|path_resolve|fcgi_record|proxy_headers) echo "-max_total_time=60" ;;
+      nginx_migrate|htaccess_parse) echo "-max_total_time=45" ;;
+      *) return 1 ;;
+    esac
+  else
+    case "$target" in
+      header_end|static_request_line|path_resolve|fcgi_record|proxy_headers) echo "-runs=5000" ;;
+      config_parse) echo "-runs=3000" ;;
+      nginx_migrate|htaccess_parse) echo "-runs=2000" ;;
+      *) return 1 ;;
+    esac
+  fi
+}
 
 TIMEOUT="${P15_WS2_TIMEOUT:-25}"
 RSS_LIMIT="${P15_WS2_RSS_LIMIT_MB:-2048}"
@@ -100,10 +105,9 @@ EOF
 FAIL=0
 cd "$ROOT/fuzz"
 for target in "${TARGETS[@]}"; do
-  if [[ "$MODE" == "main" ]]; then
-    budget="${BUDGET_MAIN[$target]}"
-  else
-    budget="${BUDGET_PROBE[$target]}"
+  if ! budget="$(budget_for "$MODE" "$target")"; then
+    echo "FATAL: no $MODE budget for target '$target'" >&2
+    exit 2
   fi
   # Writable work corpus only — do not pass curated seed/negative dirs (libFuzzer writes into them).
   work="corpus/$target/work"

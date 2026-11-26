@@ -3,11 +3,11 @@
 # runs on Wolfi (Chainguard wolfi-base + php-8.5 packages). Owner rule: every
 # image ExyonQ builds uses Wolfi; no Debian, Ubuntu, Alpine or Debian-distroless
 # base. Build the official image first:
-#   docker build -f packaging/docker/Dockerfile -t exyonq:0.9.2 .
-#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.9.2 .
+#   docker build -f packaging/docker/Dockerfile -t exyonq:0.9.3 .
+#   docker build -f packaging/docker/wordpress/Dockerfile -t exyonq-wordpress:0.9.3 .
 
-ARG EXYONQ_IMAGE=exyonq:0.9.2
-ARG EXYONQ_VERSION=0.9.2
+ARG EXYONQ_IMAGE=exyonq:0.9.3
+ARG EXYONQ_VERSION=0.9.3
 ARG EXYONQ_GIT_REVISION=unknown
 
 FROM ${EXYONQ_IMAGE} AS exyonqbin

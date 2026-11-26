@@ -51,7 +51,17 @@ pub(crate) async fn serve<LC>(
 where
     LC: Http3ConnectionLifecycle + Send + Sync + 'static,
 {
-    let rustls = load_rustls_config(&settings.tls, &[b"h3"], None)?;
+    let Some(tls) = settings.tls_certs.first() else {
+        anyhow::bail!("http3 tls: no certificate configured");
+    };
+    if settings.tls_certs.len() > 1 {
+        warn!(
+            certs = settings.tls_certs.len(),
+            "quinn-legacy serves only the first HTTP/3 certificate (no SNI selection); \
+             use the s2n provider for per-domain QUIC certificates"
+        );
+    }
+    let rustls = load_rustls_config(tls, &[b"h3"], None)?;
     let quic = quinn::crypto::rustls::QuicServerConfig::try_from(rustls)
         .map_err(|err| anyhow::anyhow!("quic tls: {err}"))?;
     let mut server_config = QuinnServerConfig::with_crypto(Arc::new(quic));

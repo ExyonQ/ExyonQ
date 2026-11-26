@@ -44,7 +44,7 @@ wp redis status
 bash benchmarks/plan10a/wc5-redis-object-cache-e2e.sh
 ```
 
-See `docs/architecture/cache/WC5_REDIS_OBJECT_CACHE_REPORT.md`.
+See `docs/architecture/cache/WC5_REDIS_OBJECT_CACHE_REPORT.md` *(no versionado en este árbol: informe de caché de la campaña v0.4.4)*.
 
 ## Experimental: Lux external (WC6)
 
@@ -55,8 +55,8 @@ LUX_EXTERNAL = EXPERIMENTAL_SUPPORTED_CANDIDATE
 LUX_PRODUCT_SUPPORT = NOT_GRANTED
 ```
 
-- Pin identity (commit/image digest) — never `:latest`. Lab: `benchmarks/plan10a/wc6-lux-compatibility-e2e.sh`.
-- Report: `docs/architecture/cache/WC6_LUX_EXTERNAL_COMPATIBILITY_REPORT.md`.
+- Pin identity (commit/image digest) — never `:latest`. Lab: `benchmarks/plan10a/wc6-lux-compatibility-e2e.sh` *(no versionado en este árbol: arnés de la campaña v0.4.4)*.
+- Report: `docs/architecture/cache/WC6_LUX_EXTERNAL_COMPATIBILITY_REPORT.md` *(no versionado en este árbol: informe de caché de la campaña v0.4.4)*.
 - Redis remains the **supported** profile; do not replace WC5 with Lux in production claims.
 
 ## Out of scope

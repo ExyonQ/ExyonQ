@@ -59,13 +59,22 @@ impl Http3ProviderId {
     }
 }
 
+/// One certificate/key pair served by a QUIC listener.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Http3Certificate {
+    pub cert_path: PathBuf,
+    pub key_path: PathBuf,
+}
+
 /// Neutral provider listen/TLS/ACK settings.
 #[derive(Debug, Clone)]
 pub struct Http3ProviderConfig {
     pub provider: Http3ProviderId,
     pub listen: SocketAddr,
-    pub cert_path: PathBuf,
-    pub key_path: PathBuf,
+    /// Certificate/key pairs in `[[server]]` order. The first pair is the
+    /// listener default; providers with SNI support select the matching
+    /// pair for the remaining names.
+    pub certificates: Vec<Http3Certificate>,
     /// Local max_ack_delay transport parameter (milliseconds). Providers that
     /// cannot apply it must document NO-OP.
     pub max_ack_delay_ms: u64,
@@ -92,6 +101,9 @@ impl Http3ProviderConfig {
         if self.request_body_drain_cap_bytes == 0 {
             return Err(Http3ProviderError::InvalidDrainCap);
         }
+        if self.certificates.is_empty() {
+            return Err(Http3ProviderError::NoCertificates);
+        }
         if self.idle_timeout_ms == 0 {
             return Err(Http3ProviderError::InvalidIdleTimeout);
         }
@@ -105,6 +117,7 @@ pub enum Http3ProviderError {
     InvalidProvider(String),
     InvalidMaxAckDelay(u64),
     InvalidDrainCap,
+    NoCertificates,
     InvalidIdleTimeout,
     FeatureNotBuilt(&'static str),
     Internal(String),
@@ -116,6 +129,7 @@ impl std::fmt::Display for Http3ProviderError {
             Self::InvalidProvider(s) => write!(f, "invalid http3 provider: {s}"),
             Self::InvalidMaxAckDelay(v) => write!(f, "invalid max_ack_delay_ms: {v}"),
             Self::InvalidDrainCap => write!(f, "request_body_drain_cap_bytes must be > 0"),
+            Self::NoCertificates => write!(f, "http3 requires at least one certificate"),
             Self::InvalidIdleTimeout => write!(f, "idle_timeout_ms must be > 0"),
             Self::FeatureNotBuilt(p) => write!(f, "http3 provider {p} not in this build"),
             Self::Internal(s) => write!(f, "http3 provider internal: {s}"),
@@ -139,8 +153,10 @@ impl From<Http3ProviderListen> for Http3ProviderConfig {
         Self {
             provider: Http3ProviderId::Quiche,
             listen: v.listen,
-            cert_path: v.cert_path,
-            key_path: v.key_path,
+            certificates: vec![Http3Certificate {
+                cert_path: v.cert_path,
+                key_path: v.key_path,
+            }],
             max_ack_delay_ms: v.max_ack_delay_ms,
             qlog_enabled: false,
             request_body_drain_cap_bytes: Self::DEFAULT_DRAIN_CAP,
@@ -176,8 +192,10 @@ mod tests {
         let mut cfg = Http3ProviderConfig {
             provider: Http3ProviderId::S2n,
             listen: "127.0.0.1:0".parse().unwrap(),
-            cert_path: PathBuf::from("c"),
-            key_path: PathBuf::from("k"),
+            certificates: vec![Http3Certificate {
+                cert_path: PathBuf::from("c"),
+                key_path: PathBuf::from("k"),
+            }],
             max_ack_delay_ms: 30_000,
             qlog_enabled: false,
             request_body_drain_cap_bytes: 1024,
@@ -188,6 +206,28 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
         cfg.max_ack_delay_ms = 1;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_certificate_list() {
+        let mut cfg = Http3ProviderConfig {
+            provider: Http3ProviderId::S2n,
+            listen: "127.0.0.1:0".parse().unwrap(),
+            certificates: Vec::new(),
+            max_ack_delay_ms: 1,
+            qlog_enabled: false,
+            request_body_drain_cap_bytes: 1024,
+            idle_timeout_ms: 1000,
+            max_concurrent_streams: 1,
+            initial_stream_window: 1,
+            initial_connection_window: 1,
+        };
+        assert_eq!(cfg.validate(), Err(Http3ProviderError::NoCertificates));
+        cfg.certificates.push(Http3Certificate {
+            cert_path: PathBuf::from("c"),
+            key_path: PathBuf::from("k"),
+        });
         assert!(cfg.validate().is_ok());
     }
 }

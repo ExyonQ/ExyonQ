@@ -175,14 +175,31 @@ where
     poll.registry()
         .register(&mut socket, mio::Token(0), mio::Interest::READABLE)?;
 
+    // quiche's public Config loads one chain; BoringSSL would need a
+    // cert-selection callback that quiche does not expose. The first pair is
+    // the listener default, matching the TCP default. Use s2n for per-SNI
+    // QUIC certificates.
+    let primary = cfg
+        .certificates
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("http3 tls: no certificate configured"))?;
+    if cfg.certificates.len() > 1 {
+        warn!(
+            certs = cfg.certificates.len(),
+            "quiche serves only the first HTTP/3 certificate (no SNI selection); \
+             use the s2n provider for per-domain QUIC certificates"
+        );
+    }
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
     config.load_cert_chain_from_pem_file(
-        cfg.cert_path
+        primary
+            .cert_path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("cert path not utf-8"))?,
     )?;
     config.load_priv_key_from_pem_file(
-        cfg.key_path
+        primary
+            .key_path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("key path not utf-8"))?,
     )?;
@@ -884,8 +901,10 @@ mod tests {
         let cfg = Http3ProviderConfig {
             provider: Http3ProviderId::Quiche,
             listen: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-            cert_path: PathBuf::from("c.pem"),
-            key_path: PathBuf::from("k.pem"),
+            certificates: vec![exyonq_http3_provider_api::Http3Certificate {
+                cert_path: PathBuf::from("c.pem"),
+                key_path: PathBuf::from("k.pem"),
+            }],
             max_ack_delay_ms: 1,
             qlog_enabled: false,
             request_body_drain_cap_bytes: 64 * 1024,

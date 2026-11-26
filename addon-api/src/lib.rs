@@ -384,12 +384,28 @@ mod tests {
     }
 
     fn leak_descriptor(name: &'static str, cost_class: CostClass) -> &'static AddonDescriptor {
+        leak_descriptor_with(
+            name,
+            ApiVersion::V1_0,
+            ">=0.1.0, <0.5.0",
+            &[Capability::Telemetry],
+            cost_class,
+        )
+    }
+
+    fn leak_descriptor_with(
+        name: &'static str,
+        addon_api: ApiVersion,
+        core_compat: &str,
+        capabilities: &'static [Capability],
+        cost_class: CostClass,
+    ) -> &'static AddonDescriptor {
         Box::leak(Box::new(AddonDescriptor {
             name,
             addon_version: "0.1.0",
-            addon_api: ApiVersion::V1_0,
-            core_compat: VersionReq::parse(">=0.1.0, <0.5.0").unwrap(),
-            capabilities: &[Capability::Telemetry],
+            addon_api,
+            core_compat: VersionReq::parse(core_compat).unwrap(),
+            capabilities,
             cost_class,
             build: BuildKind::Static,
         }))
@@ -420,5 +436,171 @@ mod tests {
             .validate_handshake(&Version::new(0, 1, 0), RuntimeProfile::Edge)
             .unwrap_err();
         assert!(matches!(err, AddonError::CostClassDenied { .. }));
+    }
+
+    /// Pins `matches_host` (major-only match) and the `Display` shape used in
+    /// handshake errors: both were mutated to constants and survived before.
+    #[test]
+    fn api_version_matches_only_the_same_major_and_displays_both_components() {
+        assert!(ApiVersion::V1_0.matches_host(ApiVersion { major: 1, minor: 7 }));
+        assert!(!ApiVersion { major: 2, minor: 0 }.matches_host(ApiVersion::V1_0));
+        assert!(!ApiVersion { major: 0, minor: 9 }.matches_host(ApiVersion::V1_0));
+        assert_eq!(format!("{}", ApiVersion::V1_0), "1.0");
+        assert_eq!(format!("{}", ApiVersion { major: 2, minor: 3 }), "2.3");
+    }
+
+    /// Full cost-class matrix per runtime profile, including the `Lb` negation
+    /// of `Experimental` and `Edge` admitting only the two cheap classes.
+    #[test]
+    fn cost_class_matrix_is_exact_per_profile() {
+        let edge = RuntimeProfile::Edge;
+        assert!(edge.allows_cost_class(CostClass::ZeroCostWhenDisabled));
+        assert!(edge.allows_cost_class(CostClass::LowCostHeaderOnly));
+        assert!(!edge.allows_cost_class(CostClass::StreamingCost));
+        assert!(!edge.allows_cost_class(CostClass::ExternalCall));
+        assert!(!edge.allows_cost_class(CostClass::Experimental));
+
+        let lb = RuntimeProfile::Lb;
+        assert!(lb.allows_cost_class(CostClass::ZeroCostWhenDisabled));
+        assert!(lb.allows_cost_class(CostClass::LowCostHeaderOnly));
+        assert!(lb.allows_cost_class(CostClass::StreamingCost));
+        assert!(lb.allows_cost_class(CostClass::ExternalCall));
+        assert!(!lb.allows_cost_class(CostClass::Experimental));
+
+        let dev = RuntimeProfile::Dev;
+        assert!(dev.allows_cost_class(CostClass::Experimental));
+        assert!(dev.allows_cost_class(CostClass::StreamingCost));
+    }
+
+    /// `len`, `is_empty` and `modules` must track the real registry contents.
+    #[test]
+    fn registry_counts_and_modules_track_registrations() {
+        let mut registry = AddonRegistry::new();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+        assert!(registry.modules().is_empty());
+
+        registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor("one", CostClass::ZeroCostWhenDisabled),
+            }))
+            .unwrap();
+        assert!(!registry.is_empty());
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.modules().len(), 1);
+        assert_eq!(registry.modules()[0].descriptor().name, "one");
+
+        registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor("two", CostClass::ZeroCostWhenDisabled),
+            }))
+            .unwrap();
+        assert!(!registry.is_empty());
+        assert_eq!(registry.len(), 2);
+        assert_eq!(
+            registry
+                .modules()
+                .iter()
+                .map(|addon| addon.descriptor().name)
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
+        );
+    }
+
+    /// Duplicate names must be rejected by identity, without registering the
+    /// second addon; distinct names must both register in order.
+    #[test]
+    fn duplicate_names_are_rejected_and_unique_names_register() {
+        let mut registry = AddonRegistry::new();
+        registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor("dup", CostClass::ZeroCostWhenDisabled),
+            }))
+            .unwrap();
+        let err = registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor("dup", CostClass::LowCostHeaderOnly),
+            }))
+            .err()
+            .expect("a duplicate name must be rejected");
+        assert!(matches!(err, AddonError::DuplicateName { name: "dup" }));
+        assert_eq!(registry.len(), 1);
+
+        registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor("other", CostClass::ZeroCostWhenDisabled),
+            }))
+            .unwrap();
+        assert_eq!(registry.len(), 2);
+    }
+
+    /// Handshake rejects an addon built against another API major.
+    #[test]
+    fn handshake_rejects_api_major_mismatch() {
+        let mut registry = AddonRegistry::new();
+        registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor_with(
+                    "future",
+                    ApiVersion { major: 2, minor: 0 },
+                    ">=0.1.0, <0.5.0",
+                    &[Capability::Telemetry],
+                    CostClass::ZeroCostWhenDisabled,
+                ),
+            }))
+            .unwrap();
+        let err = registry
+            .validate_handshake(&Version::new(0, 1, 0), RuntimeProfile::Dev)
+            .unwrap_err();
+        assert!(matches!(err, AddonError::ApiMajorMismatch { .. }));
+    }
+
+    /// A core prerelease (`0.1.0-dev`) belongs to its release line for
+    /// compatibility: it must pass a `>=0.1.0, <0.5.0` requirement, while a
+    /// genuinely newer core must still be rejected.
+    #[test]
+    fn prerelease_core_is_checked_as_its_release_line() {
+        let mut registry = AddonRegistry::new();
+        registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor("pre", CostClass::ZeroCostWhenDisabled),
+            }))
+            .unwrap();
+        registry
+            .validate_handshake(
+                &Version::parse("0.1.0-dev").expect("valid prerelease"),
+                RuntimeProfile::Dev,
+            )
+            .expect("a prerelease of the same line must be compatible");
+
+        let err = registry
+            .validate_handshake(&Version::new(0, 6, 0), RuntimeProfile::Dev)
+            .unwrap_err();
+        assert!(matches!(err, AddonError::CoreCompatMismatch { .. }));
+    }
+
+    /// `ensure_capabilities` must reject a capability no addon declares and
+    /// accept one that at least one addon provides.
+    #[test]
+    fn capabilities_must_be_declared_by_some_addon() {
+        let mut registry = AddonRegistry::new();
+        registry
+            .register(Arc::new(TestAddon {
+                desc: leak_descriptor("cap", CostClass::ZeroCostWhenDisabled),
+            }))
+            .unwrap();
+        registry
+            .ensure_capabilities(&[Capability::Telemetry])
+            .expect("Telemetry is declared");
+        let err = registry
+            .ensure_capabilities(&[Capability::RequestFilter])
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            AddonError::MissingCapability {
+                capability: Capability::RequestFilter,
+                ..
+            }
+        ));
     }
 }

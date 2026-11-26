@@ -113,10 +113,11 @@ without Docker Desktop or QEMU: `stream_config` 9/9, `ng20_stream_proxy_test`
 and `RESULT=PASS NG20_MYSQL_E2E` (two real MySQL 8.4 servers, balanced
 `@@server_id` `4202,4201`, session `1 / 4202 / 8.4.13`, failover). Measured
 binaries: 429 002 664 B / SHA-256 `42b6f388dad3d480…` on amd64 and 416 235 280 B
-/ SHA-256 `89d2fdfa753e86ce…` on arm64. `scripts/e2e/lib/host-provenance.sh`
-reports `HOST_DOCKERENV=absent`, `HOST_DETECT_VIRT=kvm`,
-`HOST_PROVENANCE=vm` on both hosts: native Linux inside a hypervisor VM, not a
-container. **CI executed on 2026-11-16.** The branch that carries this
+/ SHA-256 `89d2fdfa753e86ce…` on arm64. The provenance recorded on both hosts (`host-provenance.txt` in the local
+evidence) reports `HOST_DOCKERENV=absent`, `HOST_DETECT_VIRT=kvm`,
+`HOST_PROVENANCE=vm`: native Linux inside a hypervisor VM, not a container.
+*(The helper that printed it was not versioned in this tree; only its recorded
+output is kept, under `.exyonq-local/`.)* **CI executed on 2026-11-16.** The branch that carries this
 increment, `release/v0.9.2`, was pushed as `bdcdc3c..6ee38a5` and the `check`
 lane ran on Linux throughout: [push run `43955904651`](https://github.com/ExyonQ/ExyonQ/actions/runs/43955904651)
 is **success** on `6ee38a5` (fmt, `clippy -D warnings`, `nextest` of the whole

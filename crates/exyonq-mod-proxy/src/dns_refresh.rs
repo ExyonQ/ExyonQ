@@ -281,6 +281,12 @@ pub fn append_dns_prometheus(out: &mut String) {
 mod tests {
     use super::*;
 
+    /// Serialises the tests that share the process-global `DNS_STATS` table and
+    /// epoch. `replace_generation` prunes every peer outside its generation, so
+    /// running these in parallel lets one test delete another's row between its
+    /// `refresh_peer` write and its assertion.
+    static DNS_STATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn peer(host: &str, port: u16) -> DnsPeer {
         DnsPeer {
             upstream: "u".into(),
@@ -291,6 +297,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_peer_records_resolution_and_addr_count() {
+        let _serial = DNS_STATE_LOCK.lock().await;
         // localhost always resolves; baseline observation must not count as change.
         let p = peer("localhost", 80);
         refresh_peer("u-ng09", &p, None).await;
@@ -304,6 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_peer_records_failure() {
+        let _serial = DNS_STATE_LOCK.lock().await;
         let p = peer("nonexistent.invalid.example", 80);
         refresh_peer("u-ng09", &p, None).await;
         let map = stats_map();
@@ -330,6 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn replace_generation_dedups_and_prunes_stats() {
+        let _serial = DNS_STATE_LOCK.lock().await;
         let sup = DnsRefreshSupervisor::new();
         let peers = vec![
             peer("dup.test", 80),
@@ -354,6 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_epoch_observation_does_not_write_stats() {
+        let _serial = DNS_STATE_LOCK.lock().await;
         // A dead-generation task finishing after prune must not recreate
         // phantom series (stats write is gated on the current epoch).
         let p = peer("stale-epoch.test", 80);
@@ -364,6 +374,7 @@ mod tests {
 
     #[test]
     fn prometheus_render_emits_all_series() {
+        let _serial = DNS_STATE_LOCK.blocking_lock();
         {
             let mut map = stats_map();
             map.entry(("u-render".into(), "h.test:443".into()))

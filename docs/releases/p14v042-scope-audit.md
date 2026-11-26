@@ -420,3 +420,5 @@ Accept / amend this audit, then either:
 3. Defer opening.
 
 Also confirm when `exyonq-laboratorio-wt-p14v041` may be removed (after acknowledging exclusive `.exyonq-local/p14v041-close` evidence retention/archive).
+
+> **Historical note (2026-11-19).** This audit refers to a worktree of the former lab checkout. The lab and its worktrees were archived (outside the repository) and deleted on 2026-11-19, so that removal question is moot; the record is kept as history only.

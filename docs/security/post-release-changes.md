@@ -1,8 +1,12 @@
 # Post-release changes — after v0.9.1
 
-**Status: PREPARED, NOT RELEASED.** These changes are in the working tree for
-the next release candidate. There is no `v0.9.2` tag, GitHub Release or image;
-this file is not evidence that any of them were published.
+**Status: PREPARED, NOT RELEASED.** These changes were prepared in the working
+tree for the next release candidate after v0.9.1; the candidate that shipped
+them, **v0.9.2**, is now published (tag, GitHub Release and GHCR images on
+2026-11-19 — see [`docs/release/v0.9.2.md`](../release/v0.9.2.md)). This page
+remains a change register, not release evidence: the audit for 0.9.2 is
+[`docs/security/audit-v0.9.2.md`](audit-v0.9.2.md) and the release gates are
+recorded in the release note, not here.
 
 The five changes below close the audit findings tracked for the next release.
 They must be re-verified against the exact tagged commit and recorded in

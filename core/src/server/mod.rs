@@ -272,6 +272,15 @@ async fn serve_hyper<S>(
         let mut http2 = builder.http2();
         http2.max_header_list_size(io::max_header_cap() as u32);
         http2.timer(hyper_util::rt::TokioTimer::new());
+        // NG-21 remainder: the IO deadline above only covers the first head.
+        // After that, Hyper's h2 builder has no header or idle timeout, so a
+        // peer that goes silent on an open connection would hold it forever.
+        // The committed keep-alive deadline also arms h2's own PING liveness
+        // probe: a peer that stops answering is closed, while a healthy client
+        // (any h2 stack answers PING) keeps its connection and streams.
+        let liveness = io::header_read_timeout();
+        http2.keep_alive_interval(liveness);
+        http2.keep_alive_timeout(liveness);
     }
     if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
         // OL-03 blockBadReq: Hyper rejects malformed request lines before the
@@ -823,22 +832,42 @@ async fn run_on_impl(
     if config.http3.enabled {
         if let Some(http3_listen) = config.primary_server().http3_listen.as_deref() {
             if let Ok(addr) = http3_listen.parse::<SocketAddr>() {
-                if let Some(tls) = config.primary_server().tls.clone() {
-                    // ACME bootstrap-from-zero: H3 has no hot-reload; spawn
-                    // only with cert material on disk (restart after first
-                    // issuance to enable H3).
-                    if !tls.cert.exists() || !tls.key.exists() {
+                let primary = config.primary_server();
+                if primary.tls.is_some() {
+                    // Every [[server]] sharing the primary listen contributes
+                    // its pair; the first is the QUIC default and s2n selects
+                    // the rest by SNI. ACME bootstrap-from-zero: H3 has no
+                    // hot-reload, so spawn only with the complete set on disk
+                    // (restart after the first issuance to enable H3).
+                    let mut tls_certs = Vec::new();
+                    let mut missing = Vec::new();
+                    for server in &config.servers {
+                        if server.listen != primary.listen {
+                            continue;
+                        }
+                        let Some(tls) = server.tls.as_ref() else {
+                            continue;
+                        };
+                        if tls.cert.exists() && tls.key.exists() {
+                            tls_certs.push(TlsSettings {
+                                cert_path: tls.cert.clone(),
+                                key_path: tls.key.clone(),
+                            });
+                        } else {
+                            missing.push(tls.cert.display().to_string());
+                        }
+                    }
+                    if tls_certs.is_empty() || !missing.is_empty() {
                         warn!(
-                            cert = %tls.cert.display(),
-                            "http3_listen skipped: cert/key not on disk yet"
+                            listen = %primary.listen,
+                            missing = ?missing,
+                            "http3_listen skipped: every TLS certificate on the shared listen \
+                             must be on disk (restart after ACME issuance to enable HTTP/3)"
                         );
                     } else {
                         let settings = exyonq_mod_http3::Http3Settings {
                             listen: addr,
-                            tls: TlsSettings {
-                                cert_path: tls.cert,
-                                key_path: tls.key,
-                            },
+                            tls_certs,
                             // Neutral IR string only — no provider types in core.
                             provider: config.http3.provider.clone(),
                             max_ack_delay_ms: config.http3.max_ack_delay_ms,

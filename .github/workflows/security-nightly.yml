@@ -2,7 +2,10 @@ name: Security Nightly
 
 on:
   schedule:
+    # Nightly: the quick parser gate and Miri.
     - cron: "0 3 * * *"
+    # Weekly (Sunday): the full main fuzz matrix, ~8 minutes of fuzzing.
+    - cron: "0 4 * * 0"
   workflow_dispatch:
 
 env:
@@ -23,6 +26,28 @@ jobs:
         run: cargo install cargo-fuzz --locked
       - name: Run fuzz targets
         run: bash scripts/security-fuzz.sh --ci
+
+  fuzz-main:
+    # The full matrix is bounded by time (60 s per target, eight targets), so it
+    # runs weekly instead of every night; dispatch runs it on demand.
+    if: github.event.schedule == '0 4 * * 0' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (pin; preserves toolchain input contract)
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run the main fuzz matrix
+        run: bash scripts/security-fuzz.sh --mode main --budget 60 --out fuzz-main-evidence
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: fuzz-main-evidence
+          path: fuzz-main-evidence/
+          if-no-files-found: error
 
   miri:
     runs-on: ubuntu-latest

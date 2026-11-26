@@ -16,8 +16,9 @@
 //! NG-02 / ADR-048: patterned rewrite evaluation (compiled regex, $1..$9).
 //! ADR-062 / F1-R07: also `$uri` (path) and `$host` (normalized).
 
-use crate::path_canon::{decode_percent_path, escape_decoded_uri_bytes};
+use crate::path_canon::{decode_percent_path, escape_decoded_uri_bytes, escape_uri_bytes};
 use exyonq_config_ir::{RewriteCondConfig, RewriteConfig, RewriteFlagConfig, RewriteRuleConfig};
+use regex::bytes::Regex as BytesRegex;
 use regex::Regex;
 use std::borrow::Cow;
 
@@ -53,6 +54,10 @@ pub enum CompiledRewrite {
     Literal(String),
     Rule {
         re: Regex,
+        /// Byte-wise twin of `re`, used only when the decoded path is not UTF-8
+        /// so a rule matches nginx's `$uri` byte for byte (`None` when the
+        /// pattern needs Unicode classes that bytes mode does not provide).
+        re_bytes: Option<BytesRegex>,
         replacement: String,
         flag: RewriteFlagConfig,
         when: Vec<CompiledWhen>,
@@ -61,10 +66,18 @@ pub enum CompiledRewrite {
 
 #[derive(Debug, Clone)]
 pub enum CompiledWhen {
-    Path(Regex),
+    Path {
+        re: Regex,
+        /// Byte-wise twin of `re`, for a path condition evaluated against a
+        /// decoded target that is not UTF-8 (see `when_match`).
+        re_bytes: Option<BytesRegex>,
+    },
     Host(String),
     Query(Regex),
-    Header { name: String, value: Option<String> },
+    Header {
+        name: String,
+        value: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -96,8 +109,13 @@ fn compile_rule(rule: &RewriteRuleConfig) -> Result<CompiledRewrite, CompileRewr
     for cond in &rule.when {
         when.push(compile_when(cond)?);
     }
+    let re_bytes = regex::bytes::RegexBuilder::new(&rule.pattern)
+        .unicode(false)
+        .build()
+        .ok();
     Ok(CompiledRewrite::Rule {
         re,
+        re_bytes,
         replacement: rule.replacement.clone(),
         flag: rule.flag,
         when,
@@ -108,7 +126,11 @@ fn compile_when(cond: &RewriteCondConfig) -> Result<CompiledWhen, CompileRewrite
     if let Some(path) = &cond.path {
         let re =
             Regex::new(path).map_err(|e| CompileRewriteError::Regex(format!("when.path: {e}")))?;
-        return Ok(CompiledWhen::Path(re));
+        let re_bytes = regex::bytes::RegexBuilder::new(path)
+            .unicode(false)
+            .build()
+            .ok();
+        return Ok(CompiledWhen::Path { re, re_bytes });
     }
     if let Some(host) = &cond.host {
         return Ok(CompiledWhen::Host(normalize_host(host)));
@@ -149,91 +171,116 @@ pub fn apply_compiled_rewrite(
         }
         CompiledRewrite::Rule {
             re,
+            re_bytes,
             replacement,
             flag,
             when,
         } => {
             // nginx matches against `$uri`, the decoded normalized path, and
             // re-encodes what it forwards. The canonical path keeps its escapes,
-            // so decode one pass here; a decoded path that is not UTF-8 cannot be
-            // spelled by a regex literal, so it keeps the URI form and its
-            // captures pass through unescaped.
-            let (haystack, decoded) = match_haystack(req.path);
+            // so decode one pass here.
+            let decoded_bytes = decode_percent_path(req.path);
+            let decoded_text = decoded_bytes
+                .as_deref()
+                .and_then(|bytes| std::str::from_utf8(bytes).ok());
+            let (haystack, decoded) = match decoded_text {
+                Some(text) => (Cow::Owned(text.to_owned()), true),
+                None => (Cow::Borrowed(req.path), false),
+            };
             let req = RewriteRequest {
                 path: haystack.as_ref(),
                 ..req
             };
-            if !when_match(when, req) {
-                return RewriteApplyOutcome::NoChange;
-            }
-            let Some(caps) = re.captures(req.path) else {
-                return RewriteApplyOutcome::NoChange;
-            };
-            let Ok(expanded) = expand_replacement(replacement, &caps, req) else {
-                return RewriteApplyOutcome::Rejected;
-            };
-            let expanded = if decoded {
-                escape_decoded_uri_bytes(&expanded)
+            // A path condition obeys the same rule as the pattern: the URI form
+            // first, and the decoded bytes when that form is not UTF-8.
+            let byte_haystack = if decoded {
+                None
             } else {
-                expanded
+                decoded_bytes.as_deref()
             };
-            match flag {
-                RewriteFlagConfig::Last => {
-                    if path_valid_internal(&expanded) {
-                        RewriteApplyOutcome::Internal {
-                            path: expanded,
-                            rematch: true,
-                        }
-                    } else {
-                        RewriteApplyOutcome::Rejected
-                    }
-                }
-                RewriteFlagConfig::Break => {
-                    if path_valid_internal(&expanded) {
-                        RewriteApplyOutcome::Internal {
-                            path: expanded,
-                            rematch: false,
-                        }
-                    } else {
-                        RewriteApplyOutcome::Rejected
-                    }
-                }
-                RewriteFlagConfig::Redirect => {
-                    let location = append_query(expanded, req.query);
-                    if location_valid(&location) {
-                        RewriteApplyOutcome::Redirect {
-                            status: 302,
-                            location,
-                        }
-                    } else {
-                        RewriteApplyOutcome::Rejected
-                    }
-                }
-                RewriteFlagConfig::Permanent => {
-                    let location = append_query(expanded, req.query);
-                    if location_valid(&location) {
-                        RewriteApplyOutcome::Redirect {
-                            status: 301,
-                            location,
-                        }
-                    } else {
-                        RewriteApplyOutcome::Rejected
+            if !when_match(when, req, byte_haystack) {
+                return RewriteApplyOutcome::NoChange;
+            }
+            if let Some(caps) = re.captures(req.path) {
+                let Ok(expanded) = expand_replacement(replacement, &caps, req) else {
+                    return RewriteApplyOutcome::Rejected;
+                };
+                let expanded = if decoded {
+                    escape_decoded_uri_bytes(&expanded)
+                } else {
+                    expanded
+                };
+                return finish_rule(*flag, expanded, req);
+            }
+            // A decoded path that is not UTF-8 cannot be spelled by a regex
+            // literal, so the text rule above matches the URI form. nginx still
+            // matches `$uri` byte to byte there: run the byte-wise twin on the
+            // decoded bytes, which is what makes `^/i.ndex$` match `%FF`.
+            if !decoded {
+                if let (Some(bytes), Some(bytes_re)) = (decoded_bytes.as_deref(), re_bytes.as_ref())
+                {
+                    if let Some(caps) = bytes_re.captures(bytes) {
+                        let Ok(expanded) = expand_replacement_bytes(replacement, &caps, req, bytes)
+                        else {
+                            return RewriteApplyOutcome::Rejected;
+                        };
+                        return finish_rule(*flag, escape_uri_bytes(&expanded), req);
                     }
                 }
             }
+            RewriteApplyOutcome::NoChange
         }
     }
 }
 
-/// Path the rule matches, plus whether it is the decoded form.
-///
-/// `true` means the pattern matched nginx `$uri` and the replacement must be
-/// escaped again; `false` means the decoded bytes are not UTF-8 and the URI form
-/// was matched as-is.
-fn match_haystack(path: &str) -> (Cow<'_, str>, bool) {
-    match decode_percent_path(path).and_then(|bytes| String::from_utf8(bytes).ok()) {
-        Some(decoded) => (Cow::Owned(decoded), true),
-        None => (Cow::Borrowed(path), false),
+fn finish_rule(
+    flag: RewriteFlagConfig,
+    expanded: String,
+    req: RewriteRequest<'_>,
+) -> RewriteApplyOutcome {
+    match flag {
+        RewriteFlagConfig::Last => {
+            if path_valid_internal(&expanded) {
+                RewriteApplyOutcome::Internal {
+                    path: expanded,
+                    rematch: true,
+                }
+            } else {
+                RewriteApplyOutcome::Rejected
+            }
+        }
+        RewriteFlagConfig::Break => {
+            if path_valid_internal(&expanded) {
+                RewriteApplyOutcome::Internal {
+                    path: expanded,
+                    rematch: false,
+                }
+            } else {
+                RewriteApplyOutcome::Rejected
+            }
+        }
+        RewriteFlagConfig::Redirect => {
+            let location = append_query(expanded, req.query);
+            if location_valid(&location) {
+                RewriteApplyOutcome::Redirect {
+                    status: 302,
+                    location,
+                }
+            } else {
+                RewriteApplyOutcome::Rejected
+            }
+        }
+        RewriteFlagConfig::Permanent => {
+            let location = append_query(expanded, req.query);
+            if location_valid(&location) {
+                RewriteApplyOutcome::Redirect {
+                    status: 301,
+                    location,
+                }
+            } else {
+                RewriteApplyOutcome::Rejected
+            }
+        }
     }
 }
 
@@ -247,9 +294,20 @@ fn append_query(location: String, query: &str) -> String {
     format!("{location}?{query}")
 }
 
-fn when_match(when: &[CompiledWhen], req: RewriteRequest<'_>) -> bool {
+fn when_match(
+    when: &[CompiledWhen],
+    req: RewriteRequest<'_>,
+    byte_haystack: Option<&[u8]>,
+) -> bool {
     when.iter().all(|w| match w {
-        CompiledWhen::Path(re) => re.is_match(req.path),
+        CompiledWhen::Path { re, re_bytes } => {
+            re.is_match(req.path)
+                || byte_haystack.is_some_and(|bytes| {
+                    re_bytes
+                        .as_ref()
+                        .is_some_and(|bytes_re| bytes_re.is_match(bytes))
+                })
+        }
         CompiledWhen::Host(expected) => req
             .host
             .map(|h| normalize_host(h) == *expected)
@@ -301,6 +359,56 @@ fn expand_replacement(
                     "host" => {
                         let h = req.host.unwrap_or("");
                         out.push_str(&normalize_host_port(h));
+                    }
+                    _ => return Err(()),
+                }
+            }
+            _ => return Err(()),
+        }
+    }
+    Ok(out)
+}
+
+/// Byte-wise `$1..$9`, `$$`, `$uri`, `$host` expansion.
+///
+/// Each captured byte lands as-is and is escaped once by the caller, exactly
+/// like a text capture: nginx re-encodes `$uri` bytes and does not care whether
+/// they were UTF-8 to begin with.
+fn expand_replacement_bytes(
+    template: &str,
+    caps: &regex::bytes::Captures<'_>,
+    req: RewriteRequest<'_>,
+    decoded: &[u8],
+) -> Result<Vec<u8>, ()> {
+    let mut out = Vec::with_capacity(template.len());
+    let mut chars = template.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('$') => out.push(b'$'),
+            Some(d) if ('1'..='9').contains(&d) => {
+                let idx = (d as u8 - b'0') as usize;
+                if let Some(m) = caps.get(idx) {
+                    out.extend_from_slice(m.as_bytes());
+                }
+            }
+            Some(c0) if c0.is_ascii_alphabetic() || c0 == '_' => {
+                let mut name = String::new();
+                name.push(c0);
+                while matches!(chars.peek(), Some(n) if n.is_ascii_alphanumeric() || *n == '_') {
+                    name.push(chars.next().expect("peeked"));
+                }
+                match name.as_str() {
+                    // `$uri` is the decoded path, which is exactly `decoded` here.
+                    "uri" => out.extend_from_slice(decoded),
+                    "host" => {
+                        let h = req.host.unwrap_or("");
+                        out.extend_from_slice(normalize_host_port(h).as_bytes());
                     }
                     _ => return Err(()),
                 }
@@ -417,10 +525,31 @@ mod tests {
         );
     }
 
-    /// Bytes that are not UTF-8 cannot be spelled by a regex literal, so the
-    /// rule matches the URI form and the capture is not escaped a second time.
+    /// Bytes that are not UTF-8 still match a decoded literal, as nginx does:
+    /// the byte-wise twin sees `/raw/i\xFFndex`, so `i.ndex` cashes.
     #[test]
-    fn non_utf8_target_matches_its_uri_form() {
+    fn non_utf8_target_matches_decoded_bytes() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/raw/(i.ndex)$".into(),
+            replacement: "/mirror/$1".into(),
+            flag: RewriteFlagConfig::Last,
+            when: vec![],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(&compiled, request("/raw/i%FFndex"));
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Internal {
+                path: "/mirror/i%FFndex".into(),
+                rematch: true,
+            }
+        );
+    }
+
+    /// A rule written against the escaped spelling keeps working: the text match
+    /// on the URI form runs first and is not replaced.
+    #[test]
+    fn non_utf8_target_keeps_its_uri_form() {
         let cfg = RewriteConfig::Rule(RewriteRuleConfig {
             pattern: r"^/raw/(.*)$".into(),
             replacement: "/mirror/$1".into(),
@@ -433,6 +562,75 @@ mod tests {
             out,
             RewriteApplyOutcome::Internal {
                 path: "/mirror/i%FFndex".into(),
+                rematch: true,
+            }
+        );
+    }
+
+    /// A `when.path` condition matches a decoded non-UTF-8 target as nginx does:
+    /// both the condition and the rule see `/raw/i\xFFndex`, not `%FF`.
+    #[test]
+    fn non_utf8_target_matches_a_decoded_when_path() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/raw/(i.ndex)$".into(),
+            replacement: "/mirror/$1".into(),
+            flag: RewriteFlagConfig::Last,
+            when: vec![RewriteCondConfig {
+                path: Some(r"^/raw/i.ndex$".into()),
+                host: None,
+                query: None,
+                header: None,
+                header_value: None,
+            }],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(&compiled, request("/raw/i%FFndex"));
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Internal {
+                path: "/mirror/i%FFndex".into(),
+                rematch: true,
+            }
+        );
+    }
+
+    /// A `when.path` that does not match the decoded bytes still vetoes the rule.
+    #[test]
+    fn non_utf8_target_when_path_still_vetoes() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/raw/(i.ndex)$".into(),
+            replacement: "/mirror/$1".into(),
+            flag: RewriteFlagConfig::Last,
+            when: vec![RewriteCondConfig {
+                path: Some(r"^/other/".into()),
+                host: None,
+                query: None,
+                header: None,
+                header_value: None,
+            }],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        assert_eq!(
+            apply_compiled_rewrite(&compiled, request("/raw/i%FFndex")),
+            RewriteApplyOutcome::NoChange
+        );
+    }
+
+    /// `$uri` in the byte branch is the decoded path, escaped once on the way out.
+    #[test]
+    fn non_utf8_dollar_uri_is_decoded_and_escaped_once() {
+        let cfg = RewriteConfig::Rule(RewriteRuleConfig {
+            pattern: r"^/raw/i.ndex$".into(),
+            replacement: "/mirror$uri".into(),
+            flag: RewriteFlagConfig::Last,
+            when: vec![],
+        });
+        let compiled = compile_rewrite(&cfg).expect("compile");
+        let out = apply_compiled_rewrite(&compiled, request("/raw/i%FFndex"));
+        assert_eq!(
+            out,
+            RewriteApplyOutcome::Internal {
+                path: "/mirror/raw/i%FFndex".into(),
                 rematch: true,
             }
         );

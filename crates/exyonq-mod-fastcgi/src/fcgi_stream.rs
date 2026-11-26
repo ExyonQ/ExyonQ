@@ -15,12 +15,13 @@
  */
 //! Unified FastCGI stream for UDS and TCP pooling (P1.2).
 
-use crate::unix_connect::connect_unix_stream;
+use crate::unix_connect::connect_unix_stream_detailed;
 use crate::wire::WireError;
+use std::fmt;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Pre-resolved pool endpoint (no per-request DNS).
@@ -42,31 +43,36 @@ impl PoolEndpoint {
 }
 
 /// Bidirectional FastCGI peer stream (one request at a time).
+#[derive(Debug)]
 pub enum FcgiStream {
     Unix(UnixStream),
     Tcp(TcpStream),
 }
 
 impl FcgiStream {
-    pub fn connect(endpoint: &PoolEndpoint, connect_timeout: Duration) -> Result<Self, WireError> {
+    /// Connect preserving the OS error for diagnostics (`errno`, phase).
+    pub fn connect_detailed(
+        endpoint: &PoolEndpoint,
+        connect_timeout: Duration,
+    ) -> Result<Self, ConnectFailure> {
         match endpoint {
-            PoolEndpoint::Unix(path) => {
-                let stream = connect_unix_stream(Path::new(path), connect_timeout)?;
-                Ok(Self::Unix(stream))
-            }
-            PoolEndpoint::Tcp(addr) => {
-                let stream = TcpStream::connect_timeout(addr, connect_timeout).map_err(|e| {
-                    if e.kind() == std::io::ErrorKind::TimedOut
-                        || e.kind() == std::io::ErrorKind::WouldBlock
-                    {
-                        WireError::Timeout
-                    } else {
-                        WireError::ConnectionFailed
-                    }
-                })?;
-                Ok(Self::Tcp(stream))
-            }
+            PoolEndpoint::Unix(path) => connect_unix_stream_detailed(path, connect_timeout)
+                .map(Self::Unix)
+                .map_err(|error| ConnectFailure {
+                    endpoint: format!("unix:{}", path.display()),
+                    error,
+                }),
+            PoolEndpoint::Tcp(addr) => TcpStream::connect_timeout(addr, connect_timeout)
+                .map(Self::Tcp)
+                .map_err(|error| ConnectFailure {
+                    endpoint: format!("tcp:{addr}"),
+                    error,
+                }),
         }
+    }
+
+    pub fn connect(endpoint: &PoolEndpoint, connect_timeout: Duration) -> Result<Self, WireError> {
+        Self::connect_detailed(endpoint, connect_timeout).map_err(ConnectFailure::into_wire_error)
     }
 
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), WireError> {
@@ -122,6 +128,77 @@ impl FcgiStream {
     }
 }
 
+/// Connect failure with the real OS error kept for operator logs.
+#[derive(Debug)]
+pub struct ConnectFailure {
+    pub endpoint: String,
+    pub error: std::io::Error,
+}
+
+impl ConnectFailure {
+    /// Symbolic `errno` for the log (`EACCES`, `ENOENT`, `ECONNREFUSED`, …).
+    pub fn errno_label(&self) -> &'static str {
+        match self.error.raw_os_error() {
+            Some(code) if code == libc::EACCES => "EACCES",
+            Some(code) if code == libc::EPERM => "EPERM",
+            Some(code) if code == libc::ENOENT => "ENOENT",
+            Some(code) if code == libc::ECONNREFUSED => "ECONNREFUSED",
+            Some(code) if code == libc::ETIMEDOUT => "ETIMEDOUT",
+            Some(code) if code == libc::ENOTSOCK => "ENOTSOCK",
+            Some(code) if code == libc::EADDRNOTAVAIL => "EADDRNOTAVAIL",
+            Some(code) if code == libc::ECONNRESET => "ECONNRESET",
+            _ => match self.error.kind() {
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "ETIMEDOUT",
+                std::io::ErrorKind::NotFound => "ENOENT",
+                std::io::ErrorKind::PermissionDenied => "EACCES",
+                std::io::ErrorKind::ConnectionRefused => "ECONNREFUSED",
+                _ => "EIO",
+            },
+        }
+    }
+
+    /// Operator hint for the common PHP-FPM failures in issue #109.
+    pub fn hint(&self) -> &'static str {
+        match self.errno_label() {
+            "EACCES" | "EPERM" => {
+                "socket permissions deny the ExyonQ user; set php-fpm listen.owner/listen.group so this user can connect, then restart PHP-FPM (a USR2 reload keeps the old socket inode)"
+            }
+            "ENOENT" => {
+                "socket path does not exist; check [[fcgi_pool]].address and that PHP-FPM is running with that listen path"
+            }
+            "ECONNREFUSED" => {
+                "nothing is accepting on the socket; start PHP-FPM or fix the listener backlog/transport"
+            }
+            "ETIMEDOUT" => {
+                "connect timed out; check PHP-FPM backlog, pm.max_children and system socket limits"
+            }
+            _ => "check the FastCGI endpoint path, transport (unix/tcp) and that PHP-FPM is reachable",
+        }
+    }
+
+    pub fn into_wire_error(self) -> WireError {
+        match self.error.kind() {
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => WireError::Timeout,
+            _ => WireError::ConnectionFailed,
+        }
+    }
+}
+
+impl fmt::Display for ConnectFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} (errno={}, os_error={:?}): {}",
+            self.endpoint,
+            self.errno_label(),
+            self.error.raw_os_error(),
+            self.error
+        )
+    }
+}
+
+impl std::error::Error for ConnectFailure {}
+
 impl Read for FcgiStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
@@ -144,5 +221,32 @@ impl Write for FcgiStream {
             Self::Unix(s) => s.flush(),
             Self::Tcp(s) => s.flush(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_failure_keeps_missing_socket_errno() {
+        let path = std::env::temp_dir().join(format!(
+            "exyonq-missing-fcgi-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let failure =
+            FcgiStream::connect_detailed(&PoolEndpoint::Unix(path), Duration::from_millis(200))
+                .expect_err("missing socket must fail");
+        assert_eq!(failure.errno_label(), "ENOENT");
+        assert!(
+            failure.hint().contains("does not exist"),
+            "{}",
+            failure.hint()
+        );
+        assert!(failure.to_string().contains("errno=ENOENT"));
     }
 }

@@ -17,6 +17,7 @@
 
 use crate::caps::{MAX_CGI_HEADER_BYTES, MAX_CGI_HEADER_COUNT, MAX_FCGI_RESPONSE_BYTES};
 use crate::client::{ClientError, PhpFpmClient};
+use crate::diagnostics::endpoint_display;
 use crate::metrics;
 use crate::params::MinForwardRequest;
 use crate::scripted::{ScriptedFpmConfig, ScriptedFpmTransport};
@@ -353,6 +354,52 @@ impl FcgiModuleExecutor {
         self.pools.values().next().map(|p| p.generation())
     }
 
+    /// Connect once per configured pool as the ExyonQ service user.
+    /// Logs actionable `errno` + permission hints; never fails the generation.
+    pub fn preflight(&self) -> (usize, usize) {
+        let mut pools: Vec<_> = self.pools.values().collect();
+        pools.sort_by(|a, b| a.pool_name().cmp(b.pool_name()));
+        let (mut ok, mut failed) = (0usize, 0usize);
+        for pool in pools {
+            match pool.preflight() {
+                Ok(()) => {
+                    ok += 1;
+                    tracing::info!(
+                        target: "exyonq::fcgi",
+                        pool = %pool.pool_name(),
+                        endpoint = %endpoint_display(pool.endpoint()),
+                        max_connections = pool.max_connections(),
+                        "fcgi preflight ok"
+                    );
+                }
+                Err(failure) => {
+                    failed += 1;
+                    tracing::warn!(
+                        target: "exyonq::fcgi",
+                        pool = %pool.pool_name(),
+                        endpoint = %failure.endpoint,
+                        errno = failure.errno_label(),
+                        os_error = ?failure.error.raw_os_error(),
+                        phase = "preflight",
+                        "fcgi preflight failed: {}; {}",
+                        failure,
+                        failure.hint()
+                    );
+                }
+            }
+        }
+        if ok + failed > 0 {
+            tracing::info!(
+                target: "exyonq::fcgi",
+                pools = ok + failed,
+                ok,
+                failed,
+                "fcgi preflight summary"
+            );
+        }
+        (ok, failed)
+    }
+
     /// Legacy alias — Unix paths only.
     pub fn production_unix_pools_with_config(
         pools: Vec<(u32, PathBuf)>,
@@ -392,12 +439,37 @@ impl FcgiBackendExecutor for FcgiModuleExecutor {
 
         match pool.forward_once(&params, &forward.stdin) {
             Ok(response) => map_forward_success(&response.stdout),
-            Err(err) => map_wire_error(err),
+            Err(err) => {
+                tracing::warn!(
+                    target: "exyonq::fcgi",
+                    pool = %pool.pool_name(),
+                    endpoint = %endpoint_display(pool.endpoint()),
+                    phase = "dispatch",
+                    error = wire_error_category(&err),
+                    "fcgi request failed"
+                );
+                map_wire_error(err)
+            }
         }
     }
 
     fn begin_drain(&self) {
         self.begin_drain_all();
+    }
+}
+
+fn wire_error_category(err: &crate::wire::WireError) -> &'static str {
+    match err {
+        crate::wire::WireError::Timeout => "timeout",
+        crate::wire::WireError::PoolBusy => "pool_busy",
+        crate::wire::WireError::ConnectionFailed => "connect",
+        crate::wire::WireError::ConnectionClosed => "peer_closed",
+        crate::wire::WireError::ResponseCapExceeded => "response_cap",
+        crate::wire::WireError::IoFailed => "io",
+        crate::wire::WireError::InvalidFrame(_) => "invalid_frame",
+        crate::wire::WireError::WrongRequestId { .. } => "wrong_request_id",
+        crate::wire::WireError::Encode(_) => "encode",
+        crate::wire::WireError::Decode(_) => "decode",
     }
 }
 

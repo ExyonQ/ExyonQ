@@ -10,5 +10,5 @@ fuzz_target!(|data: &[u8]| {
     if data.len() > 16_384 {
         return;
     }
-    exyonq_mod_proxy::fuzz_exercise_proxy_headers(data);
+    exyonq_mod_proxy::headers::fuzz_exercise_proxy_headers(data);
 });

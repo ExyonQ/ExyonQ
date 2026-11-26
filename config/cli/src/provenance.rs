@@ -482,15 +482,25 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Unique per call: nanosecond timestamps alone can collide between tests
+    /// that start together, and these tests write `main.toml`/`frag.toml` into
+    /// the same directory name, so a collision makes one test read the other's
+    /// config or a file the other just deleted (seen on 2026-11-20 as
+    /// `read .../frag.toml: No such file or directory`). `create_dir` fails
+    /// loudly instead of silently sharing a directory.
     fn tmp() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let d = std::env::temp_dir().join(format!(
-            "exyonq-q06-{}",
+            "exyonq-q06-{}-{}-{}",
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&d).unwrap();
+        fs::create_dir(&d).unwrap();
         d
     }
 

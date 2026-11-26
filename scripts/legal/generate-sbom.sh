@@ -65,6 +65,8 @@ def sanitize(obj):
                 return "path+file://./" + rest
         # Deny-all: any absolute path+file:/// must be rewritten or rejected.
         if s.startswith("path+file:///"):
+            # Historical prefixes: the former lab checkout was archived and deleted on
+            # 2026-11-19. Kept so SBOMs generated before that date still sanitize.
             for marker in (
                 "/exyonq-laboratorio/",
                 "/exyonq-p14v041/",

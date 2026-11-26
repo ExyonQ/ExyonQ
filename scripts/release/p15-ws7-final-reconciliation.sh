@@ -249,14 +249,20 @@ rm -rf "$STAGING"
 # F13 — lock/hash reconciliation (canonical LATEST_LOCK_ID + evidence presence)
 LOCKS_OK=true
 : >"$ARTIFACT_DIR/f13-locks.log"
-declare -A LOCK_TO_DIR=(
-  [P1_5_WS1_LOCK_20260720T152416Z_04656c9cd4f2]=p1.5-ws1
-  [P1_5_WS2_LOCK_20260720T164500Z_04656c9cd4f2]=p1.5-ws2
-  [P1_5_WS3_LOCK_20260720T171247Z_04656c9cd4f2]=p1.5-ws3
-  [P1_5_WS4_LOCK_20260720T183445Z_04656c9cd4f2]=p1.5-ws4
-  [P1_5_WS5_LOCK_20260720T224635Z_04656c9cd4f2]=p1.5-ws5
-  [P1_5_WS6_LOCK_20260721T001809Z_04656c9cd4f2]=p1.5-ws6
-)
+# Plain `case`, not `declare -A`: associative arrays are bash >= 4 and this
+# script must also run on the macOS bash 3.2 (see
+# scripts/gates/portable-shell-gate.sh).
+lock_dir_for() { # lock_dir_for <lock-id>; prints the evidence directory name
+  case "$1" in
+    P1_5_WS1_LOCK_20260720T152416Z_04656c9cd4f2) echo p1.5-ws1 ;;
+    P1_5_WS2_LOCK_20260720T164500Z_04656c9cd4f2) echo p1.5-ws2 ;;
+    P1_5_WS3_LOCK_20260720T171247Z_04656c9cd4f2) echo p1.5-ws3 ;;
+    P1_5_WS4_LOCK_20260720T183445Z_04656c9cd4f2) echo p1.5-ws4 ;;
+    P1_5_WS5_LOCK_20260720T224635Z_04656c9cd4f2) echo p1.5-ws5 ;;
+    P1_5_WS6_LOCK_20260721T001809Z_04656c9cd4f2) echo p1.5-ws6 ;;
+    *) return 1 ;;
+  esac
+}
 for id in \
   P1_5_WS1_LOCK_20260720T152416Z_04656c9cd4f2 \
   P1_5_WS2_LOCK_20260720T164500Z_04656c9cd4f2 \
@@ -264,7 +270,12 @@ for id in \
   P1_5_WS4_LOCK_20260720T183445Z_04656c9cd4f2 \
   P1_5_WS5_LOCK_20260720T224635Z_04656c9cd4f2 \
   P1_5_WS6_LOCK_20260721T001809Z_04656c9cd4f2; do
-  ev_dir="$WORKSPACE/docs/operations/evidence/${LOCK_TO_DIR[$id]}"
+  if ! ws_dir="$(lock_dir_for "$id")"; then
+    LOCKS_OK=false
+    echo "unknown lock id $id" >>"$ARTIFACT_DIR/f13-locks.log"
+    continue
+  fi
+  ev_dir="$WORKSPACE/docs/operations/evidence/$ws_dir"
   latest_f="$ev_dir/LATEST_LOCK_ID"
   if [[ ! -f "$latest_f" ]]; then
     LOCKS_OK=false

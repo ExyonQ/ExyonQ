@@ -55,7 +55,7 @@ names the real commands that now provide that coverage.
 
 - [ ] Audit the code commit C and copy [`audit-template.md`](audit-template.md) → `audit-vX.Y.Z.md` (or `cargo xtask security audit --version X.Y.Z`).
 - [ ] Fill version, commit **C**, gates, findings, waivers, surfaces, sign-off.
-- [ ] If the document is added after C, commit only the audit document as an audit-only seal A whose first parent is C. The tag points at A; the verifier requires `A^ = C` and that the seal changes only `docs/security/audit-vX.Y.Z.md`.
+- [ ] If the document is added after C, commit only the audit document as an audit-only seal A whose first parent is C. The tag points at A; the verifier requires `A^ = C` and that the seal changes only `docs/security/audit-vX.Y.Z.md` *(plantilla de nombre; el sello real es `docs/security/audit-v0.9.3.md`)*.
 - [ ] No unresolved entries under `## Blockers`.
 - [ ] `bash scripts/verify-release-audit.sh X.Y.Z` PASS.
 - [ ] Optional: independent security review of the release diff before sign-off.

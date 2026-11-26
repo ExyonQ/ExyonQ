@@ -70,24 +70,6 @@ fn rp3_no_runtime_patch_fcgi_pool_surface() {
 }
 
 #[test]
-#[ignore = "lab-only guard script: absent from the published source tree"]
-fn guards_script_enforces_fastcgi_and_handler_bans() {
-    // Lab-only guard script; absent from the published source tree.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../scripts/architecture/verify-phase0-kernel.sh");
-    let verify = std::fs::read_to_string(&path)
-        .expect("lab-only guard script: present in exyonq-laboratorio");
-    for check in [
-        "check_fastcgi_runtime",
-        "check_handler_table",
-        "check_forbidden_hotpath",
-        "check_mod_to_core",
-    ] {
-        assert!(verify.contains(check), "missing guard check `{check}`");
-    }
-}
-
-#[test]
 fn pr1_execute_backend_contract_surface_unchanged_in_core() {
     let execute_backend_src = include_str!("../src/execute_backend.rs");
     assert!(

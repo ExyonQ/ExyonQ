@@ -58,7 +58,9 @@ pub(crate) struct FcgiPoolMetrics {
     responses_504: AtomicU64,
     saturation_rejections: AtomicU64,
     checkout_timeouts: AtomicU64,
+    connect_failures: AtomicU64,
     inflight_current: AtomicI64,
+    waiters_current: AtomicI64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -70,7 +72,9 @@ pub(crate) struct FcgiPoolSnapshot {
     pub responses_504: u64,
     pub saturation_rejections: u64,
     pub checkout_timeouts: u64,
+    pub connect_failures: u64,
     pub inflight_current: i64,
+    pub waiters_current: i64,
 }
 
 impl FcgiPoolMetrics {
@@ -93,12 +97,21 @@ impl FcgiPoolMetrics {
         self.checkout_timeouts.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn note_connect_failure(&self) {
+        self.connect_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn inflight_acquire(&self) {
         self.inflight_current.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn inflight_release(&self) {
         self.inflight_current.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_waiters(&self, waiters: usize) {
+        self.waiters_current
+            .store(waiters.min(i64::MAX as usize) as i64, Ordering::Relaxed);
     }
 
     fn snapshot(&self) -> FcgiPoolSnapshot {
@@ -110,7 +123,9 @@ impl FcgiPoolMetrics {
             responses_504: self.responses_504.load(Ordering::Relaxed),
             saturation_rejections: self.saturation_rejections.load(Ordering::Relaxed),
             checkout_timeouts: self.checkout_timeouts.load(Ordering::Relaxed),
+            connect_failures: self.connect_failures.load(Ordering::Relaxed),
             inflight_current: self.inflight_current.load(Ordering::Relaxed),
+            waiters_current: self.waiters_current.load(Ordering::Relaxed),
         }
     }
 
@@ -123,7 +138,9 @@ impl FcgiPoolMetrics {
             || snap.responses_504 != 0
             || snap.saturation_rejections != 0
             || snap.checkout_timeouts != 0
+            || snap.connect_failures != 0
             || snap.inflight_current != 0
+            || snap.waiters_current != 0
     }
 }
 
@@ -498,6 +515,22 @@ fn append_fcgi_pool_prometheus(out: &mut String) {
             snap.inflight_current
         ));
     }
+    out.push_str("# TYPE exyonq_fcgi_pool_waiters_current gauge\n");
+    for (pool, snap) in &snapshots {
+        out.push_str(&format!(
+            "exyonq_fcgi_pool_waiters_current{{pool=\"{}\"}} {}\n",
+            escape_prometheus_label(pool),
+            snap.waiters_current
+        ));
+    }
+    out.push_str("# TYPE exyonq_fcgi_pool_connect_failures_total counter\n");
+    for (pool, snap) in &snapshots {
+        out.push_str(&format!(
+            "exyonq_fcgi_pool_connect_failures_total{{pool=\"{}\"}} {}\n",
+            escape_prometheus_label(pool),
+            snap.connect_failures
+        ));
+    }
 
     let overflow = &*FCGI_POOL_OVERFLOW;
     if overflow.has_data() {
@@ -529,6 +562,14 @@ fn append_pool_series(out: &mut String, pool: &str, snap: &FcgiPoolSnapshot) {
     out.push_str(&format!(
         "exyonq_fcgi_pool_inflight_current{{pool=\"{label}\"}} {}\n",
         snap.inflight_current
+    ));
+    out.push_str(&format!(
+        "exyonq_fcgi_pool_waiters_current{{pool=\"{label}\"}} {}\n",
+        snap.waiters_current
+    ));
+    out.push_str(&format!(
+        "exyonq_fcgi_pool_connect_failures_total{{pool=\"{label}\"}} {}\n",
+        snap.connect_failures
     ));
 }
 
@@ -590,6 +631,8 @@ mod tests {
         metric.note_response(503);
         metric.note_saturation_rejection();
         metric.note_checkout_timeout();
+        metric.note_connect_failure();
+        metric.set_waiters(2);
         metric.inflight_acquire();
         metric.inflight_release();
 
@@ -606,6 +649,12 @@ mod tests {
         )));
         assert!(out.contains(&format!(
             "exyonq_fcgi_pool_checkout_timeouts_total{{pool=\"{name}\"}} 1"
+        )));
+        assert!(out.contains(&format!(
+            "exyonq_fcgi_pool_connect_failures_total{{pool=\"{name}\"}} 1"
+        )));
+        assert!(out.contains(&format!(
+            "exyonq_fcgi_pool_waiters_current{{pool=\"{name}\"}} 2"
         )));
         assert!(out.contains(&format!(
             "exyonq_fcgi_pool_inflight_current{{pool=\"{name}\"}} 0"

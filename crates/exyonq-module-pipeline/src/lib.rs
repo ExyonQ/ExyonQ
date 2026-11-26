@@ -17,7 +17,7 @@
 
 mod convert;
 
-pub use convert::{inject_client_ip, module_request_from_parts};
+pub use convert::{inject_client_ip, module_request_from_parts, ModuleBodyTooLarge};
 
 use convert::{
     boxed_from_module_response, module_request_from_incoming, module_response_from_boxed,
@@ -27,16 +27,16 @@ use exyonq_config_ir::ModulesConfig;
 use exyonq_metrics::MetricsModule;
 use exyonq_module_api::{HttpRequest, ModuleRegistry, ResponseObservation, RuntimeProfile};
 use exyonq_ratelimit::RateLimitModule;
+use http_body::Body as _;
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use hyper::header::CONTENT_TYPE;
+use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use hyper::{Request, Response};
 use semver::Version;
 use std::future::Future;
 use std::sync::Arc;
 
 type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
-
-const MODULE_BODY_LIMIT: usize = 4 * 1024 * 1024;
 
 /// Cap032: SSE responses must stay streaming — never enter module body collect.
 fn response_is_event_stream(response: &Response<BoxBody>) -> bool {
@@ -55,6 +55,7 @@ fn response_is_event_stream(response: &Response<BoxBody>) -> bool {
 /// Cap055 rate-limit token state is process-lifetime (`PROCESS_MODULE_LIMITER`).
 pub struct CrossCuttingPipeline {
     registry: ModuleRegistry,
+    body_limit: usize,
     wire_ratelimit_enabled: bool,
     wire_ratelimit_requests_per_second: u32,
     wire_ratelimit_burst: u32,
@@ -99,6 +100,7 @@ impl CrossCuttingPipeline {
         registry.validate_handshake(&core_version, RuntimeProfile::Edge)?;
         Ok(Self {
             registry,
+            body_limit: config.response_body_limit_bytes(),
             wire_ratelimit_enabled: config.ratelimit.enabled,
             wire_ratelimit_requests_per_second: config.ratelimit.requests_per_second,
             wire_ratelimit_burst: config.ratelimit.burst,
@@ -185,25 +187,42 @@ impl CrossCuttingPipeline {
             module_req.extensions_mut().insert(labels.clone());
         }
         // Cap032: never collect text/event-stream — streaming must reach the client.
-        // Cap054: modules observe real status + real headers with StreamingUnavailable body.
         if response_is_event_stream(&response) {
-            let mut obs = ResponseObservation::streaming_unavailable(
-                response.status(),
-                response.headers().clone(),
-            );
-            for module in self.registry.modules() {
-                module
-                    .on_response(module_req, &mut obs)
-                    .await
-                    .map_err(|err| anyhow::anyhow!("{err}"))?;
-            }
-            // Re-apply metadata mutations only; never replace the streaming body.
-            let (mut parts, body) = response.into_parts();
-            parts.status = obs.status();
-            parts.headers = obs.headers().clone();
-            return Ok(Response::from_parts(parts, body));
+            return self.observe_without_body(module_req, response).await;
         }
-        let module_resp = module_response_from_boxed(response, MODULE_BODY_LIMIT).await?;
+        // Issue #109: a body whose declared size is over the ceiling is not
+        // buffered; modules observe metadata only and the original bytes stream.
+        let declared_len = response.body().size_hint().exact().or_else(|| {
+            response
+                .headers()
+                .get(CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        });
+        if declared_len.is_some_and(|len| len > self.body_limit as u64) {
+            return self.observe_without_body(module_req, response).await;
+        }
+        let module_resp = match module_response_from_boxed(response, self.body_limit).await {
+            Ok(response) => response,
+            Err(err) => {
+                if let Some(too_large) = err.downcast_ref::<ModuleBodyTooLarge>() {
+                    let route = module_req
+                        .extensions()
+                        .get::<exyonq_module_api::RouteLabels>()
+                        .map(|labels| (labels.route.clone(), labels.upstream.clone()));
+                    tracing::warn!(
+                        target: "exyonq::modules",
+                        limit = too_large.limit,
+                        observed = too_large.observed,
+                        route = route.as_ref().map(|(route, _)| route.as_str()).unwrap_or("-"),
+                        upstream = route.as_ref().map(|(_, upstream)| upstream.as_str()).unwrap_or("-"),
+                        "module response body exceeds configured limit; returning 413"
+                    );
+                    return Ok(module_body_too_large_response(*too_large));
+                }
+                return Err(err);
+            }
+        };
         let mut obs = ResponseObservation::from_http_response(module_resp);
         for module in self.registry.modules() {
             module
@@ -215,6 +234,29 @@ impl CrossCuttingPipeline {
             .try_into_http_response()
             .map_err(|err| anyhow::anyhow!("{err}"))?;
         boxed_from_module_response(module_resp).await
+    }
+
+    /// Cap032/Cap054: modules see real status and headers, never the body.
+    /// The original body is passed through untouched (SSE, large responses).
+    async fn observe_without_body(
+        &self,
+        module_req: &mut HttpRequest,
+        response: Response<BoxBody>,
+    ) -> anyhow::Result<Response<BoxBody>> {
+        let mut obs = ResponseObservation::streaming_unavailable(
+            response.status(),
+            response.headers().clone(),
+        );
+        for module in self.registry.modules() {
+            module
+                .on_response(module_req, &mut obs)
+                .await
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
+        }
+        let (mut parts, body) = response.into_parts();
+        parts.status = obs.status();
+        parts.headers = obs.headers().clone();
+        Ok(Response::from_parts(parts, body))
     }
 
     /// HTTP/1.x path: request filters → route short-circuit → core dispatch → response filters.
@@ -261,6 +303,24 @@ impl CrossCuttingPipeline {
     }
 }
 
+/// Actionable `413` instead of the historical generic `500 module error`.
+fn module_body_too_large_response(too_large: ModuleBodyTooLarge) -> Response<BoxBody> {
+    let body = format!(
+        "module response body is {} bytes and exceeds the configured {} byte limit\n\
+         set [modules].response_body_limit_bytes higher, or serve large assets without body-inspecting modules\n",
+        too_large.observed, too_large.limit
+    );
+    Response::builder()
+        .status(hyper::StatusCode::PAYLOAD_TOO_LARGE)
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(
+            http_body_util::Full::from(bytes::Bytes::from(body))
+                .map_err(|never| match never {})
+                .boxed(),
+        )
+        .expect("valid 413 response")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +331,7 @@ mod tests {
     #[test]
     fn la_cap054_008_ratelimit_registers_before_metrics() {
         let config = ModulesConfig {
+            response_body_limit_bytes: None,
             metrics: MetricsConfig {
                 enabled: true,
                 ..MetricsConfig::default()
@@ -314,6 +375,7 @@ mod tests {
     fn wire_cheap_hooks_install_without_compression() {
         // Process-global OnceLock: only assert when install succeeds (first in process).
         let config = ModulesConfig {
+            response_body_limit_bytes: None,
             metrics: MetricsConfig {
                 enabled: true,
                 ..MetricsConfig::default()
@@ -406,6 +468,7 @@ mod tests {
         registry.register(probe.clone());
         let pipeline = CrossCuttingPipeline {
             registry,
+            body_limit: exyonq_config_ir::DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES,
             wire_ratelimit_enabled: false,
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
@@ -513,6 +576,7 @@ mod tests {
         registry.register(probe.clone());
         let pipeline = CrossCuttingPipeline {
             registry,
+            body_limit: exyonq_config_ir::DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES,
             wire_ratelimit_enabled: false,
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
@@ -587,6 +651,7 @@ mod tests {
         }
 
         let config = ModulesConfig {
+            response_body_limit_bytes: None,
             metrics: MetricsConfig {
                 enabled: false,
                 ..MetricsConfig::default()
@@ -681,6 +746,7 @@ mod tests {
 
         let probe = Arc::new(Probe::default());
         let config = ModulesConfig {
+            response_body_limit_bytes: None,
             metrics: MetricsConfig {
                 enabled: true,
                 ..MetricsConfig::default()
@@ -774,6 +840,7 @@ mod tests {
         registry.register(probe.clone());
         let pipeline = CrossCuttingPipeline {
             registry,
+            body_limit: exyonq_config_ir::DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES,
             wire_ratelimit_enabled: false,
             wire_ratelimit_requests_per_second: 1,
             wire_ratelimit_burst: 1,
@@ -801,5 +868,158 @@ mod tests {
             probe.seen.lock().expect("lock").clone(),
             Some(ResponseBodyState::Empty)
         );
+    }
+
+    #[tokio::test]
+    async fn declared_body_over_limit_streams_uncollected() {
+        use bytes::Bytes;
+        use exyonq_module_api::{
+            Body, BoxError, HttpRequest, Module, ModuleInfo, ResponseBodyState, ResponseObservation,
+        };
+        use http::{Request, StatusCode};
+        use http_body_util::BodyExt;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct Probe {
+            body_state: Mutex<Option<ResponseBodyState>>,
+        }
+        #[async_trait::async_trait]
+        impl Module for Probe {
+            fn info(&self) -> ModuleInfo {
+                ModuleInfo {
+                    name: "large-probe",
+                    version: "0.0.0",
+                    api_version: "1.0",
+                }
+            }
+            async fn on_response(
+                &self,
+                _req: &HttpRequest,
+                obs: &mut ResponseObservation,
+            ) -> Result<(), BoxError> {
+                *self.body_state.lock().expect("lock") = Some(obs.body().clone());
+                Ok(())
+            }
+        }
+
+        let probe = Arc::new(Probe::default());
+        let mut registry = ModuleRegistry::new();
+        registry.register(probe.clone());
+        let pipeline = CrossCuttingPipeline {
+            registry,
+            body_limit: 1024,
+            wire_ratelimit_enabled: false,
+            wire_ratelimit_requests_per_second: 1,
+            wire_ratelimit_burst: 1,
+            wire_metrics_enabled: false,
+        };
+        let payload = Bytes::from(vec![b'z'; 5 * 1024 * 1024]);
+        let response = http::Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, payload.len())
+            .body(
+                http_body_util::Full::from(payload.clone())
+                    .map_err(|never| match never {})
+                    .boxed(),
+            )
+            .unwrap();
+        let mut req = Request::builder()
+            .uri("http://127.0.0.1/big.json")
+            .body(Body::from(Bytes::new()))
+            .unwrap();
+        let out = pipeline
+            .transform_response(&mut req, response)
+            .await
+            .expect("large body must stream");
+        assert_eq!(out.status(), StatusCode::OK);
+        assert_eq!(
+            probe.body_state.lock().expect("lock").clone(),
+            Some(ResponseBodyState::StreamingUnavailable)
+        );
+        let client = BodyExt::collect(out.into_body())
+            .await
+            .expect("collect")
+            .to_bytes();
+        assert_eq!(client.len(), payload.len());
+        assert_eq!(client, payload);
+    }
+
+    #[tokio::test]
+    async fn unknown_length_body_over_limit_returns_413() {
+        use bytes::Bytes;
+        use exyonq_module_api::{Body, Module, ModuleInfo, ModuleRegistry};
+        use http::{Request, StatusCode};
+        use http_body_util::BodyExt;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::task::{Context, Poll};
+
+        struct UnknownLenBody {
+            remaining: usize,
+        }
+        impl http_body::Body for UnknownLenBody {
+            type Data = Bytes;
+            type Error = hyper::Error;
+
+            fn poll_frame(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+                let this = self.get_mut();
+                if this.remaining == 0 {
+                    return Poll::Ready(None);
+                }
+                let n = this.remaining.min(512);
+                this.remaining -= n;
+                Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(vec![b'u'; n])))))
+            }
+
+            fn size_hint(&self) -> http_body::SizeHint {
+                http_body::SizeHint::default()
+            }
+        }
+
+        struct Noop;
+        #[async_trait::async_trait]
+        impl Module for Noop {
+            fn info(&self) -> ModuleInfo {
+                ModuleInfo {
+                    name: "noop",
+                    version: "0.0.0",
+                    api_version: "1.0",
+                }
+            }
+        }
+
+        let mut registry = ModuleRegistry::new();
+        registry.register(Arc::new(Noop));
+        let pipeline = CrossCuttingPipeline {
+            registry,
+            body_limit: 1024,
+            wire_ratelimit_enabled: false,
+            wire_ratelimit_requests_per_second: 1,
+            wire_ratelimit_burst: 1,
+            wire_metrics_enabled: false,
+        };
+        let response = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(UnknownLenBody { remaining: 4096 }.boxed())
+            .unwrap();
+        let mut req = Request::builder()
+            .uri("http://127.0.0.1/stream")
+            .body(Body::from(Bytes::new()))
+            .unwrap();
+        let out = pipeline
+            .transform_response(&mut req, response)
+            .await
+            .expect("413 response, not module error");
+        assert_eq!(out.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = BodyExt::collect(out.into_body())
+            .await
+            .expect("collect")
+            .to_bytes();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("response_body_limit_bytes"), "{text}");
     }
 }

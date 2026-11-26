@@ -51,8 +51,17 @@ match, runs the rule, and re-encodes the expanded replacement before validating
 or forwarding it. A decoded capture therefore never reaches the upstream as a
 literal space, and a `%` inside a capture is escaped as `%25` instead of being
 read back as an escape. When the decoded bytes are not UTF-8 (for example `%FF`)
-no regex literal can spell them, so the engine matches the URI form and passes
-its captures through unescaped rather than corrupting them.
+the text rule first gets the URI form, exactly as before, so a rule written
+against the escaped spelling keeps matching and its captures still pass through
+unescaped. If that does not match, the same pattern runs byte-wise
+(`regex::bytes`, Unicode disabled) over the decoded bytes, which is what nginx
+does: `^/i.ndex$` matches `/i\xFFndex` and `$1` is re-encoded to `%FF` on the way
+out. `$uri` in that branch is the decoded path, and the captures are escaped once.
+`when.path` obeys the same rule and in the same order: the URI form first, then
+the decoded bytes through its own byte-wise twin, so a condition and the pattern
+it guards never disagree about what the path is. `when.query` and the header
+conditions are unaffected — the query string is not percent-decoded and header
+values arrive as text.
 
 ### Compilation
 

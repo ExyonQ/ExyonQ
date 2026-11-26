@@ -17,9 +17,22 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Default ceiling for a response body collected by the cross-cutting module
+/// pipeline (`MODULE_BODY_LIMIT`). Bodies whose declared size is larger are
+/// streamed through without module body inspection.
+pub const DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Upper bound accepted for `[modules].response_body_limit_bytes`.
+pub const MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModulesConfig {
+    /// Ceiling for response bodies collected by the module pipeline. Bodies
+    /// with a larger declared `Content-Length` stream through uncollected;
+    /// unknown-length bodies over the limit return `413`. Default 4 MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_body_limit_bytes: Option<usize>,
     #[serde(default)]
     pub metrics: MetricsConfig,
     #[serde(default)]
@@ -43,6 +56,25 @@ pub struct ModulesConfig {
     /// 0.5: nginx `auth_basic` per route.
     #[serde(default, skip_serializing_if = "AuthConfig::is_default")]
     pub auth: AuthConfig,
+}
+
+impl ModulesConfig {
+    /// Effective pipeline body ceiling (default 4 MiB).
+    pub fn response_body_limit_bytes(&self) -> usize {
+        self.response_body_limit_bytes
+            .unwrap_or(DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES)
+    }
+
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        if let Some(limit) = self.response_body_limit_bytes {
+            if !(1024..=MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES).contains(&limit) {
+                return Err(crate::ConfigError::Parse(format!(
+                    "modules.response_body_limit_bytes must be 1024..={MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES}, got {limit}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -708,5 +740,47 @@ mod tests {
                 "{endpoint} must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn response_body_limit_defaults_and_validates_range() {
+        assert_eq!(
+            ModulesConfig::default().response_body_limit_bytes(),
+            DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES
+        );
+        let mut config = ModulesConfig {
+            response_body_limit_bytes: Some(1024),
+            ..ModulesConfig::default()
+        };
+        assert!(config.validate().is_ok());
+        config.response_body_limit_bytes = Some(512);
+        assert!(config.validate().is_err(), "below 1 KiB must fail closed");
+        config.response_body_limit_bytes = Some(MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES + 1);
+        assert!(config.validate().is_err(), "above 1 GiB must fail closed");
+    }
+
+    #[test]
+    fn response_body_limit_parses_from_toml() {
+        let raw = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["r"]
+[[route]]
+name = "r"
+match = { path = "/" }
+root = "/srv"
+[modules]
+response_body_limit_bytes = 8388608
+"#;
+        let config = crate::AppConfig::parse_str(raw).expect("parse");
+        assert_eq!(config.modules.response_body_limit_bytes(), 8 * 1024 * 1024);
+
+        let invalid = raw.replace("8388608", "512");
+        let err = crate::AppConfig::parse_str(&invalid).expect_err("reject");
+        assert!(
+            err.to_string().contains("response_body_limit_bytes"),
+            "{err}"
+        );
     }
 }

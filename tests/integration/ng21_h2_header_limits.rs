@@ -201,3 +201,140 @@ async fn h2_header_deadline_cuts_silent_client() {
         started.elapsed()
     );
 }
+
+// NG-21 remainder: after the first head, the committed deadline still bounds
+// an H2 connection whose peer stops answering. Hyper's h2 builder exposes no
+// header or idle timeout, so the deadline is armed through h2's own PING
+// liveness probe; these two tests drive that with a hand-written h2c client so
+// the "silent peer" is real and not an artefact of a client library.
+
+const FRAME_DATA: u8 = 0x0;
+const FRAME_HEADERS: u8 = 0x1;
+const FRAME_SETTINGS: u8 = 0x4;
+const FRAME_PING: u8 = 0x6;
+const FLAG_END_STREAM: u8 = 0x1;
+const FLAG_ACK: u8 = 0x1;
+const FLAG_END_HEADERS: u8 = 0x4;
+
+fn h2_frame(kind: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + payload.len());
+    let len = payload.len() as u32;
+    out.extend_from_slice(&len.to_be_bytes()[1..]);
+    out.push(kind);
+    out.push(flags);
+    out.extend_from_slice(&(stream & 0x7fff_ffff).to_be_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+/// `:method GET`, `:scheme http`, `:path /` from the static table plus a
+/// literal `:authority` (name index 1), without Huffman coding.
+fn h2_request_headers(authority: &str) -> Vec<u8> {
+    assert!(
+        authority.len() < 127,
+        "authority must fit a single literal length byte"
+    );
+    let mut payload = vec![0x82, 0x86, 0x84];
+    payload.push(0x41);
+    payload.push(authority.len() as u8);
+    payload.extend_from_slice(authority.as_bytes());
+    payload
+}
+
+async fn read_h2_frame(tcp: &mut TcpStream) -> Option<(u8, u8, u32, Vec<u8>)> {
+    let mut head = [0u8; 9];
+    if tcp.read_exact(&mut head).await.is_err() {
+        return None;
+    }
+    let len = u32::from_be_bytes([0, head[0], head[1], head[2]]) as usize;
+    let kind = head[3];
+    let flags = head[4];
+    let stream = u32::from_be_bytes([head[5] & 0x7f, head[6], head[7], head[8]]);
+    let mut payload = vec![0u8; len];
+    if len > 0 && tcp.read_exact(&mut payload).await.is_err() {
+        return None;
+    }
+    Some((kind, flags, stream, payload))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h2_keepalive_deadline_closes_a_peer_that_stops_answering() {
+    let addr = start_server().await;
+    let mut tcp = TcpStream::connect(addr).await.expect("client tcp");
+    let authority = addr.to_string();
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+    out.extend_from_slice(&h2_frame(FRAME_SETTINGS, 0, 0, &[]));
+    out.extend_from_slice(&h2_frame(
+        FRAME_HEADERS,
+        FLAG_END_HEADERS | FLAG_END_STREAM,
+        1,
+        &h2_request_headers(&authority),
+    ));
+    tcp.write_all(&out)
+        .await
+        .expect("h2 preface, settings and headers");
+    tcp.flush().await.expect("flush");
+
+    let started = Instant::now();
+    let mut served = false;
+    let closed_after = loop {
+        let frame =
+            match tokio::time::timeout(Duration::from_secs(5), read_h2_frame(&mut tcp)).await {
+                Ok(frame) => frame,
+                Err(_) => break None,
+            };
+        let Some((kind, flags, stream, payload)) = frame else {
+            break Some(started.elapsed());
+        };
+        if matches!(kind, FRAME_HEADERS | FRAME_DATA) && stream == 1 && flags & FLAG_END_STREAM != 0
+        {
+            served = true;
+        }
+        if kind == FRAME_SETTINGS && flags & FLAG_ACK == 0 {
+            tcp.write_all(&h2_frame(FRAME_SETTINGS, FLAG_ACK, 0, &[]))
+                .await
+                .expect("settings ack");
+            tcp.flush().await.expect("flush");
+        }
+        if kind == FRAME_PING {
+            // Deliberately unanswered: this peer stops responding while it
+            // still holds the socket open.
+            let _ = &payload;
+        }
+    };
+
+    assert!(
+        served,
+        "the request must be served before the peer goes silent"
+    );
+    let closed_after = closed_after
+        .expect("a peer that stops answering must be closed by the keep-alive deadline");
+    assert!(
+        closed_after < Duration::from_secs(4),
+        "closed after {closed_after:?}; the committed deadline is {DEADLINE_MS} ms"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h2_keepalive_deadline_keeps_a_responsive_peer() {
+    let addr = start_server().await;
+    let mut sender = h2_client(addr).await;
+
+    let first = sender
+        .send_request(padded_request(64))
+        .await
+        .expect("first h2 request");
+    assert_eq!(first.status().as_u16(), 200);
+
+    // Idle for several committed deadlines: Hyper's client answers the h2 PING
+    // at the protocol layer, so a healthy peer must keep its connection.
+    tokio::time::sleep(Duration::from_millis(DEADLINE_MS * 3)).await;
+
+    let second = sender
+        .send_request(padded_request(64))
+        .await
+        .expect("a responsive peer must stay connected");
+    assert_eq!(second.status().as_u16(), 200);
+}

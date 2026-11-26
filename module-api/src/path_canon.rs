@@ -103,8 +103,17 @@ fn push_decoded(byte: u8, out: &mut Vec<u8>) -> Option<()> {
 /// is escaped with uppercase hex. nginx does the same when it turns a rewritten
 /// `$uri` back into a request-target or a `Location` header.
 pub fn escape_decoded_uri_bytes(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for &byte in text.as_bytes() {
+    escape_uri_bytes(text.as_bytes())
+}
+
+/// Same encoding as [`escape_decoded_uri_bytes`], over raw decoded bytes.
+///
+/// A rewrite whose captures come from a decoded path that is not UTF-8 holds
+/// bytes, not `str`; nginx re-encodes those bytes the same way it re-encodes
+/// text, so both entry points share one encoder.
+pub fn escape_uri_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for &byte in bytes {
         if is_literal_path_byte(byte) || matches!(byte, b'/' | b'?' | b'#') {
             out.push(char::from(byte));
         } else {

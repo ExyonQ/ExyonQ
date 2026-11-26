@@ -45,3 +45,21 @@ pub fn static_descriptor(
 pub fn official_core_compat() -> &'static str {
     ">=0.1.0, <0.10.0"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the addon contract: the requirement must parse, admit the whole
+    /// 0.9.x line and reject 0.10 and 1.0. Mutation testing found this value
+    /// unasserted (`cargo mutants` reported two surviving mutants).
+    #[test]
+    fn official_core_compat_pins_the_0_9_line() {
+        let req = VersionReq::parse(official_core_compat())
+            .expect("official_core_compat must be a valid semver requirement");
+        assert!(req.matches(&semver::Version::new(0, 9, 3)));
+        assert!(req.matches(&semver::Version::new(0, 1, 0)));
+        assert!(!req.matches(&semver::Version::new(0, 10, 0)));
+        assert!(!req.matches(&semver::Version::new(1, 0, 0)));
+    }
+}
