@@ -344,6 +344,32 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
             serde_json::Value::Array(sorted.into_iter().map(serde_json::Value::String).collect()),
         );
     }
+    // F-01/F-05: request-body and WebSocket limits are runtime-effective; a
+    // reload that changes only them must not be canonicalized as NO_OP.
+    if let Some(ms) = route.request_body_timeout_ms {
+        map.insert(
+            "request_body_timeout_ms".into(),
+            serde_json::Value::Number(ms.into()),
+        );
+    }
+    if let Some(bytes) = route.request_body_spool_bytes {
+        map.insert(
+            "request_body_spool_bytes".into(),
+            serde_json::Value::Number(bytes.into()),
+        );
+    }
+    if let Some(ms) = route.websocket_idle_timeout_ms {
+        map.insert(
+            "websocket_idle_timeout_ms".into(),
+            serde_json::Value::Number(ms.into()),
+        );
+    }
+    if let Some(max) = route.websocket_max_tunnels {
+        map.insert(
+            "websocket_max_tunnels".into(),
+            serde_json::Value::Number(max.into()),
+        );
+    }
     if let Some(fc) = &route.front_controller {
         map.insert(
             "front_controller".into(),
@@ -1039,5 +1065,38 @@ address = "/tmp/php.sock"
         let mut c = a.clone();
         c.pools_fcgi.get_mut("app").unwrap().script_extensions = vec![".php".into()];
         assert_ne!(fingerprint(&a), fingerprint(&c));
+    }
+
+    #[test]
+    fn fingerprint_changes_when_proxy_datapath_limits_change() {
+        let base: AppConfig = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["api"]
+[[route]]
+name = "api"
+match = { path = "/" }
+upstream = "backend"
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+"#
+        .parse()
+        .unwrap();
+        for mutate in [
+            (|r: &mut crate::RouteConfig| r.request_body_timeout_ms = Some(5_000)),
+            (|r: &mut crate::RouteConfig| r.request_body_spool_bytes = Some(1_048_576)),
+            (|r: &mut crate::RouteConfig| r.websocket_idle_timeout_ms = Some(60_000)),
+            (|r: &mut crate::RouteConfig| r.websocket_max_tunnels = Some(128)),
+        ] {
+            let mut changed = base.clone();
+            mutate(&mut changed.routes[0]);
+            assert_ne!(
+                fingerprint(&base),
+                fingerprint(&changed),
+                "F-01/F-05 runtime limit must change the reload fingerprint"
+            );
+        }
     }
 }
