@@ -221,6 +221,7 @@ struct ParsedActions {
     skip_after: Option<String>,
     ctl_detection_only: bool,
     ctl_remove_ids: Vec<u32>,
+    unsupported_transforms: Vec<String>,
 }
 
 fn parse_actions(actions: &str) -> ParsedActions {
@@ -234,6 +235,7 @@ fn parse_actions(actions: &str) -> ParsedActions {
     let mut skip_after = None;
     let mut ctl_detection_only = false;
     let mut ctl_remove_ids = Vec::new();
+    let mut unsupported_transforms = Vec::new();
     for action_text in actions.split(',') {
         let action_text = action_text.trim();
         if let Some(v) = action_text.strip_prefix("id:") {
@@ -261,6 +263,8 @@ fn parse_actions(actions: &str) -> ParsedActions {
             }
         } else if let Some(name) = action_text.strip_prefix("t:") {
             match name {
+                // ModSecurity `t:none` clears the default chain and is a no-op.
+                "none" => {}
                 "lowercase" => transforms.push(CrsTransform::Lowercase),
                 "urlDecode" => transforms.push(CrsTransform::UrlDecode),
                 "urlDecodeUni" => transforms.push(CrsTransform::UrlDecodeUni),
@@ -280,7 +284,7 @@ fn parse_actions(actions: &str) -> ParsedActions {
                 "escapeSeqDecode" => transforms.push(CrsTransform::EscapeSeqDecode),
                 "cmdLine" => transforms.push(CrsTransform::CmdLine),
                 "replaceComments" => transforms.push(CrsTransform::ReplaceComments),
-                _ => {}
+                _ => unsupported_transforms.push(name.to_string()),
             }
         }
     }
@@ -310,6 +314,7 @@ fn parse_actions(actions: &str) -> ParsedActions {
         skip_after,
         ctl_detection_only,
         ctl_remove_ids,
+        unsupported_transforms,
     }
 }
 
@@ -324,8 +329,9 @@ fn parse_action_only(actions: &str) -> Option<CrsRuleInput> {
         skip_after,
         ctl_detection_only,
         ctl_remove_ids,
+        unsupported_transforms,
     } = parse_actions(actions);
-    if rule_id == 0 {
+    if rule_id == 0 || !unsupported_transforms.is_empty() {
         return None;
     }
     Some(CrsRuleInput {
@@ -616,8 +622,9 @@ fn parse_rule_tokens(
         skip_after,
         ctl_detection_only,
         ctl_remove_ids,
+        unsupported_transforms,
     } = parse_actions(actions);
-    if rule_id == 0 && !allow_no_id {
+    if (rule_id == 0 && !allow_no_id) || !unsupported_transforms.is_empty() {
         return None;
     }
     let mut phases = vec![WafPhase::RequestHeaders, WafPhase::RequestBodyComplete];

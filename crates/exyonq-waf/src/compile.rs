@@ -392,4 +392,16 @@ mod tests {
         assert_eq!(snapshot.compile_stats().discarded, 1);
         assert_eq!(snapshot.compile_stats().diagnostics.len(), 1);
     }
+
+    #[test]
+    fn f02_unsupported_transform_discards_the_whole_rule() {
+        let crs = crate::crs::parse_rule_file(
+            "crs",
+            "SecRule REQUEST_URI \"@contains attack\" \"id:990002,deny,t:notARealTransform\"\n",
+            0,
+        );
+        assert!(crs.rules.is_empty(), "a half-applied rule must not load");
+        assert_eq!(crs.discarded, 1);
+        assert!(crs.diagnostics[0].contains("line 1"));
+    }
 }

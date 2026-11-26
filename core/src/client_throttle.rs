@@ -154,7 +154,14 @@ fn try_state_for(
         return clients.get_mut(&ip);
     }
     if clients.len() >= MAX_CLIENTS {
-        return None;
+        // Reclaim only a row that no longer carries authoritative state. A
+        // live ban or an active connection is never a victim.
+        let victim = clients.iter().find_map(|(candidate, state)| {
+            let banned = state.ban_until.is_some_and(|until| until > now);
+            (state.active == 0 && !banned).then_some(*candidate)
+        });
+        let candidate = victim?;
+        clients.remove(&candidate);
     }
     Some(clients.entry(ip).or_insert_with(|| ClientState::new(now)))
 }
@@ -748,6 +755,15 @@ mod tests {
             .get(&active_ip)
             .is_some_and(|state| state.active > 0));
         assert!(!clients.contains_key(&newcomer));
+
+        // A row with neither ban nor active connection is safe to reclaim.
+        let recyclable = IpAddr::from(std::net::Ipv4Addr::new(10, 0, 0, 2));
+        clients.get_mut(&recyclable).expect("row").active = 0;
+        assert!(try_state_for(&mut clients, newcomer, now).is_some());
+        assert_eq!(clients.len(), MAX_CLIENTS);
+        assert!(clients.contains_key(&newcomer));
+        assert!(clients.contains_key(&banned_ip));
+        assert!(clients.contains_key(&active_ip));
 
         // An existing row is still usable without growing the table.
         let existing = IpAddr::from(std::net::Ipv4Addr::new(10, 0, 0, 42));
