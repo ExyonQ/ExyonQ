@@ -24,7 +24,7 @@ tree_fingerprint() {
   {
     git -C "$root" rev-parse HEAD 2>/dev/null || return 1
     git -C "$root" status --porcelain=v1 --untracked-files=no 2>/dev/null || return 1
-    (cd "$root" && git ls-files -z | sort -z | xargs -0 sha256sum) || return 1
+    (cd "$root" && git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum) || return 1
   } | sha256sum | awk '{print $1}'
 }
 
