@@ -20,8 +20,10 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
+  # Dependency PRs are built, linted and tested like any other: a bump that no
+  # longer compiles (sha1 0.11, wasmtime 50, quiche 0.30) must fail here instead
+  # of landing unvalidated. Only the expensive matrix jobs stay dependabot-free.
   check:
-    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
