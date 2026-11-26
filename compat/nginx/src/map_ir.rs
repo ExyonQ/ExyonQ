@@ -1127,6 +1127,7 @@ fn map_location(
             if let Ok(rule) = parse_rewrite(&d.loc, &d.args) {
                 if let Some((status, _from, target)) = is_safe_literal_redirect(&rule) {
                     return Some(RouteConfig {
+                        script_extensions: None,
                         respond: None,
                         max_request_body_bytes: None,
                         gunzip: None,
@@ -1163,6 +1164,7 @@ fn map_location(
                 }
                 if let Some(rw) = map_rewrite_to_ir(&rule) {
                     return Some(RouteConfig {
+                        script_extensions: None,
                         respond: None,
                         max_request_body_bytes: None,
                         gunzip: None,
@@ -1243,6 +1245,7 @@ fn map_location(
         let (fallback_rewrite, try_uri, try_uri_dir) =
             map_location_try_files(location).unwrap_or((None, None, None));
         return Some(RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,
@@ -1303,6 +1306,7 @@ fn map_location(
             Some("[[route]] access = { deny = [\"all\"] }".into()),
         );
         return Some(RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,
@@ -1483,6 +1487,7 @@ fn map_proxy(
     let proxy_set_headers = map_location_proxy_set_headers(location, report);
     let location_rewrite = map_location_proxy_redirects(location, target, route_match, report);
     Some(RouteConfig {
+        script_extensions: None,
         respond: None,
         max_request_body_bytes: None,
         gunzip: None,
@@ -2224,6 +2229,7 @@ fn map_fastcgi(
         pools_fcgi.insert(
             pool_name.clone(),
             FcgiPoolConfig {
+                script_extensions: Vec::new(),
                 name: pool_name.clone(),
                 address,
                 document_root: root_path.clone(),
@@ -2267,6 +2273,7 @@ fn map_fastcgi(
         }
         report_fc(report);
         return Some(RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,
@@ -2305,6 +2312,7 @@ fn map_fastcgi(
             pools_fcgi.insert(
                 pool_name.clone(),
                 FcgiPoolConfig {
+                    script_extensions: Vec::new(),
                     name: pool_name.clone(),
                     address: target.clone(),
                     document_root: root_path.clone(),
@@ -2348,6 +2356,7 @@ fn map_fastcgi(
             }
             report_fc(report);
             return Some(RouteConfig {
+                script_extensions: None,
                 respond: None,
                 max_request_body_bytes: None,
                 gunzip: None,
@@ -2400,6 +2409,7 @@ fn map_fastcgi(
         )?;
         report_fc(report);
         return Some(RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,
@@ -2552,6 +2562,7 @@ fn map_return(
                 },
             );
             Some(RouteConfig {
+                script_extensions: None,
                 respond: None,
                 max_request_body_bytes: None,
                 gunzip: None,
@@ -2633,6 +2644,7 @@ fn map_return(
                 None,
             );
             Some(RouteConfig {
+                script_extensions: None,
                 name: route_name.to_string(),
                 r#match: route_match.clone(),
                 upstream: None,
@@ -2681,6 +2693,7 @@ fn map_return(
                 None,
             );
             Some(RouteConfig {
+                script_extensions: None,
                 name: route_name.to_string(),
                 r#match: route_match.clone(),
                 upstream: None,
@@ -2765,6 +2778,7 @@ fn server_default_route(
         Some("route.root + root_mode=full-uri".into()),
     );
     Some(RouteConfig {
+        script_extensions: None,
         respond: None,
         max_request_body_bytes: None,
         gunzip: None,

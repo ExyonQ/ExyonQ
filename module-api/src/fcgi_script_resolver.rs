@@ -56,6 +56,10 @@ pub struct FastcgiScriptResolutionRequest {
     /// `<dir>/<front_controller>` (index semantics); otherwise the named script
     /// at the root resolves with `PATH_INFO` = `uri_path` (try_files fallback).
     pub front_controller: Option<String>,
+    /// F-06: effective script allowlist (dot-prefixed, case-insensitive). Empty
+    /// means no allowlist. Checked on the resolved filename before it can
+    /// become `SCRIPT_FILENAME`.
+    pub script_extensions: Vec<String>,
     /// Current runtime generation (for metrics/debug; not required for correctness).
     pub generation: u64,
     pub purpose: FastcgiScriptResolutionPurpose,

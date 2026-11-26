@@ -2571,6 +2571,7 @@ mod ws_tunnel_tests {
 
     pub(super) fn minimal_proxy_config(listen_port: u16, upstream_port: u16) -> AppConfig {
         let api = RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,

@@ -413,6 +413,13 @@ pub struct RouteConfig {
     /// `pool.document_root + URI`. `SCRIPT_NAME` stays the full request URI.
     #[serde(default)]
     pub fastcgi_script_root: Option<PathBuf>,
+    /// F-06: script extensions this route may execute through FastCGI. `None`
+    /// inherits the referenced pool list; `Some([])` denies every script on
+    /// the route. Entries are matched case-insensitively and include the dot
+    /// (`.php`). The check runs after resolution and before a
+    /// `SCRIPT_FILENAME` is handed to the FastCGI transport.
+    #[serde(default)]
+    pub script_extensions: Option<Vec<String>>,
     /// EXY-10: front-controller fallback for `fastcgi` routes (NGINX
     /// `try_files $uri $uri/ /index.php?$args` semantics). When the URI does
     /// not resolve to a file under the script/document root: a URI that names
@@ -739,6 +746,23 @@ impl RouteConfig {
             .and_then(|name| pools_fcgi.get(name))
             .and_then(|pool| pool.document_root.as_ref())
     }
+
+    /// F-06: effective FastCGI script allowlist. A route override wins over the
+    /// referenced pool; an empty result means no allowlist (historical
+    /// behaviour). `Some([])` on the route therefore denies every script.
+    pub fn effective_fcgi_script_extensions<'a>(
+        &'a self,
+        pools_fcgi: &'a HashMap<String, FcgiPoolConfig>,
+    ) -> &'a [String] {
+        if let Some(extensions) = &self.script_extensions {
+            return extensions.as_slice();
+        }
+        self.fastcgi
+            .as_ref()
+            .and_then(|name| pools_fcgi.get(name))
+            .map(|pool| pool.script_extensions.as_slice())
+            .unwrap_or(&[])
+    }
 }
 
 /// Default FastCGI in-flight capacity per pool (PR5-B2).
@@ -778,6 +802,12 @@ pub struct FcgiPoolConfig {
     /// Pool checkout wait in milliseconds (default 5000).
     #[serde(default = "default_fcgi_checkout_timeout_ms")]
     pub checkout_timeout_ms: u64,
+    /// F-06: script extensions this pool may execute (`.php`). Empty means no
+    /// allowlist (historical behaviour); a route may override it. The check
+    /// runs before `SCRIPT_FILENAME` reaches PHP-FPM, so a misconfigured pool
+    /// with `security.limit_extensions =` empty is not the only barrier.
+    #[serde(default)]
+    pub script_extensions: Vec<String>,
 }
 
 fn default_fcgi_max_concurrency() -> u32 {
@@ -1486,6 +1516,15 @@ impl AppConfig {
                     });
                 }
             }
+            if route.script_extensions.is_some() && route.fastcgi.is_none() {
+                return Err(ConfigError::Parse(format!(
+                    "route `{}`: script_extensions requires a fastcgi pool",
+                    route.name
+                )));
+            }
+            if let Some(extensions) = &route.script_extensions {
+                validate_script_extensions(&format!("route `{}`", route.name), extensions)?;
+            }
         }
 
         for upstream in upstreams.values() {
@@ -1506,6 +1545,10 @@ impl AppConfig {
             validate_fcgi_idle_timeout_ms(&pool.name, pool.idle_timeout_ms)?;
             validate_fcgi_total_timeout_ms(&pool.name, pool.total_timeout_ms)?;
             validate_fcgi_checkout_timeout_ms(&pool.name, pool.checkout_timeout_ms)?;
+            validate_script_extensions(
+                &format!("fcgi_pool `{}`", pool.name),
+                &pool.script_extensions,
+            )?;
         }
 
         validate_static_preload(&raw.static_section.preload)?;
@@ -3701,6 +3744,26 @@ fn validate_fcgi_total_timeout_ms(pool: &str, value: u64) -> Result<(), ConfigEr
             value,
         })
     }
+}
+
+/// F-06: extension entries must be dot-prefixed, non-empty and contain no
+/// path separator or whitespace. The dot is part of the value on purpose: it
+/// avoids treating a suffix such as `php` as a substring match.
+fn validate_script_extensions(owner: &str, extensions: &[String]) -> Result<(), ConfigError> {
+    for extension in extensions {
+        if extension.len() < 2
+            || !extension.starts_with('.')
+            || extension.contains('/')
+            || extension.contains('\\')
+            || extension.contains('\0')
+            || extension.chars().any(char::is_whitespace)
+        {
+            return Err(ConfigError::Parse(format!(
+                "{owner}: script_extensions entry {extension:?} must start with '.' and contain no path separator or whitespace"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_fcgi_checkout_timeout_ms(pool: &str, value: u64) -> Result<(), ConfigError> {
@@ -6677,6 +6740,59 @@ protocols = ["TLSv1.3"]
         cfg.zones.get_mut("z").unwrap().key = "expr:$remote_addr$".into();
         let err = validate_ratelimit_config(&cfg).unwrap_err().to_string();
         assert!(err.contains("expr:<nginx expression>"), "{err}");
+    }
+
+    #[test]
+    fn f06_route_script_extensions_override_pool_and_require_fastcgi() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["php"]
+[[route]]
+name = "php"
+match = { path = "/" }
+fastcgi = "app"
+script_extensions = [".php", ".jpg"]
+[[fcgi_pool]]
+name = "app"
+address = "/tmp/php.sock"
+script_extensions = [".php"]
+"#;
+        let mut cfg = AppConfig::parse_str(toml).expect("valid allowlist");
+        assert_eq!(
+            cfg.routes[0].effective_fcgi_script_extensions(&cfg.pools_fcgi),
+            [".php", ".jpg"]
+        );
+
+        cfg.routes[0].script_extensions = None;
+        assert_eq!(
+            cfg.routes[0].effective_fcgi_script_extensions(&cfg.pools_fcgi),
+            [".php"]
+        );
+
+        let without_fastcgi = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["static"]
+[[route]]
+name = "static"
+match = { path = "/" }
+root = "/tmp"
+script_extensions = [".php"]
+"#;
+        let err = AppConfig::parse_str(without_fastcgi)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("script_extensions requires a fastcgi pool"),
+            "{err}"
+        );
+
+        let invalid = toml.replace(r#"[".php", ".jpg"]"#, r#"["php"]"#);
+        let err = AppConfig::parse_str(&invalid).unwrap_err().to_string();
+        assert!(err.contains("script_extensions"), "{err}");
     }
 
     #[test]

@@ -575,6 +575,7 @@ pub fn build_fcgi_dispatch_request(
     script_root: Option<&Path>,
     script_name_uri: Option<&str>,
     front_controller: Option<&str>,
+    script_extensions: &[String],
     method: &str,
     uri_path: &str,
     query_string: &str,
@@ -593,6 +594,7 @@ pub fn build_fcgi_dispatch_request(
         script_root: script_root.map(Path::to_path_buf),
         script_name_uri: script_name_uri.map(str::to_string),
         front_controller: front_controller.map(str::to_string),
+        script_extensions: script_extensions.to_vec(),
         generation: 0,
         purpose: FastcgiScriptResolutionPurpose::Dispatch,
     });

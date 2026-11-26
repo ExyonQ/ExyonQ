@@ -238,7 +238,15 @@ pub fn might_use_proxy_wire(head: &[u8]) -> bool {
         Some(canonical) if canonical == path => {}
         _ => return false,
     }
-    if !header_name_present_ci(head, b"host:") {
+    // F-13: exactly one Host and no obsolete line folding. Both are framing
+    // ambiguities that Hyper rejects; the wire path must not forward them.
+    if header_field_count_ci(head, b"host:") != 1 {
+        return false;
+    }
+    if head
+        .split(|&b| b == b'\n')
+        .any(|line| matches!(line.first(), Some(b' ') | Some(b'\t')))
+    {
         return false;
     }
     if wire_head_is_websocket_upgrade(head) {
@@ -1497,6 +1505,27 @@ mod tests {
     fn wire_proxy_target_rejects_header_injection_bytes() {
         assert!(parse_get_path_and_query(b"GET /api/x\r\nX-Injected: yes HTTP/1.1\r\n").is_none());
         assert!(parse_get_path_and_query(b"GET /api/x\tHTTP/1.1\r\n").is_none());
+    }
+
+    /// F-13: the wire path preserves end-to-end headers but rejects every
+    /// framing ambiguity that Hyper would reject; this is the parity contract
+    /// the roadmap cites.
+    #[test]
+    fn f13_wire_security_parity() {
+        let headers = b"GET /api/x HTTP/1.1\r\nHost: localhost\r\nAuthorization: test-token\r\nCookie: a=b\r\nRange: bytes=0-1\r\n\r\n";
+        assert!(
+            might_use_proxy_wire(headers),
+            "end-to-end headers must stay on the wire path"
+        );
+
+        let duplicate_host = b"GET /api/x HTTP/1.1\r\nHost: localhost\r\nHost: evil.test\r\n\r\n";
+        assert!(!might_use_proxy_wire(duplicate_host));
+
+        let obs_fold = b"GET /api/x HTTP/1.1\r\nHost: localhost\r\nX-Test: a\r\n b\r\n\r\n";
+        assert!(!might_use_proxy_wire(obs_fold));
+
+        let te_cl = b"GET /api/x HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n";
+        assert!(!might_use_proxy_wire(te_cl));
     }
 
     #[test]

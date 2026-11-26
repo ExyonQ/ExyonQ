@@ -450,6 +450,7 @@ pub fn map_fcgi_pools_from_upstreams(
         out.insert(
             name.clone(),
             FcgiPoolConfig {
+                script_extensions: Vec::new(),
                 name: name.clone(),
                 address: socket,
                 document_root: None,

@@ -176,6 +176,16 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
         if let Some(fastcgi) = &route.fastcgi {
             out.push_str(&format!("fastcgi = {fastcgi:?}\n"));
         }
+        if let Some(extensions) = &route.script_extensions {
+            out.push_str("script_extensions = [");
+            for (i, extension) in extensions.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&format!("{extension:?}"));
+            }
+            out.push_str("]\n");
+        }
         if route.htaccess != HtaccessMode::Off {
             let mode = match route.htaccess {
                 HtaccessMode::Off => "off",

@@ -45,6 +45,7 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
         };
         matches!(
             resolver.resolve(&FastcgiScriptResolutionRequest {
+                script_extensions: Vec::new(),
                 uri_path: candidate_uri.to_string(),
                 pool_document_root: Some(Path::new(document_root).to_path_buf()),
                 script_root: None,
@@ -65,6 +66,7 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
         // Probe as a dispatch-like resolution; if it resolves, treat it as a file hit.
         let resolver = fastcgi_script_resolver()?;
         match resolver.resolve(&FastcgiScriptResolutionRequest {
+            script_extensions: Vec::new(),
             uri_path: child_uri.to_string(),
             pool_document_root: Some(Path::new(document_root).to_path_buf()),
             script_root: None,
@@ -89,6 +91,7 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
         // DirectoryIndex + front-controller policy stays in the module.
         let resolver = fastcgi_script_resolver().ok_or(())?;
         match resolver.resolve(&FastcgiScriptResolutionRequest {
+            script_extensions: Vec::new(),
             uri_path: uri_path.to_string(),
             pool_document_root: Some(Path::new(document_root).to_path_buf()),
             script_root: None,
@@ -109,6 +112,7 @@ impl HtaccessRuntimeProbes for CoreHtaccessProbes {
         };
         matches!(
             resolver.resolve(&FastcgiScriptResolutionRequest {
+                script_extensions: Vec::new(),
                 uri_path: uri_path.to_string(),
                 pool_document_root: Some(Path::new(document_root).to_path_buf()),
                 script_root: None,

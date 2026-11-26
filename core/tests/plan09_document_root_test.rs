@@ -82,6 +82,7 @@ fn compile_fcgi_pool_slots_preserves_per_pool_document_roots() {
             idle_timeout_ms: 30_000,
             total_timeout_ms: 30_000,
             checkout_timeout_ms: 5_000,
+            script_extensions: Vec::new(),
         },
     );
     pools.insert(
@@ -96,6 +97,7 @@ fn compile_fcgi_pool_slots_preserves_per_pool_document_roots() {
             idle_timeout_ms: 30_000,
             total_timeout_ms: 30_000,
             checkout_timeout_ms: 5_000,
+            script_extensions: Vec::new(),
         },
     );
     let slots = compile_fcgi_pool_slots(&pools);
@@ -151,6 +153,7 @@ fn pool_without_document_root_compiles_as_none() {
             idle_timeout_ms: 30_000,
             total_timeout_ms: 30_000,
             checkout_timeout_ms: 5_000,
+            script_extensions: Vec::new(),
         },
     );
     let slots = compile_fcgi_pool_slots(&pools);
@@ -170,6 +173,7 @@ fn build_dispatch_request_uses_pool_a_script_under_root_a() {
         None,
         None,
         None,
+        &[],
         "GET",
         "/index.php",
         "",
@@ -202,6 +206,7 @@ fn build_dispatch_request_preserves_path_info() {
         None,
         None,
         None,
+        &[],
         "GET",
         "/api.php/posts/hello",
         "",
@@ -232,6 +237,7 @@ fn build_dispatch_request_pool_b_differs_from_pool_a() {
         None,
         None,
         None,
+        &[],
         "GET",
         "/a.php",
         "",
@@ -248,6 +254,7 @@ fn build_dispatch_request_pool_b_differs_from_pool_a() {
         None,
         None,
         None,
+        &[],
         "GET",
         "/b.php",
         "",
@@ -275,6 +282,7 @@ fn missing_document_root_fails_before_dispatch() {
         None,
         None,
         None,
+        &[],
         "GET",
         "/index.php",
         "",
@@ -316,6 +324,7 @@ async fn script_resolution_failure_does_not_invoke_executor() {
         None,
         None,
         None,
+        &[],
         "GET",
         "/index.php",
         "",

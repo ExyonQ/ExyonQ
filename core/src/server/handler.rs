@@ -2557,12 +2557,15 @@ async fn execute_fastcgi_backend(
             let pool_document_root = state.snapshot.fcgi_pool_document_root(*pool_id);
 
             let front_controller = state.config.routes[route_idx].front_controller.as_deref();
+            let script_extensions = state.config.routes[route_idx]
+                .effective_fcgi_script_extensions(&state.config.pools_fcgi);
             let dispatch_request = match execute_backend::build_fcgi_dispatch_request(
                 *pool_id,
                 pool_document_root,
                 script_root,
                 script_name_uri,
                 front_controller,
+                script_extensions,
                 http.method.as_str(),
                 uri_path,
                 query_string,
@@ -2824,6 +2827,9 @@ async fn fastcgi_dispatch_maybe_cached(
     // resolution, cloned into the cache fill closure below.
     let fcgi_script_root_owned = state.config.routes[route_idx].fastcgi_script_root.clone();
     let front_controller_owned = state.config.routes[route_idx].front_controller.clone();
+    let script_extensions_owned = state.config.routes[route_idx]
+        .effective_fcgi_script_extensions(&state.config.pools_fcgi)
+        .to_vec();
     let route_match_path_owned = state.config.routes[route_idx].r#match.path.clone();
     let route_match_exact_owned = state.config.routes[route_idx].r#match.exact;
 
@@ -2847,6 +2853,7 @@ async fn fastcgi_dispatch_maybe_cached(
                 let fcgi_backend = fcgi_backend;
                 let fcgi_script_root = fcgi_script_root_owned.clone();
                 let front_controller = front_controller_owned.clone();
+                let script_extensions = script_extensions_owned.clone();
                 let route_match_path = route_match_path_owned.clone();
                 let route_match_exact = route_match_exact_owned;
                 async move {
@@ -2880,6 +2887,7 @@ async fn fastcgi_dispatch_maybe_cached(
                         script_root,
                         script_name_uri,
                         front_controller.as_deref(),
+                        &script_extensions,
                         method.as_str(),
                         uri_path,
                         query_string,
@@ -5128,6 +5136,7 @@ mod tests {
 
     fn route(name: &str, path: &str) -> RouteConfig {
         RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,

@@ -627,6 +627,7 @@ mod fcgi_register_tests {
         config.pools_fcgi.insert(
             "php".into(),
             FcgiPoolConfig {
+                script_extensions: Vec::new(),
                 name: "php".into(),
                 address: address.into(),
                 document_root: None,
@@ -677,6 +678,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_include_fastcgi_pool_document_root() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,
@@ -715,6 +717,7 @@ mod htaccess_overlay_tests {
         config.pools_fcgi.insert(
             "php".into(),
             FcgiPoolConfig {
+                script_extensions: Vec::new(),
                 name: "php".into(),
                 address: "/run/php.sock".into(),
                 document_root: Some("/srv/php".into()),
@@ -736,6 +739,7 @@ mod htaccess_overlay_tests {
     fn watcher_sites_empty_without_overlay_routes() {
         let mut config = minimal_app_config();
         config.routes.push(exyonq_config_ir::RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,

@@ -334,6 +334,16 @@ fn canonical_route(route: &RouteConfig) -> serde_json::Value {
     if let Some(fastcgi) = &route.fastcgi {
         map.insert("fastcgi".into(), serde_json::Value::String(fastcgi.clone()));
     }
+    // F-06: a route-only allowlist change is runtime-effective and must not
+    // canonicalize as NO_OP. Sort so ordering never changes the fingerprint.
+    if let Some(extensions) = &route.script_extensions {
+        let mut sorted = extensions.clone();
+        sorted.sort();
+        map.insert(
+            "script_extensions".into(),
+            serde_json::Value::Array(sorted.into_iter().map(serde_json::Value::String).collect()),
+        );
+    }
     if let Some(fc) = &route.front_controller {
         map.insert(
             "front_controller".into(),
@@ -488,6 +498,15 @@ fn canonical_fcgi_pool(pool: &FcgiPoolConfig) -> serde_json::Value {
         "checkout_timeout_ms".into(),
         serde_json::Value::Number(pool.checkout_timeout_ms.into()),
     );
+    // F-06: pool allowlist participates in reload fingerprints.
+    if !pool.script_extensions.is_empty() {
+        let mut sorted = pool.script_extensions.clone();
+        sorted.sort();
+        map.insert(
+            "script_extensions".into(),
+            serde_json::Value::Array(sorted.into_iter().map(serde_json::Value::String).collect()),
+        );
+    }
     serde_json::Value::Object(map)
 }
 
@@ -991,5 +1010,34 @@ checkout_timeout_ms = 500
         .parse()
         .unwrap();
         assert_ne!(fingerprint(&a), fingerprint(&b));
+    }
+
+    /// F-06: the route allowlist is runtime-effective; changing only it must
+    /// change the fingerprint so reload does not report NO_OP.
+    #[test]
+    fn fingerprint_changes_when_route_fcgi_script_extensions_change() {
+        let a: AppConfig = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["php"]
+[[route]]
+name = "php"
+match = { path = "/" }
+fastcgi = "app"
+script_extensions = [".php"]
+[[fcgi_pool]]
+name = "app"
+address = "/tmp/php.sock"
+"#
+        .parse()
+        .unwrap();
+        let mut b = a.clone();
+        b.routes[0].script_extensions = Some(vec![".php".into(), ".jpg".into()]);
+        assert_ne!(fingerprint(&a), fingerprint(&b));
+
+        let mut c = a.clone();
+        c.pools_fcgi.get_mut("app").unwrap().script_extensions = vec![".php".into()];
+        assert_ne!(fingerprint(&a), fingerprint(&c));
     }
 }

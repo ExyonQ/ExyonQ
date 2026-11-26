@@ -97,7 +97,7 @@ impl FastcgiScriptResolutionService for FastcgiScriptResolver {
         // EXY-03: `location =` + file alias — an empty remainder resolves the
         // script root itself when it names a regular file (verbatim target).
         if request.script_root.is_some() && request.uri_path.trim_start_matches('/').is_empty() {
-            return match document_root.canonicalize().ok().filter(|p| p.is_file()) {
+            let outcome = match document_root.canonicalize().ok().filter(|p| p.is_file()) {
                 Some(script) => FastcgiScriptResolutionOutcome::Resolved {
                     script_filename: script.display().to_string(),
                     script_name: request
@@ -109,9 +109,10 @@ impl FastcgiScriptResolutionService for FastcgiScriptResolver {
                 },
                 None => FastcgiScriptResolutionOutcome::NotFound,
             };
+            return enforce_script_extensions(outcome, &request.script_extensions);
         }
 
-        match resolve_under_root(&document_root, &request.uri_path) {
+        let outcome = match resolve_under_root(&document_root, &request.uri_path) {
             Ok(resolved) => FastcgiScriptResolutionOutcome::Resolved {
                 script_filename: resolved.script_filename,
                 script_name: request
@@ -145,7 +146,48 @@ impl FastcgiScriptResolutionService for FastcgiScriptResolver {
             Err(ResolveError::ProbeError | ResolveError::InvalidDocumentRoot) => {
                 FastcgiScriptResolutionOutcome::ProbeError
             }
+        };
+        enforce_script_extensions(outcome, &request.script_extensions)
+    }
+}
+
+/// F-06: reject a resolved script whose extension is outside the effective
+/// allowlist. This runs before `build_fcgi_dispatch_request` builds a
+/// `ScriptFilename` parameter, so PHP-FPM never sees the path.
+fn enforce_script_extensions(
+    outcome: FastcgiScriptResolutionOutcome,
+    allowed: &[String],
+) -> FastcgiScriptResolutionOutcome {
+    if allowed.is_empty() {
+        return outcome;
+    }
+    let FastcgiScriptResolutionOutcome::Resolved {
+        script_filename,
+        script_name,
+        path_info,
+        document_root,
+    } = outcome
+    else {
+        return outcome;
+    };
+    let extension = Path::new(&script_filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!(".{}", ext.to_ascii_lowercase()));
+    let permitted = extension.as_deref().is_some_and(|ext| {
+        allowed
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(ext))
+    });
+    if permitted {
+        FastcgiScriptResolutionOutcome::Resolved {
+            script_filename,
+            script_name,
+            path_info,
+            document_root,
         }
+    } else {
+        FastcgiScriptResolutionOutcome::Forbidden
     }
 }
 
@@ -345,6 +387,7 @@ mod tests {
 
     fn req(path: &str, root: &Path) -> FastcgiScriptResolutionRequest {
         FastcgiScriptResolutionRequest {
+            script_extensions: Vec::new(),
             uri_path: path.to_string(),
             pool_document_root: Some(root.to_path_buf()),
             script_root: None,
@@ -512,6 +555,43 @@ mod tests {
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
+    }
+
+    #[test]
+    fn dispatch_rejects_extension_outside_allowlist_before_script_filename() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::write(root.join("hello.php"), b"<?php echo 'ok';").expect("write");
+        fs::write(root.join("shell.jpg"), b"<?php echo 'pwn';").expect("write");
+        let svc = FastcgiScriptResolver::new();
+
+        let mut strict = req("/shell.jpg", root);
+        strict.script_extensions = vec![".php".into()];
+        assert_eq!(
+            svc.resolve(&strict),
+            FastcgiScriptResolutionOutcome::Forbidden,
+            "a .jpg outside the allowlist must be rejected before SCRIPT_FILENAME"
+        );
+
+        let mut php = req("/hello.php", root);
+        php.script_extensions = vec![".PHP".into()];
+        assert!(
+            matches!(
+                svc.resolve(&php),
+                FastcgiScriptResolutionOutcome::Resolved { .. }
+            ),
+            "allowlist matching is case-insensitive"
+        );
+
+        let mut open = req("/shell.jpg", root);
+        open.script_extensions = Vec::new();
+        assert!(
+            matches!(
+                svc.resolve(&open),
+                FastcgiScriptResolutionOutcome::Resolved { .. }
+            ),
+            "empty allowlist preserves the historical behaviour"
+        );
     }
 
     #[test]

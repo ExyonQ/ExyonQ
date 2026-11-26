@@ -43,6 +43,7 @@ fn redirect_config() -> AppConfig {
             error_pages: Default::default(),
         }],
         routes: vec![RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,

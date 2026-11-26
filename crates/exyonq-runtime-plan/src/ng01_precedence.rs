@@ -21,6 +21,7 @@ use exyonq_config_ir::{RouteConfig, RouteMatch};
 
 fn r(name: &str, m: RouteMatch) -> RouteConfig {
     RouteConfig {
+        script_extensions: None,
         respond: None,
         max_request_body_bytes: None,
         cache_tags: Vec::new(),
