@@ -1534,6 +1534,7 @@ mod tests {
 
     fn bench_site_config(root: Option<std::path::PathBuf>) -> AppConfig {
         let site = RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,
@@ -1575,6 +1576,7 @@ mod tests {
             cache: None,
         };
         let api = RouteConfig {
+            script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
             gunzip: None,

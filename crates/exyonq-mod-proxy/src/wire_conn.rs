@@ -1519,13 +1519,22 @@ mod tests {
         );
 
         let duplicate_host = b"GET /api/x HTTP/1.1\r\nHost: localhost\r\nHost: evil.test\r\n\r\n";
-        assert!(!might_use_proxy_wire(duplicate_host));
+        assert!(
+            !might_use_proxy_wire(duplicate_host),
+            "a duplicate Host header must leave the wire fast path"
+        );
 
         let obs_fold = b"GET /api/x HTTP/1.1\r\nHost: localhost\r\nX-Test: a\r\n b\r\n\r\n";
-        assert!(!might_use_proxy_wire(obs_fold));
+        assert!(
+            !might_use_proxy_wire(obs_fold),
+            "obs-fold must leave the wire fast path"
+        );
 
         let te_cl = b"GET /api/x HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n";
-        assert!(!might_use_proxy_wire(te_cl));
+        assert!(
+            !might_use_proxy_wire(te_cl),
+            "Transfer-Encoding with Content-Length must leave the wire fast path"
+        );
     }
 
     #[test]
