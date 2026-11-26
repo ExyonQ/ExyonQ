@@ -563,7 +563,9 @@ class WsUpstream:
                 except (ConnectionError, OSError):
                     pass
 
-        server = await asyncio.start_server(handler, "127.0.0.1", self.port)
+        server = await asyncio.start_server(
+            handler, "127.0.0.1", self.port, backlog=4096
+        )
         self.server = server
         self.ready.set()
         async with server:
@@ -625,14 +627,38 @@ def f05(binary, work):
     async def scenario():
         clients = []
         semaphore = asyncio.Semaphore(200)
+        retries = [0]
 
-        async def connect_one():
+        async def connect_one(index):
+            # A distinct loopback source per tunnel avoids ephemeral-port reuse
+            # after the 9 998-connection F-04 scenario. A transient upstream
+            # connect failure is retried; the final tunnel count is unchanged.
+            source_ip = f"127.5.{index // 250}.{index % 250 + 1}"
             async with semaphore:
-                reader, writer, response = await ws_handshake(port)
-                return reader, writer, response
+                for _ in range(3):
+                    try:
+                        reader, writer, response = await ws_handshake(port, source_ip)
+                    except (ConnectionError, OSError):
+                        retries[0] += 1
+                        await asyncio.sleep(0.1)
+                        continue
+                    if b" 101 " in response:
+                        return reader, writer, response
+                    retries[0] += 1
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except (ConnectionError, OSError):
+                        pass
+                    await asyncio.sleep(0.1)
+                return None
 
-        results = await asyncio.gather(*(connect_one() for _ in range(2000)))
-        for reader, writer, response in results:
+        results = await asyncio.gather(*(connect_one(i) for i in range(2000)))
+        log(f"F05_RETRIES={retries[0]}")
+        for result in results:
+            if result is None:
+                return False, "handshake retries exhausted", 0, 0
+            reader, writer, response = result
             if b" 101 " not in response:
                 return False, f"handshake={response[:80]!r}", 0, 0
             clients.append((reader, writer))
