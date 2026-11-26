@@ -32,7 +32,7 @@
 
 use crate::runtime::ProxyRuntime;
 use crate::wire_io;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use hyper::header::HeaderValue;
 use std::io::{self, Result};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -169,6 +169,27 @@ fn header_name_present_ci(head: &[u8], needle_lower: &[u8]) -> bool {
     header_field_count_ci(head, needle_lower) > 0
 }
 
+/// First raw value for a header name (case-insensitive), without the leading
+/// whitespace. Scans line starts only, so a header value cannot spoof another
+/// header name.
+fn header_value_ci<'a>(head: &'a [u8], needle_lower: &[u8]) -> Option<&'a [u8]> {
+    for line in head.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Some(prefix) = line.get(..needle_lower.len()) else {
+            continue;
+        };
+        if !prefix.eq_ignore_ascii_case(needle_lower) {
+            continue;
+        }
+        let mut value = &line[needle_lower.len()..];
+        while value.first().copied() == Some(b' ') || value.first().copied() == Some(b'\t') {
+            value = &value[1..];
+        }
+        return Some(value);
+    }
+    None
+}
+
 /// Raw-head WebSocket upgrade detection — wire proxy cannot tunnel upgrades.
 /// Cap031 LA-002: Connection is a comma-separated token list (e.g. `close, Upgrade`).
 fn wire_head_is_websocket_upgrade(head: &[u8]) -> bool {
@@ -227,10 +248,19 @@ pub fn might_use_proxy_wire(head: &[u8]) -> bool {
     if header_field_count_ci(head, b"content-length:") > 1 {
         return false;
     }
-    if header_name_present_ci(head, b"transfer-encoding:")
-        && header_name_present_ci(head, b"content-length:")
-    {
+    // F-07: a GET with a request body must be framed by Hyper, never by the
+    // bodyless wire path. Reject TE/Expect outright and any Content-Length
+    // other than exactly `0` (absent and `0` remain wire-eligible).
+    if header_name_present_ci(head, b"transfer-encoding:") {
         return false;
+    }
+    if header_name_present_ci(head, b"expect:") {
+        return false;
+    }
+    if let Some(content_length) = header_value_ci(head, b"content-length:") {
+        if content_length != b"0" {
+            return false;
+        }
     }
     true
 }
@@ -1020,7 +1050,7 @@ pub async fn serve_with_labels<S>(
     upstream: String,
     mut stream: S,
     first_head: Bytes,
-    _carry: Bytes,
+    carry: Bytes,
     x_forwarded_for: HeaderValue,
     real_ip: Option<exyonq_module_api::real_ip::RealIpTrust>,
     route_gate: Option<Arc<exyonq_module_api::wire_module_hooks::WireRouteGate>>,
@@ -1043,6 +1073,9 @@ where
 
     let pinned_host = host_header_raw(first_head.as_ref()).map(|h| h.to_vec());
     let mut head = first_head;
+    // F-07: bytes read after the first head are already-arrived keep-alive
+    // requests (pipelining). Consume them before touching the socket.
+    let mut pending = BytesMut::from(carry.as_ref());
     let mut admission_status: u16 = 200;
     // AUDIT-D1: opaque route token pinned on the first request (when the
     // composition layer supplies a gate). Keep-alive requests resolving to a
@@ -1329,7 +1362,7 @@ where
                 return Ok(last_status);
             }
             WireWriteOutcome::KeepAlive => {
-                match read_next_get_head(&mut stream).await {
+                match read_next_get_head(&mut stream, &mut pending).await {
                     Ok(Some(next)) => {
                         // LA-001: Host switch on the same TCP must not reuse a frozen cluster.
                         // Fail closed by ending the admission when Host changes.
@@ -1374,24 +1407,23 @@ fn host_header_raw(head: &[u8]) -> Option<&[u8]> {
     None
 }
 
-async fn read_next_get_head<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Option<Bytes>> {
+async fn read_next_get_head<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    pending: &mut BytesMut,
+) -> Result<Option<Bytes>> {
     use tokio::io::AsyncReadExt;
-    let mut buf = bytes::BytesMut::with_capacity(512);
     let deadline = tokio::time::Instant::now() + wire_io::header_read_timeout();
     loop {
-        if let Some(end) = wire_io::find_header_end(&buf) {
+        if let Some(end) = wire_io::find_header_end(pending) {
             let head_end = end + 4;
             if head_end > wire_io::max_header_bytes() {
                 return Err(io::Error::other("headers too large"));
             }
-            let head = buf.split_to(head_end).freeze();
-            // Trailing body bytes on a GET are unexpected; drop the connection.
-            if !buf.is_empty() {
-                return Ok(None);
-            }
-            return Ok(Some(head));
+            // Keep any bytes after this head: they are the next pipelined
+            // request, not a body (GET-ness is checked by the caller).
+            return Ok(Some(pending.split_to(head_end).freeze()));
         }
-        if buf.len() >= wire_io::max_header_bytes() {
+        if pending.len() >= wire_io::max_header_bytes() {
             return Err(io::Error::other("headers too large"));
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -1413,7 +1445,7 @@ async fn read_next_get_head<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Opti
                 ))
             }
         };
-        buf.extend_from_slice(&tmp[..n]);
+        pending.extend_from_slice(&tmp[..n]);
     }
 }
 
@@ -1669,6 +1701,106 @@ mod tests {
         let (r1, n2) = client.await.expect("join");
         assert!(r1.starts_with("HTTP/1.1 200"), "{r1}");
         assert_eq!(n2, 0, "gate mismatch must close with no response");
+    }
+
+    /// F-07: bytes after the first head belong to the next keep-alive request.
+    /// The old code dropped them (`_carry`) and waited on a silent socket.
+    #[tokio::test]
+    async fn carry_bytes_are_served_as_the_next_keepalive_request() {
+        let _rt_guard = TEST_RT_LOCK.lock().await;
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream");
+        let upstream_addr = upstream.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let (mut s, _) = upstream.accept().await.expect("upstream accept");
+            for body in ["one", "two"] {
+                let mut buf = [0u8; 2048];
+                let n = tokio::io::AsyncReadExt::read(&mut s, &mut buf)
+                    .await
+                    .expect("upstream read");
+                assert!(n > 0, "upstream request must arrive");
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n{body}");
+                tokio::io::AsyncWriteExt::write_all(&mut s, response.as_bytes())
+                    .await
+                    .expect("upstream write");
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let rt = Arc::new(ProxyRuntime::new());
+        pin_runtime(Arc::clone(&rt));
+        rt.bind_compiled_slots(
+            1,
+            &[ProxyCompiledSlot::legacy_single(
+                0,
+                "backend",
+                format!("http://{upstream_addr}"),
+                Duration::from_millis(500),
+            )],
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+            let mut out = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !(out.windows(12).filter(|w| *w == b"HTTP/1.1 200").count() >= 2
+                && out.ends_with(b"two"))
+            {
+                match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(0)) | Err(_) => break,
+                    Ok(Ok(n)) => out.extend_from_slice(&buf[..n]),
+                    Ok(Err(_)) => break,
+                }
+            }
+            out
+        });
+        let (server, _) = listener.accept().await.expect("accept");
+        #[cfg(target_os = "linux")]
+        let peer_fd = Some(std::os::fd::AsRawFd::as_raw_fd(&server));
+        let status = serve(
+            0,
+            1,
+            server,
+            Bytes::from_static(b"GET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
+            Bytes::from_static(b"GET /b HTTP/1.1\r\nHost: x\r\n\r\n"),
+            HeaderValue::from_static("127.0.0.1"),
+            None,
+            #[cfg(target_os = "linux")]
+            peer_fd,
+        )
+        .await
+        .expect("serve");
+        assert_eq!(status, 200);
+        let out = client.await.expect("join");
+        let text = String::from_utf8_lossy(&out);
+        assert_eq!(text.matches("HTTP/1.1 200").count(), 2, "{text}");
+        assert!(text.contains("one"), "{text}");
+        assert!(text.contains("two"), "{text}");
+    }
+
+    #[test]
+    fn might_use_rejects_get_with_nonzero_content_length() {
+        let head = b"GET /api/body HTTP/1.1\r\nHost: localhost\r\nContent-Length: 7\r\n\r\n";
+        assert!(!might_use_proxy_wire(head));
+        let zero = b"GET /api/empty HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+        assert!(might_use_proxy_wire(zero));
+    }
+
+    #[test]
+    fn might_use_rejects_transfer_encoding_and_expect() {
+        let te = b"GET /api/body HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n";
+        assert!(!might_use_proxy_wire(te));
+        let expect = b"GET /api/body HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\n\r\n";
+        assert!(!might_use_proxy_wire(expect));
     }
 
     #[test]
