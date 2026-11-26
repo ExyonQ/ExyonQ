@@ -223,6 +223,91 @@ pub enum ProxyMethod {
     Other,
 }
 
+/// File-backed request body produced by the core spool (F-01).
+///
+/// The file is created with mode `0600` by the core and removed when the last
+/// clone of this value is dropped. The proxy module only receives the path;
+/// it never materializes the full body in memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxySpooledBody {
+    path: std::path::PathBuf,
+    len: u64,
+    prefix: Vec<u8>,
+}
+
+impl ProxySpooledBody {
+    pub fn new(path: std::path::PathBuf, len: u64, prefix: Vec<u8>) -> Self {
+        Self { path, len, prefix }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn prefix(&self) -> &[u8] {
+        &self.prefix
+    }
+}
+
+impl Drop for ProxySpooledBody {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Request body accepted by the proxy contract.
+///
+/// Small bodies stay in memory; bodies above the spool threshold are streamed
+/// from a private file by the module runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyRequestBody {
+    Memory(Vec<u8>),
+    Spool(std::sync::Arc<ProxySpooledBody>),
+}
+
+impl ProxyRequestBody {
+    pub fn memory(bytes: Vec<u8>) -> Self {
+        Self::Memory(bytes)
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Memory(bytes) => bytes.len(),
+            Self::Spool(spool) => usize::try_from(spool.len).unwrap_or(usize::MAX),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn is_spooled(&self) -> bool {
+        matches!(self, Self::Spool(_))
+    }
+
+    /// First bytes kept for host checks; the full body remains on disk.
+    pub fn prefix(&self) -> &[u8] {
+        match self {
+            Self::Memory(bytes) => bytes,
+            Self::Spool(spool) => spool.prefix(),
+        }
+    }
+}
+
+impl From<Vec<u8>> for ProxyRequestBody {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Memory(bytes)
+    }
+}
+
 /// Request context passed from core shell into registered proxy runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyDispatchRequest {
@@ -233,7 +318,7 @@ pub struct ProxyDispatchRequest {
     pub host: Option<String>,
     pub headers: Vec<(String, String)>,
     /// Present for methods with body; bounded by [`PROXY_MAX_REQUEST_BODY_BYTES`].
-    pub body: Option<Vec<u8>>,
+    pub body: Option<ProxyRequestBody>,
     pub remote_addr: String,
     pub scheme: String,
 }

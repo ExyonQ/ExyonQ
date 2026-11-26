@@ -70,7 +70,7 @@ fn request() -> ProxyDispatchRequest {
                 "application/x-www-form-urlencoded".into(),
             ),
         ],
-        body: Some(b"hi=test".to_vec()),
+        body: Some(b"hi=test".to_vec().into()),
         remote_addr: "127.0.0.1".into(),
         scheme: "http".into(),
     }

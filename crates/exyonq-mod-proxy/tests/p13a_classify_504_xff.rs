@@ -139,7 +139,7 @@ async fn post_xff_uses_remote_addr_not_inbound_header() {
                 ("x-forwarded-proto".into(), "https".into()),
                 ("forwarded".into(), "for=9.9.9.9".into()),
             ],
-            body: Some(b"hi".to_vec()),
+            body: Some(b"hi".to_vec().into()),
             remote_addr: "198.51.100.7".into(),
             scheme: "http".into(),
         })

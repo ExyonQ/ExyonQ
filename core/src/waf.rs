@@ -680,6 +680,89 @@ pub(crate) fn inspect_response_body(
     )
 }
 
+/// Incremental request-body inspector (F-01).
+///
+/// Keeps the WAF window in bounded chunks so a spooled body never has to be
+/// materialized in memory for inspection. A blocking decision from any chunk is
+/// retained; later allow decisions cannot clear it.
+pub(crate) struct RequestBodyInspector<'a> {
+    waf: &'a dyn WafEngine,
+    req: WafRequest<'a>,
+    ctx: WafLogContext<'a>,
+    state: BodyInspectionState,
+    decision: WafDecision,
+    generation: u64,
+    enforce: bool,
+    abuse: Option<&'a dyn WafAbuseGate>,
+}
+
+impl<'a> RequestBodyInspector<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        waf: &'a dyn WafEngine,
+        method: &'a str,
+        host: Option<&'a str>,
+        path: &'a str,
+        query: Option<&'a str>,
+        headers: &'a dyn HeaderView,
+        client_ip: IpAddr,
+        route_id: Option<&'a str>,
+        generation: u64,
+        enforce: bool,
+        abuse: Option<&'a dyn WafAbuseGate>,
+    ) -> Self {
+        Self {
+            waf,
+            req: WafRequest {
+                method,
+                host,
+                path,
+                query,
+                headers,
+                client_ip,
+                route_id,
+            },
+            ctx: log_context(client_ip, host, method, path, headers),
+            state: BodyInspectionState::default(),
+            decision: WafDecision::allow(),
+            generation,
+            enforce,
+            abuse,
+        }
+    }
+
+    /// Feed one body chunk. Only the chunk is live in memory.
+    pub(crate) fn push(&mut self, chunk: &[u8], end_of_stream: bool) {
+        let started = std::time::Instant::now();
+        let decision =
+            self.waf
+                .inspect_body_chunk(&self.req, chunk, end_of_stream, &mut self.state);
+        crate::waf_metrics::note_inspection(WafPhase::RequestBodyComplete, started.elapsed());
+        if decision.is_blocking() || !self.decision.is_blocking() {
+            self.decision = decision;
+        }
+    }
+
+    pub(crate) fn finish(self) -> (WafHookResult, bool) {
+        let inspection_limited = self.decision.inspection_truncated;
+        if self.enforce && self.decision.action == WafAction::Block {
+            if let Some(gate) = self.abuse {
+                gate.record_violation(self.ctx.client_ip);
+            }
+        }
+        (
+            finish(
+                WafPhase::RequestBodyComplete,
+                self.decision,
+                self.ctx,
+                self.generation,
+                self.enforce,
+            ),
+            inspection_limited,
+        )
+    }
+}
+
 /// H3: body chunk / complete — does **not** run abuse gate.
 pub(crate) fn inspect_request_body(
     waf: &dyn WafEngine,
@@ -695,40 +778,11 @@ pub(crate) fn inspect_request_body(
     enforce: bool,
     abuse: Option<&dyn WafAbuseGate>,
 ) -> (WafHookResult, bool) {
-    let req = WafRequest {
-        method,
-        host,
-        path,
-        query,
-        headers,
-        client_ip,
-        route_id,
-    };
-    let ctx = log_context(client_ip, host, method, path, headers);
-    let mut state = BodyInspectionState::default();
-    let started = std::time::Instant::now();
-    let decision = waf.inspect_body_chunk(&req, body, true, &mut state);
-    crate::waf_metrics::note_inspection(WafPhase::RequestBodyComplete, started.elapsed());
-    // `inspection_truncated` is the engine's record that the body budget was
-    // exhausted (OnInspectionLimit applied). The host surfaces it on the
-    // access log so an allowed-but-partially-inspected request is never
-    // counted as clean traffic.
-    let inspection_limited = decision.inspection_truncated;
-    if enforce && decision.action == WafAction::Block {
-        if let Some(gate) = abuse {
-            gate.record_violation(client_ip);
-        }
-    }
-    (
-        finish(
-            WafPhase::RequestBodyComplete,
-            decision,
-            ctx,
-            generation,
-            enforce,
-        ),
-        inspection_limited,
-    )
+    let mut inspector = RequestBodyInspector::new(
+        waf, method, host, path, query, headers, client_ip, route_id, generation, enforce, abuse,
+    );
+    inspector.push(body, true);
+    inspector.finish()
 }
 
 /// Verify POST `/.exyonq/waf-challenge` — signature WAF still applies; abuse skipped.

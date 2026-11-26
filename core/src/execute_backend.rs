@@ -32,7 +32,7 @@ use exyonq_module_api::kernel_observation::{
 };
 use exyonq_module_api::proxy_dispatch::{
     ProxyCompiledSlot, ProxyDispatchOutcome, ProxyDispatchRequest, ProxyDispatchService,
-    ProxyMaterializedResponse, ProxyMethod, ProxyRegisterError,
+    ProxyMaterializedResponse, ProxyMethod, ProxyRegisterError, ProxyRequestBody,
 };
 use exyonq_module_api::static_dispatch::{
     StaticCompiledSlot, StaticDispatchRequest, StaticDispatchService, StaticMethod,
@@ -241,7 +241,7 @@ pub fn build_proxy_dispatch_request(
     path_and_query: impl Into<String>,
     host: Option<String>,
     headers: Vec<(String, String)>,
-    body: Option<Vec<u8>>,
+    body: Option<ProxyRequestBody>,
     remote_addr: impl Into<String>,
     scheme: impl Into<String>,
 ) -> ProxyDispatchRequest {

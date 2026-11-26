@@ -21,11 +21,13 @@
 //! 2. Incremental frame accumulation with checked arithmetic; abort before
 //!    appending a chunk that would exceed the limit.
 
+use exyonq_module_api::proxy_dispatch::{ProxyRequestBody, ProxySpooledBody};
 use http_body_util::BodyExt;
 use hyper::body::Body;
 use hyper::header::{HeaderMap, CONTENT_LENGTH};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -35,6 +37,8 @@ pub(crate) const PROXY_REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const PROXY_REQUEST_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// Bodies above this threshold spill to a private temp file (F-01).
 pub(crate) const PROXY_REQUEST_BODY_SPOOL_THRESHOLD: usize = 4 * 1024 * 1024;
+/// Prefix retained in memory for host-side checks (never the full spooled body).
+const SPOOL_PREFIX_BYTES: usize = 64 * 1024;
 
 /// Private error for proxy request body reads (not a public API).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +56,7 @@ pub(crate) enum ProxyRequestBodyReadError {
 /// Collected proxy body plus whether it crossed the spool threshold.
 #[derive(Debug)]
 pub(crate) struct CollectedProxyRequestBody {
-    pub bytes: Vec<u8>,
+    pub body: ProxyRequestBody,
     pub spooled: bool,
 }
 
@@ -61,6 +65,8 @@ static SPOOL_SEQ: AtomicU64 = AtomicU64::new(0);
 struct SpoolFile {
     path: PathBuf,
     file: Option<tokio::fs::File>,
+    len: u64,
+    prefix: Vec<u8>,
 }
 
 impl Drop for SpoolFile {
@@ -91,6 +97,8 @@ impl SpoolFile {
                     return Ok(Self {
                         path,
                         file: Some(tokio::fs::File::from_std(file)),
+                        len: 0,
+                        prefix: Vec::new(),
                     })
                 }
                 Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
@@ -106,18 +114,29 @@ impl SpoolFile {
         let Some(file) = self.file.as_mut() else {
             return Err(std::io::Error::other("spool file already closed"));
         };
-        file.write_all(bytes).await
+        file.write_all(bytes).await?;
+        self.len += bytes.len() as u64;
+        if self.prefix.len() < SPOOL_PREFIX_BYTES {
+            let take = (SPOOL_PREFIX_BYTES - self.prefix.len()).min(bytes.len());
+            self.prefix.extend_from_slice(&bytes[..take]);
+        }
+        Ok(())
     }
 
-    async fn finish(mut self) -> std::io::Result<Vec<u8>> {
-        drop(self.file.take());
-        tokio::fs::read(&self.path).await
+    async fn finish(mut self) -> std::io::Result<ProxyRequestBody> {
+        if let Some(mut file) = self.file.take() {
+            file.flush().await?;
+        }
+        let path = std::mem::take(&mut self.path);
+        let spool = ProxySpooledBody::new(path, self.len, std::mem::take(&mut self.prefix));
+        Ok(ProxyRequestBody::Spool(Arc::new(spool)))
     }
 }
 
 /// Collect with an absolute deadline and disk spooling above `spool_threshold`.
 /// The in-memory accumulation is capped at the threshold; once crossed, the
-/// body is written to a 0600 temporary file and read back only at the end.
+/// body is written to a 0600 temporary file and the returned request body is a
+/// file-backed handle. It is never read back into RAM by the core.
 pub(crate) async fn collect_proxy_request_body_with_deadline<B>(
     declared_content_length: Option<usize>,
     body: B,
@@ -194,14 +213,14 @@ where
     }
     match spool {
         Some(file) => Ok(CollectedProxyRequestBody {
-            bytes: file
+            body: file
                 .finish()
                 .await
                 .map_err(|_| ProxyRequestBodyReadError::Spool)?,
             spooled: true,
         }),
         None => Ok(CollectedProxyRequestBody {
-            bytes: buf,
+            body: ProxyRequestBody::memory(buf),
             spooled: false,
         }),
     }
@@ -587,7 +606,8 @@ mod tests {
         .await
         .expect("spooled body");
         assert!(out.spooled, "body above threshold must spill to disk");
-        assert_eq!(out.bytes, b"1234567890abcdef");
+        assert!(out.body.is_spooled());
+        assert_eq!(out.body.prefix(), b"1234567890abcdef");
     }
 
     #[tokio::test]
@@ -602,6 +622,7 @@ mod tests {
         .await
         .expect("memory body");
         assert!(!out.spooled);
-        assert_eq!(out.bytes, b"12345678");
+        assert_eq!(out.body.len(), 8);
+        assert_eq!(out.body.prefix(), b"12345678");
     }
 }

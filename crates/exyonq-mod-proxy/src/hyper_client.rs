@@ -15,7 +15,9 @@
  */
 //! Shared Hyper client configuration — dual typed pools (KD3.2).
 
-use http_body_util::{Empty, Full};
+use bytes::Bytes;
+use http_body_util::combinators::BoxBody;
+use http_body_util::Empty;
 use hyper::body::Incoming;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
@@ -65,7 +67,7 @@ pub fn set_hyper_client_config(config: HyperClientConfig) {
 
 pub type ProxyClient = Client<HttpConnector, Incoming>;
 type GetClient = Client<HttpConnector, Empty<bytes::Bytes>>;
-type PostClient = Client<HttpConnector, Full<bytes::Bytes>>;
+type PostClient = Client<HttpConnector, BoxBody<Bytes, std::io::Error>>;
 
 static INCOMING_CLIENT: OnceLock<ProxyClient> = OnceLock::new();
 static POST_CLIENT: OnceLock<PostClient> = OnceLock::new();

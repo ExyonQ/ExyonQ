@@ -1616,7 +1616,7 @@ async fn handle_core_request_with_body(
         collect_proxy_request_body_bounded, parse_proxy_request_content_length,
         ProxyRequestBodyReadError,
     };
-    use exyonq_module_api::proxy_dispatch::{ProxyDispatchOutcome, PROXY_MAX_REQUEST_BODY_BYTES};
+    use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
 
     let matched_route =
         state
@@ -1633,45 +1633,42 @@ async fn handle_core_request_with_body(
         matched_route.and_then(|(route_idx, _)| state.config.routes.get(route_idx)),
         base_body_limit,
     );
-    let route_config = matched_route.and_then(|(route_idx, _)| state.config.routes.get(route_idx));
     let declared_len = parse_proxy_request_content_length(req.headers());
     let uri = req.uri().clone();
+
+    // F-01: proxy bodies stay on the direct path so a spooled body never has
+    // to be flattened into `Bytes` for the generic dispatcher.
+    if is_proxy_route {
+        let Some((route_idx, _)) = matched_route else {
+            return text_response(StatusCode::NOT_FOUND, "not found");
+        };
+        let Some(cluster_id) = state.snapshot.proxy_cluster_for_route(route_idx) else {
+            return text_response(StatusCode::NOT_FOUND, "not found");
+        };
+        return proxy_route_target(
+            state,
+            route_idx,
+            proxy_client,
+            cluster_id,
+            req,
+            x_forwarded_for,
+        )
+        .await;
+    }
+
     let throttle_cfg = state.config.modules.ratelimit.client.clone();
     let body =
         crate::client_throttle::wrap_request_body(req.into_body(), None, client_ip, &throttle_cfg);
-    let body = if is_proxy_route {
-        match crate::server::proxy_request_body::collect_proxy_request_body_with_deadline(
-            declared_len,
-            body,
-            body_limit,
-            route_request_body_timeout(route_config),
-            route_request_body_spool(route_config),
-        )
-        .await
-        {
-            Ok(body) => body.bytes,
-            Err(ProxyRequestBodyReadError::TooLarge) => {
-                return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
-            }
-            Err(ProxyRequestBodyReadError::Deadline) => {
-                return text_response(StatusCode::REQUEST_TIMEOUT, "request body timeout");
-            }
-            Err(ProxyRequestBodyReadError::Body | ProxyRequestBodyReadError::Spool) => {
-                return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
-            }
+    let body = match collect_proxy_request_body_bounded(declared_len, body, body_limit).await {
+        Ok(body) => body,
+        Err(ProxyRequestBodyReadError::TooLarge) => {
+            return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
         }
-    } else {
-        match collect_proxy_request_body_bounded(declared_len, body, body_limit).await {
-            Ok(body) => body,
-            Err(ProxyRequestBodyReadError::TooLarge) => {
-                return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
-            }
-            Err(ProxyRequestBodyReadError::Body) => {
-                return text_response(StatusCode::BAD_REQUEST, "request body too large");
-            }
-            Err(ProxyRequestBodyReadError::Deadline | ProxyRequestBodyReadError::Spool) => {
-                return text_response(StatusCode::BAD_REQUEST, "request body read failed");
-            }
+        Err(ProxyRequestBodyReadError::Body) => {
+            return text_response(StatusCode::BAD_REQUEST, "request body too large");
+        }
+        Err(ProxyRequestBodyReadError::Deadline | ProxyRequestBodyReadError::Spool) => {
+            return text_response(StatusCode::BAD_REQUEST, "request body read failed");
         }
     };
     let waf_body_limited = match waf_body_gate(
@@ -4238,7 +4235,8 @@ async fn proxy_contract_target(
     let remote_addr = x_forwarded_for
         .and_then(|value| value.to_str().ok())
         .unwrap_or("127.0.0.1");
-    let body = request_body.map(|b| b.to_vec());
+    let body = request_body
+        .map(|b| exyonq_module_api::proxy_dispatch::ProxyRequestBody::memory(b.to_vec()));
     let request = execute_backend::build_proxy_dispatch_request(
         *cluster_id,
         method,
@@ -4399,9 +4397,9 @@ async fn proxy_route_target(
         {
             Ok(collected) => {
                 if collected.spooled {
-                    tracing::debug!(bytes = collected.bytes.len(), "proxy request body spooled");
+                    tracing::debug!(bytes = collected.body.len(), "proxy request body spooled");
                 }
-                Some(collected.bytes)
+                Some(collected.body)
             }
             Err(ProxyRequestBodyReadError::TooLarge) => {
                 // Client-facing body limit (nginx client_max_body_size semantics):
@@ -4421,8 +4419,8 @@ async fn proxy_route_target(
             }
         }
     };
-    if let Some(ref body_bytes) = body {
-        if let WafBodyGate::Reject(reject) = waf_body_gate(
+    if let Some(ref body) = body {
+        if let WafBodyGate::Reject(reject) = waf_body_gate_proxy(
             state,
             &http_method,
             host.as_deref(),
@@ -4430,8 +4428,10 @@ async fn proxy_route_target(
             query.as_deref(),
             &header_view,
             client_ip,
-            body_bytes,
-        ) {
+            body,
+        )
+        .await
+        {
             return reject;
         }
     }
@@ -5068,6 +5068,98 @@ fn waf_body_gate(
     match hook {
         crate::waf::WafHookResult::Continue => WafBodyGate::Continue { inspection_limited },
         crate::waf::WafHookResult::Reject(reject) => {
+            WafBodyGate::Reject(waf_reject_response(reject))
+        }
+    }
+}
+
+/// Async body gate: memory bodies use the existing single-chunk path; spooled
+/// bodies are inspected incrementally from disk in 1 MiB windows (F-01).
+#[allow(clippy::too_many_arguments)]
+async fn waf_body_gate_proxy(
+    state: &ServerState,
+    method: &Method,
+    host: Option<&str>,
+    path: &str,
+    query: Option<&str>,
+    headers: &dyn exyonq_waf_api::HeaderView,
+    client_ip: std::net::IpAddr,
+    body: &exyonq_module_api::proxy_dispatch::ProxyRequestBody,
+) -> WafBodyGate {
+    use exyonq_module_api::proxy_dispatch::ProxyRequestBody;
+
+    let ProxyRequestBody::Spool(spool) = body else {
+        return waf_body_gate(
+            state,
+            method,
+            host,
+            path,
+            query,
+            headers,
+            client_ip,
+            body.prefix(),
+        );
+    };
+
+    let xml_body = headers
+        .get("content-type")
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .is_some_and(|value| {
+            let media_type = value.split(';').next().unwrap_or(value).trim();
+            media_type.eq_ignore_ascii_case("text/xml")
+                || media_type.eq_ignore_ascii_case("application/xml")
+        });
+    if xml_body && malformed_percent_encoding(body.prefix()) {
+        return WafBodyGate::Reject(text_response(
+            StatusCode::BAD_REQUEST,
+            "malformed percent-encoding in request body",
+        ));
+    }
+
+    let mut inspector = crate::waf::RequestBodyInspector::new(
+        state.waf.as_ref(),
+        method.as_str(),
+        host,
+        path,
+        query,
+        headers,
+        client_ip,
+        None,
+        state.generation,
+        state.waf_enforce,
+        state.waf_abuse.as_deref(),
+    );
+    let mut file = match tokio::fs::File::open(spool.path()).await {
+        Ok(file) => file,
+        Err(err) => {
+            tracing::error!(%err, "proxy request body spool could not be reopened for WAF");
+            return WafBodyGate::Reject(text_response(
+                StatusCode::BAD_GATEWAY,
+                "request body spool unavailable",
+            ));
+        }
+    };
+    use tokio::io::AsyncReadExt;
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        match file.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => inspector.push(&buf[..n], false),
+            Err(err) => {
+                tracing::error!(%err, "proxy request body spool read failed for WAF");
+                return WafBodyGate::Reject(text_response(
+                    StatusCode::BAD_GATEWAY,
+                    "request body spool read failed",
+                ));
+            }
+        }
+    }
+    inspector.push(&[], true);
+    match inspector.finish() {
+        (crate::waf::WafHookResult::Continue, inspection_limited) => {
+            WafBodyGate::Continue { inspection_limited }
+        }
+        (crate::waf::WafHookResult::Reject(reject), _) => {
             WafBodyGate::Reject(waf_reject_response(reject))
         }
     }

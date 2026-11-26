@@ -316,7 +316,7 @@ async fn post_body_preserved() {
         "/submit?q=1",
         Some("upstream.local".into()),
         vec![("content-type".into(), "application/json".into())],
-        Some(b"{\"k\":\"v\"}".to_vec()),
+        Some(b"{\"k\":\"v\"}".to_vec().into()),
         "127.0.0.1",
         "http",
     ))

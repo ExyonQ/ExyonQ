@@ -227,11 +227,15 @@ pub enum WafOnInspectionLimitIr {
     LogAndAllow,
 }
 
-/// Compile-time failure policy (v1: fail closed only).
+/// Compile-time failure policy.
+///
+/// `closed_for_invalid_rules` refuses the whole snapshot; `best_effort`
+/// discards only bad rules and reports them through `CompileStats`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WafFailPolicyIr {
     ClosedForInvalidRules,
+    BestEffort,
 }
 
 /// Abuse gate mode (host seam — separate from signature `mode`).
@@ -438,12 +442,6 @@ pub(crate) fn validate_waf(waf: &WafConfig) -> Result<(), ConfigError> {
 
     if waf.engine != WafEngineIr::Native {
         return Err(ConfigError::Parse("waf.engine must be \"native\"".into()));
-    }
-
-    if waf.fail_policy != WafFailPolicyIr::ClosedForInvalidRules {
-        return Err(ConfigError::Parse(
-            "waf.fail_policy must be \"closed_for_invalid_rules\"".into(),
-        ));
     }
 
     validate_waf_abuse(&waf.abuse)?;

@@ -797,7 +797,10 @@ mod tests {
         assert_eq!(resp.status, 200);
         let seen = capture.seen.lock().expect("proxy requests");
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].body.as_deref(), Some(&b"hello proxy"[..]));
+        assert_eq!(
+            seen[0].body.as_ref().map(|body| body.prefix()),
+            Some(&b"hello proxy"[..])
+        );
         let content_length = seen[0]
             .headers
             .iter()

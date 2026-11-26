@@ -40,10 +40,11 @@ use async_trait::async_trait;
 use exyonq_module_api::proxy_dispatch::ProxySelectionPolicy;
 use exyonq_module_api::proxy_dispatch::{
     ProxyCompiledSlot, ProxyDispatchOutcome, ProxyDispatchRequest, ProxyDispatchService,
-    ProxyMethod, ProxyMetricsSnapshot, PROXY_MAX_REQUEST_BODY_BYTES,
+    ProxyMethod, ProxyMetricsSnapshot, ProxyRequestBody, PROXY_MAX_REQUEST_BODY_BYTES,
 };
 use http::Uri;
-use http_body_util::{BodyExt, Full};
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
 use hyper::header::{HeaderValue, HOST};
 use hyper::{Method, Request};
@@ -51,6 +52,77 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tracing::warn;
+
+/// File-backed request body used for spooled proxy uploads (F-01).
+struct SpoolFileBody {
+    file: tokio::fs::File,
+    remaining: u64,
+    buf: Vec<u8>,
+}
+
+impl SpoolFileBody {
+    async fn open(
+        spool: &exyonq_module_api::proxy_dispatch::ProxySpooledBody,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            file: tokio::fs::File::open(spool.path()).await?,
+            remaining: spool.len(),
+            buf: Vec::new(),
+        })
+    }
+}
+
+impl http_body::Body for SpoolFileBody {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        use std::task::Poll;
+        use tokio::io::AsyncRead;
+
+        if self.remaining == 0 {
+            return Poll::Ready(None);
+        }
+        let want = self.remaining.min(64 * 1024) as usize;
+        if self.buf.len() < want {
+            self.buf.resize(want, 0);
+        }
+        let read = {
+            let this = self.as_mut().get_mut();
+            let mut read_buf = tokio::io::ReadBuf::new(&mut this.buf[..want]);
+            match std::pin::Pin::new(&mut this.file).poll_read(cx, &mut read_buf) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Err(err)) => Poll::Ready(Some(Err(err))),
+                Poll::Ready(Ok(())) => {
+                    let n = read_buf.filled().len();
+                    if n == 0 {
+                        Poll::Ready(Some(Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "request body spool ended before its declared length",
+                        ))))
+                    } else {
+                        Poll::Ready(Some(Ok((
+                            bytes::Bytes::copy_from_slice(read_buf.filled()),
+                            n,
+                        ))))
+                    }
+                }
+            }
+        };
+        match read {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Ok((chunk, n)))) => {
+                self.remaining -= n as u64;
+                Poll::Ready(Some(Ok(http_body::Frame::data(chunk))))
+            }
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
+            Poll::Ready(None) => Poll::Ready(None),
+        }
+    }
+}
 
 enum ClusterBinding {
     NoEligible,
@@ -798,8 +870,8 @@ impl ProxyRuntime {
         if budget.is_zero() {
             return Err(UpstreamAttemptClass::TimedOut);
         }
-        let body = request.body.clone().unwrap_or_default();
-        if body.len() > PROXY_MAX_REQUEST_BODY_BYTES {
+        let body_len = request.body.as_ref().map_or(0, ProxyRequestBody::len);
+        if body_len > PROXY_MAX_REQUEST_BODY_BYTES {
             return Ok(ProxyDispatchOutcome::BadGateway);
         }
 
@@ -841,7 +913,20 @@ impl ProxyRuntime {
             builder = builder.header(HOST, host.clone());
         }
 
-        let mut req = match builder.body(Full::from(body)) {
+        let body: BoxBody<bytes::Bytes, std::io::Error> = match request.body.as_ref() {
+            None => Empty::new().map_err(|never| match never {}).boxed(),
+            Some(ProxyRequestBody::Memory(bytes)) => Full::new(bytes::Bytes::from(bytes.clone()))
+                .map_err(|never| match never {})
+                .boxed(),
+            Some(ProxyRequestBody::Spool(spool)) => match SpoolFileBody::open(spool).await {
+                Ok(body) => body.boxed(),
+                Err(err) => {
+                    warn!(%err, "proxy request body spool open failed");
+                    return Ok(ProxyDispatchOutcome::BadGateway);
+                }
+            },
+        };
+        let mut req = match builder.body(body) {
             Ok(req) => req,
             Err(err) => {
                 warn!(%err, "proxy request builder failed (operator/network headers)");

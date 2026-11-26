@@ -97,6 +97,7 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
         ip_metrics = ip_filter_metrics(&input.builtins.ip_filter);
         let crs = waf_crs_rulesets_from_ir(&config.waf)
             .map_err(|e| anyhow::anyhow!("waf CRS load: {e}"))?;
+        enforce_crs_fail_policy(&config.waf, &crs)?;
         let engine = FixedWafEngine::compile_with_crs(input, &crs)
             .map_err(|e| anyhow::anyhow!("waf compile failed (fail closed): {e}"))?;
         let stats = engine.snapshot().compile_stats();
@@ -129,6 +130,32 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
         enforce,
         wire_inspection_active,
     })
+}
+
+/// CRS parser diagnostics are subject to the configured compile policy: a
+/// closed policy refuses the snapshot when any SecRule line was discarded;
+/// best-effort keeps the valid rules and reports the skipped lines in stats.
+fn enforce_crs_fail_policy(
+    waf: &WafConfig,
+    crs: &[exyonq_waf::CrsRulesetInput],
+) -> anyhow::Result<()> {
+    if waf.fail_policy != exyonq_config_ir::WafFailPolicyIr::ClosedForInvalidRules {
+        return Ok(());
+    }
+    if let Some(ruleset) = crs.iter().find(|ruleset| ruleset.discarded > 0) {
+        let reason = ruleset
+            .diagnostics
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "discarded SecRule".into());
+        anyhow::bail!(
+            "waf ruleset `{}` discarded {} rule(s) under fail_policy=closed_for_invalid_rules: {}",
+            ruleset.id,
+            ruleset.discarded,
+            reason
+        );
+    }
+    Ok(())
 }
 
 fn install_cap013_hooks() {
@@ -242,7 +269,12 @@ pub fn waf_compile_input_from_ir(waf: &WafConfig) -> Result<WafCompileInput, Str
             max_body_bytes: waf.max_inspection_body_bytes as usize,
             on_limit: map_on_limit(waf.on_inspection_limit),
         },
-        fail_policy: FailPolicy::ClosedForInvalidRules,
+        fail_policy: match waf.fail_policy {
+            exyonq_config_ir::WafFailPolicyIr::ClosedForInvalidRules => {
+                FailPolicy::ClosedForInvalidRules
+            }
+            exyonq_config_ir::WafFailPolicyIr::BestEffort => FailPolicy::BestEffort,
+        },
         normalize: Default::default(),
         builtins,
         rulesets,
@@ -679,6 +711,16 @@ fn build_abuse_gate_from_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f02_crs_fail_policy_is_effective() {
+        let mut waf = WafConfig::default();
+        let crs = exyonq_waf::parse_rule_file("local", "SecRule broken\n", 0);
+        assert_eq!(crs.discarded, 1);
+        assert!(enforce_crs_fail_policy(&waf, std::slice::from_ref(&crs)).is_err());
+        waf.fail_policy = exyonq_config_ir::WafFailPolicyIr::BestEffort;
+        assert!(enforce_crs_fail_policy(&waf, &[crs]).is_ok());
+    }
 
     fn tracker(threshold: u32) -> ViolationTracker {
         ViolationTracker::new(Duration::from_secs(60), threshold, Duration::from_secs(300))

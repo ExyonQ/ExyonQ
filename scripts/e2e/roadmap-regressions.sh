@@ -100,6 +100,7 @@ rc=0
 run_cargo core_lib test --locked -p exyonq-core --lib || rc=1
 run_cargo f01_body_deadline_spool test --locked -p exyonq-core --lib f01_ || rc=1
 run_cargo f02_rule_fail_policy test --locked -p exyonq-waf --lib f02_ || rc=1
+run_cargo f02_install_policy test --locked -p exyonq f02_ || rc=1
 run_cargo f04_client_table_protection test --locked -p exyonq-core --lib f04_ || rc=1
 run_cargo f05_websocket_limits test --locked -p exyonq-mod-proxy --lib f05_ || rc=1
 run_cargo body_limit test --locked -p exyonq-core --test proxy_request_body_limit_test || rc=1
