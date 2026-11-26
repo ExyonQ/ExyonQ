@@ -65,6 +65,7 @@ pub use modules::{
     GunzipConfig, MetricsConfig, MirrorConfig, MirrorRouteConfig, ModulesConfig, RateLimitConfig,
     RateLimitLimit, RateLimitRouteOptions, RateLimitRoutePolicy, RateLimitZoneConfig, RealIpConfig,
     SliceConfig, SliceRouteConfig, SubFilterConfig, SubFilterRouteConfig, SubFilterRule,
+    DEFAULT_MODULE_RESPONSE_BODY_LIMIT_BYTES, MAX_MODULE_RESPONSE_BODY_LIMIT_BYTES,
 };
 pub use registry::{lookup_module, ModuleDirectiveSpec, MODULE_DIRECTIVES_V1};
 pub use rfc3339::{parse_rfc3339_utc, TimestampError};
@@ -1513,6 +1514,7 @@ impl AppConfig {
         validate_http3_config(&raw.http3)?;
         waf::validate_waf(&raw.waf)?;
         validate_metrics_config(&raw.modules.metrics, &raw.server)?;
+        raw.modules.validate()?;
         validate_ratelimit_config(&raw.modules.ratelimit)?;
         raw.modules.real_ip.validate()?;
         raw.modules.gunzip.validate()?;
@@ -3268,16 +3270,6 @@ fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError
             "http3_listen is only honored on the first [[server]] block".into(),
         ));
     }
-    if servers.iter().skip(1).any(|s| {
-        s.tls
-            .as_ref()
-            .and_then(|t| t.acme.as_ref())
-            .is_some_and(|a| a.enabled)
-    }) {
-        return Err(ConfigError::Parse(
-            "tls.acme is only honored on the first [[server]] block".into(),
-        ));
-    }
     if servers
         .iter()
         .skip(1)
@@ -3303,6 +3295,31 @@ fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError
             return Err(ConfigError::Parse(format!(
                 "{field} is only honored on the first [[server]] block"
             )));
+        }
+    }
+    // Every ACME-enabled block owns its certificate files. Two issuance loops
+    // writing the same path would race and truncate each other's key, so each
+    // ACME block needs a distinct `tls.cert` and `tls.key`.
+    let mut acme_cert_owner: HashMap<&std::path::Path, usize> = HashMap::new();
+    let mut acme_key_owner: HashMap<&std::path::Path, usize> = HashMap::new();
+    for (idx, server) in servers.iter().enumerate() {
+        let Some(tls) = server.tls.as_ref() else {
+            continue;
+        };
+        if !tls.acme.as_ref().is_some_and(|a| a.enabled) {
+            continue;
+        }
+        for (field, path, owners) in [
+            ("tls.cert", tls.cert.as_path(), &mut acme_cert_owner),
+            ("tls.key", tls.key.as_path(), &mut acme_key_owner),
+        ] {
+            if let Some(previous) = owners.insert(path, idx) {
+                return Err(ConfigError::Parse(format!(
+                    "server[{idx}] and server[{previous}] enable tls.acme with the same {field} {}; \
+                     each ACME-enabled [[server]] needs its own certificate path",
+                    path.display()
+                )));
+            }
         }
     }
     let mut groups: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -3361,21 +3378,6 @@ fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError
         return Err(ConfigError::Parse(
             "http3_listen cannot be combined with tls.strict_sni/protocols/ciphers/curves/\
              ocsp_stapling/must_staple (HTTP/3 providers do not honor them yet)"
-                .into(),
-        ));
-    }
-    // HTTP/3 listeners load a single certificate; combining them with SNI
-    // multi-cert would silently serve the primary cert for every hostname.
-    if servers[0].http3_listen.is_some()
-        && servers[0].tls.is_some()
-        && servers
-            .iter()
-            .skip(1)
-            .any(|s| s.listen == servers[0].listen && s.tls.is_some())
-    {
-        return Err(ConfigError::Parse(
-            "http3_listen cannot be combined with multiple TLS servers on the same listen \
-             (QUIC does not support SNI multi-certificate yet)"
                 .into(),
         ));
     }
@@ -5983,7 +5985,7 @@ http3_listen = "0.0.0.0:8443"
     }
 
     #[test]
-    fn ng15_rejects_http3_with_sni_multi_cert() {
+    fn ng15_accepts_http3_with_sni_multi_cert() {
         let toml = ng15_config(&format!(
             r#"
 [[server]]
@@ -5999,8 +6001,75 @@ routes = ["r"]
 {NG15_TLS}
 "#
         ));
+        let config = AppConfig::parse_str(&toml).expect("QUIC SNI multi-cert is supported");
+        assert_eq!(config.servers.len(), 2);
+    }
+
+    #[test]
+    fn ng15_accepts_acme_on_every_server_block() {
+        let toml = ng15_config(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/a.pem"
+key = "/tmp/a.key"
+[server.tls.acme]
+email = "ops@a.test"
+domains = ["a.test"]
+
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/b.pem"
+key = "/tmp/b.key"
+[server.tls.acme]
+email = "ops@a.test"
+domains = ["b.test"]
+"#,
+        );
+        let config = AppConfig::parse_str(&toml).expect("ACME is per [[server]] block");
+        assert_eq!(config.servers.len(), 2);
+        assert!(config.servers[1]
+            .tls
+            .as_ref()
+            .and_then(|tls| tls.acme.as_ref())
+            .is_some_and(|acme| acme.enabled));
+    }
+
+    #[test]
+    fn ng15_rejects_shared_acme_cert_path() {
+        let toml = ng15_config(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/shared.pem"
+key = "/tmp/shared.key"
+[server.tls.acme]
+email = "ops@a.test"
+domains = ["a.test"]
+
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/shared.pem"
+key = "/tmp/b.key"
+[server.tls.acme]
+email = "ops@a.test"
+domains = ["b.test"]
+"#,
+        );
         let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
-        assert!(err.contains("QUIC does not support"), "{err}");
+        assert!(err.contains("own certificate path"), "{err}");
     }
 
     #[test]
@@ -6049,7 +6118,7 @@ routes = ["r"]
     }
 
     #[test]
-    fn ng15_rejects_acme_on_non_primary_server() {
+    fn ng15_accepts_acme_on_non_primary_server() {
         let toml = ng15_config(&format!(
             r#"
 [[server]]
@@ -6070,8 +6139,14 @@ email = "ops@example.com"
 domains = ["b.test"]
 "#
         ));
-        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
-        assert!(err.contains("tls.acme"), "{err}");
+        let config = AppConfig::parse_str(&toml).expect("ACME is honored on every [[server]]");
+        let acme = config.servers[1]
+            .tls
+            .as_ref()
+            .and_then(|tls| tls.acme.as_ref())
+            .expect("second block keeps its ACME config");
+        assert!(acme.enabled);
+        assert_eq!(acme.domains, vec!["b.test".to_string()]);
     }
 
     #[test]

@@ -147,6 +147,15 @@ PHP-FPM workers. Alert on sustained
 `exyonq_fcgi_pool_responses_total{pool=…,status="503"}`; the warn log names the
 pool and includes `queue=disabled`.
 
+Startup and reload probe each pool as the ExyonQ user; a socket left as
+`root:root` logs `errno=EACCES` with the `listen.owner`/`listen.group` fix, and
+`exyonqctl fastcgi check --config …` reproduces the same check offline. See
+[FastCGI / PHP-FPM operations](../../../docs/architecture/fastcgi-php-fpm-operations.md).
+
+The module response ceiling is `[modules].response_body_limit_bytes` (default
+4 MiB). Bodies with a larger declared size stream through uncollected;
+unknown-size bodies over the limit return `413` instead of `500`.
+
 ## .htaccess
 
 The stock WordPress file compiles. `RewriteBase` is accepted and not

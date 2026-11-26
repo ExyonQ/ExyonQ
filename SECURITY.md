@@ -129,4 +129,4 @@ Run ExyonQ with minimal env exposure in production.
 - Integration security tests: `cargo nextest run -p exyonq-integration-tests --filter-expr 'test(security) or test(wasm_host)'`
 - Fuzz: `scripts/security-fuzz.sh` (see [`fuzz/`](fuzz/))
 - Dependency audit: `cargo audit`, `cargo deny check`
-- Private material: `bash scripts/security/scan-private-material.sh --git-tree --repo .`
+- Private material: `bash scripts/security/scan-private-material.sh --publication --repo .`

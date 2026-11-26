@@ -18,12 +18,66 @@
 //! Fixed hop-by-hop semantics live in [`exyonq_module_api::hop_by_hop`]. This module
 //! re-exports them for proxy callers and adds request/content-length helpers.
 
-use http::header::{HeaderMap, HeaderValue, CONTENT_LENGTH, TRANSFER_ENCODING};
+use http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, TRANSFER_ENCODING};
 
 pub use exyonq_module_api::hop_by_hop::{
     connection_nominated_header_names, is_fixed_hop_by_hop_header as is_hop_by_hop_header,
     strip_hop_by_hop_headers, FIXED_HOP_BY_HOP_HEADERS,
 };
+
+/// `P15-WS2-PROXY` fuzz entry point (`fuzz/fuzz_targets/proxy_headers.rs`).
+///
+/// Builds a hostile header set straight from raw bytes and runs the **real**
+/// request policy: the fixed hop-by-hop set must be stripped, and duplicate
+/// `Content-Length` or `Content-Length` plus `Transfer-Encoding` must be refused.
+/// It only calls product code; a panic here is a real finding, not a harness bug.
+#[doc(hidden)]
+pub fn fuzz_exercise_proxy_headers(data: &[u8]) {
+    let mut headers = HeaderMap::new();
+    for line in data.split(|byte| *byte == b'\n') {
+        let Some(colon) = line.iter().position(|byte| *byte == b':') else {
+            continue;
+        };
+        let (name, value) = line.split_at(colon);
+        let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(trim_ows(name)),
+            HeaderValue::from_bytes(trim_ows(&value[1..])),
+        ) else {
+            continue;
+        };
+        headers.append(name, value);
+    }
+
+    // Framing policy, checked in both directions: the predicate must reject
+    // exactly duplicated `Content-Length` and `Content-Length` plus
+    // `Transfer-Encoding`, and nothing else.
+    let ambiguous_framing = headers.get_all(CONTENT_LENGTH).iter().nth(1).is_some()
+        || (headers.contains_key(CONTENT_LENGTH) && headers.contains_key(TRANSFER_ENCODING));
+    assert_eq!(
+        request_headers_safe_for_proxy(&headers),
+        !ambiguous_framing,
+        "request_headers_safe_for_proxy disagrees with the framing rules"
+    );
+
+    // Hop-by-hop policy: nothing from the fixed (or Connection-nominated) set
+    // survives the strip.
+    let mut stripped = headers;
+    strip_hop_by_hop_headers(&mut stripped);
+    let hop_by_hop_left = stripped
+        .keys()
+        .any(|name| is_hop_by_hop_header(name.as_str()));
+    assert!(!hop_by_hop_left, "hop-by-hop header survived the strip");
+}
+
+fn trim_ows(bytes: &[u8]) -> &[u8] {
+    let is_ows = |byte: &u8| matches!(*byte, b' ' | b'\t');
+    let start = bytes.iter().position(|byte| !is_ows(byte)).unwrap_or(0);
+    let end = bytes
+        .iter()
+        .rposition(|byte| !is_ows(byte))
+        .map_or(start, |i| i + 1);
+    &bytes[start..end]
+}
 
 /// Response header names stripped before forwarding to downstream clients.
 pub const RESPONSE_HOP_BY_HOP_HEADERS: &[&str] = FIXED_HOP_BY_HOP_HEADERS;

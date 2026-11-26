@@ -18,7 +18,7 @@ PUBLIC_CLOUD_AUTHORITY     = <repo>
 
 WORKTREE_ROLE = ISOLATED_DEVELOPMENT_DIAGNOSTIC_EXPERIMENT_ONLY
 WORKTREE_IS_PUBLICATION_AUTHORITY = NO
-WORKTREE_MAY_REPLACE_EXYONQ_LABORATORIO = NO
+SECOND_CANONICAL_CHECKOUT_EXISTS = NO
 WIP_LIMIT = 1
 
 MUTABLE_STATE_ISOLATION_REQUIRED = YES
@@ -33,7 +33,7 @@ TAG_REQUIRES_EXPLICIT_OWNER_AUTHORIZATION = YES
 RELEASE_REQUIRES_EXPLICIT_OWNER_AUTHORIZATION = YES
 ```
 
-`exyonq-github` is a sanitized export surface, not a git worktree of lab.
+`exyonq-github` is the sanitized export surface and the single canonical tree; the former lab checkout was archived and deleted on 2026-11-19 and no worktree may take its place.
 
 ### Owner seal (2026-08-20)
 
@@ -169,7 +169,7 @@ Examples:
 <worktree><name>/.exyonq-local/
 ```
 
-No runtime or evidence state may silently resolve back to the canonical `exyonq-laboratorio/.exyonq-local` directory unless the access is explicitly read-only and named in the current task.
+No runtime or evidence state may silently resolve outside this checkout's own `<repo>/.exyonq-local/`: the former lab state exists only in the offline archive and is never a writable target.
 
 Nested worktrees under `.exyonq-local/worktrees/<name>` MUST still use their own nested `.exyonq-local/` for writable state. They must not write evidence, logs, PIDs, sockets, or caches into the parent canonical `.exyonq-local/` except when copying a finished artifact as an explicit, labeled handoff.
 
@@ -325,7 +325,7 @@ PUBLICATION = NO
 SYNC_TO_GITHUB = NO
 ```
 
-A worktree never implies permission to sync to `exyonq-github`. Local worktree paths (`<worktree>`, `exyonq-laboratorio-wt-*`, `/private/tmp/exyonq-*`) must not be published.
+A worktree never implies permission to sync to `exyonq-github`. Local worktree paths (`<worktree>`, `exyonq-wt-*`, `/private/tmp/exyonq-*`) must not be published.
 
 ---
 

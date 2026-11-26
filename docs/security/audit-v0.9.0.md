@@ -110,7 +110,7 @@ No new `unsafe` blocks introduced by the v0.9.0 feature set (NG-15..18, OL-01/02
 
 | ID | Sev | Finding | Disposition |
 | --- | --- | --- | --- |
-| F1 | H | slice cached 206s bypassing store gates → `Set-Cookie` replay, private/no-store poisoning | **FIXED** — `slice_segment_store_blocked` + `filter_storable_headers` + denylist (`module-api/cache.rs`, `handler.rs`) |
+| F1 | H | slice cached 206s bypassing store gates → `Set-Cookie` replay, private/no-store poisoning | **FIXED** — `slice_segment_store_blocked` + `filter_storable_headers` + denylist (`module-api/src/cache.rs`, `handler.rs`) |
 | F2 | H | `zone_ratelimit` unbounded map on attacker keys | **FIXED** — 10k/zone cap, full-bucket sweep, LRU evict, 128-char key cap |
 | F3 | M | gunzip unbounded header-state input | **FIXED** — `Err` when header-state input >64 KiB |
 | F4 | M | sub_filter `buf` grew ~whole-body on large frames | **FIXED** — drain `buf` before polling inner |

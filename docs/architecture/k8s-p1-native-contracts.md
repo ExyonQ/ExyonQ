@@ -62,7 +62,7 @@ Companion docs:
 
 - `docs/architecture/k8s-p1-config-ir-gap-analysis.md`
 - `docs/adr/035-native-endpoint-set-contract.md`
-- `docs/adr/036-control-plane-data-plane-apply-contract.md`
+- `docs/adr/036-control-plane-data-plane-apply-contract.md` *(no versionado en este árbol; el 036 versionado es `036-control-http-api.md`)*
 
 ---
 

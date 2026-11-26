@@ -199,7 +199,10 @@ fn ci() -> anyhow::Result<()> {
         "bash",
         &[
             "scripts/security/scan-private-material.sh",
-            "--git-tree",
+            // `--git-tree` is rejected fail-closed (blind to untracked/staged
+            // content); publication mode is the tracked + untracked, non-ignored
+            // set the repo and CI gate on.
+            "--publication",
             "--repo",
             ".",
         ],
@@ -221,6 +224,43 @@ fn ci() -> anyhow::Result<()> {
             "scripts/gates/l02-no-benchmark-path-decisions.sh",
             "--selftest",
         ],
+    )?;
+    // Release-tag authenticity. On a branch this prints NOT_APPLICABLE and exits
+    // 0 (never a pass); on a tag it fails closed unless the tag is annotated,
+    // SSH-signed by an authorized principal and points at the expected commit.
+    // The selftest keeps the gate itself from going vacuous.
+    run_in(
+        root.clone(),
+        "bash",
+        &["scripts/gates/tag-signature-gate.sh"],
+    )?;
+    run_in(
+        root.clone(),
+        "bash",
+        &["scripts/gates/tag-signature-gate.sh", "--selftest"],
+    )?;
+    // EXY-14: a binary built at a tag must report that tag and commit. Off-tag
+    // this prints NOT_APPLICABLE and exits 0 (never a pass); on a tagged tree
+    // it fails closed unless the release binary exists and carries the exact
+    // `source_tag`/`source_revision`. The selftest feeds it the failure modes.
+    run_in(root.clone(), "bash", &["scripts/gates/source-tag-gate.sh"])?;
+    run_in(
+        root.clone(),
+        "bash",
+        &["scripts/gates/source-tag-gate.sh", "--selftest"],
+    )?;
+    // Shell portability: tracked scripts must run on the bash 3.2 macOS ships.
+    // Two of them used `declare -A` and aborted before doing any work; the
+    // selftest proves the lint actually detects the class.
+    run_in(
+        root.clone(),
+        "bash",
+        &["scripts/gates/portable-shell-gate.sh"],
+    )?;
+    run_in(
+        root.clone(),
+        "bash",
+        &["scripts/gates/portable-shell-gate.sh", "--selftest"],
     )?;
     run("cargo", &["fmt", "--all", "--", "--check"])?;
     run(

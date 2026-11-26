@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 /// Honest product version metadata (P1.5-WS6). Control binary uses the system
 /// allocator (no optional jemalloc feature). No builder paths or secrets.
@@ -119,6 +120,11 @@ enum Command {
         #[command(subcommand)]
         command: CacheCommand,
     },
+    /// FastCGI pool diagnostics (offline; connects as this user).
+    Fastcgi {
+        #[command(subcommand)]
+        command: FastcgiCommand,
+    },
     /// Offline configuration utilities.
     Config {
         #[command(subcommand)]
@@ -172,6 +178,17 @@ enum CacheCommand {
         config: PathBuf,
         /// Absolute http(s) URL to evaluate.
         url: String,
+        #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
+        format: DiagFormat,
+    },
+}
+
+#[derive(Subcommand)]
+enum FastcgiCommand {
+    /// Parse a config and connect to every [[fcgi_pool]] as this user.
+    Check {
+        #[arg(short, long)]
+        config: PathBuf,
         #[arg(long, value_enum, default_value_t = DiagFormat::Human)]
         format: DiagFormat,
     },
@@ -573,6 +590,7 @@ fn main() -> ExitCode {
         }) => run_purge(command, socket, token),
         Some(Command::Server { command, socket }) => run_server(command, socket),
         Some(Command::Cache { command }) => run_cache(command),
+        Some(Command::Fastcgi { command }) => run_fastcgi(command),
         Some(Command::Config { command }) => run_config(command),
         None => {
             eprintln!(
@@ -1550,6 +1568,191 @@ struct PurgeResponse {
     generation: u64,
     #[serde(default)]
     error: Option<String>,
+}
+
+fn run_fastcgi(command: FastcgiCommand) -> ExitCode {
+    match command {
+        FastcgiCommand::Check { config, format } => fastcgi_check(&config, format),
+    }
+}
+
+#[derive(Serialize)]
+struct FastcgiCheckRow {
+    pool: String,
+    transport: String,
+    endpoint: String,
+    max_concurrency: u32,
+    max_connections: u32,
+    checkout_timeout_ms: u64,
+    connect: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    errno: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    os_error: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+fn fastcgi_check(path: &Path, format: DiagFormat) -> ExitCode {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            eprintln!("exyonqctl fastcgi check: read {}: {err}", path.display());
+            return ExitCode::from(2);
+        }
+    };
+    let cfg = match AppConfig::parse_str(&raw) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!(
+                "exyonqctl fastcgi check: {} is not a valid config: {}",
+                path.display(),
+                redact_secrets(&format!("{err:#}"))
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut names: Vec<String> = cfg.pools_fcgi.keys().cloned().collect();
+    names.sort();
+    let mut rows = Vec::with_capacity(names.len());
+    for name in names {
+        let pool = &cfg.pools_fcgi[&name];
+        let (transport, endpoint) = fastcgi_endpoint(pool);
+        let probe = probe_fastcgi(&transport, &endpoint);
+        let (connect, errno, os_error, detail) = match probe {
+            Ok(()) => ("ok", None, None, None),
+            Err((errno, os_error, detail)) => ("failed", Some(errno), os_error, Some(detail)),
+        };
+        rows.push(FastcgiCheckRow {
+            pool: name,
+            transport,
+            endpoint,
+            max_concurrency: pool.max_concurrency,
+            max_connections: pool.max_connections.unwrap_or(pool.max_concurrency),
+            checkout_timeout_ms: pool.checkout_timeout_ms,
+            connect,
+            errno,
+            os_error,
+            detail,
+        });
+    }
+    let failed = rows.iter().filter(|row| row.connect != "ok").count();
+    let ok = rows.len() - failed;
+
+    match format {
+        DiagFormat::Human => {
+            for row in &rows {
+                print!(
+                    "pool={} transport={} endpoint={} max_concurrency={} max_connections={} checkout_timeout_ms={} connect={}",
+                    row.pool,
+                    row.transport,
+                    row.endpoint,
+                    row.max_concurrency,
+                    row.max_connections,
+                    row.checkout_timeout_ms,
+                    row.connect
+                );
+                if let Some(errno) = &row.errno {
+                    print!(" errno={errno}");
+                }
+                if let Some(os_error) = row.os_error {
+                    print!(" os_error={os_error}");
+                }
+                if let Some(detail) = &row.detail {
+                    print!(" detail={detail:?}");
+                }
+                println!();
+            }
+            println!("FASTCGI_CHECK pools={} ok={ok} failed={failed}", rows.len());
+        }
+        DiagFormat::Json => {
+            let payload = serde_json::json!({
+                "pools": rows,
+                "ok": ok,
+                "failed": failed,
+            });
+            match serde_json::to_string_pretty(&payload) {
+                Ok(body) => println!("{body}"),
+                Err(err) => {
+                    eprintln!("exyonqctl fastcgi check: serialize: {err}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+    }
+
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn fastcgi_endpoint(pool: &exyonq_config_ir::FcgiPoolConfig) -> (String, String) {
+    let address = pool.address.strip_prefix("unix:").unwrap_or(&pool.address);
+    let unix = if pool.transport.eq_ignore_ascii_case("tcp") {
+        false
+    } else if pool.transport.eq_ignore_ascii_case("unix") {
+        true
+    } else {
+        address.starts_with('/')
+    };
+    if unix {
+        ("unix".into(), address.to_string())
+    } else {
+        ("tcp".into(), address.to_string())
+    }
+}
+
+fn probe_fastcgi(transport: &str, endpoint: &str) -> Result<(), (String, Option<i32>, String)> {
+    if transport == "unix" {
+        #[cfg(unix)]
+        {
+            std::os::unix::net::UnixStream::connect(endpoint)
+                .map(drop)
+                .map_err(|err| (fcgi_errno_label(&err), err.raw_os_error(), err.to_string()))
+        }
+        #[cfg(not(unix))]
+        {
+            Err((
+                "ENOTSUP".into(),
+                None,
+                "unix sockets are not supported on this platform".into(),
+            ))
+        }
+    } else {
+        let addr: std::net::SocketAddr = endpoint.parse().map_err(|_| {
+            (
+                "EINVAL".into(),
+                None,
+                "address is not a literal host:port".into(),
+            )
+        })?;
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+            .map(drop)
+            .map_err(|err| (fcgi_errno_label(&err), err.raw_os_error(), err.to_string()))
+    }
+}
+
+fn fcgi_errno_label(err: &std::io::Error) -> String {
+    match err.raw_os_error() {
+        Some(13) => "EACCES".into(),
+        Some(1) => "EPERM".into(),
+        Some(2) => "ENOENT".into(),
+        Some(111) | Some(61) => "ECONNREFUSED".into(),
+        Some(110) | Some(60) => "ETIMEDOUT".into(),
+        Some(88) | Some(38) => "ENOTSOCK".into(),
+        Some(99) | Some(49) => "EADDRNOTAVAIL".into(),
+        Some(104) | Some(54) => "ECONNRESET".into(),
+        _ => match err.kind() {
+            std::io::ErrorKind::PermissionDenied => "EACCES".into(),
+            std::io::ErrorKind::NotFound => "ENOENT".into(),
+            std::io::ErrorKind::ConnectionRefused => "ECONNREFUSED".into(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "ETIMEDOUT".into(),
+            _ => "EIO".into(),
+        },
+    }
 }
 
 fn run_cache(command: CacheCommand) -> ExitCode {

@@ -394,10 +394,9 @@ pub fn prepare_tls_acceptor(
         // yet; the listener serves cleartext (HTTP-01) until the bootstrap
         // publishes the issued certificate via reload_tls_from_config.
         // Without ACME a missing pair stays fail-closed (load error below).
-        // Only the primary server is provisioned by the ACME bootstrap, so
-        // secondary servers keep fail-closed even with acme enabled.
-        let acme_pending = idx == 0
-            && tls.acme.as_ref().is_some_and(|acme| acme.enabled)
+        // Every ACME-enabled block is provisioned, so the exemption is per
+        // block instead of primary-only.
+        let acme_pending = tls.acme.as_ref().is_some_and(|acme| acme.enabled)
             && !(tls.cert.exists() && tls.key.exists());
         if !acme_pending {
             certs.push(SniCert {

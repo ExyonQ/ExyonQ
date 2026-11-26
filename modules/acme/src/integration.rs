@@ -67,29 +67,38 @@ impl AcmeIntegrationService for AcmeIntegrationRuntime {
         config: &AppConfig,
         publication: Arc<dyn CertificatePublicationPort>,
     ) {
-        let Some(tls) = config.primary_server().tls.clone() else {
-            return;
-        };
-        let Some(acme_cfg) = tls.acme.clone() else {
-            return;
-        };
-        if !acme_cfg.enabled {
+        // One order per `[[server]]` block: each block owns its cert/key files,
+        // so a multi-domain listener issues and renews every certificate.
+        let jobs = crate::manager::acme_jobs(config);
+        if jobs.is_empty() {
             return;
         }
 
-        match ensure_certificates(&tls, &acme_cfg, &self.challenges, false).await {
-            Ok(AcmeRenewalOutcome::Issued(_)) => {
-                if let Err(err) = publication.reload_tls_from_config(config) {
-                    warn!(%err, "TLS reload after ACME bootstrap failed");
+        let mut issued = false;
+        for (idx, tls, acme_cfg) in &jobs {
+            match ensure_certificates(tls, acme_cfg, &self.challenges, false).await {
+                Ok(AcmeRenewalOutcome::Issued(paths)) => {
+                    issued = true;
+                    info!(
+                        server = idx,
+                        cert = %paths.cert.display(),
+                        domains = ?acme_cfg.domains,
+                        "ACME bootstrap issued"
+                    );
                 }
+                Ok(AcmeRenewalOutcome::SkippedExisting) => {}
+                Err(err) => warn!(server = idx, %err, "ACME bootstrap failed"),
             }
-            Ok(AcmeRenewalOutcome::SkippedExisting) => {}
-            Err(err) => warn!(%err, "ACME bootstrap failed"),
+        }
+        if issued {
+            if let Err(err) = publication.reload_tls_from_config(config) {
+                warn!(%err, "TLS reload after ACME bootstrap failed");
+            }
         }
 
         let config = Arc::new(config.clone());
-        let challenges = self.challenges.clone();
-        spawn_renewal_loop(tls, acme_cfg, challenges, move || {
+        let jobs = jobs.into_iter().map(|(_, tls, acme)| (tls, acme)).collect();
+        spawn_renewal_loop(jobs, self.challenges.clone(), move || {
             if publication.reload_tls_from_config(&config).is_ok() {
                 info!("TLS acceptor reloaded after ACME renewal");
             }

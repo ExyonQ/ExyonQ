@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1050,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-acme"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-addon-sdk"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-addon-api",
  "semver",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-cache"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "bytes",
  "exyonq-module-api",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-cache-redis"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-cache",
  "exyonq-module-api",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-cfd-control"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-cfd-gen",
  "exyonq-waf",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-cfd-dataplane"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-cfd-control",
  "exyonq-cfd-gen",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-cfd-gen"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "tempfile",
  "thiserror",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-compat-apache"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "exyonq-compat-common",
@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-compat-cli"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-compat-common"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-compat-nginx"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "exyonq-compat-common",
@@ -1182,11 +1182,11 @@ dependencies = [
 
 [[package]]
 name = "exyonq-compat-openlitespeed"
-version = "0.9.2"
+version = "0.9.3"
 
 [[package]]
 name = "exyonq-compression"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "brotli",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-config-cli"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-config-ir",
  "exyonq-config-merge",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-config-ir"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "hyper",
  "ipnetwork",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-config-merge"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-config-ir",
  "serde",
@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-config-schema"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-config-ir",
  "serde_json",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-config-surface"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-config-ir",
  "exyonq-config-merge",
@@ -1258,7 +1258,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-control-api"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1279,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-control-api-client"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "reqwest",
  "reqwest-middleware",
@@ -1290,7 +1290,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-core"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-discovery-runtime"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-config-ir",
  "exyonq-module-api",
@@ -1350,18 +1350,18 @@ dependencies = [
 
 [[package]]
 name = "exyonq-fastcgi-wire"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "exyonq-http3-provider-api"
-version = "0.9.2"
+version = "0.9.3"
 
 [[package]]
 name = "exyonq-http3-provider-quiche"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-http3-provider-s2n"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-linux-ffi"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "libc",
  "tokio",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-metrics"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1452,11 +1452,11 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mime"
-version = "0.9.2"
+version = "0.9.3"
 
 [[package]]
 name = "exyonq-mod-fastcgi"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1474,7 +1474,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-htaccess"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-http3"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-proxy"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-static"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "brotli",
@@ -1556,7 +1556,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-mod-tls"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "exyonq-module-api",
  "rustls",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-module-api"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-module-pipeline"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1596,15 +1596,17 @@ dependencies = [
  "exyonq-module-api",
  "exyonq-ratelimit",
  "http",
+ "http-body",
  "http-body-util",
  "hyper",
  "semver",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "exyonq-observability"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "exyonq-config-ir",
@@ -1623,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-ops-runtime"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1667,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-proxy-sdp"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "arc-swap",
  "exyonq-runtime-plan",
@@ -1681,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-ratelimit"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1693,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-reload-runtime"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "exyonq-module-api",
@@ -1706,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-runtime-plan"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "exyonq-config-ir",
@@ -1721,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "exyonq-waf"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
@@ -1740,11 +1742,11 @@ dependencies = [
 
 [[package]]
 name = "exyonq-waf-api"
-version = "0.9.2"
+version = "0.9.3"
 
 [[package]]
 name = "exyonq-wasm-host"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "criterion",
  "dashmap",
@@ -1755,7 +1757,7 @@ dependencies = [
 
 [[package]]
 name = "exyonqctl"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "clap",
  "exyonq-compat-nginx",
@@ -3691,6 +3693,7 @@ dependencies = [
  "s2n-quic-crypto",
  "s2n-quic-platform",
  "s2n-quic-rustls",
+ "s2n-quic-tls",
  "s2n-quic-tls-default",
  "s2n-quic-transport",
  "tokio",
@@ -5207,7 +5210,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "clap",

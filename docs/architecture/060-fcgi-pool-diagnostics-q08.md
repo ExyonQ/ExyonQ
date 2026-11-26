@@ -24,6 +24,18 @@ QUEJAS_OLS §2.6: operators see opaque LSAPI deadlock messages with no timeout, 
 3. **Cardinality:** the named-pool registry is capped at 64 configured pools; excess names share `pool="__overflow__"`. This is a config-defined bound, not a per-request label. The global series remain the fallback for existing dashboards.
 4. **Non-goals:** changing 503 mapping, unbounded wait queues, LSAPI watchdog messages.
 
+5. **Connect diagnostics (issue #109):** every pool connects once at startup
+   and structural reload as the ExyonQ service user. A failure warns with
+   `pool`, `endpoint`, `errno` (`EACCES`, `ENOENT`, `ECONNREFUSED`, …),
+   `os_error`, `phase=preflight` and the PHP-FPM ownership/restart hint; the
+   generation still commits so static routes stay available. Request-time
+   connect failures log the same fields with `phase=connect` before the `502`.
+   `exyonqctl fastcgi check --config …` performs the same probe offline and
+   exits non-zero on failure.
+6. **Per-pool series added:** `exyonq_fcgi_pool_connect_failures_total{pool}`
+   and `exyonq_fcgi_pool_waiters_current{pool}` alongside the existing
+   inflight/checkout/saturation counters.
+
 ## Consequences
 
 - Saturating a pool produces a grep-friendly warn and scrapable `exyonq_fcgi_*` series.  

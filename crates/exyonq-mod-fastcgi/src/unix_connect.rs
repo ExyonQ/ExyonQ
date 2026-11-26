@@ -28,24 +28,24 @@ use std::time::Duration;
 /// Uses non-blocking `connect` + `connect_timeout` poll + `SO_ERROR` check, then restores
 /// blocking mode for the existing spawn_blocking transport path.
 pub fn connect_unix_stream(path: &Path, timeout: Duration) -> Result<UnixStream, WireError> {
-    let addr = SockAddr::unix(path).map_err(|_| WireError::ConnectionFailed)?;
-    let socket =
-        Socket::new(Domain::UNIX, Type::STREAM, None).map_err(|_| WireError::ConnectionFailed)?;
+    connect_unix_stream_detailed(path, timeout).map_err(|err| map_connect_error(&err))
+}
 
-    match socket.connect_timeout(&addr, timeout) {
-        Ok(()) => {}
-        Err(err) => return Err(map_connect_error(&err)),
-    }
-
-    socket
-        .set_nonblocking(false)
-        .map_err(|_| WireError::ConnectionFailed)?;
-
+/// Same connect, preserving the OS error (`EACCES`, `ENOENT`, `ECONNREFUSED`, …)
+/// so startup preflight and request logs can name it instead of `502` alone.
+pub fn connect_unix_stream_detailed(
+    path: &Path,
+    timeout: Duration,
+) -> Result<UnixStream, std::io::Error> {
+    let addr = SockAddr::unix(path)?;
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+    socket.connect_timeout(&addr, timeout)?;
+    socket.set_nonblocking(false)?;
     let owned: OwnedFd = socket.into();
     Ok(UnixStream::from(owned))
 }
 
-fn map_connect_error(err: &std::io::Error) -> WireError {
+pub(crate) fn map_connect_error(err: &std::io::Error) -> WireError {
     match err.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => WireError::Timeout,
         ErrorKind::NotFound

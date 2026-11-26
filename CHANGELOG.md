@@ -23,6 +23,38 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ## [Unreleased]
 
+### Added
+
+- FastCGI pools are probed at startup and structural reload as the service
+  user; failures log the pool, endpoint, `errno`, OS error and a PHP-FPM
+  ownership hint instead of leaving only a generic `502`. Per-pool
+  `connect_failures`/`waiters` metrics and `exyonqctl fastcgi check` expose the
+  same diagnosis offline.
+- `[modules].response_body_limit_bytes` configures the response ceiling for
+  the cross-cutting module pipeline. Known-size bodies above it stream
+  uncollected; unknown-size bodies above it return `413` with the limit in the
+  body and log, instead of the historical generic `500 module error`.
+- `tls.acme` is honored on every `[[server]]` block, not only the first: each
+  block orders, renews and publishes its own certificate, and two ACME blocks
+  sharing a `tls.cert` are rejected instead of racing on one file.
+- HTTP/3 listens accept several TLS blocks on one `listen`; the `s2n` provider
+  loads every pair and selects the certificate by client SNI (the first block
+  stays the default). The `quiche` provider still serves only the first pair
+  and logs a warning.
+
+## [0.9.3] — wasmtime 49.0.6 (prepared locally, NOT published; owner authorization pending)
+
+```text
+VERSION = 0.9.3
+PUBLICATION_STATUS = NOT_PUBLISHED (patch prepared in the working tree)
+TAG = NONE (no tag created, nothing committed or pushed)
+BASE_TAG = v0.9.2
+DEPENDENCY = wasmtime =49.0.6 (was =49.0.5)
+ADVISORIES = RUSTSEC-2026-0566 .. RUSTSEC-2026-0572, cleared by the bump; none waived
+RELEASE_NOTES = docs/release/v0.9.3.md
+PENDING_OWNER = publish authorization (commit, push, tag, release), cosign layer, Docker Hub secrets, stability sign-off
+```
+
 ### Fixed
 
 - Access events now carry the request `host`, and WAF violation events carry
@@ -37,17 +69,22 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 ### Security
 
 - `wasmtime` 49.0.6 replaces 49.0.5, clearing RUSTSEC-2026-0566 through
-  -0572; `cargo deny check` and `cargo audit` pass with no waivers added.
+  -0572; no advisory is waived. This is the only dependency change in the patch,
+  so the 0.9.2 artifacts that embed 49.0.5 are superseded rather than patched.
+- The local verification of this patch (toolchain, wasm-host and workspace
+  checks, `cargo deny`/`cargo audit`, gates) is recorded in
+  `docs/release/v0.9.3.md`. Publishing, tagging and the stability declaration
+  are **NOT EXECUTED**: they require the owner's authorization.
 
-## [0.9.2] — binaries in the GitHub Release and images in GHCR, Docker Hub mirror pending
+## [0.9.2] — binaries in the GitHub Release, images in GHCR and the Docker Hub mirror
 
 ```text
 VERSION = 0.9.2
-PUBLICATION_STATUS = BINARIES_IN_GITHUB_RELEASE_V0.9.2_AND_GHCR_IMAGES_VERIFIED_BY_DIGEST
+PUBLICATION_STATUS = BINARIES_IN_GITHUB_RELEASE_V0.9.2_AND_GHCR_AND_DOCKERHUB_IMAGES_VERIFIED_BY_DIGEST
 TAG = PUSHED, ANNOTATED AND SSH-SIGNED (v0.9.2 -> tag object 648cf617 -> audit seal 4e3338a)
 TAG_SIGNATURE = EXYONQ_RELEASE_TAG_SSH_V2, principal exyonq-release, verified
 ARTIFACT_SIGNATURE = SHA256SUMS.txt.sig (SSH, namespace file), verified
-DOCKERHUB_MIRROR = ABSENT (repository secrets missing)
+DOCKERHUB_MIRROR = PRESENT (digest copy of both GHCR indexes, 2026-11-20)
 GITHUB_RELEASE = v0.9.2 (10 artifacts incl. the COMPAT matrix + release-manifest.json + SHA256SUMS.txt + compliance files; SHA256SUMS covers every asset except the sums file)
 COMPAT_MATRIX = COMPAT_MATRIX_v0.9.2.md (measured from the release binaries: macOS arm64, Linux arm64, Linux amd64; P1_OPEN=0 P2_OPEN=0)
 STABILITY = NOT_DECLARED (cosign layer absent, CI on the tag pending, owner sign-off pending)
@@ -56,16 +93,23 @@ BASE_TAG = v0.9.1
 RELEASE_NOTES = docs/release/v0.9.2.md
 ```
 
-> **Published except the Docker Hub mirror.** Tag `v0.9.2` is on `origin`, both
+> **Published, Docker Hub mirror included.** Tag `v0.9.2` is on `origin`, both
 > multi-arch images are live in GHCR (`exyonq` and `exyonq-wordpress`) and
 > verified by immutable digest on native amd64 and arm64, and the GitHub
 > Release `v0.9.2` carries the nine checksummed artifacts plus
 > `SHA256SUMS.txt`, `release-manifest.json`, `THIRD_PARTY_NOTICES.md` and
 > `sbom.cdx.json` (`INTEGRITY_VERIFIED=YES`). The workflow's `github-release`
-> job never ran because it depends on `dockerhub-mirror`, which fails closed
+> job never ran because it depends on `dockerhub-mirror`, which failed closed
 > without the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` repository secrets (run
 > `44404288845`), so the Release was created from that run's artifacts with the
-> job's layout. **The Docker Hub mirror is still absent.**
+> job's layout. The mirror itself was completed out of band on 2026-11-20 with
+> `scripts/release/mirror-to-dockerhub.sh`: a digest copy, not a rebuild, so
+> each `docker.io/exyonq` index is byte-identical to its GHCR source.
+>
+> | Image | Index digest | `linux/amd64` | `linux/arm64` |
+> | --- | --- | --- | --- |
+> | `exyonq:0.9.2` (GHCR and Docker Hub) | `sha256:52ee58c28cab478633bcd098cebe22b82b8c536b7395223470992ae29e53713f` | `sha256:76c152a8c3895a43eba9565c20daeb3b6ccb907aac2173cec9b2af4c0de9fb9a` | `sha256:ae17cc15c4c41b382a92b6654be35f7cb663ebf982648b77d5d7ca47f6e46d61` |
+> | `exyonq-wordpress:0.9.2` (GHCR and Docker Hub) | `sha256:a0b139c3e75aa1f69b918d6b41595e79b611873d8d0aa020f447fe5ecef4b7f8` | `sha256:2dbd6995178c71cb00186c7951e6ef7aa36a567866218edb3a367f393d24940b` | `sha256:61103d6a57df207b774c83b2d09833db1cdde95d79a09e51f8405e6d3d347edd` |
 
 ### Stability
 
@@ -170,6 +214,12 @@ This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
   `checksums`, `docker` and `docker-wordpress` **success**;
   `dockerhub-mirror` **failure** (missing repository secrets) and
   `github-release` **skipped**.
+- Docker Hub mirror executed on 2026-11-20 with
+  `scripts/release/mirror-to-dockerhub.sh --version 0.9.2` (exit 0,
+  `DOCKERHUB_MIRROR=VERIFIED`): both `docker.io/exyonq` indexes were copied
+  from the GHCR index digests and re-read, and `docker buildx imagetools
+  inspect` confirms identical index, `linux/amd64` and `linux/arm64` digests on
+  both registries with no `:latest`.
 - `bash scripts/verify-release-audit.sh 0.9.2` → `RELEASE_AUDIT_GATE=PASS`,
   `audit-v0.9.2.md @ 64b8388`, exit 0.
 - `SHA256SUMS.txt` of the `checksums` artifact: 10/10 `OK`.

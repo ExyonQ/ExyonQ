@@ -19,7 +19,7 @@ use crate::caps::{FCGI_CONNECT_TIMEOUT, FCGI_READ_TIMEOUT, FCGI_WRITE_TIMEOUT};
 use crate::client::ForwardResponse;
 use crate::commit::CommitStage;
 use crate::diagnostics::{endpoint_display, format_saturation_message, SaturationKind};
-use crate::fcgi_stream::{FcgiStream, PoolEndpoint};
+use crate::fcgi_stream::{ConnectFailure, FcgiStream, PoolEndpoint};
 use crate::metrics;
 use crate::pooled_forward::forward_on_stream_budgeted;
 use crate::record::FCGI_KEEP_CONN;
@@ -183,6 +183,39 @@ impl ConnPool {
             timeout_kind = kind.as_str(),
             "{msg}"
         );
+    }
+
+    /// Issue #109 P1: one structured warn with the real `errno`, endpoint and
+    /// remediation instead of a bare `502`.
+    fn emit_connect_failure(&self, failure: &ConnectFailure) {
+        metrics::note_fcgi_connect_failure();
+        self.pool_metrics.note_connect_failure();
+        tracing::warn!(
+            target: "exyonq::fcgi",
+            pool = %self.pool_name,
+            endpoint = %failure.endpoint,
+            errno = failure.errno_label(),
+            os_error = ?failure.error.raw_os_error(),
+            phase = "connect",
+            "fcgi connect failed: {}; {}",
+            failure,
+            failure.hint()
+        );
+    }
+
+    /// Startup/reload preflight: connect as the ExyonQ service user and close.
+    /// Does not fail the generation by itself; the caller decides.
+    pub fn preflight(&self) -> Result<(), ConnectFailure> {
+        let timeout = self
+            .config
+            .connect_timeout
+            .min(Duration::from_millis(500))
+            .max(Duration::from_millis(1));
+        FcgiStream::connect_detailed(&self.endpoint, timeout).map(drop)
+    }
+
+    pub fn max_connections(&self) -> usize {
+        self.config.max_connections
     }
 
     pub fn generation(&self) -> u64 {
@@ -405,7 +438,7 @@ impl ConnPool {
                 }
                 let connect_t = budget.connect_budget().unwrap_or(connect_t);
 
-                return match FcgiStream::connect(&self.endpoint, connect_t) {
+                return match FcgiStream::connect_detailed(&self.endpoint, connect_t) {
                     Ok(stream) => {
                         if streak > 0 {
                             metrics::note_fcgi_fpm_reconnect();
@@ -425,19 +458,17 @@ impl ConnPool {
                         metrics::note_fcgi_connection_created();
                         Ok((stream, 1, false))
                     }
-                    Err(err) => {
+                    Err(failure) => {
                         self.connect_fail_streak.fetch_add(1, Ordering::Relaxed);
-                        metrics::note_fcgi_connect_failure();
-                        if matches!(
-                            err,
-                            WireError::ConnectionFailed | WireError::ConnectionClosed
-                        ) {
+                        self.emit_connect_failure(&failure);
+                        let wire = failure.into_wire_error();
+                        if wire == WireError::ConnectionFailed {
                             metrics::note_fcgi_fpm_disconnect();
                         }
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                         state.open = state.open.saturating_sub(1);
                         self.avail.notify_one();
-                        Err(err)
+                        Err(wire)
                     }
                 };
             }
@@ -457,12 +488,14 @@ impl ConnPool {
                 return Err(WireError::PoolBusy);
             }
             state.waiters = state.waiters.saturating_add(1);
+            self.pool_metrics.set_waiters(state.waiters);
             let (guard, wait_result) = self
                 .avail
                 .wait_timeout(state, slice)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             state = guard;
             state.waiters = state.waiters.saturating_sub(1);
+            self.pool_metrics.set_waiters(state.waiters);
             if wait_result.timed_out() && Instant::now() >= wait_deadline {
                 self.checkout_timeouts.fetch_add(1, Ordering::Relaxed);
                 metrics::note_fcgi_checkout_timeout();
@@ -638,20 +671,24 @@ mod tests {
             let Some(rid) = drain_one_fcgi_request(stream) else {
                 return;
             };
-            let stdout = crate::encode_record_frame(
-                rid,
-                crate::FCGI_STDOUT,
-                b"Content-Type: text/plain\r\n\r\nok",
-            )
-            .expect("stdout");
-            let mut end_body = [0u8; 8];
-            end_body[4] = crate::FCGI_REQUEST_COMPLETE;
-            let end =
-                crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body).expect("end");
-            let _ = stream.write_all(&stdout);
-            let _ = stream.write_all(&end);
-            let _ = stream.flush();
+            write_ok_response(stream, rid);
         }
+    }
+
+    /// One complete FastCGI response (`STDOUT` + `END_REQUEST`) for `rid`.
+    fn write_ok_response<S: Write>(stream: &mut S, rid: u16) {
+        let stdout = crate::encode_record_frame(
+            rid,
+            crate::FCGI_STDOUT,
+            b"Content-Type: text/plain\r\n\r\nok",
+        )
+        .expect("stdout");
+        let mut end_body = [0u8; 8];
+        end_body[4] = crate::FCGI_REQUEST_COMPLETE;
+        let end = crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body).expect("end");
+        let _ = stream.write_all(&stdout);
+        let _ = stream.write_all(&end);
+        let _ = stream.flush();
     }
 
     /// Read FastCGI records until empty STDIN; return request_id from BEGIN.
@@ -887,49 +924,45 @@ mod tests {
     }
 
     #[test]
+    fn preflight_reports_missing_socket_errno() {
+        let pool = ConnPool::new(
+            1,
+            PoolEndpoint::Unix(PathBuf::from(format!(
+                "/nonexistent/exyonq-preflight-{}.sock",
+                std::process::id()
+            ))),
+            ConnPoolConfig::default(),
+        );
+        let failure = pool.preflight().expect_err("missing socket");
+        assert_eq!(failure.errno_label(), "ENOENT");
+        assert!(failure.endpoint.starts_with("unix:/nonexistent/"));
+    }
+
+    #[test]
     fn stale_idle_retries_once_then_succeeds() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
+        // No "give the thread time to start" sleep: the listener is already bound
+        // before the thread spawns, so the first connect is queued by the kernel.
+        let (first_closed_tx, first_closed_rx) = std::sync::mpsc::channel::<()>();
         let _server = thread::spawn(move || {
-            // First connection: one KEEP_CONN exchange then close (becomes stale).
-            if let Ok((mut s, _)) = listener.accept() {
-                let _ = drain_one_fcgi_request(&mut s).map(|rid| {
-                    let stdout = crate::encode_record_frame(
-                        rid,
-                        crate::FCGI_STDOUT,
-                        b"Content-Type: text/plain\r\n\r\nok",
-                    )
-                    .unwrap();
-                    let mut end_body = [0u8; 8];
-                    end_body[4] = crate::FCGI_REQUEST_COMPLETE;
-                    let end = crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body)
-                        .unwrap();
-                    let _ = s.write_all(&stdout);
-                    let _ = s.write_all(&end);
-                    let _ = s.flush();
-                });
+            // Serve every connection exactly once and then close it. The peer close
+            // is announced after `shutdown`, so the client's next checkout sees a
+            // dead idle socket as a fact instead of winning or losing a race with
+            // the server thread's scheduling.
+            let mut announced = false;
+            while let Ok((mut s, _)) = listener.accept() {
+                if let Some(rid) = drain_one_fcgi_request(&mut s) {
+                    write_ok_response(&mut s, rid);
+                }
+                let _ = s.shutdown(std::net::Shutdown::Both);
                 drop(s);
-            }
-            // Fresh connection after safe retry.
-            if let Ok((mut s, _)) = listener.accept() {
-                let _ = drain_one_fcgi_request(&mut s).map(|rid| {
-                    let stdout = crate::encode_record_frame(
-                        rid,
-                        crate::FCGI_STDOUT,
-                        b"Content-Type: text/plain\r\n\r\nok",
-                    )
-                    .unwrap();
-                    let mut end_body = [0u8; 8];
-                    end_body[4] = crate::FCGI_REQUEST_COMPLETE;
-                    let end = crate::encode_record_frame(rid, crate::FCGI_END_REQUEST, &end_body)
-                        .unwrap();
-                    let _ = s.write_all(&stdout);
-                    let _ = s.write_all(&end);
-                    let _ = s.flush();
-                });
+                if !announced {
+                    announced = true;
+                    let _ = first_closed_tx.send(());
+                }
             }
         });
-        thread::sleep(Duration::from_millis(30));
         let pool = Arc::new(ConnPool::new(
             1,
             PoolEndpoint::Tcp(addr),
@@ -950,11 +983,23 @@ mod tests {
         ];
         let r1 = pool.forward_once(&params, b"").expect("first");
         assert!(r1.stdout.windows(2).any(|w| w == b"ok"));
-        // Peer closed; idle socket is stale → one safe retry on fresh connect.
+        // Wait for the server's close instead of sleeping: `shutdown` has already
+        // handed the FIN to the kernel, so the pooled socket is observably dead.
+        first_closed_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("server must close the first connection");
+        // Stale idle detected before any byte is committed → exactly one safe
+        // retry on a fresh connect, which then serves the request.
         let r2 = pool.forward_once(&params, b"").expect("retry fresh");
         assert!(r2.stdout.windows(2).any(|w| w == b"ok"));
         let stats = pool.stats();
-        assert!(stats.safe_retries >= 1 || stats.stale_idle >= 1 || stats.new_connects >= 2);
+        assert_eq!(
+            stats.stale_idle, 1,
+            "stale idle must be detected at checkout"
+        );
+        assert_eq!(stats.safe_retries, 1, "exactly one safe retry");
+        assert_eq!(stats.new_connects, 2, "retry opens the fresh connection");
+        assert_eq!(stats.idle, 1, "fresh connection is pooled after the retry");
     }
 
     #[test]

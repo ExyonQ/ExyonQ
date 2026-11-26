@@ -87,6 +87,39 @@ pub fn diagnostics_snapshot() -> S2nProviderDiagSnapshot {
     DIAG.snapshot()
 }
 
+/// Build the s2n-tls server from every configured pair. Each chain goes into
+/// the s2n certificate store (`load_chain`), which selects the certificate by
+/// client SNI; the first loaded pair is the default for unmatched names.
+fn build_tls(
+    certificates: &[exyonq_http3_provider_api::Http3Certificate],
+) -> anyhow::Result<s2n_quic::provider::tls::s2n_tls::Server> {
+    use s2n_quic::provider::tls::s2n_tls;
+
+    if certificates.is_empty() {
+        anyhow::bail!("http3 tls: no certificate configured");
+    }
+    let mut tls = s2n_tls::Server::builder();
+    for entry in certificates {
+        let cert_pem = std::fs::read(&entry.cert_path)
+            .map_err(|err| anyhow::anyhow!("s2n tls cert {}: {err}", entry.cert_path.display()))?;
+        let key_pem = std::fs::read(&entry.key_path)
+            .map_err(|err| anyhow::anyhow!("s2n tls key {}: {err}", entry.key_path.display()))?;
+        let mut chain = s2n_tls::cert_chain::Builder::new()
+            .map_err(|err| anyhow::anyhow!("s2n cert chain: {err}"))?;
+        chain.load_pem(&cert_pem, &key_pem).map_err(|err| {
+            anyhow::anyhow!("s2n cert chain {}: {err}", entry.cert_path.display())
+        })?;
+        let chain = chain.build().map_err(|err| {
+            anyhow::anyhow!("s2n cert chain {}: {err}", entry.cert_path.display())
+        })?;
+        tls.config_mut().load_chain(chain).map_err(|err| {
+            anyhow::anyhow!("s2n load_chain {}: {err}", entry.cert_path.display())
+        })?;
+    }
+    tls.build()
+        .map_err(|err| anyhow::anyhow!("s2n tls build: {err}"))
+}
+
 /// Serve HTTP/3 via s2n-quic until the acceptor closes.
 pub async fn serve<LC>(
     config: Http3ProviderConfig,
@@ -106,8 +139,9 @@ where
         .with_max_open_remote_bidirectional_streams(config.max_concurrent_streams)
         .map_err(|e| anyhow::anyhow!("s2n limits streams: {e}"))?;
 
+    let tls = build_tls(&config.certificates)?;
     let mut server = Server::builder()
-        .with_tls((config.cert_path.as_path(), config.key_path.as_path()))
+        .with_tls(tls)
         .map_err(|e| anyhow::anyhow!("s2n tls: {e}"))?
         .with_io(config.listen)
         .map_err(|e| anyhow::anyhow!("s2n io: {e}"))?
@@ -427,17 +461,74 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exyonq_http3_provider_api::Http3ProviderId;
+    use exyonq_http3_provider_api::{Http3Certificate, Http3ProviderId};
     use std::net::SocketAddr;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn openssl_bin() -> &'static str {
+        for candidate in [
+            "/opt/homebrew/opt/openssl@3/bin/openssl",
+            "/usr/local/opt/openssl@3/bin/openssl",
+        ] {
+            if Path::new(candidate).is_file() {
+                return candidate;
+            }
+        }
+        "openssl"
+    }
+
+    fn write_pair(dir: &Path, stem: &str, san: &str) -> (PathBuf, PathBuf) {
+        let cert = dir.join(format!("{stem}.pem"));
+        let key = dir.join(format!("{stem}.key"));
+        let status = Command::new(openssl_bin())
+            .args(["req", "-x509", "-newkey", "rsa:2048", "-keyout"])
+            .arg(&key)
+            .arg("-out")
+            .arg(&cert)
+            .args(["-days", "1", "-nodes", "-subj", "/CN=exyonq-s2n-test"])
+            .args(["-addext", &format!("subjectAltName={san}")])
+            .status()
+            .expect("openssl available for ephemeral QUIC TLS fixtures");
+        assert!(status.success(), "openssl SAN cert generation failed");
+        (cert, key)
+    }
+
+    /// NG-15 over QUIC: both `[[server]]` pairs enter the s2n certificate
+    /// store (SNI selection by SAN); an empty list fails closed.
+    #[test]
+    fn build_tls_loads_every_pair_into_the_sni_store() {
+        let dir = std::env::temp_dir().join(format!("exyonq-s2n-multi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (cert_a, key_a) = write_pair(&dir, "a", "DNS:a.test");
+        let (cert_b, key_b) = write_pair(&dir, "b", "DNS:b.test");
+        let certificates = vec![
+            Http3Certificate {
+                cert_path: cert_a,
+                key_path: key_a,
+            },
+            Http3Certificate {
+                cert_path: cert_b,
+                key_path: key_b,
+            },
+        ];
+        build_tls(&certificates).expect("both chains load into the s2n SNI store");
+        assert!(
+            build_tls(&[]).is_err(),
+            "empty certificate list fails closed"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn validates_ack_delay_config() {
         let cfg = Http3ProviderConfig {
             provider: Http3ProviderId::S2n,
             listen: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-            cert_path: PathBuf::from("c.pem"),
-            key_path: PathBuf::from("k.pem"),
+            certificates: vec![exyonq_http3_provider_api::Http3Certificate {
+                cert_path: PathBuf::from("c.pem"),
+                key_path: PathBuf::from("k.pem"),
+            }],
             max_ack_delay_ms: 1,
             qlog_enabled: false,
             request_body_drain_cap_bytes: 64 * 1024,

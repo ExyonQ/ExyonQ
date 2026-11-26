@@ -45,8 +45,32 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "proxy_headers"
+path = "fuzz_targets/proxy_headers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nginx_migrate"
+path = "fuzz_targets/nginx_migrate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "htaccess_parse"
+path = "fuzz_targets/htaccess_parse.rs"
+test = false
+doc = false
+bench = false
+
 [dependencies]
 libfuzzer-sys = "0.4"
 exyonq-core = { path = "../core", default-features = false, features = ["http3-provider-s2n"] }
 exyonq-mod-fastcgi = { path = "../crates/exyonq-mod-fastcgi" }
 exyonq-mod-static = { path = "../crates/exyonq-mod-static" }
+exyonq-mod-proxy = { path = "../crates/exyonq-mod-proxy" }
+exyonq-mod-htaccess = { path = "../crates/exyonq-mod-htaccess" }
+exyonq-compat-nginx = { path = "../compat/nginx" }

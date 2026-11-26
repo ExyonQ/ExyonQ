@@ -92,7 +92,7 @@ pub use exyonq_module_api::fcgi_dispatch::{
     FcgiBindError, FcgiCompiledSlot, FcgiRuntimeRegistration,
 };
 #[cfg(unix)]
-pub use fcgi_stream::{FcgiStream, PoolEndpoint};
+pub use fcgi_stream::{ConnectFailure, FcgiStream, PoolEndpoint};
 #[cfg(test)]
 pub use metrics::fcgi_metric_test_gate;
 pub use metrics::{

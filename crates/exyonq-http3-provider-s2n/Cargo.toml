@@ -12,7 +12,7 @@ exyonq-http3-provider-api = { path = "../exyonq-http3-provider-api" }
 exyonq-module-api = { path = "../../module-api" }
 h3 = "0.0.8"
 http.workspace = true
-s2n-quic = "1.89.0"
+s2n-quic = { version = "1.89.0", features = ["provider-tls-s2n"] }
 # crates.io `s2n-quic-h3` is fully yanked; tachyon-quic is the maintained h3↔s2n-quic binding.
 tachyon-quic = "0.3"
 tokio.workspace = true

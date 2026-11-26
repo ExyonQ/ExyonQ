@@ -718,6 +718,18 @@ mod tests {
     use super::*;
     use http::Request;
 
+    /// `wire_enabled` is a process-global switch, so the tests that toggle it
+    /// must not overlap: a concurrent reset turns another test's
+    /// `wire_record_*` calls into no-ops and its counters stay where they were
+    /// (seen on 2026-11-20 as `left: 0, right: 8` in a workspace run).
+    static WIRE_SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn wire_switch_guard() -> std::sync::MutexGuard<'static, ()> {
+        WIRE_SWITCH_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[tokio::test]
     async fn serves_prometheus_on_configured_path() {
         let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.2.0", None);
@@ -807,6 +819,7 @@ mod tests {
 
     #[test]
     fn wire_terminal_statuses_are_accounted_once_by_real_class() {
+        let _guard = wire_switch_guard();
         MetricsModule::set_wire_enabled(true);
         let total_before = PROCESS_HTTP.requests_total.load(Ordering::Relaxed);
         let responses_2xx_before = PROCESS_HTTP.responses_2xx.load(Ordering::Relaxed);
@@ -895,6 +908,7 @@ mod tests {
 
     #[test]
     fn q15_wire_labeled_exchange_records_route_upstream() {
+        let _guard = wire_switch_guard();
         let module = MetricsModule::new("/metrics", "/exyonq-metrics-health", "0.2.0", None);
         MetricsModule::set_wire_enabled(true);
         MetricsModule::wire_record_exchange_labeled(

@@ -20,6 +20,7 @@ use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::header::HeaderValue;
 use hyper::{Request, Response};
+use std::fmt;
 
 type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
 
@@ -58,10 +59,33 @@ pub async fn module_response_from_boxed(
         .map_err(|err| anyhow::anyhow!("collect response body: {err}"))?
         .to_bytes();
     if bytes.len() > limit {
-        anyhow::bail!("response body exceeds module processing limit");
+        return Err(anyhow::Error::new(ModuleBodyTooLarge {
+            limit,
+            observed: bytes.len(),
+        }));
     }
     Ok(Response::from_parts(parts, Body::from(bytes)))
 }
+
+/// Typed pipeline failure: the response body is larger than the configured
+/// module collection ceiling. The caller turns this into `413`, not `500`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleBodyTooLarge {
+    pub limit: usize,
+    pub observed: usize,
+}
+
+impl fmt::Display for ModuleBodyTooLarge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "response body is {} bytes, over the {} byte module response limit",
+            self.observed, self.limit
+        )
+    }
+}
+
+impl std::error::Error for ModuleBodyTooLarge {}
 
 pub async fn boxed_from_module_response(
     response: HttpResponse,

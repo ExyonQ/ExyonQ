@@ -15,9 +15,11 @@ exyonq-metrics = { workspace = true }
 exyonq-module-api = { path = "../../module-api" }
 exyonq-ratelimit = { workspace = true }
 http.workspace = true
+http-body.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 semver.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

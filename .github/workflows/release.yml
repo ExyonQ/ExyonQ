@@ -52,6 +52,11 @@ jobs:
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+      - name: Verify release tag signature
+        # Repeated on every release: annotated tag, authorized SSH principal and
+        # the exact commit being released. The same gate runs locally through
+        # `cargo run -p xtask -- ci` (NOT_APPLICABLE off-tag).
+        run: bash scripts/gates/tag-signature-gate.sh --tag "v${{ steps.ver.outputs.version }}" --expected-commit "${{ github.sha }}"
       - name: cargo audit
         run: cargo audit
       - name: Verify release legal bundle
@@ -143,7 +148,11 @@ jobs:
           TAG="v${GITHUB_REF#refs/tags/v}"
           BIN="target/${{ matrix.target }}/release/exyonq"
           "$BIN" --version | tee /tmp/exyonq-version.txt
-          grep -Fx "source_tag=$TAG" /tmp/exyonq-version.txt
+          # Shared EXY-14 gate (also run by `cargo run -p xtask -- ci`): it
+          # requires a non-empty `source_tag` equal to the release tag and a
+          # `source_revision` equal to HEAD, instead of the previous one-line
+          # grep that ignored the revision.
+          EXYONQ_BIN="$BIN" SOURCE_TAG_EXPECT="$TAG" bash scripts/gates/source-tag-gate.sh
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{}")"
       - name: Verify embedded SBOM
         run: |

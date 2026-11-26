@@ -47,8 +47,14 @@ value governs every HTTP/1.1 path — the core pre-parser
 the wire hands over and the Linux epoll slowloris guard
 (`expire_stale_header_reads`) — so a 2 s keep-alive does not expire at 30 s on
 one path and at 2 s on another. HTTP/3 reads it through
-`http_limits::header_deadline()`; the HTTP/2 builder takes the header cap but no
-deadline, and that remainder stays open in NG-21.
+`http_limits::header_deadline()`. HTTP/2 reads it twice: the connection's first
+head is bounded by the same deadline as HTTP/1.1 (`HeaderDeadlineIo`, disarmed
+by the first request), and after that the h2 PING probe runs at that deadline
+and closes a peer that stops answering within one further deadline — so an idle
+connection whose client process is gone no longer holds a socket forever. The
+one thing still out of reach is a **per-stream HEADERS deadline**: hyper 1.12
+exposes no header timeout for h2, and enforcing it would mean parsing h2 frames
+ourselves. That, and only that, is the remainder NG-21 leaves open.
 Resolution order: `[tuning].keepalive_timeout_ms`, then `EXYONQ_READ_TIMEOUT_MS`
 (observed once per process), then 30 s — resolved only in
 `exyonq_module_api::runtime_tuning`, so no path owns a copy of it. The env var

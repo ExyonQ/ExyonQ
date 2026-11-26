@@ -131,7 +131,43 @@ must_staple = true   # fail-closed: requires ocsp_stapling
 acceptor build (the previous acceptor stays live). It does not verify the
 response's signature, status or validity window — that is the PKI's job.
 
-## ACME: zero-touch certificates
+## ACME: automatic certificates per `[[server]]`
+
+Every `[[server]]` block may enable its own `[server.tls.acme]` and owns the
+`cert`/`key` pair it writes — one order, one renewal job and one account file
+per block. A two-domain listener therefore looks like this:
+
+```toml
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["example.com", "www.example.com"]
+routes = ["site"]
+
+[server.tls]
+cert = "/etc/exyonq/tls/example.com.pem"
+key  = "/etc/exyonq/tls/example.com.key"
+
+[server.tls.acme]
+email = "ops@example.com"
+domains = ["example.com", "www.example.com"]
+
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["api.example.com"]
+routes = ["api"]
+
+[server.tls]
+cert = "/etc/exyonq/tls/api.example.com.pem"
+key  = "/etc/exyonq/tls/api.example.com.key"
+
+[server.tls.acme]
+email = "ops@example.com"
+domains = ["api.example.com"]
+```
+
+Two ACME blocks may not share a `cert` path (`exyonq validate` rejects it):
+two issuance loops writing the same file would race. A single certificate with
+several SANs is still one block and one order.
 
 HTTP-01 (default):
 
@@ -169,7 +205,36 @@ The ACME account is persisted (`account_path`, or `<cert>.acme-account.json`)
 with mode `0600`, and reused across runs. Renewal uses ACME Renewal Information
 (ARI) when the CA supports it, and otherwise renews 30 days before expiry.
 Certificates are written atomically and the live TLS acceptor is rebuilt from
-the current config.
+the current config after any block is issued. Issuance runs sequentially per
+block; a failure on one block does not stop the others.
+
+### Scope and limits
+
+- **ACME is per `[[server]]`, not per `listen`.** Enabling it on two blocks on
+the same socket issues two certificates. Each block must declare its own
+`cert`/`key`.
+- **A wildcard block is still one certificate.** `*.example.com` plus its apex
+in `domains` is one order with several SANs, not one certificate per name.
+- **HTTP/3 has no certificate hot-reload.** The QUIC listener starts only when
+  every TLS block on the shared listen already has its pair on disk, so the
+  first ACME issuance still requires a restart before HTTP/3 can serve. After
+  that, renewal-on-disk works for TCP immediately and for QUIC on restart.
+- **One crypto policy per socket.** `protocols`/`ciphers`/`curves`/`strict_sni`
+  remain first-block settings for the shared listener; `acme` and `cert`/`key`
+  are per block.
+
+## HTTP/3 certificates
+
+HTTP/3 uses the same per-`[[server]]` pairs as TCP. With the default `s2n`
+provider every pair is loaded into the s2n certificate store and the
+certificate is chosen from the client's SNI (matching the certificate SANs,
+not the `server_name` list); the first block's pair is the default for an
+unmatched name. `exyonq validate` therefore accepts `http3_listen` with
+several TLS blocks on one listen.
+
+The `quiche` provider loads a single chain and logs a warning when more than
+one pair is configured: it always serves the first block's certificate. Use
+`s2n` (the product default) when HTTP/3 needs per-domain certificates.
 
 ## Verify
 
@@ -186,6 +251,10 @@ openssl s_client -connect example.com:443 -servername example.com -tls1_2 </dev/
 openssl s_client -connect example.com:443 -servername api.example.com </dev/null 2>/dev/null \
   | openssl x509 -noout -subject
 
+# Per-name certificate over HTTP/3 (s2n provider)
+curl --http3-only -skv --resolve api.example.com:443:127.0.0.1 \
+  https://api.example.com/ 2>&1 | grep -i "subject:"
+
 # Stapling
 openssl s_client -connect example.com:443 -servername example.com -status </dev/null 2>/dev/null \
   | grep -A2 "OCSP response"
@@ -200,13 +269,15 @@ exyonqctl status --format json | grep -o '"tls_cert_not_after_epoch":[0-9]*'
 - **No renegotiation.** rustls does not implement TLS renegotiation; there is
   no `SSLRenegBufferSize` equivalent. `SSLStrictSNIVHostCheck` semantics are
   covered by `strict_sni`.
-- **HTTP/3 ignores these fields.** QUIC providers consume only `cert`/`key`;
-  `exyonq validate` rejects `http3_listen` combined with `strict_sni`,
-  `protocols`, `ciphers`, `curves`, `ocsp_stapling` or `must_staple` rather
-  than silently ignoring them.
+- **HTTP/3 ignores these fields.** QUIC providers consume only the
+  `cert`/`key` pairs; `exyonq validate` rejects `http3_listen` combined with
+  `strict_sni`, `protocols`, `ciphers`, `curves`, `ocsp_stapling` or
+  `must_staple` rather than silently ignoring them.
 - **No `ssl_ciphers` expression language.** Only the explicit suite names
   above; no `HIGH:!aNULL` style macros.
 - **Stapling is file-based.** No automatic responder fetch, no
   `ssl_stapling_verify`.
-- **One TLS listener per process.** Fields apply to the first `[[server]]`;
-  other listeners are plain HTTP.
+- **Crypto policy is per shared socket.** `protocols`, `ciphers`, `curves` and
+  `strict_sni` are read from the first `[[server]]` on a `listen`; a second
+  block with different values is rejected. Certificates, ACME and OCSP
+  stapling are per block. Other `listen` addresses are plain HTTP.

@@ -39,12 +39,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 #[cfg(any(feature = "http3-provider-s2n", feature = "http3-provider-quiche"))]
-use exyonq_http3_provider_api::{Http3ProviderConfig, Http3ProviderError, Http3ProviderId};
+use exyonq_http3_provider_api::{
+    Http3Certificate, Http3ProviderConfig, Http3ProviderError, Http3ProviderId,
+};
 
 #[derive(Debug, Clone)]
 pub struct Http3Settings {
     pub listen: SocketAddr,
-    pub tls: TlsSettings,
+    /// Certificate/key pairs for this QUIC listener, in `[[server]]` order.
+    /// The first pair is the default; the s2n provider selects per SNI.
+    pub tls_certs: Vec<TlsSettings>,
     /// Product IR provider (`"s2n"` / `"quiche"`). Ignored for Quinn-only builds.
     /// `None` → resolve via [`resolve_provider`] (IR default s2n when compiled).
     pub provider: Option<String>,
@@ -57,7 +61,7 @@ impl Http3Settings {
     pub fn legacy(listen: SocketAddr, tls: TlsSettings) -> Self {
         Self {
             listen,
-            tls,
+            tls_certs: vec![tls],
             provider: None,
             max_ack_delay_ms: 1,
             request_body_drain_cap_bytes: 64 * 1024,
@@ -240,8 +244,14 @@ fn provider_config(
     let config = Http3ProviderConfig {
         provider: id,
         listen: settings.listen,
-        cert_path: settings.tls.cert_path.clone(),
-        key_path: settings.tls.key_path.clone(),
+        certificates: settings
+            .tls_certs
+            .iter()
+            .map(|tls| Http3Certificate {
+                cert_path: tls.cert_path.clone(),
+                key_path: tls.key_path.clone(),
+            })
+            .collect(),
         max_ack_delay_ms: settings.max_ack_delay_ms,
         qlog_enabled: settings.qlog_enabled,
         request_body_drain_cap_bytes: settings.request_body_drain_cap_bytes,

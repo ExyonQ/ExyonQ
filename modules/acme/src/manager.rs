@@ -16,7 +16,7 @@
 //! ACME order flow: HTTP-01 challenge registration and certificate persistence.
 
 use crate::ChallengeStore;
-use exyonq_config_ir::{AcmeConfig, TlsConfig};
+use exyonq_config_ir::{AcmeConfig, AppConfig, TlsConfig};
 use instant_acme::{
     Account, AccountCredentials, AuthorizationStatus, CertificateIdentifier, ChallengeType,
     Identifier, LetsEncrypt, NewAccount, NewOrder, OrderStatus, RetryPolicy,
@@ -349,24 +349,46 @@ pub async fn ensure_certificates(
     }))
 }
 
-/// Background renewal loop (daily check; re-issue when cert missing or near expiry).
+/// Every `[[server]]` block with `tls.acme.enabled`, in declaration order.
+/// The first block's certificate remains the listener default; each job
+/// issues, renews and serves its own pair.
+pub fn acme_jobs(config: &AppConfig) -> Vec<(usize, TlsConfig, AcmeConfig)> {
+    config
+        .servers
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, server)| {
+            let tls = server.tls.clone()?;
+            let acme = tls.acme.clone()?;
+            acme.enabled.then_some((idx, tls, acme))
+        })
+        .collect()
+}
+
+/// Background renewal loop (daily check; re-issue when cert missing or near
+/// expiry). One job per ACME-enabled `[[server]]` block.
 pub async fn spawn_renewal_loop(
-    tls: TlsConfig,
-    acme: AcmeConfig,
+    jobs: Vec<(TlsConfig, AcmeConfig)>,
     challenges: ChallengeStore,
     on_renewed: impl Fn() + Send + Sync + 'static,
 ) {
-    if !acme.enabled {
+    if jobs.is_empty() {
         return;
     }
     let challenges = std::sync::Arc::new(challenges);
     tokio::spawn(async move {
         let interval = std::time::Duration::from_secs(86_400);
         loop {
-            match ensure_certificates(&tls, &acme, challenges.as_ref(), false).await {
-                Ok(AcmeRenewalOutcome::Issued(_)) => on_renewed(),
-                Ok(AcmeRenewalOutcome::SkippedExisting) => {}
-                Err(err) => warn!(%err, "ACME renewal failed"),
+            let mut issued = false;
+            for (tls, acme) in &jobs {
+                match ensure_certificates(tls, acme, challenges.as_ref(), false).await {
+                    Ok(AcmeRenewalOutcome::Issued(_)) => issued = true,
+                    Ok(AcmeRenewalOutcome::SkippedExisting) => {}
+                    Err(err) => warn!(%err, domains = ?acme.domains, "ACME renewal failed"),
+                }
+            }
+            if issued {
+                on_renewed();
             }
             tokio::time::sleep(interval).await;
         }
@@ -441,6 +463,51 @@ mod tests {
             !path.with_extension("tmp").exists(),
             "tmp file renamed away"
         );
+    }
+
+    #[test]
+    fn acme_jobs_cover_every_server_block() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/a.pem"
+key = "/tmp/a.key"
+[server.tls.acme]
+email = "ops@a.test"
+domains = ["a.test"]
+
+[[server]]
+listen = "0.0.0.0:8080"
+server_name = ["plain.test"]
+routes = ["r"]
+
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+[server.tls]
+cert = "/tmp/b.pem"
+key = "/tmp/b.key"
+[server.tls.acme]
+email = "ops@a.test"
+domains = ["b.test"]
+
+[[route]]
+name = "r"
+match = { path = "/" }
+redirect = { status = 301, location = "https://example/" }
+"#;
+        let config = AppConfig::parse_str(toml).expect("two ACME blocks");
+        let jobs = acme_jobs(&config);
+        assert_eq!(jobs.len(), 2, "both ACME-enabled blocks renew");
+        assert_eq!(jobs[0].0, 0);
+        assert_eq!(jobs[1].0, 2);
+        assert_eq!(jobs[1].1.cert, PathBuf::from("/tmp/b.pem"));
+        assert_eq!(jobs[1].2.domains, vec!["b.test".to_string()]);
     }
 
     #[test]

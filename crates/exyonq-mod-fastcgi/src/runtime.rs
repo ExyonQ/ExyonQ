@@ -207,6 +207,13 @@ impl FcgiRuntimeState {
             .map(|m| m.is_quiescent())
             .unwrap_or(true)
     }
+
+    /// Startup/reload connectivity probe for every configured pool.
+    fn preflight(&self) {
+        if let Some(module) = &self.module_executor {
+            module.preflight();
+        }
+    }
 }
 
 // EmptyExecutor removed — empty generations use FcgiModuleExecutor with zero slots.
@@ -415,6 +422,9 @@ impl FcgiDispatchService for FcgiRuntime {
         self.registry.swap(Arc::new(next));
         self.active_generation.store(generation, Ordering::Release);
         metrics::set_fcgi_pool_generation_active(generation);
+        // Issue #109: surface socket path/permission errors at reload time,
+        // not only on the first 502.
+        prepared.preflight();
         Ok(())
     }
 
