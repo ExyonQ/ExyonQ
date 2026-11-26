@@ -1,10 +1,10 @@
 # ExyonQ security audit — v0.9.3
 
-> **Re-audited for the current working tree (2026-11-25).** This seal describes
-> HEAD `0f58cae` plus the **74 tracked + 10 untracked = 84-entry** 0.9.3
-> candidate snapshot, including issue #109 (FastCGI/PHP-FPM), the
-> ACME-per-server/H3-SNI increment and the strict fingerprint binding in
-> `scripts/verify-release-audit.sh`. The seal binds the canonical tracked diff
+> **Re-audited for the 0.9.3 patch (2026-11-25), now committed.** This seal
+> describes the **74 tracked + 10 untracked = 84-entry** 0.9.3 patch audited on
+> HEAD `0f58cae` and committed as `C d145976`, including issue #109
+> (FastCGI/PHP-FPM), the ACME-per-server/H3-SNI increment and the strict
+> fingerprint binding in `scripts/verify-release-audit.sh`. The seal binds the canonical tracked diff
 > and a sorted manifest of every untracked file (path + content SHA-256); the
 > combined `WORKTREE_FINGERPRINT_SHA256` is `89788d3c…` / **84** entries. The verifier fails with
 > `CONTROL=worktree_fingerprint_mismatch` when either component changes; the old
@@ -29,20 +29,17 @@ audit runs, `CHANGELOG.md`, `docs/release/v0.9.2.md` and
 >history and are **not** presented as results for this tree. Nothing was reverted and
 >no file outside this seal's scope was touched.
 >
-> **What the Commit field names here.** This audit was executed on the working
-> tree, which is HEAD `0f58cae` **plus the uncommitted 0.9.3 candidate** (74 modified
-> tracked files, 10 untracked files, including issue #109 and ACME/H3). Publishing is owner-gated, so no commit
-> exists for that state and no audit-only seal commit could be created. The
-> Commit field therefore names the base commit, and the exact audited bytes are
-> bound by the worktree fingerprint below. **Before tagging**, the owner must
-> commit the patch as C and then either update this field to C or commit this
-> document as an audit-only seal whose first parent is C; otherwise
-> `scripts/verify-release-audit.sh 0.9.3` fails closed at tag time by design
-> (`CONTROL=tag_mismatch` / `CONTROL=seal_diff`).
+> **What the Commit field names here.** The audited state was HEAD `0f58cae`
+> **plus the 0.9.3 patch** (74 modified tracked files and 10 untracked files,
+> including issue #109 and ACME/H3), bound by the worktree fingerprint below.
+> That patch is committed as **C**
+> `d145976b486c243c8e8c8970cd0f45ec6a425977`, and this document is committed as
+> the audit-only seal **S**, whose first parent is C and whose only change is
+> this file. `v0.9.3` is not tagged yet: the tag belongs on S, not on C.
 
 ```text
-AUDITED_STATE      = HEAD 0f58caea08899744ec6f34a5671b41fac18a6ea6 + uncommitted 0.9.3 candidate
-                     (74 modified tracked files + 10 untracked files = 84 entries; includes #109 and ACME/H3)
+AUDITED_STATE      = C d145976b486c243c8e8c8970cd0f45ec6a425977 (the 0.9.3 patch commit)
+                     audited on HEAD 0f58caea08899744ec6f34a5671b41fac18a6ea6 as 74 tracked + 10 untracked = 84 entries (includes #109 and ACME/H3)
 WORKTREE_INTEGRITY_BEGIN
 WORKTREE_DIFF_SHA256 = dbbab9bb532eda55883e72acfcd151654e2c78a587fba25d2a8bd87172cc715f (canonical tracked `git diff`; snapshot 2026-11-25, after the #109 FastCGI fix, the ACME/H3 increment, the strict fingerprint binding in `scripts/verify-release-audit.sh`, and all other tracked edits)
 WORKTREE_DIFF_FILES  = 74 modified (git diff --name-only)
@@ -73,7 +70,7 @@ WORKTREE_UNTRACKED   = 10 files / 8 status entries (docs/architecture/fastcgi-ph
                            supply-chain/imports.lock — the vet store created here)
 RELEASE_BINARY     = target/release/exyonq sha256 720d5a6efe78132998454b12b1fa5e9dd87207d4dd74a28d55bae4ab1f755bc9 (rebuilt 2026-11-25 after #109/ACME; local smoke DEVELOPMENT_AID PASS=5 FAIL=0, not E2E)
 BINARY_VERSION     = exyonq 0.9.3 / product_version=0.9.3 / artifact_version=0.9.3 / source_revision=0f58caea… / source_tag= (empty, untagged tree)
-SEAL_COMMIT        = NONE (owner-gated; not created in this increment)
+SEAL_COMMIT        = S (the audit-only commit that adds this line; first parent C; changes only this file)
 TAG                = NONE (owner-gated; not created in this increment)
 ```
 
@@ -617,7 +614,8 @@ of this seal.
 
 - **Reviewer:** local release pipeline (commands, exit codes and paths above; no external reviewer)
 - **Date:** 2026-11-25
-- **Notes:** Local audit seal for an **uncommitted** 84-entry candidate. Veyra
+- **Notes:** Local audit seal for the 84-entry 0.9.3 patch, now committed as
+  `d145976` with this document as the audit-only seal commit on top. Veyra
   standard, Rust Audit 0.2.9, CodeMap and the rebuilt release binary were run on
   this tree; missing post-publication or host-bound gates are reported as NOT
   EXECUTED here and belong in `docs/release/v0.9.3.md`, never as passes.
