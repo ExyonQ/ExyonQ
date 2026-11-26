@@ -125,7 +125,7 @@ class Run:
         return self.log_path.read_text(errors="replace") if self.log_path.exists() else ""
 
 
-def base_config(port, upstream_port, *, waf="", ratelimit="", route_extra=""):
+def base_config(port, upstream_port, *, waf="", ratelimit="", auth="", route_extra=""):
     return f"""config_version = 1
 
 [[server]]
@@ -143,6 +143,7 @@ name = "backend"
 target = "http://127.0.0.1:{upstream_port}"
 {waf}
 {ratelimit}
+{auth}
 """
 
 
@@ -152,6 +153,8 @@ class HttpUpstream:
     def __init__(self, body_bytes=0):
         self.port = free_port()
         self.body_bytes = body_bytes
+        self.requests = []
+        self.lock = threading.Lock()
         outer = self
 
         class Handler(socketserver.BaseRequestHandler):
@@ -176,6 +179,11 @@ class HttpUpstream:
                         if not chunk:
                             return
                         received += len(chunk)
+                    request_line = head.split(b"\r\n", 1)[0]
+                    parts = request_line.split(b" ")
+                    path = parts[1].decode("latin-1") if len(parts) >= 2 else ""
+                    with outer.lock:
+                        outer.requests.append((path, received))
                     body = b"ok"
                     sock.sendall(
                         b"HTTP/1.1 200 OK\r\nContent-Length: "
@@ -251,15 +259,51 @@ def f01(binary, work, rss_limit_mib):
     port = free_port()
     run.port = port
     body_len = 32 * 1024 * 1024
+    rules = run.work / "local.rules"
+    rules.write_text(
+        'SecRule REQUEST_URI "@contains /blocked" "id:990001,deny"\n'
+        'SecRule REQUEST_BODY "@contains WAF_BODY_BLOCK" "id:990002,deny"\n'
+    )
+    users = run.work / "users"
+    users.write_text("f01:{PLAIN}secret\n")
     config = run.write_config(
         base_config(
             port,
             upstream.port,
-            waf="[waf]\nenabled = false\n",
+            waf=(
+                "[waf]\n"
+                "enabled = true\n"
+                'mode = "block"\n'
+                "max_inspection_body_bytes = 67108864\n"
+                'on_inspection_limit = "block"\n'
+                'fail_policy = "closed_for_invalid_rules"\n'
+                "\n[[waf.ruleset]]\n"
+                'id = "local-f01"\n'
+                f'rules_file = "{rules}"\n'
+            ),
+            auth=(
+                "[modules.auth.routes.site]\n"
+                'realm = "f01"\n'
+                f'user_file = "{users}"\n'
+            ),
+            ratelimit=(
+                "[modules.ratelimit]\n"
+                "enabled = true\n"
+                "[modules.ratelimit.zones.f01]\n"
+                'key = "user"\n'
+                "requests_per_second = 1\n"
+                "burst = 2\n"
+                "[modules.ratelimit.routes]\n"
+                'site = "f01"\n'
+                "[modules.ratelimit.route_options.site]\n"
+                "nodelay = true\n"
+            ),
             route_extra=(
                 "max_request_body_bytes = 67108864\n"
                 "request_body_timeout_ms = 30000\n"
                 "request_body_spool_bytes = 4194304\n"
+                'access = { allow = ["127.0.0.0/8"], deny = ["127.9.0.1"] }\n'
+                'rewrite = "/upload"\n'
             ),
         )
     )
@@ -271,6 +315,60 @@ def f01(binary, work, rss_limit_mib):
     if not wait_port(port):
         log(f"F01_START=FAIL\n{run.log_text()[-2000:]}")
         return 1
+
+    auth = base64.b64encode(b"f01:secret").decode()
+
+    def request(method, path, *, source="127.0.0.1", authorized=True, body=b""):
+        sock = socket.create_connection(
+            ("127.0.0.1", port), timeout=10, source_address=(source, 0)
+        )
+        sock.settimeout(30)
+        lines = [
+            f"{method} {path} HTTP/1.1",
+            "Host: stress.local",
+            "Connection: close",
+        ]
+        if authorized:
+            lines.append(f"Authorization: Basic {auth}")
+        if body:
+            lines.append(f"Content-Length: {len(body)}")
+            lines.append("Content-Type: application/octet-stream")
+        sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode() + body)
+        response = read_response(sock, timeout=30)
+        sock.close()
+        return status_code(response)
+
+    def post_slow(path, body):
+        sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        sock.settimeout(90)
+        header = (
+            f"POST {path} HTTP/1.1\r\nHost: stress.local\r\n"
+            f"Authorization: Basic {auth}\r\n"
+            "Content-Type: application/octet-stream\r\n"
+            f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+        ).encode()
+        sock.sendall(header)
+        chunk = b"x" * 65536
+        sent = 0
+        while sent < len(body):
+            this = min(len(chunk), len(body) - sent)
+            sock.sendall(body[sent : sent + this])
+            sent += this
+            time.sleep(0.002)
+        response = read_response(sock, timeout=90)
+        sock.close()
+        return status_code(response)
+
+    acl_denied = request("GET", "/upload", source="127.9.0.1", authorized=False)
+    waf_uri = request("GET", "/blocked", authorized=False)
+    auth_missing = request("GET", "/upload", authorized=False)
+    rate_ok_1 = request("GET", "/upload")
+    rate_ok_2 = request("GET", "/upload")
+    rate_limited = request("GET", "/upload")
+    time.sleep(1.5)
+    waf_small = request("POST", "/ingest", body=b"WAF_BODY_BLOCK")
+    time.sleep(1.5)
+
     baseline = rss_kib(run.proc.pid)
     peak = baseline
     stop_sampling = threading.Event()
@@ -283,32 +381,46 @@ def f01(binary, work, rss_limit_mib):
 
     sampler = threading.Thread(target=sample, daemon=True)
     sampler.start()
-    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
-    sock.settimeout(60)
-    header = (
-        b"POST /upload HTTP/1.1\r\nHost: stress.local\r\n"
-        b"Content-Type: application/octet-stream\r\n"
-        b"Content-Length: " + str(body_len).encode() + b"\r\n\r\n"
-    )
-    sock.sendall(header)
-    chunk = b"x" * 65536
-    sent = 0
-    while sent < body_len:
-        this = min(len(chunk), body_len - sent)
-        sock.sendall(chunk[:this])
-        sent += this
-        time.sleep(0.002)
-    response = read_response(sock, timeout=60)
-    sock.close()
+
+    sentinel = b"WAF_BODY_BLOCK"
+    blocked_body = b"x" * (body_len - len(sentinel)) + sentinel
+    waf_blocked_large = post_slow("/ingest", blocked_body)
+    time.sleep(1.5)
+    rc = post_slow("/ingest", b"x" * body_len)
     stop_sampling.set()
     sampler.join(timeout=2)
-    rc = status_code(response)
     delta = peak - baseline
     limit_kib = rss_limit_mib * 1024
     leftovers = list(run.tmp.glob("exyonq-proxy-body-*"))
-    ok = rc == 200 and delta <= limit_kib and not leftovers
+    last_path, last_body = upstream.requests[-1] if upstream.requests else ("", 0)
+    ok = (
+        acl_denied == 403
+        and waf_uri == 403
+        and auth_missing == 401
+        and rate_ok_1 == 200
+        and rate_ok_2 == 200
+        and rate_limited == 429
+        and waf_small == 403
+        and waf_blocked_large == 403
+        and rc == 200
+        and last_path == "/upload"
+        and last_body == body_len
+        and delta <= limit_kib
+        and not leftovers
+    )
     log(f"F01_BODY_BYTES={body_len}")
+    log("F01_WAF_ENABLED=True")
+    log(f"F01_WAF_URI_STATUS={waf_uri}")
+    log(f"F01_WAF_SMALL_BODY_STATUS={waf_small}")
+    log(f"F01_WAF_LARGE_BODY_STATUS={waf_blocked_large}")
+    log(f"F01_ACL_DENIED_STATUS={acl_denied}")
+    log(f"F01_AUTH_MISSING_STATUS={auth_missing}")
+    log(f"F01_RATE_OK_1={rate_ok_1}")
+    log(f"F01_RATE_OK_2={rate_ok_2}")
+    log(f"F01_RATE_LIMITED_STATUS={rate_limited}")
     log(f"F01_STATUS={rc}")
+    log(f"F01_REWRITE_UPSTREAM_PATH={last_path}")
+    log(f"F01_UPSTREAM_BODY_BYTES={last_body}")
     log(f"F01_RSS_BASELINE_KIB={baseline}")
     log(f"F01_RSS_PEAK_KIB={peak}")
     log(f"F01_RSS_DELTA_KIB={delta}")
