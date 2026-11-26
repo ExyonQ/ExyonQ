@@ -5325,7 +5325,11 @@ async fn waf_body_gate_proxy(
         state.waf_enforce,
         state.waf_abuse.as_deref(),
     );
-    let mut file = match tokio::fs::File::open(spool.path()).await {
+    let mut file = match tokio::fs::OpenOptions::new()
+        .read(true)
+        .open(spool.path())
+        .await
+    {
         Ok(file) => file,
         Err(err) => {
             tracing::error!(%err, "proxy request body spool could not be reopened for WAF");
