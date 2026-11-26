@@ -20,7 +20,7 @@ aborts startup/reload; the previous generation remains active.
 | `engine` | string | `"native"` | `native` only | Other values rejected |
 | `max_inspection_body_bytes` | u64 | `67108864` | `>= 1` | Body inspection budget (aligned with the proxy body limit) |
 | `on_inspection_limit` | string | `"block"` | `allow_uninspected` \| `block` \| `log_and_allow` | Behavior when budget exhausted |
-| `fail_policy` | string | `"closed_for_invalid_rules"` | that value only | Compile/config fail-closed |
+| `fail_policy` | string | `"closed_for_invalid_rules"` | `closed_for_invalid_rules` \| `best_effort` | Closed rejects discarded rules; best-effort keeps valid rules and reports `CompileStats` |
 
 ### `on_inspection_limit`
 

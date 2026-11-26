@@ -389,7 +389,7 @@ def f02(binary, work):
     parsed = "parsed=1" in text and "discarded=1" in text
     ok = closed_ok and blocked == 403 and allowed == 200 and parsed
     log(f"F02_CLOSED_START_REJECTED={closed_ok}")
-    log(f"F02_BEST_EFFORT_STATUS={code}")
+    log(f"F02_BEST_EFFORT_VALIDATE={code}")
     log(f"F02_BLOCKED_STATUS={blocked}")
     log(f"F02_ALLOWED_STATUS={allowed}")
     log(f"F02_STATS_LOGGED={parsed}")
@@ -531,7 +531,11 @@ class WsUpstream:
 
     def _run(self):
         asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self._serve())
+        try:
+            self.loop.run_until_complete(self._serve())
+        except RuntimeError:
+            # Shutdown closes the listening socket and stops the loop.
+            pass
 
     async def _serve(self):
         async def handler(reader, writer):

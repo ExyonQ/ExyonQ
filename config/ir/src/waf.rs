@@ -786,6 +786,19 @@ blacklist = [{{ ip = "203.0.113.10", ttl = 60 }}]
     }
 
     #[test]
+    fn best_effort_fail_policy_is_accepted() {
+        let input = format!(
+            r#"
+{MINIMAL}
+[waf]
+fail_policy = "best_effort"
+"#
+        );
+        let config: AppConfig = input.parse().expect("best-effort policy must parse");
+        assert_eq!(config.waf.fail_policy, WafFailPolicyIr::BestEffort);
+    }
+
+    #[test]
     fn full_waf_block_parses() {
         let input = format!(
             r#"
