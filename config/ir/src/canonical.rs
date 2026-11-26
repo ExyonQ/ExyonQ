@@ -256,6 +256,18 @@ fn canonical_server(server: &ServerConfig) -> serde_json::Value {
             serde_json::Value::String(http3.clone()),
         );
     }
+    // EXQ-029: error_pages is runtime content, not listener state; a change
+    // must produce a new generation instead of a NO_OP. Sort keys so the
+    // fingerprint is stable across HashMap iteration order.
+    if !server.error_pages.is_empty() {
+        let mut pages: Vec<_> = server.error_pages.iter().collect();
+        pages.sort_by(|a, b| a.0.cmp(b.0));
+        let pages = pages
+            .into_iter()
+            .map(|(status, path)| (status.clone(), serde_json::Value::String(path.clone())))
+            .collect();
+        map.insert("error_pages".into(), serde_json::Value::Object(pages));
+    }
     serde_json::Value::Object(map)
 }
 
@@ -743,6 +755,29 @@ path = "/tmp/a.log"
         assert_ne!(base, fingerprint(&a));
         a.logging.file.rotation.enabled = true;
         assert_ne!(base, fingerprint(&a));
+    }
+
+    /// EXQ-029: changing only error_pages must change the fingerprint, not
+    /// produce a reload NO_OP.
+    #[test]
+    fn fingerprint_changes_when_error_pages_change() {
+        let toml = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8080"
+routes = ["site"]
+error_pages = { "404" = "/404-a.html" }
+[[route]]
+name = "site"
+match = { path = "/site/" }
+root = "./site"
+"#;
+        let mut config: AppConfig = toml.parse().unwrap();
+        let base = fingerprint(&config);
+        config.servers[0]
+            .error_pages
+            .insert("404".into(), "/404-b.html".into());
+        assert_ne!(base, fingerprint(&config));
     }
 
     #[test]

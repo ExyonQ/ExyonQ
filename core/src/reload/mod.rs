@@ -345,6 +345,14 @@ fn reject_listen_bind_changes(current: &AppConfig, candidate: &AppConfig) -> any
                 "EXY-RELOAD-0005: http3_listen bind change requires restart (server[{idx}])"
             ));
         }
+        // EXQ-029: proxy_protocol is consumed by the listener before any HTTP
+        // parse; changing it without rebinding would leave the old admission
+        // mode live.
+        if cur.proxy_protocol != cand.proxy_protocol {
+            return Err(anyhow::anyhow!(
+                "EXY-RELOAD-0005: proxy_protocol change requires restart (server[{idx}])"
+            ));
+        }
     }
     // NG-20: L4 listeners own long-lived sockets and a compiled endpoint
     // selector. Changing their bind/upstream set without rebinding would keep
