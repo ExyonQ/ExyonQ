@@ -1624,7 +1624,10 @@ async fn handle_core_request_with_body(
             .match_route_index_with_host_port(&path, host.as_deref(), local_port);
     let is_proxy_route = matched_route
         .is_some_and(|(route_idx, _)| state.snapshot.proxy_cluster_for_route(route_idx).is_some());
-    let base_body_limit = if is_proxy_route {
+    let has_route_rewrite = matched_route
+        .and_then(|(route_idx, _)| state.config.routes.get(route_idx))
+        .is_some_and(|route| route.rewrite.is_some());
+    let base_body_limit = if is_proxy_route || has_route_rewrite {
         PROXY_MAX_REQUEST_BODY_BYTES
     } else {
         FCGI_REQUEST_BODY_LIMIT
@@ -1639,7 +1642,7 @@ async fn handle_core_request_with_body(
     // F-01: collect a proxy body once (spool-aware) and pass it through the
     // normal dispatcher. The file-backed variant survives ACL/auth/rewrite and
     // cache phases without being flattened into `Bytes`.
-    if is_proxy_route {
+    if is_proxy_route || has_route_rewrite {
         let Some((route_idx, _)) = matched_route else {
             return text_response(StatusCode::NOT_FOUND, "not found");
         };
@@ -2498,11 +2501,22 @@ async fn dispatch_core_inner(
         .to_string();
     // Cap038 LA-CAP038-001: FastCGI must receive the collected request body.
     // Passing Vec::new() here dropped every POST/PUT body (php://input always empty).
-    let fcgi_body = request_body
-        .as_ref()
-        .and_then(DispatchBody::as_bytes)
-        .map(<[u8]>::to_vec)
-        .unwrap_or_default();
+    let fcgi_body = match request_body.as_ref() {
+        Some(DispatchBody::Memory(bytes)) => bytes.to_vec(),
+        Some(DispatchBody::Proxy(exyonq_module_api::proxy_dispatch::ProxyRequestBody::Memory(
+            bytes,
+        ))) => bytes.clone(),
+        Some(DispatchBody::Proxy(exyonq_module_api::proxy_dispatch::ProxyRequestBody::Spool(
+            spool,
+        ))) => match tokio::fs::read(spool.path()).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!(%err, "request body spool could not be read for FastCGI");
+                return text_response(StatusCode::BAD_GATEWAY, "request body spool unavailable");
+            }
+        },
+        None => Vec::new(),
+    };
     if let Some(ctx) = fpc_miss {
         if matches!(
             state.snapshot.resolve_backend(route_idx),
@@ -5204,7 +5218,7 @@ fn waf_body_gate(
 }
 
 /// Async body gate: memory bodies use the existing single-chunk path; spooled
-/// bodies are inspected incrementally from disk in 1 MiB windows (F-01).
+/// bodies are inspected incrementally from disk in bounded windows (F-01).
 #[allow(clippy::too_many_arguments)]
 async fn waf_body_gate_proxy(
     state: &ServerState,
@@ -5270,11 +5284,19 @@ async fn waf_body_gate_proxy(
         }
     };
     use tokio::io::AsyncReadExt;
-    let mut buf = vec![0u8; 1024 * 1024];
+    let mut buf = vec![0u8; 256 * 1024];
+    let total = spool.len();
+    let mut seen = 0u64;
+    if total == 0 {
+        inspector.push(&[], true);
+    }
     loop {
         match file.read(&mut buf).await {
             Ok(0) => break,
-            Ok(n) => inspector.push(&buf[..n], false),
+            Ok(n) => {
+                seen = seen.saturating_add(n as u64);
+                inspector.push(&buf[..n], seen >= total);
+            }
             Err(err) => {
                 tracing::error!(%err, "proxy request body spool read failed for WAF");
                 return WafBodyGate::Reject(text_response(
@@ -5284,7 +5306,13 @@ async fn waf_body_gate_proxy(
             }
         }
     }
-    inspector.push(&[], true);
+    if seen < total {
+        tracing::error!(seen, total, "proxy request body spool ended early for WAF");
+        return WafBodyGate::Reject(text_response(
+            StatusCode::BAD_GATEWAY,
+            "request body spool ended early",
+        ));
+    }
     match inspector.finish() {
         (crate::waf::WafHookResult::Continue, inspection_limited) => {
             WafBodyGate::Continue { inspection_limited }

@@ -1521,10 +1521,14 @@ impl LiteralMatcher {
                 .query
                 .map(|q| q.contains(needle.as_str()))
                 .unwrap_or(false),
-            // Cap015 / WAF-001: never fail-open on non-UTF8 — match like detectors (lossy)
-            // so a needle present in raw bytes still hits.
+            // Cap015 / WAF-001: scan the raw window. A lossy String here would
+            // allocate one full inspection window per chunk and defeat the
+            // spooled-body memory bound.
             Self::Body(needle) => body_chunk
-                .map(|b| String::from_utf8_lossy(b).contains(needle.as_str()))
+                .map(|b| {
+                    let needle = needle.as_bytes();
+                    !needle.is_empty() && b.windows(needle.len()).any(|w| w == needle)
+                })
                 .unwrap_or(false),
             Self::Header { name, needle } => {
                 let Some(raw) = req.headers.get(name) else {

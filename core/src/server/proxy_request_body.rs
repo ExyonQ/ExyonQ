@@ -201,7 +201,9 @@ where
             file.write_all(chunk)
                 .await
                 .map_err(|_| ProxyRequestBodyReadError::Spool)?;
-            buf.clear();
+            // Release the pre-spill accumulation now; keeping its capacity
+            // would leave up to `spool_threshold` bytes resident per request.
+            buf = Vec::new();
             spool = Some(file);
         } else if let Some(file) = spool.as_mut() {
             file.write_all(chunk)

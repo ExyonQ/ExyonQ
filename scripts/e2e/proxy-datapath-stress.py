@@ -267,45 +267,56 @@ def f01(binary, work, rss_limit_mib):
     users = run.work / "users"
     users.write_text("f01:{PLAIN}secret\n")
     config = run.write_config(
-        base_config(
-            port,
-            upstream.port,
-            waf=(
-                "[waf]\n"
-                "enabled = true\n"
-                'mode = "block"\n'
-                "max_inspection_body_bytes = 67108864\n"
-                'on_inspection_limit = "block"\n'
-                'fail_policy = "closed_for_invalid_rules"\n'
-                "\n[[waf.ruleset]]\n"
-                'id = "local-f01"\n'
-                f'rules_file = "{rules}"\n'
-            ),
-            auth=(
-                "[modules.auth.routes.site]\n"
-                'realm = "f01"\n'
-                f'user_file = "{users}"\n'
-            ),
-            ratelimit=(
-                "[modules.ratelimit]\n"
-                "enabled = true\n"
-                "[modules.ratelimit.zones.f01]\n"
-                'key = "user"\n'
-                "requests_per_second = 1\n"
-                "burst = 2\n"
-                "[modules.ratelimit.routes]\n"
-                'site = "f01"\n'
-                "[modules.ratelimit.route_options.site]\n"
-                "nodelay = true\n"
-            ),
-            route_extra=(
-                "max_request_body_bytes = 67108864\n"
-                "request_body_timeout_ms = 30000\n"
-                "request_body_spool_bytes = 4194304\n"
-                'access = { allow = ["127.0.0.0/8"], deny = ["127.9.0.1"] }\n'
-                'rewrite = "/upload"\n'
-            ),
-        )
+        f"""config_version = 1
+
+[[server]]
+listen = "127.0.0.1:{port}"
+routes = ["ingress", "upload"]
+
+[[route]]
+name = "ingress"
+match = {{ path = "/ingest", exact = true }}
+rewrite = "/upload"
+max_request_body_bytes = 67108864
+request_body_timeout_ms = 30000
+request_body_spool_bytes = 4194304
+access = {{ allow = ["127.0.0.0/8"], deny = ["127.9.0.1"] }}
+
+[[route]]
+name = "upload"
+match = {{ path = "/upload", exact = true }}
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:{upstream.port}"
+
+[waf]
+enabled = true
+mode = "block"
+max_inspection_body_bytes = 67108864
+on_inspection_limit = "block"
+fail_policy = "closed_for_invalid_rules"
+
+[[waf.ruleset]]
+id = "local-f01"
+rules_file = "{rules}"
+
+[modules.auth.routes.ingress]
+realm = "f01"
+user_file = "{users}"
+
+[modules.ratelimit]
+enabled = true
+[modules.ratelimit.zones.f01]
+key = "user"
+requests_per_second = 1
+burst = 2
+[modules.ratelimit.routes]
+ingress = "f01"
+[modules.ratelimit.route_options.ingress]
+nodelay = true
+"""
     )
     code, out = run.validate(config)
     if code != 0:
@@ -359,12 +370,13 @@ def f01(binary, work, rss_limit_mib):
         sock.close()
         return status_code(response)
 
-    acl_denied = request("GET", "/upload", source="127.9.0.1", authorized=False)
+    acl_denied = request("GET", "/ingest", source="127.9.0.1", authorized=False)
     waf_uri = request("GET", "/blocked", authorized=False)
-    auth_missing = request("GET", "/upload", authorized=False)
-    rate_ok_1 = request("GET", "/upload")
-    rate_ok_2 = request("GET", "/upload")
-    rate_limited = request("GET", "/upload")
+    auth_missing = request("GET", "/ingest", authorized=False)
+    rate_ok_1 = request("GET", "/ingest")
+    rate_ok_2 = request("GET", "/ingest")
+    rate_ok_3 = request("GET", "/ingest")
+    rate_limited = request("GET", "/ingest")
     time.sleep(1.5)
     waf_small = request("POST", "/ingest", body=b"WAF_BODY_BLOCK")
     time.sleep(1.5)
@@ -399,6 +411,7 @@ def f01(binary, work, rss_limit_mib):
         and auth_missing == 401
         and rate_ok_1 == 200
         and rate_ok_2 == 200
+        and rate_ok_3 == 200
         and rate_limited == 429
         and waf_small == 403
         and waf_blocked_large == 403
@@ -417,6 +430,7 @@ def f01(binary, work, rss_limit_mib):
     log(f"F01_AUTH_MISSING_STATUS={auth_missing}")
     log(f"F01_RATE_OK_1={rate_ok_1}")
     log(f"F01_RATE_OK_2={rate_ok_2}")
+    log(f"F01_RATE_OK_3={rate_ok_3}")
     log(f"F01_RATE_LIMITED_STATUS={rate_limited}")
     log(f"F01_STATUS={rc}")
     log(f"F01_REWRITE_UPSTREAM_PATH={last_path}")
