@@ -171,6 +171,10 @@ pub struct CrsRulesetInput {
     pub markers: std::collections::HashMap<String, usize>,
     pub default_actions: std::collections::HashMap<WafPhase, WafAction>,
     pub rules: Vec<CrsRuleInput>,
+    /// SecRule lines that could not be parsed and were not loaded.
+    pub discarded: usize,
+    /// One diagnostic per discarded line, including the source line number.
+    pub diagnostics: Vec<String>,
 }
 
 fn tokenize(line: &str) -> Vec<String> {
@@ -810,6 +814,8 @@ pub fn parse_rule_file_with_base(
     let mut markers = std::collections::HashMap::new();
     let mut default_actions: std::collections::HashMap<WafPhase, WafAction> =
         std::collections::HashMap::new();
+    let mut discarded = 0usize;
+    let mut diagnostics = Vec::new();
     let mut visited = std::collections::HashSet::new();
     if let Some(base) = base_dir {
         if let Ok(canonical) = base.canonicalize() {
@@ -822,6 +828,7 @@ pub fn parse_rule_file_with_base(
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
+        let line_no = i + 1;
         i += 1;
         if line.starts_with("SecRuleEngine ") {
             detection_only = line.contains("DetectionOnly");
@@ -873,6 +880,11 @@ pub fn parse_rule_file_with_base(
         let Some((mut rule, mut chained)) =
             parse_rule_tokens(&tokenize(&line["SecRule ".len()..]), base_dir, false)
         else {
+            discarded += 1;
+            diagnostics.push(format!(
+                "line {line_no}: discarded SecRule (malformed or unsupported operator): {}",
+                truncate_rule_line(line)
+            ));
             continue;
         };
         let mut chain_broken = false;
@@ -895,6 +907,11 @@ pub fn parse_rule_file_with_base(
             chained = next_chained;
         }
         if chain_broken {
+            discarded += 1;
+            diagnostics.push(format!(
+                "line {line_no}: discarded SecRule with incomplete or invalid chain: {}",
+                truncate_rule_line(line)
+            ));
             continue;
         }
         if !rule.explicit_action {
@@ -922,7 +939,18 @@ pub fn parse_rule_file_with_base(
         markers,
         default_actions,
         rules,
+        discarded,
+        diagnostics,
     }
+}
+
+fn truncate_rule_line(line: &str) -> String {
+    const MAX: usize = 160;
+    let mut out: String = line.chars().take(MAX).collect();
+    if line.chars().count() > MAX {
+        out.push('…');
+    }
+    out
 }
 
 /// Parse an `application/x-www-form-urlencoded` body into name/value pairs.

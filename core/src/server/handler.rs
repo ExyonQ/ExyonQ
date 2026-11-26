@@ -33,8 +33,8 @@ use exyonq_cache::{
     CacheKeyParts, CacheNamespace, NamespaceMetrics,
 };
 use exyonq_mod_proxy::{
-    bad_gateway, forward_websocket_by_cluster, is_websocket_upgrade, load_get_for_cache_by_cluster,
-    serve_proxy_with_cache, ProxyCacheLoad, ProxyClient,
+    bad_gateway, forward_websocket_by_cluster_with_limits, is_websocket_upgrade,
+    load_get_for_cache_by_cluster, serve_proxy_with_cache, ProxyCacheLoad, ProxyClient,
 };
 use exyonq_mod_static::{serve_static_with_cache, StaticCacheLoad};
 use exyonq_module_api::kernel_observation::{note_fastcgi_http_501, note_proxy_http_501};
@@ -1633,21 +1633,45 @@ async fn handle_core_request_with_body(
         matched_route.and_then(|(route_idx, _)| state.config.routes.get(route_idx)),
         base_body_limit,
     );
+    let route_config = matched_route.and_then(|(route_idx, _)| state.config.routes.get(route_idx));
     let declared_len = parse_proxy_request_content_length(req.headers());
     let uri = req.uri().clone();
     let throttle_cfg = state.config.modules.ratelimit.client.clone();
     let body =
         crate::client_throttle::wrap_request_body(req.into_body(), None, client_ip, &throttle_cfg);
-    let body = match collect_proxy_request_body_bounded(declared_len, body, body_limit).await {
-        Ok(body) => body,
-        Err(ProxyRequestBodyReadError::TooLarge) => {
-            return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
+    let body = if is_proxy_route {
+        match crate::server::proxy_request_body::collect_proxy_request_body_with_deadline(
+            declared_len,
+            body,
+            body_limit,
+            route_request_body_timeout(route_config),
+            route_request_body_spool(route_config),
+        )
+        .await
+        {
+            Ok(body) => body.bytes,
+            Err(ProxyRequestBodyReadError::TooLarge) => {
+                return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
+            }
+            Err(ProxyRequestBodyReadError::Deadline) => {
+                return text_response(StatusCode::REQUEST_TIMEOUT, "request body timeout");
+            }
+            Err(ProxyRequestBodyReadError::Body | ProxyRequestBodyReadError::Spool) => {
+                return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
+            }
         }
-        Err(ProxyRequestBodyReadError::Body) if is_proxy_route => {
-            return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
-        }
-        Err(ProxyRequestBodyReadError::Body) => {
-            return text_response(StatusCode::BAD_REQUEST, "request body too large");
+    } else {
+        match collect_proxy_request_body_bounded(declared_len, body, body_limit).await {
+            Ok(body) => body,
+            Err(ProxyRequestBodyReadError::TooLarge) => {
+                return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
+            }
+            Err(ProxyRequestBodyReadError::Body) => {
+                return text_response(StatusCode::BAD_REQUEST, "request body too large");
+            }
+            Err(ProxyRequestBodyReadError::Deadline | ProxyRequestBodyReadError::Spool) => {
+                return text_response(StatusCode::BAD_REQUEST, "request body read failed");
+            }
         }
     };
     let waf_body_limited = match waf_body_gate(
@@ -3006,6 +3030,8 @@ where
         }
         Err(ProxyRequestBodyReadError::TooLarge) => Err(StatusCode::PAYLOAD_TOO_LARGE),
         Err(ProxyRequestBodyReadError::Body) => Err(StatusCode::BAD_REQUEST),
+        Err(ProxyRequestBodyReadError::Deadline) => Err(StatusCode::REQUEST_TIMEOUT),
+        Err(ProxyRequestBodyReadError::Spool) => Err(StatusCode::BAD_REQUEST),
     }
 }
 
@@ -3023,6 +3049,39 @@ fn route_request_body_limit(route: Option<&exyonq_config_ir::RouteConfig>, base:
         .unwrap_or(usize::MAX)
         .min(base)
         .min(PROXY_MAX_REQUEST_BODY_BYTES)
+}
+
+fn route_request_body_timeout(
+    route: Option<&exyonq_config_ir::RouteConfig>,
+) -> std::time::Duration {
+    use crate::server::proxy_request_body::PROXY_REQUEST_BODY_TIMEOUT;
+    route
+        .and_then(|route| route.request_body_timeout_ms)
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(PROXY_REQUEST_BODY_TIMEOUT)
+}
+
+fn route_request_body_spool(route: Option<&exyonq_config_ir::RouteConfig>) -> usize {
+    use crate::server::proxy_request_body::PROXY_REQUEST_BODY_SPOOL_THRESHOLD;
+    route
+        .and_then(|route| route.request_body_spool_bytes)
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .unwrap_or(PROXY_REQUEST_BODY_SPOOL_THRESHOLD)
+}
+
+fn route_websocket_limits(
+    route: Option<&exyonq_config_ir::RouteConfig>,
+) -> exyonq_module_api::proxy_dispatch::WebSocketLimits {
+    let mut limits = exyonq_module_api::proxy_dispatch::WebSocketLimits::default();
+    if let Some(route) = route {
+        if let Some(ms) = route.websocket_idle_timeout_ms {
+            limits.idle_timeout = std::time::Duration::from_millis(ms);
+        }
+        if let Some(max) = route.websocket_max_tunnels {
+            limits.max_tunnels = max as usize;
+        }
+    }
+    limits
 }
 
 /// Shared limit check for FastCGI (and other) collected request bodies → HTTP 413.
@@ -4265,7 +4324,14 @@ async fn proxy_route_target(
                 .get(exyonq_module_api::CLIENT_IP_HEADER)
                 .cloned()
         });
-        return forward_websocket_by_cluster(proxy_client, cluster_id, req, xff.as_ref()).await;
+        return forward_websocket_by_cluster_with_limits(
+            proxy_client,
+            cluster_id,
+            req,
+            xff.as_ref(),
+            route_websocket_limits(state.config.routes.get(route_idx)),
+        )
+        .await;
     }
 
     let Some(Backend::Proxy {
@@ -4304,7 +4370,7 @@ async fn proxy_route_target(
         None
     } else {
         use crate::server::proxy_request_body::{
-            collect_proxy_request_body_bounded, parse_proxy_request_content_length,
+            collect_proxy_request_body_with_deadline, parse_proxy_request_content_length,
             ProxyRequestBodyReadError,
         };
         use exyonq_module_api::proxy_dispatch::PROXY_MAX_REQUEST_BODY_BYTES;
@@ -4321,8 +4387,22 @@ async fn proxy_route_target(
             state.config.routes.get(route_idx),
             PROXY_MAX_REQUEST_BODY_BYTES,
         );
-        match collect_proxy_request_body_bounded(declared_len, body, body_limit).await {
-            Ok(bytes) => Some(bytes),
+        let route = state.config.routes.get(route_idx);
+        match collect_proxy_request_body_with_deadline(
+            declared_len,
+            body,
+            body_limit,
+            route_request_body_timeout(route),
+            route_request_body_spool(route),
+        )
+        .await
+        {
+            Ok(collected) => {
+                if collected.spooled {
+                    tracing::debug!(bytes = collected.bytes.len(), "proxy request body spooled");
+                }
+                Some(collected.bytes)
+            }
             Err(ProxyRequestBodyReadError::TooLarge) => {
                 // Client-facing body limit (nginx client_max_body_size semantics):
                 // 413, never upstream dispatch.
@@ -4331,6 +4411,12 @@ async fn proxy_route_target(
             // Cap015 / WAF-LOGIC-P3-B: body-frame transport failure must not become an
             // empty body for WAF inspection or upstream dispatch (fail closed).
             Err(ProxyRequestBodyReadError::Body) => {
+                return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
+            }
+            Err(ProxyRequestBodyReadError::Deadline) => {
+                return text_response(StatusCode::REQUEST_TIMEOUT, "request body timeout");
+            }
+            Err(ProxyRequestBodyReadError::Spool) => {
                 return execute_backend::proxy_outcome_to_hyper(ProxyDispatchOutcome::BadGateway);
             }
         }
@@ -5139,6 +5225,10 @@ mod tests {
             script_extensions: None,
             respond: None,
             max_request_body_bytes: None,
+            request_body_timeout_ms: None,
+            request_body_spool_bytes: None,
+            websocket_idle_timeout_ms: None,
+            websocket_max_tunnels: None,
             gunzip: None,
             cache_tags: Vec::new(),
             name: name.into(),

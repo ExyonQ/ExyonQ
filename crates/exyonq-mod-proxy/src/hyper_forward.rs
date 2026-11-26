@@ -39,6 +39,7 @@ type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
 
 pub struct ProxyHyperMetrics {
     pub responses_502: AtomicU64,
+    pub responses_503: AtomicU64,
     pub responses_504: AtomicU64,
     /// Cap021: connect-only retries that were issued (not final failures).
     pub connect_retries: AtomicU64,
@@ -50,6 +51,7 @@ impl Default for ProxyHyperMetrics {
     fn default() -> Self {
         Self {
             responses_502: AtomicU64::new(0),
+            responses_503: AtomicU64::new(0),
             responses_504: AtomicU64::new(0),
             connect_retries: AtomicU64::new(0),
             sse_streams: AtomicU64::new(0),

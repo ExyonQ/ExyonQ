@@ -1532,6 +1532,23 @@ pub async fn forward_websocket_by_cluster(
     req: hyper::Request<hyper::body::Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
 ) -> hyper::Response<http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>> {
+    forward_websocket_by_cluster_with_limits(
+        client,
+        cluster_id,
+        req,
+        x_forwarded_for,
+        exyonq_module_api::proxy_dispatch::WebSocketLimits::default(),
+    )
+    .await
+}
+
+pub async fn forward_websocket_by_cluster_with_limits(
+    client: &ProxyClient,
+    cluster_id: u32,
+    req: hyper::Request<hyper::body::Incoming>,
+    x_forwarded_for: Option<&HeaderValue>,
+    limits: exyonq_module_api::proxy_dispatch::WebSocketLimits,
+) -> hyper::Response<http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>> {
     let rt = crate::wire_conn::pinned_runtime();
     let req_headers: Vec<(String, String)> = req
         .headers()
@@ -1561,12 +1578,13 @@ pub async fn forward_websocket_by_cluster(
         });
         return crate::hyper_forward::service_unavailable();
     };
-    let mut resp = crate::websocket::forward_websocket(
+    let mut resp = crate::websocket::forward_websocket_with_limits(
         client,
         &sel.target,
         req,
         x_forwarded_for,
         rt.hyper_metrics().as_ref(),
+        limits,
     )
     .await;
     // NG-07: mint the route cookie on successful non-upgrade responses only.

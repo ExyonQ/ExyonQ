@@ -395,6 +395,22 @@ pub struct RouteConfig {
     /// above that bound is clamped to it.
     #[serde(default)]
     pub max_request_body_bytes: Option<u64>,
+    /// F-01: absolute deadline for reading a proxy request body. `None` uses
+    /// the conservative 30 s process default.
+    #[serde(default)]
+    pub request_body_timeout_ms: Option<u64>,
+    /// F-01: bodies above this size spill to a private temporary file while
+    /// they are read. `None` uses the 4 MiB process default.
+    #[serde(default)]
+    pub request_body_spool_bytes: Option<u64>,
+    /// F-05: WebSocket inactivity deadline for tunnels on this route. `None`
+    /// uses the 300 s process default.
+    #[serde(default)]
+    pub websocket_idle_timeout_ms: Option<u64>,
+    /// F-05: maximum concurrent WebSocket tunnels for this route. `None` uses
+    /// the process default (2 000).
+    #[serde(default)]
+    pub websocket_max_tunnels: Option<u32>,
     #[serde(default)]
     pub redirect: Option<RedirectConfig>,
     /// EXY-03: literal response (`NGINX return <status> "<body>"`). A route with
@@ -2076,6 +2092,30 @@ fn validate_route_actions(route: &RouteConfig) -> Result<(), ConfigError> {
     if route.max_request_body_bytes == Some(0) {
         return Err(ConfigError::Parse(format!(
             "route `{}`: max_request_body_bytes must be positive",
+            route.name
+        )));
+    }
+    if route.request_body_timeout_ms == Some(0) {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: request_body_timeout_ms must be positive",
+            route.name
+        )));
+    }
+    if route.request_body_spool_bytes == Some(0) {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: request_body_spool_bytes must be positive",
+            route.name
+        )));
+    }
+    if route.websocket_idle_timeout_ms == Some(0) {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: websocket_idle_timeout_ms must be positive",
+            route.name
+        )));
+    }
+    if route.websocket_max_tunnels == Some(0) {
+        return Err(ConfigError::Parse(format!(
+            "route `{}`: websocket_max_tunnels must be positive",
             route.name
         )));
     }

@@ -271,8 +271,14 @@ fn handler_uses_bounded_collector_not_unbounded_collect() {
         })
         .expect("proxy_route_target");
     assert!(
-        section.contains("collect_proxy_request_body_bounded"),
-        "proxy_route_target must use bounded collector"
+        section.contains("collect_proxy_request_body_with_deadline")
+            || section.contains("collect_proxy_request_body_bounded"),
+        "proxy_route_target must use a bounded collector"
+    );
+    assert!(
+        section.contains("route_request_body_timeout")
+            && section.contains("route_request_body_spool"),
+        "F-01: proxy body read must carry the route deadline and spool threshold"
     );
     assert!(
         !section.contains(".collect()"),
@@ -293,8 +299,9 @@ fn handler_uses_bounded_collector_not_unbounded_collect() {
         .and_then(|rest| rest.split("\nasync fn ").next())
         .expect("handle_core_request_with_body");
     assert!(
-        with_body.contains("collect_proxy_request_body_bounded"),
-        "POST with_body path must use bounded collector (Cap035 + SEC-PROXY-001)"
+        with_body.contains("collect_proxy_request_body_with_deadline")
+            || with_body.contains("collect_proxy_request_body_bounded"),
+        "POST with_body path must use a bounded collector (Cap035 + SEC-PROXY-001)"
     );
     assert!(
         !with_body

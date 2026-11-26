@@ -86,8 +86,8 @@ pub use proxy_cache::{
     build_materialized_response, load_get_for_cache, prepare_proxy_cache_load, ProxyCacheLoad,
 };
 pub use runtime::{
-    forward_websocket_by_cluster, global_hyper_metrics, load_get_for_cache_by_cluster, AffinityCtx,
-    ProxyRuntime, ResolveSelection,
+    forward_websocket_by_cluster, forward_websocket_by_cluster_with_limits, global_hyper_metrics,
+    load_get_for_cache_by_cluster, AffinityCtx, ProxyRuntime, ResolveSelection,
 };
 pub use runtime_diag::{
     emit_map_unknown, emit_no_eligible, emit_upstream_class, RtFailCtx, EXY_RT_0001, EXY_RT_0002,

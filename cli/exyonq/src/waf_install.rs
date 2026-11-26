@@ -97,10 +97,24 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
         ip_metrics = ip_filter_metrics(&input.builtins.ip_filter);
         let crs = waf_crs_rulesets_from_ir(&config.waf)
             .map_err(|e| anyhow::anyhow!("waf CRS load: {e}"))?;
-        Arc::new(
-            FixedWafEngine::compile_with_crs(input, &crs)
-                .map_err(|e| anyhow::anyhow!("waf compile failed (fail closed): {e}"))?,
-        )
+        let engine = FixedWafEngine::compile_with_crs(input, &crs)
+            .map_err(|e| anyhow::anyhow!("waf compile failed (fail closed): {e}"))?;
+        let stats = engine.snapshot().compile_stats();
+        if stats.discarded > 0 {
+            warn!(
+                parsed = stats.parsed,
+                discarded = stats.discarded,
+                diagnostics = ?stats.diagnostics,
+                "WAF rules discarded during compile"
+            );
+        } else {
+            info!(
+                parsed = stats.parsed,
+                discarded = stats.discarded,
+                "WAF rules compiled"
+            );
+        }
+        Arc::new(engine)
     };
     // Entry-level metrics describe the filter that was just compiled (install or
     // reload prepare); the engine is the authority for what actually matches.

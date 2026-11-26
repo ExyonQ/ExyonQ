@@ -43,7 +43,7 @@ pub use crs::{
 };
 pub use engine::{FixedWafEngine, NativeWafEngine};
 pub use normalize::NormalizeBudget;
-pub use snapshot::{CompiledWafSnapshot, MapHeaders};
+pub use snapshot::{CompileStats, CompiledWafSnapshot, MapHeaders};
 
 pub use exyonq_waf_api::{ChallengeIssue, ChallengeVerifyResult, WafChallengeHandler};
 

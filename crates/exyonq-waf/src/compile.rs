@@ -32,6 +32,9 @@ pub use crate::detect::{
 pub enum FailPolicy {
     /// Reject the entire compile (default / required for product).
     ClosedForInvalidRules,
+    /// Drop invalid rules with a diagnostic and keep compiling the rest.
+    /// Used by diagnostics/tooling; product configuration stays fail-closed.
+    BestEffort,
 }
 
 /// Host/path/method/rule exclusion (config shape).
@@ -121,19 +124,29 @@ pub enum CompileError {
 
 /// Compile input → immutable snapshot. Invalid rules fail closed.
 pub fn compile_waf(input: WafCompileInput) -> Result<CompiledWafSnapshot, CompileError> {
-    let _ = input.fail_policy;
-
+    let fail_policy = input.fail_policy;
     let detectors =
         compile_detectors(&input.builtins, input.normalize).map_err(CompileError::Detector)?;
 
     let mut rulesets = Vec::with_capacity(input.rulesets.len());
+    let mut stats = crate::snapshot::CompileStats::default();
     for rs in input.rulesets {
         if rs.id.trim().is_empty() {
             return Err(CompileError::EmptyRulesetId);
         }
         let mut rules = Vec::new();
         for rule in rs.rules {
-            rules.push(compile_rule(rule)?);
+            match compile_rule(rule) {
+                Ok(rule) => {
+                    stats.parsed += 1;
+                    rules.push(rule);
+                }
+                Err(err) if fail_policy == FailPolicy::BestEffort => {
+                    stats.discarded += 1;
+                    stats.diagnostics.push(err.to_string());
+                }
+                Err(err) => return Err(err),
+            }
         }
         rulesets.push(CompiledRuleset {
             id: rs.id,
@@ -168,6 +181,7 @@ pub fn compile_waf(input: WafCompileInput) -> Result<CompiledWafSnapshot, Compil
         detectors,
         rulesets,
         exclusions,
+        stats,
     })
 }
 
@@ -244,6 +258,12 @@ pub fn compile_waf_with_crs(
 ) -> Result<CompiledWafSnapshot, CompileError> {
     let mut snapshot = compile_waf(input)?;
     for ruleset in crs {
+        snapshot.stats.parsed += ruleset.rules.len();
+        snapshot.stats.discarded += ruleset.discarded;
+        snapshot
+            .stats
+            .diagnostics
+            .extend(ruleset.diagnostics.iter().cloned());
         snapshot
             .rulesets
             .push(compile_crs_ruleset(ruleset.clone())?);
@@ -306,5 +326,70 @@ impl WafCompileInput {
             ip_filter: IpFilterInput::default(),
         };
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ruleset(rules: Vec<RuleInput>) -> RulesetInput {
+        RulesetInput {
+            id: "test".into(),
+            enabled: true,
+            rules,
+        }
+    }
+
+    fn rule(id: &str, pattern: &str) -> RuleInput {
+        RuleInput {
+            id: id.into(),
+            enabled: true,
+            phases: vec![WafPhase::RequestHeaders],
+            target: MatchTarget::Path,
+            pattern: pattern.into(),
+            action: WafAction::Block,
+        }
+    }
+
+    #[test]
+    fn f02_fail_policy_is_effective_and_counted() {
+        let input = || WafCompileInput {
+            builtins: BuiltinDetectorsInput::default(),
+            rulesets: vec![ruleset(vec![rule("1", "/ok"), rule("2", "")])],
+            ..Default::default()
+        };
+
+        let closed = compile_waf(input()).expect_err("closed policy must reject");
+        assert_eq!(closed, CompileError::EmptyPattern("2".into()));
+
+        let mut best_effort = input();
+        best_effort.fail_policy = FailPolicy::BestEffort;
+        let snapshot = compile_waf(best_effort).expect("best effort keeps valid rules");
+        let stats = snapshot.compile_stats();
+        assert_eq!(stats.parsed, 1, "only the valid rule is loaded");
+        assert_eq!(stats.discarded, 1, "the empty-pattern rule is counted");
+        assert_eq!(stats.diagnostics.len(), 1);
+        assert!(stats.diagnostics[0].contains("empty pattern"));
+        assert_eq!(snapshot.rulesets[0].rules.len(), 1);
+        assert_eq!(snapshot.rulesets[0].rules[0].id, "1");
+    }
+
+    #[test]
+    fn f02_crs_parser_discards_with_diagnostic_and_propagates_stats() {
+        let crs = crate::crs::parse_rule_file(
+            "crs",
+            "SecRule REQUEST_URI \"@contains attack\" \"id:990001,deny\"\nSecRule broken\n",
+            0,
+        );
+        assert_eq!(crs.rules.len(), 1);
+        assert_eq!(crs.discarded, 1);
+        assert!(crs.diagnostics[0].contains("line 2"));
+
+        let snapshot = compile_waf_with_crs(WafCompileInput::default(), &[crs])
+            .expect("valid CRS rule compiles");
+        assert_eq!(snapshot.compile_stats().parsed, 1);
+        assert_eq!(snapshot.compile_stats().discarded, 1);
+        assert_eq!(snapshot.compile_stats().diagnostics.len(), 1);
     }
 }

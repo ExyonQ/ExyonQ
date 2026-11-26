@@ -238,6 +238,24 @@ pub struct ProxyDispatchRequest {
     pub scheme: String,
 }
 
+/// Route-scoped WebSocket tunnel controls (F-05).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebSocketLimits {
+    /// Maximum time either direction may stay idle before a close frame is sent.
+    pub idle_timeout: std::time::Duration,
+    /// Maximum concurrent tunnels across the process (fail closed with 503).
+    pub max_tunnels: usize,
+}
+
+impl Default for WebSocketLimits {
+    fn default() -> Self {
+        Self {
+            idle_timeout: std::time::Duration::from_secs(300),
+            max_tunnels: 2_000,
+        }
+    }
+}
+
 /// Materialized upstream success (cache-eligible GET/HEAD, small responses, error pages).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyMaterializedResponse {

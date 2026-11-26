@@ -34,6 +34,18 @@ pub struct CompiledWafSnapshot {
     pub(crate) detectors: CompiledDetectors,
     pub(crate) rulesets: Vec<CompiledRuleset>,
     pub(crate) exclusions: Vec<CompiledExclusion>,
+    pub(crate) stats: CompileStats,
+}
+
+/// Rule compile accounting surfaced for install diagnostics (F-02).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompileStats {
+    /// Rules that reached the compiled snapshot (native + CRS).
+    pub parsed: usize,
+    /// Rules/parser lines rejected without entering the snapshot.
+    pub discarded: usize,
+    /// One diagnostic per discarded rule (never silently dropped).
+    pub diagnostics: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +114,10 @@ pub(crate) enum LiteralMatcher {
 }
 
 impl CompiledWafSnapshot {
+    pub fn compile_stats(&self) -> &CompileStats {
+        &self.stats
+    }
+
     pub fn mode(&self) -> WafMode {
         self.mode
     }

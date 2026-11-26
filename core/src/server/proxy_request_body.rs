@@ -24,6 +24,17 @@
 use http_body_util::BodyExt;
 use hyper::body::Body;
 use hyper::header::{HeaderMap, CONTENT_LENGTH};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+
+/// Absolute wall-clock budget for reading one proxy request body (F-01).
+pub(crate) const PROXY_REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Per-frame read budget inside the absolute body deadline (slowloris guard).
+pub(crate) const PROXY_REQUEST_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bodies above this threshold spill to a private temp file (F-01).
+pub(crate) const PROXY_REQUEST_BODY_SPOOL_THRESHOLD: usize = 4 * 1024 * 1024;
 
 /// Private error for proxy request body reads (not a public API).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +43,168 @@ pub(crate) enum ProxyRequestBodyReadError {
     Body,
     /// Declared or observed size exceeds the configured limit.
     TooLarge,
+    /// Absolute or per-read body deadline elapsed.
+    Deadline,
+    /// The spool file could not be created, written, or read back.
+    Spool,
+}
+
+/// Collected proxy body plus whether it crossed the spool threshold.
+#[derive(Debug)]
+pub(crate) struct CollectedProxyRequestBody {
+    pub bytes: Vec<u8>,
+    pub spooled: bool,
+}
+
+static SPOOL_SEQ: AtomicU64 = AtomicU64::new(0);
+
+struct SpoolFile {
+    path: PathBuf,
+    file: Option<tokio::fs::File>,
+}
+
+impl Drop for SpoolFile {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+impl SpoolFile {
+    fn create() -> std::io::Result<Self> {
+        use std::io::ErrorKind;
+        for _ in 0..32 {
+            let seq = SPOOL_SEQ.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "exyonq-proxy-body-{}-{seq}.tmp",
+                std::process::id()
+            ));
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&path) {
+                Ok(file) => {
+                    return Ok(Self {
+                        path,
+                        file: Some(tokio::fs::File::from_std(file)),
+                    })
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(err),
+            }
+        }
+        Err(std::io::Error::other(
+            "could not allocate a unique spool file",
+        ))
+    }
+
+    async fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        let Some(file) = self.file.as_mut() else {
+            return Err(std::io::Error::other("spool file already closed"));
+        };
+        file.write_all(bytes).await
+    }
+
+    async fn finish(mut self) -> std::io::Result<Vec<u8>> {
+        drop(self.file.take());
+        tokio::fs::read(&self.path).await
+    }
+}
+
+/// Collect with an absolute deadline and disk spooling above `spool_threshold`.
+/// The in-memory accumulation is capped at the threshold; once crossed, the
+/// body is written to a 0600 temporary file and read back only at the end.
+pub(crate) async fn collect_proxy_request_body_with_deadline<B>(
+    declared_content_length: Option<usize>,
+    body: B,
+    max_bytes: usize,
+    timeout: Duration,
+    spool_threshold: usize,
+) -> Result<CollectedProxyRequestBody, ProxyRequestBodyReadError>
+where
+    B: Body + Unpin,
+    B::Data: AsRef<[u8]>,
+{
+    if declared_content_length.is_some_and(|len| len > max_bytes) {
+        return Err(ProxyRequestBodyReadError::TooLarge);
+    }
+    let deadline = tokio::time::Instant::now() + timeout.max(Duration::from_millis(1));
+    tokio::time::timeout_at(
+        deadline,
+        collect_inner(body, max_bytes, deadline, spool_threshold),
+    )
+    .await
+    .map_err(|_| ProxyRequestBodyReadError::Deadline)?
+}
+
+async fn collect_inner<B>(
+    mut body: B,
+    max_bytes: usize,
+    deadline: tokio::time::Instant,
+    spool_threshold: usize,
+) -> Result<CollectedProxyRequestBody, ProxyRequestBodyReadError>
+where
+    B: Body + Unpin,
+    B::Data: AsRef<[u8]>,
+{
+    let mut buf = Vec::new();
+    let mut total = 0usize;
+    let mut spool: Option<SpoolFile> = None;
+    loop {
+        let read_deadline =
+            deadline.min(tokio::time::Instant::now() + PROXY_REQUEST_BODY_READ_TIMEOUT);
+        let frame = tokio::time::timeout_at(read_deadline, body.frame())
+            .await
+            .map_err(|_| ProxyRequestBodyReadError::Deadline)?;
+        let Some(frame) = frame else {
+            break;
+        };
+        let frame = frame.map_err(|_| ProxyRequestBodyReadError::Body)?;
+        let Ok(chunk) = frame.into_data() else {
+            continue;
+        };
+        let chunk = chunk.as_ref();
+        if chunk.is_empty() {
+            continue;
+        }
+        total = proxy_request_body_accept_chunk(total, chunk.len(), max_bytes)
+            .ok_or(ProxyRequestBodyReadError::TooLarge)?;
+
+        if spool.is_none() && total > spool_threshold {
+            let mut file = SpoolFile::create().map_err(|_| ProxyRequestBodyReadError::Spool)?;
+            file.write_all(&buf)
+                .await
+                .map_err(|_| ProxyRequestBodyReadError::Spool)?;
+            file.write_all(chunk)
+                .await
+                .map_err(|_| ProxyRequestBodyReadError::Spool)?;
+            buf.clear();
+            spool = Some(file);
+        } else if let Some(file) = spool.as_mut() {
+            file.write_all(chunk)
+                .await
+                .map_err(|_| ProxyRequestBodyReadError::Spool)?;
+        } else {
+            buf.extend_from_slice(chunk);
+        }
+    }
+    match spool {
+        Some(file) => Ok(CollectedProxyRequestBody {
+            bytes: file
+                .finish()
+                .await
+                .map_err(|_| ProxyRequestBodyReadError::Spool)?,
+            spooled: true,
+        }),
+        None => Ok(CollectedProxyRequestBody {
+            bytes: buf,
+            spooled: false,
+        }),
+    }
 }
 
 /// Parse a single valid Content-Length as `usize`.
@@ -156,6 +329,20 @@ mod tests {
     }
 
     struct ErrorBody;
+
+    struct PendingBody;
+
+    impl Body for PendingBody {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            Poll::Pending
+        }
+    }
 
     impl Body for ErrorBody {
         type Data = Bytes;
@@ -366,5 +553,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, b"abcdef");
+    }
+
+    #[tokio::test]
+    async fn f01_body_deadline_returns_timeout() {
+        let err = collect_proxy_request_body_with_deadline(
+            None,
+            PendingBody,
+            1024,
+            Duration::from_millis(25),
+            1024,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, ProxyRequestBodyReadError::Deadline);
+    }
+
+    #[tokio::test]
+    async fn f01_body_spools_above_threshold_and_reassembles() {
+        let chunks = [
+            Bytes::from_static(b"1234"),
+            Bytes::from_static(b"5678"),
+            Bytes::from_static(b"90ab"),
+            Bytes::from_static(b"cdef"),
+        ];
+        let out = collect_proxy_request_body_with_deadline(
+            None,
+            ChunksBody::data(chunks),
+            1024,
+            Duration::from_secs(1),
+            8,
+        )
+        .await
+        .expect("spooled body");
+        assert!(out.spooled, "body above threshold must spill to disk");
+        assert_eq!(out.bytes, b"1234567890abcdef");
+    }
+
+    #[tokio::test]
+    async fn f01_body_below_threshold_stays_in_memory() {
+        let out = collect_proxy_request_body_with_deadline(
+            None,
+            Full::new(Bytes::from_static(b"12345678")),
+            1024,
+            Duration::from_secs(1),
+            8,
+        )
+        .await
+        .expect("memory body");
+        assert!(!out.spooled);
+        assert_eq!(out.bytes, b"12345678");
     }
 }

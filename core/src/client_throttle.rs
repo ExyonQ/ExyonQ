@@ -108,6 +108,10 @@ pub(crate) enum ThrottleDecision {
     SoftLimit,
     HardLimit,
     Banned,
+    /// The bounded client table is full and every row is protected by a live
+    /// ban or an active connection. Refuse the newcomer instead of evicting
+    /// state that is still authoritative (fail closed).
+    TableFull,
 }
 
 pub(crate) struct ClientGuard {
@@ -138,17 +142,21 @@ fn hard_abort_changed(ip: IpAddr, epoch: u64) -> bool {
     hard_abort_epoch(ip) != epoch
 }
 
-fn state_for(
+/// Look up or insert a client row without ever discarding a live ban or an
+/// active connection. `None` means the bounded table is full and every row is
+/// protected; callers fail closed for the newcomer.
+fn try_state_for(
     clients: &mut HashMap<IpAddr, ClientState>,
     ip: IpAddr,
     now: Instant,
-) -> &mut ClientState {
-    if clients.len() >= MAX_CLIENTS && !clients.contains_key(&ip) {
-        if let Some(victim) = clients.keys().next().copied() {
-            clients.remove(&victim);
-        }
+) -> Option<&mut ClientState> {
+    if clients.contains_key(&ip) {
+        return clients.get_mut(&ip);
     }
-    clients.entry(ip).or_insert_with(|| ClientState::new(now))
+    if clients.len() >= MAX_CLIENTS {
+        return None;
+    }
+    Some(clients.entry(ip).or_insert_with(|| ClientState::new(now)))
 }
 
 fn arm_ban(state: &mut ClientState, now: Instant, ban_seconds: u64) {
@@ -173,7 +181,9 @@ pub(crate) fn acquire_connection(
     }
     let now = Instant::now();
     let mut clients = CLIENTS.lock().unwrap_or_else(|p| p.into_inner());
-    let state = state_for(&mut clients, ip, now);
+    let Some(state) = try_state_for(&mut clients, ip, now) else {
+        return Err(ThrottleDecision::TableFull);
+    };
     if let Some(until) = state.ban_until {
         if until > now {
             return Err(ThrottleDecision::Banned);
@@ -236,7 +246,9 @@ pub(crate) fn request_wait(config: &ClientThrottleConfig, ip: IpAddr, dynamic: b
     };
     let now = Instant::now();
     let mut clients = CLIENTS.lock().unwrap_or_else(|p| p.into_inner());
-    let state = state_for(&mut clients, ip, now);
+    let Some(state) = try_state_for(&mut clients, ip, now) else {
+        return Duration::ZERO;
+    };
     let window = if dynamic {
         &mut state.dynamic_window
     } else {
@@ -272,7 +284,9 @@ pub(crate) fn request_wait(config: &ClientThrottleConfig, ip: IpAddr, dynamic: b
 
 fn token_wait(ip: IpAddr, bytes: usize, rate: u64, inbound: bool, now: Instant) -> Duration {
     let mut clients = CLIENTS.lock().unwrap_or_else(|p| p.into_inner());
-    let state = state_for(&mut clients, ip, now);
+    let Some(state) = try_state_for(&mut clients, ip, now) else {
+        return Duration::ZERO;
+    };
     let (tokens, at) = if inbound {
         (&mut state.in_tokens, &mut state.in_at)
     } else {
@@ -326,7 +340,9 @@ pub(crate) fn note_bad_request(config: &ClientThrottleConfig, ip: IpAddr) {
     }
     let now = Instant::now();
     let mut clients = CLIENTS.lock().unwrap_or_else(|p| p.into_inner());
-    let state = state_for(&mut clients, ip, now);
+    let Some(state) = try_state_for(&mut clients, ip, now) else {
+        return;
+    };
     if state.ban_until.is_some_and(|until| until > now) {
         return;
     }
@@ -348,7 +364,9 @@ fn token_chunk(
     now: Instant,
 ) -> (Bytes, Option<Bytes>, Duration) {
     let mut clients = CLIENTS.lock().unwrap_or_else(|p| p.into_inner());
-    let state = state_for(&mut clients, ip, now);
+    let Some(state) = try_state_for(&mut clients, ip, now) else {
+        return (data, None, Duration::ZERO);
+    };
     let (tokens, at) = if inbound {
         (&mut state.in_tokens, &mut state.in_at)
     } else {
@@ -690,6 +708,51 @@ mod tests {
         assert_eq!(head.len(), 40);
         assert!(tail.is_none());
         assert!(wait.is_zero());
+    }
+
+    #[test]
+    fn f04_full_table_preserves_bans_and_active_connections() {
+        use std::collections::HashMap;
+
+        let now = Instant::now();
+        let mut clients: HashMap<IpAddr, ClientState> = HashMap::new();
+        for i in 0..MAX_CLIENTS {
+            let ip = IpAddr::from(std::net::Ipv4Addr::from(0x0a00_0000u32 + i as u32));
+            let mut state = ClientState::new(now);
+            state.active = 1;
+            clients.insert(ip, state);
+        }
+        let banned_ip = IpAddr::from(std::net::Ipv4Addr::new(10, 255, 0, 1));
+        let mut banned = clients
+            .remove(&IpAddr::from(std::net::Ipv4Addr::new(10, 0, 0, 0)))
+            .expect("seed row");
+        banned.active = 0;
+        banned.ban_until = Some(now + Duration::from_secs(60));
+        clients.insert(banned_ip, banned);
+        let active_ip = IpAddr::from(std::net::Ipv4Addr::new(10, 255, 0, 2));
+        let active = clients
+            .remove(&IpAddr::from(std::net::Ipv4Addr::new(10, 0, 0, 1)))
+            .expect("active row");
+        clients.insert(active_ip, active);
+
+        let newcomer = IpAddr::from(std::net::Ipv4Addr::new(10, 255, 0, 3));
+        assert!(
+            try_state_for(&mut clients, newcomer, now).is_none(),
+            "a full table with every row protected must refuse the newcomer"
+        );
+        assert_eq!(clients.len(), MAX_CLIENTS);
+        assert!(clients
+            .get(&banned_ip)
+            .is_some_and(|state| state.ban_until.is_some_and(|until| until > now)));
+        assert!(clients
+            .get(&active_ip)
+            .is_some_and(|state| state.active > 0));
+        assert!(!clients.contains_key(&newcomer));
+
+        // An existing row is still usable without growing the table.
+        let existing = IpAddr::from(std::net::Ipv4Addr::new(10, 0, 0, 42));
+        assert!(try_state_for(&mut clients, existing, now).is_some());
+        assert_eq!(clients.len(), MAX_CLIENTS);
     }
 
     #[test]

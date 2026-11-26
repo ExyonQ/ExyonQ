@@ -28,12 +28,56 @@ use hyper::header::{
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tracing::warn;
 
 const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const WS_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+/// Close frame: opcode 0x8, length 2, status 1000 (normal closure).
+const WS_CLOSE_NORMAL: &[u8] = &[0x88, 0x02, 0x03, 0xe8];
+
+#[derive(Default)]
+struct TunnelCounter {
+    active: AtomicUsize,
+}
+
+static WS_TUNNELS: LazyLock<Arc<TunnelCounter>> =
+    LazyLock::new(|| Arc::new(TunnelCounter::default()));
+
+struct TunnelPermit {
+    counter: Arc<TunnelCounter>,
+}
+
+impl Drop for TunnelPermit {
+    fn drop(&mut self) {
+        self.counter.active.fetch_sub(1, AtomicOrdering::AcqRel);
+    }
+}
+
+fn reserve_tunnel(counter: &Arc<TunnelCounter>, max_tunnels: usize) -> Option<TunnelPermit> {
+    let mut current = counter.active.load(AtomicOrdering::Acquire);
+    loop {
+        if current >= max_tunnels {
+            return None;
+        }
+        match counter.active.compare_exchange_weak(
+            current,
+            current + 1,
+            AtomicOrdering::AcqRel,
+            AtomicOrdering::Acquire,
+        ) {
+            Ok(_) => {
+                return Some(TunnelPermit {
+                    counter: Arc::clone(counter),
+                })
+            }
+            Err(next) => current = next,
+        }
+    }
+}
 
 fn sec_websocket_accept(key: &str) -> String {
     use base64::Engine;
@@ -100,9 +144,28 @@ fn ws_forward_headers(req_headers: &hyper::HeaderMap) -> hyper::HeaderMap {
 pub async fn forward_websocket(
     _client: &ProxyClient,
     upstream: &UpstreamTarget,
+    req: Request<Incoming>,
+    x_forwarded_for: Option<&HeaderValue>,
+    metrics: &ProxyHyperMetrics,
+) -> Response<BoxBody<bytes::Bytes, hyper::Error>> {
+    forward_websocket_with_limits(
+        _client,
+        upstream,
+        req,
+        x_forwarded_for,
+        metrics,
+        exyonq_module_api::proxy_dispatch::WebSocketLimits::default(),
+    )
+    .await
+}
+
+pub async fn forward_websocket_with_limits(
+    _client: &ProxyClient,
+    upstream: &UpstreamTarget,
     mut req: Request<Incoming>,
     x_forwarded_for: Option<&HeaderValue>,
     metrics: &ProxyHyperMetrics,
+    limits: exyonq_module_api::proxy_dispatch::WebSocketLimits,
 ) -> Response<BoxBody<bytes::Bytes, hyper::Error>> {
     if !request_headers_safe_for_proxy(req.headers()) {
         return bad_request("ambiguous request headers");
@@ -125,6 +188,14 @@ pub async fn forward_websocket(
         .map(str::to_string)
     else {
         return bad_gateway();
+    };
+
+    // F-05: refuse before contacting the upstream when the tunnel budget is
+    // exhausted. The permit moves into the tunnel task and is released when
+    // the task ends.
+    let Some(tunnel_permit) = reserve_tunnel(&WS_TUNNELS, limits.max_tunnels) else {
+        metrics.responses_503.fetch_add(1, Ordering::Relaxed);
+        return crate::hyper_forward::service_unavailable();
     };
 
     let mut upstream_builder = Request::builder()
@@ -224,10 +295,17 @@ pub async fn forward_websocket(
 
     tokio::spawn(async move {
         let _lifecycle_hold = lifecycle_hold;
+        let _tunnel_permit = tunnel_permit;
         let (client_res, upstream_res) = tokio::join!(on_client_upgrade, on_upstream_upgrade);
         match (client_res, upstream_res) {
             (Ok(client_io), Ok(upstream_io)) => {
-                if let Err(err) = tunnel(TokioIo::new(client_io), TokioIo::new(upstream_io)).await {
+                if let Err(err) = tunnel_with_idle(
+                    TokioIo::new(client_io),
+                    TokioIo::new(upstream_io),
+                    limits.idle_timeout,
+                )
+                .await
+                {
                     warn!(%err, "websocket tunnel closed");
                 }
             }
@@ -269,7 +347,19 @@ fn upstream_websocket_101_ok(headers: &hyper::HeaderMap) -> bool {
     upgrade.eq_ignore_ascii_case("websocket") && connection_has_token(headers, "upgrade")
 }
 
-async fn tunnel<C, U>(client: C, upstream: U) -> std::io::Result<()>
+enum TunnelOutcome {
+    Closed,
+    Failed(std::io::Error),
+    Idle,
+}
+
+/// Transparent frame relay with an inactivity deadline. On idle, both peers
+/// receive a normal close (1000) and the sockets are shut down in order.
+async fn tunnel_with_idle<C, U>(
+    client: C,
+    upstream: U,
+    idle_timeout: Duration,
+) -> std::io::Result<()>
 where
     C: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     U: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -277,18 +367,40 @@ where
     let (mut client_read, mut client_write) = tokio::io::split(client);
     let (mut upstream_read, mut upstream_write) = tokio::io::split(upstream);
 
-    let client_to_upstream = tokio::io::copy(&mut client_read, &mut upstream_write);
-    let upstream_to_client = tokio::io::copy(&mut upstream_read, &mut client_write);
-
-    tokio::select! {
-        result = client_to_upstream => {
-            result?;
+    let outcome = {
+        let client_to_upstream = tokio::io::copy(&mut client_read, &mut upstream_write);
+        let upstream_to_client = tokio::io::copy(&mut upstream_read, &mut client_write);
+        tokio::pin!(client_to_upstream);
+        tokio::pin!(upstream_to_client);
+        tokio::select! {
+            result = tokio::time::timeout(idle_timeout, &mut client_to_upstream) => {
+                match result {
+                    Ok(Ok(_)) => TunnelOutcome::Closed,
+                    Ok(Err(err)) => TunnelOutcome::Failed(err),
+                    Err(_) => TunnelOutcome::Idle,
+                }
+            }
+            result = tokio::time::timeout(idle_timeout, &mut upstream_to_client) => {
+                match result {
+                    Ok(Ok(_)) => TunnelOutcome::Closed,
+                    Ok(Err(err)) => TunnelOutcome::Failed(err),
+                    Err(_) => TunnelOutcome::Idle,
+                }
+            }
         }
-        result = upstream_to_client => {
-            result?;
+    };
+
+    match outcome {
+        TunnelOutcome::Closed => Ok(()),
+        TunnelOutcome::Failed(err) => Err(err),
+        TunnelOutcome::Idle => {
+            let _ = client_write.write_all(WS_CLOSE_NORMAL).await;
+            let _ = upstream_write.write_all(WS_CLOSE_NORMAL).await;
+            let _ = client_write.shutdown().await;
+            let _ = upstream_write.shutdown().await;
+            Ok(())
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -753,5 +865,47 @@ mod tests {
         let payload = "k".repeat(1024);
         let echo = proxy_ws_echo(&payload, false).await;
         assert_eq!(echo, payload);
+    }
+
+    #[tokio::test]
+    async fn f05_idle_timeout_sends_normal_close_to_both_peers() {
+        let (client, mut client_peer) = tokio::io::duplex(256);
+        let (upstream, mut upstream_peer) = tokio::io::duplex(256);
+        let task = tokio::spawn(tunnel_with_idle(
+            client,
+            upstream,
+            Duration::from_millis(25),
+        ));
+
+        let mut buf = [0u8; 16];
+        let n = tokio::time::timeout(Duration::from_secs(1), client_peer.read(&mut buf))
+            .await
+            .expect("idle timeout must not hang")
+            .expect("client close frame read");
+        assert_eq!(&buf[..n], WS_CLOSE_NORMAL, "client receives close 1000");
+        let n = tokio::time::timeout(Duration::from_secs(1), upstream_peer.read(&mut buf))
+            .await
+            .expect("idle timeout must not hang")
+            .expect("upstream close frame read");
+        assert_eq!(&buf[..n], WS_CLOSE_NORMAL, "upstream receives close 1000");
+        task.await.expect("tunnel task").expect("clean close");
+    }
+
+    #[test]
+    fn f05_tunnel_limit_is_fail_closed() {
+        let counter = Arc::new(TunnelCounter::default());
+        let mut permits = Vec::new();
+        for _ in 0..2_000 {
+            permits.push(reserve_tunnel(&counter, 2_000).expect("tunnel slot below the limit"));
+        }
+        assert!(
+            reserve_tunnel(&counter, 2_000).is_none(),
+            "the 2 001st idle tunnel is refused"
+        );
+        drop(permits.pop());
+        assert!(
+            reserve_tunnel(&counter, 2_000).is_some(),
+            "a released slot is reusable"
+        );
     }
 }
