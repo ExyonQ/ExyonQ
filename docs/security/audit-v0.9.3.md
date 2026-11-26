@@ -13,7 +13,7 @@
 | Field | Value |
 | --- | --- |
 | **Version** | 0.9.3 |
-| **Commit** | `0f58caea08899744ec6f34a5671b41fac18a6ea6` |
+| **Commit** | `d145976b486c243c8e8c8970cd0f45ec6a425977` |
 | **Date** | 2026-11-25 |
 | **Previous audit** | [`audit-v0.9.2.md`](audit-v0.9.2.md) |
 
@@ -34,8 +34,10 @@ audit runs, `CHANGELOG.md`, `docs/release/v0.9.2.md` and
 > including issue #109 and ACME/H3), bound by the worktree fingerprint below.
 > That patch is committed as **C**
 > `d145976b486c243c8e8c8970cd0f45ec6a425977`, and this document is committed as
-> the audit-only seal **S**, whose first parent is C and whose only change is
-> this file. `v0.9.3` is not tagged yet: the tag belongs on S, not on C.
+> the audit-only seal **S** `ffbc2005d54f6d9e99e295f2570e9b240697406b`, whose
+> first parent is C and whose only change is this file. C and S were published
+> to `main` through merge `1b92e6a4199b50e5cffa80ebcb68583a13fdaaf1` (PR #110).
+> `v0.9.3` is not tagged yet: the tag belongs on S, not on C.
 
 ```text
 AUDITED_STATE      = C d145976b486c243c8e8c8970cd0f45ec6a425977 (the 0.9.3 patch commit)
@@ -70,8 +72,9 @@ WORKTREE_UNTRACKED   = 10 files / 8 status entries (docs/architecture/fastcgi-ph
                            supply-chain/imports.lock — the vet store created here)
 RELEASE_BINARY     = target/release/exyonq sha256 720d5a6efe78132998454b12b1fa5e9dd87207d4dd74a28d55bae4ab1f755bc9 (rebuilt 2026-11-25 after #109/ACME; local smoke DEVELOPMENT_AID PASS=5 FAIL=0, not E2E)
 BINARY_VERSION     = exyonq 0.9.3 / product_version=0.9.3 / artifact_version=0.9.3 / source_revision=0f58caea… / source_tag= (empty, untagged tree)
-SEAL_COMMIT        = S (the audit-only commit that adds this line; first parent C; changes only this file)
-TAG                = NONE (owner-gated; not created in this increment)
+SEAL_COMMIT        = S ffbc2005d54f6d9e99e295f2570e9b240697406b (audit-only; first parent C; changes only this file)
+PUBLISHED_IN       = 1b92e6a4199b50e5cffa80ebcb68583a13fdaaf1 (merge of PR #110 into main; no tag)
+TAG                = NONE (not created; the tag ceremony is still owner-gated)
 ```
 
 **Seal construction (2026-11-25).** `WORKTREE_DIFF_SHA256` is the SHA-256 of
