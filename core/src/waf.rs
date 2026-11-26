@@ -294,6 +294,7 @@ struct WafLogContext<'a> {
     method: &'a str,
     path: &'a str,
     user_agent: Option<&'a [u8]>,
+    request_id: Option<&'a str>,
 }
 
 fn log_context<'a>(
@@ -303,12 +304,24 @@ fn log_context<'a>(
     path: &'a str,
     headers: &'a dyn HeaderView,
 ) -> WafLogContext<'a> {
+    log_context_with_id(client_ip, host, method, path, headers, None)
+}
+
+fn log_context_with_id<'a>(
+    client_ip: IpAddr,
+    host: Option<&'a str>,
+    method: &'a str,
+    path: &'a str,
+    headers: &'a dyn HeaderView,
+    request_id: Option<&'a str>,
+) -> WafLogContext<'a> {
     WafLogContext {
         client_ip,
         host,
         method,
         path,
         user_agent: headers.get("user-agent"),
+        request_id,
     }
 }
 
@@ -330,6 +343,7 @@ fn emit_decision(phase: WafPhase, decision: &WafDecision, ctx: WafLogContext<'_>
             method = %ctx.method,
             path = %ctx.path,
             user_agent = %user_agent,
+            request_id = ctx.request_id.unwrap_or("-"),
             rule_id = %v.rule_id,
             action = ?decision.action,
             truncated = decision.inspection_truncated,
@@ -532,6 +546,7 @@ fn finish_abuse(
 /// H1 / H2 / H4 / H5: header-phase inspection.
 ///
 /// Precedence: signature inspect → Block (enforce) → else abuse (grant may skip) → Challenge/RateLimit.
+#[cfg(test)]
 pub(crate) fn inspect_request_headers(
     waf: &dyn WafEngine,
     method: &str,
@@ -546,6 +561,28 @@ pub(crate) fn inspect_request_headers(
     enforce: bool,
     abuse: Option<&dyn WafAbuseGate>,
 ) -> WafHookResult {
+    inspect_request_headers_with_id(
+        waf, method, host, path, query, headers, client_ip, route_id, generation, skip_abuse,
+        enforce, abuse, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn inspect_request_headers_with_id(
+    waf: &dyn WafEngine,
+    method: &str,
+    host: Option<&str>,
+    path: &str,
+    query: Option<&str>,
+    headers: &dyn HeaderView,
+    client_ip: IpAddr,
+    route_id: Option<&str>,
+    generation: u64,
+    skip_abuse: bool,
+    enforce: bool,
+    abuse: Option<&dyn WafAbuseGate>,
+    request_id: Option<&str>,
+) -> WafHookResult {
     let req = WafRequest {
         method,
         host,
@@ -555,7 +592,7 @@ pub(crate) fn inspect_request_headers(
         client_ip,
         route_id,
     };
-    let ctx = log_context(client_ip, host, method, path, headers);
+    let ctx = log_context_with_id(client_ip, host, method, path, headers, request_id);
     // EXQ-032: a temporary ban from the per-IP violation counter is a hard gate
     // evaluated before the signature engine, so a violating client observes the
     // ban (429) instead of an endless stream of 403s. Rate-limit/challenge keep
@@ -996,6 +1033,7 @@ mod tests {
             method: "GET",
             path: "/",
             user_agent: None,
+            request_id: None,
         };
         let r = finish(
             WafPhase::RequestHeaders,
@@ -1024,6 +1062,7 @@ mod tests {
             method: "GET",
             path: "/",
             user_agent: None,
+            request_id: None,
         };
         let r = finish(
             WafPhase::RequestHeaders,

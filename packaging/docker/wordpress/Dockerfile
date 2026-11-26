@@ -15,10 +15,17 @@ FROM ${EXYONQ_IMAGE} AS exyonqbin
 # WordPress payload is fetched in a builder stage so the runtime image carries
 # no downloader (curl/unzip).
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:771146c2dfc880902a185f060c3db5571473c46b267edd98c3119c83068dfb61 AS fetcher
+ARG WORDPRESS_VERSION=7.1.4
+ARG WORDPRESS_SHA256=881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835
+ARG SQLITE_INTEGRATION_VERSION=3.1.3
+ARG SQLITE_INTEGRATION_SHA256=f6ce35e8419d0b9326221a907627d905e25c2a5ba2afc86492811f14c851efe0
 RUN apk update && apk add --no-cache curl unzip ca-certificates \
     && rm -rf /var/cache/apk/*
-RUN curl -fsSL https://wordpress.org/latest.tar.gz | tar -xz -C /tmp \
-    && curl -fsSL -o /tmp/sqlite.zip https://downloads.wordpress.org/plugin/sqlite-database-integration.latest-stable.zip \
+RUN curl -fsSL -o /tmp/wordpress.tar.gz "https://wordpress.org/wordpress-${WORDPRESS_VERSION}.tar.gz" \
+    && echo "${WORDPRESS_SHA256}  /tmp/wordpress.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/wordpress.tar.gz -C /tmp \
+    && curl -fsSL -o /tmp/sqlite.zip "https://downloads.wordpress.org/plugin/sqlite-database-integration.${SQLITE_INTEGRATION_VERSION}.zip" \
+    && echo "${SQLITE_INTEGRATION_SHA256}  /tmp/sqlite.zip" | sha256sum -c - \
     && mkdir -p /staging/wp-content/plugins /staging/wp-content/database \
     && cp -a /tmp/wordpress/. /staging/ \
     && unzip -q /tmp/sqlite.zip -d /staging/wp-content/plugins \

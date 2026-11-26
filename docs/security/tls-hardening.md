@@ -114,6 +114,29 @@ Session IDs and stateless tickets are shared across acceptor rebuilds: a
 reload does not break resumption, and ticket keys rotate on the rustls
 schedule (6h issuance, 12h acceptance). No configuration is required.
 
+## Client certificates (mTLS)
+
+`[server.tls]` can require a client certificate signed by a private CA. The
+policy is listener-wide and applies to the first `[[server]]` on the socket;
+the fields are rejected on a shared non-primary block and on `http3_listen`.
+
+```toml
+[server.tls]
+cert = "/etc/exyonq/tls/example.com.pem"
+key  = "/etc/exyonq/tls/example.com.key"
+client_auth = true
+client_ca  = "/etc/exyonq/tls/client-ca.pem"
+crl        = "/etc/exyonq/tls/client-ca.crl.pem"   # optional
+min_version = "TLSv1.3"                            # TLSv1.2 | TLSv1.3
+```
+
+`client_ca` is a PEM bundle of trusted client CAs; `crl` is an optional PEM
+bundle checked for every handshake. Missing, empty or unparsable files fail
+closed at startup/reload. `client_auth` without `client_ca`, or `client_ca`/
+`crl` without `client_auth`, is a configuration error. `min_version` is a
+floor: `TLSv1.3` combined with an explicit `protocols` list containing
+`TLSv1.2` is rejected.
+
 ## OCSP stapling
 
 ExyonQ does not fetch from the responder. Point `ocsp_stapling` at a

@@ -132,6 +132,17 @@ pub(crate) fn emit_wire_access(
     client_ip: Option<&str>,
     duration_ms: u64,
 ) -> Option<String> {
+    emit_wire_access_with_id(head, status, outcome, client_ip, duration_ms, None)
+}
+
+fn emit_wire_access_with_id(
+    head: &[u8],
+    status: u16,
+    outcome: &str,
+    client_ip: Option<&str>,
+    duration_ms: u64,
+    request_id: Option<&str>,
+) -> Option<String> {
     // Cap061/S2: no identity/urandom/formatting when no access consumer is active.
     if !observability::access_event_required() {
         return None;
@@ -143,7 +154,13 @@ pub(crate) fn emit_wire_access(
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case("x-request-id"))
         .map(|(_, v)| v.as_str());
-    let identity = observability::resolve_request_identity(raw_xid);
+    let (external, internal) = match request_id {
+        Some(id) => (None, id.to_string()),
+        None => {
+            let identity = observability::resolve_request_identity(raw_xid);
+            (identity.external_request_id, identity.internal_request_id)
+        }
+    };
     let host = wire_host_from_pairs(&pairs).map(strip_host_port);
     observability::emit_access_terminal(AccessTerminal {
         method: "GET",
@@ -154,13 +171,13 @@ pub(crate) fn emit_wire_access(
         duration_ms,
         bytes_sent: None,
         client_ip,
-        external_request_id: identity.external_request_id.as_deref(),
-        internal_request_id: &identity.internal_request_id,
+        external_request_id: external.as_deref(),
+        internal_request_id: &internal,
         upstream: None,
         error_class: None,
         outcome: Some(outcome),
     });
-    Some(identity.internal_request_id)
+    Some(internal)
 }
 
 /// A blocking static wire thread has no Hyper. Install the sink that replays a
@@ -467,7 +484,15 @@ fn parse_wire_method(head: &[u8]) -> &'static str {
 /// solely for Nop/Disabled engine plumbing. Monitor and Block remain fully active.
 #[inline]
 pub(crate) fn waf_wire_materialization_active(state: &ServerState) -> bool {
+    // EXQ-028: the wire path writes its reject bytes inline and cannot resolve
+    // a server `error_pages` document. Those servers must take Hyper, whose
+    // WAF gate and `maybe_error_page` run in the same dispatch.
     state.waf_wire_inspection_active
+        && !state
+            .config
+            .servers
+            .iter()
+            .any(|server| !server.error_pages.is_empty())
 }
 
 /// Cap015: evaluate generation-frozen WAF on wire heads before static/proxy serve.
@@ -482,6 +507,7 @@ pub(crate) fn evaluate_wire_waf(
     head: &[u8],
     x_forwarded_for: &HeaderValue,
     skip_abuse: bool,
+    request_id: Option<&str>,
 ) -> crate::waf::WafHookResult {
     // ARCH-002: skip parse_wire_header_pairs / owned Strings / engine inspect when WAF is off.
     if !waf_wire_materialization_active(state) {
@@ -518,7 +544,7 @@ pub(crate) fn evaluate_wire_waf(
             "abuse judgement site"
         );
     }
-    let decision = crate::waf::inspect_request_headers(
+    let decision = crate::waf::inspect_request_headers_with_id(
         state.waf.as_ref(),
         parse_wire_method(head),
         host,
@@ -531,6 +557,7 @@ pub(crate) fn evaluate_wire_waf(
         skip_abuse,
         state.waf_enforce,
         state.waf_abuse.as_deref(),
+        request_id,
     );
     if matches!(decision, crate::waf::WafHookResult::Continue) {
         // CRS phase 2 must run for bodyless methods too (the Hyper path does the
@@ -624,29 +651,32 @@ async fn complete_waf_reject_wire<S>(
     head: &[u8],
     client_ip: Option<&str>,
     started: Instant,
+    request_id: Option<&str>,
 ) where
     S: AsyncWrite + Unpin,
 {
     match write_waf_reject_wire(stream, reject).await {
         Ok(()) => {
             exyonq_module_api::wire_record_response(reject.status.as_u16());
-            emit_wire_access(
+            emit_wire_access_with_id(
                 head,
                 reject.status.as_u16(),
                 waf_reject_access_outcome(reject),
                 client_ip,
                 observability::duration_ms(started),
+                request_id,
             );
         }
         Err(err) => {
             WIRE_WAF_REJECT_RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
             warn!(%err, "wire waf reject response write failed");
-            emit_wire_access(
+            emit_wire_access_with_id(
                 head,
                 reject.status.as_u16(),
                 "response_write_failed",
                 client_ip,
                 observability::duration_ms(started),
+                request_id,
             );
         }
     }
@@ -661,6 +691,7 @@ struct WireWafReject {
     bytes: Vec<u8>,
     status: u16,
     outcome: &'static str,
+    request_id: Option<String>,
 }
 
 /// Wire proxy fast path; returns `Fallback` when Hyper must complete the request.
@@ -674,17 +705,25 @@ fn wire_waf_reject_bytes(ctx: &WireDispatchContext, head: &[u8]) -> Option<WireW
     // Pre-check only: this rejected request never reaches Hyper, but an allowed
     // one always does, and Hyper runs the full gate including abuse. Judging the
     // quota here would charge the client twice for one request.
+    let header_pairs = parse_wire_header_pairs(head);
+    let raw_xid = header_pairs
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, v)| v.as_str());
+    let identity = observability::resolve_request_identity(raw_xid);
     match evaluate_wire_waf(
         &ctx.state,
         ctx.pinned_generation,
         head,
         &ctx.x_forwarded_for,
         true,
+        Some(identity.internal_request_id.as_str()),
     ) {
         crate::waf::WafHookResult::Reject(reject) => Some(WireWafReject {
             bytes: format_waf_reject_http(&reject),
             status: reject.status.as_u16(),
             outcome: waf_reject_access_outcome(&reject),
+            request_id: Some(identity.internal_request_id),
         }),
         crate::waf::WafHookResult::Continue => None,
     }
@@ -765,7 +804,19 @@ where
 
     // Cap015: proxy wire must not bypass signature/abuse WAF (same contract as Hyper path).
     // The wire answers this request itself, so its gate is the authoritative one.
-    match evaluate_wire_waf(state, generation, head.as_ref(), &x_forwarded_for, false) {
+    let raw_xid = header_pairs
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, v)| v.as_str());
+    let identity = observability::resolve_request_identity(raw_xid);
+    match evaluate_wire_waf(
+        state,
+        generation,
+        head.as_ref(),
+        &x_forwarded_for,
+        false,
+        Some(identity.internal_request_id.as_str()),
+    ) {
         crate::waf::WafHookResult::Reject(reject) => {
             let started = Instant::now();
             complete_waf_reject_wire(
@@ -774,6 +825,7 @@ where
                 head.as_ref(),
                 request_xff.to_str().ok(),
                 started,
+                Some(identity.internal_request_id.as_str()),
             )
             .await;
             return ProxyWireOutcome::Handled;
@@ -1213,23 +1265,25 @@ where
         match stream.write_all(&reject.bytes).await {
             Ok(()) => {
                 exyonq_module_api::wire_record_response(reject.status);
-                emit_wire_access(
+                emit_wire_access_with_id(
                     head.as_ref(),
                     reject.status,
                     reject.outcome,
                     client_ip,
                     observability::duration_ms(started),
+                    reject.request_id.as_deref(),
                 );
             }
             Err(err) => {
                 WIRE_WAF_REJECT_RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
                 warn!(%err, "waf reject response write failed");
-                emit_wire_access(
+                emit_wire_access_with_id(
                     head.as_ref(),
                     reject.status,
                     "response_write_failed",
                     client_ip,
                     observability::duration_ms(started),
+                    reject.request_id.as_deref(),
                 );
             }
         }

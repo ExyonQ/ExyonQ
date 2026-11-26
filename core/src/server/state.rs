@@ -203,6 +203,30 @@ impl ServerState {
         m.enabled && (path == m.path.as_str() || path == m.health_path.as_str())
     }
 
+    /// EXQ-034: a route with body-transforming or subrequest modules cannot be
+    /// served by the fast proxy path; those requests need CrossCuttingPipeline
+    /// so `response_body_limit_bytes` and the module chain are real.
+    pub fn route_requires_module_pipeline(
+        &self,
+        path: &str,
+        host: Option<&str>,
+        local_port: Option<u16>,
+    ) -> bool {
+        let Some((route_idx, _)) = self
+            .route_index
+            .match_route_index_with_host_port(path, host, local_port)
+        else {
+            return false;
+        };
+        let Some(route) = self.config.routes.get(route_idx) else {
+            return false;
+        };
+        let name = route.name.as_str();
+        self.config.modules.sub_filter.routes.contains_key(name)
+            || self.config.modules.mirror.routes.contains_key(name)
+            || self.config.modules.slice.routes.contains_key(name)
+    }
+
     /// Route-bound features the fast paths (wire proxy GET, epoll sendfile,
     /// blocking static pool, static shortcut) cannot honor — the
     /// request must take the full dispatch path.

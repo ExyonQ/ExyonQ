@@ -188,7 +188,7 @@ impl CoreConnectionExecutor {
                 // below), which runs the same gate and owns the abuse decision:
                 // charging the quota here counted one request twice.
                 if let crate::waf::WafHookResult::Reject(reject) =
-                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff, true)
+                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff, true, None)
                 {
                     let bytes = format_waf_reject_http(&reject);
                     let _ = conn.stream.set_nodelay(true);
@@ -215,9 +215,14 @@ impl CoreConnectionExecutor {
             if waf_wire_materialization_active(&state) {
                 let xff = HeaderValue::from_str(&conn.peer.ip().to_string())
                     .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
-                if let crate::waf::WafHookResult::Reject(reject) =
-                    evaluate_wire_waf(&state, view.generation, head.as_ref(), &xff, !wire_answers)
-                {
+                if let crate::waf::WafHookResult::Reject(reject) = evaluate_wire_waf(
+                    &state,
+                    view.generation,
+                    head.as_ref(),
+                    &xff,
+                    !wire_answers,
+                    None,
+                ) {
                     let bytes = format_waf_reject_http(&reject);
                     let _ = conn.stream.set_nodelay(true);
                     if let Err(err) = conn.stream.write_all(&bytes) {
@@ -309,7 +314,7 @@ impl CoreConnectionExecutor {
         let xff = HeaderValue::from_str(&peer.ip().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1"));
         // Wire keepalive answers the request itself: authoritative, abuse included.
-        match evaluate_wire_waf(&state, generation, head, &xff, false) {
+        match evaluate_wire_waf(&state, generation, head, &xff, false, None) {
             crate::waf::WafHookResult::Reject(reject) => Some(format_waf_reject_http(&reject)),
             crate::waf::WafHookResult::Continue => None,
         }

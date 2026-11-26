@@ -426,9 +426,24 @@ pub fn prepare_tls_acceptor(
             (
                 tls.strict_sni,
                 crate::tls::TlsCryptoPolicy {
-                    protocols: tls.protocols.clone(),
+                    protocols: if tls.protocols.is_empty() {
+                        match tls.min_version.as_deref() {
+                            Some("TLSv1.3") | Some("TLS1.3") | Some("1.3") => {
+                                vec!["TLSv1.3".to_string()]
+                            }
+                            _ => Vec::new(),
+                        }
+                    } else {
+                        tls.protocols.clone()
+                    },
                     ciphers: tls.ciphers.clone(),
                     curves: tls.curves.clone(),
+                    client_auth: tls.client_ca.clone().map(|ca_path| {
+                        crate::tls::ClientAuthPolicy {
+                            ca_path,
+                            crl_path: tls.crl.clone(),
+                        }
+                    }),
                 },
             )
         })

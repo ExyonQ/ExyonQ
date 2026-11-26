@@ -41,14 +41,36 @@ type RespBody = Full<Bytes>;
 #[derive(Clone)]
 pub struct ControlHttp {
     service: ControlService,
-    token: Arc<[u8]>,
+    auth: ControlAuth,
+}
+
+#[derive(Clone)]
+pub struct ControlAuth {
+    pub full: Arc<[u8]>,
+    pub read_only: Option<Arc<[u8]>>,
+    pub write_only: Option<Arc<[u8]>>,
+    pub token_file: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for ControlAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlAuth")
+            .field("full", &"<redacted>")
+            .field("read_only", &self.read_only.as_ref().map(|_| "<redacted>"))
+            .field(
+                "write_only",
+                &self.write_only.as_ref().map(|_| "<redacted>"),
+            )
+            .field("token_file", &self.token_file)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ControlApiBindConfig {
     pub unix_socket: Option<PathBuf>,
     pub tcp_addr: Option<SocketAddr>,
-    pub token: Arc<[u8]>,
+    pub auth: ControlAuth,
 }
 
 #[derive(Debug)]
@@ -70,7 +92,7 @@ pub async fn spawn_http(
     if let Some(addr) = config.tcp_addr {
         validate_loopback(addr)?;
         let listener = TcpListener::bind(addr).await?;
-        let http = ControlHttp::new(service.clone(), Arc::clone(&config.token));
+        let http = ControlHttp::new(service.clone(), config.auth.clone());
         tasks.push(tokio::spawn(async move {
             if let Err(err) = serve_tcp(listener, addr, http).await {
                 warn!(%err, %addr, "control api tcp listener stopped");
@@ -82,10 +104,23 @@ pub async fn spawn_http(
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::create_dir_all(parent)?;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
         let listener = UnixListener::bind(&path)?;
-        let http = ControlHttp::new(service, Arc::clone(&config.token));
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let owner_uid = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(&path)?.uid()
+        };
+        let http = ControlHttp::new(service, config.auth);
         tasks.push(tokio::spawn(async move {
-            if let Err(err) = serve_unix(listener, path.clone(), http).await {
+            if let Err(err) = serve_unix(listener, path.clone(), http, owner_uid).await {
                 warn!(%err, path = %path.display(), "control api unix listener stopped");
             }
         }));
@@ -94,12 +129,12 @@ pub async fn spawn_http(
 }
 
 impl ControlHttp {
-    pub fn new(service: ControlService, token: Arc<[u8]>) -> Self {
-        Self { service, token }
+    pub fn new(service: ControlService, auth: ControlAuth) -> Self {
+        Self { service, auth }
     }
 
     async fn route(&self, req: Request<Incoming>) -> Result<Response<RespBody>, CtrlError> {
-        auth::authorize(req.headers(), &self.token)?;
+        self.authorize(req.headers(), req.method())?;
         match (req.method(), req.uri().path()) {
             (&Method::GET, "/api/v1/health") => self.health(),
             (&Method::GET, "/api/v1/stats") => self.json(self.service.stats()?),
@@ -116,6 +151,31 @@ impl ControlHttp {
                 "unknown control api route".to_owned(),
             )),
         }
+    }
+
+    fn authorize(&self, headers: &::http::HeaderMap, method: &Method) -> Result<(), CtrlError> {
+        let scope = if method == Method::GET || method == Method::HEAD {
+            auth::Scope::Read
+        } else {
+            auth::Scope::Write
+        };
+        if let Some(path) = &self.auth.token_file {
+            let current = auth::read_token_file(path)?;
+            return auth::authorize(
+                headers,
+                scope,
+                &current,
+                self.auth.read_only.as_deref(),
+                self.auth.write_only.as_deref(),
+            );
+        }
+        auth::authorize(
+            headers,
+            scope,
+            &self.auth.full,
+            self.auth.read_only.as_deref(),
+            self.auth.write_only.as_deref(),
+        )
     }
 
     fn health(&self) -> Result<Response<RespBody>, CtrlError> {
@@ -217,10 +277,17 @@ async fn serve_unix(
     listener: UnixListener,
     path: PathBuf,
     http: ControlHttp,
+    owner_uid: u32,
 ) -> Result<(), CtrlError> {
     info!(path = %path.display(), "control api unix listener started");
     loop {
         let (stream, _) = listener.accept().await?;
+        #[cfg(target_os = "linux")]
+        if stream.peer_cred().map(|cred| cred.uid()).ok() != Some(owner_uid) {
+            continue;
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = owner_uid;
         let http = http.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);

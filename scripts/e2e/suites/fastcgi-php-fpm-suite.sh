@@ -221,7 +221,8 @@ EOF
 start_exyonq() {
   : >"$EXYONQ_LOG"
   export EXYONQ_FCGI_DOCUMENT_ROOT="$DOCROOT"
-  "$EXYONQ_BIN" serve --config "$CFG" >>"$EXYONQ_LOG" 2>&1 &
+  EXYONQ_CONTROL_SOCKET="$TMP/exyonq.sock" \
+    "$EXYONQ_BIN" serve --config "$CFG" >>"$EXYONQ_LOG" 2>&1 &
   EXYONQ_PID=$!
   BASE="http://127.0.0.1:$EXYONQ_FCGI_E2E_PORT"
   wait_for_http "$BASE/index.php" 30

@@ -233,6 +233,11 @@ async fn serve_http3_request_bytes(
     ctx: ConnectionContext,
     req: Request<bytes::Bytes>,
 ) -> HandlerResponse {
+    // F-13: HTTP/3 normally carries :authority, but a peer can still send a
+    // literal Host; two values are ambiguous and must not reach the upstream.
+    if has_ambiguous_host(req.headers()) {
+        return text_response(StatusCode::BAD_REQUEST, "duplicate Host header");
+    }
     let local_port = ctx.local_port;
     // Cap061/S2: one admission snapshot — no mid-request flag re-read (LA-S2-001/002).
     let access_needed = crate::observability::access_event_required();
@@ -720,7 +725,20 @@ async fn serve_connection_inner(
                             &header_view,
                             client_ip_addr,
                             false,
+                            identity
+                                .as_ref()
+                                .map(|id| id.internal_request_id.as_str()),
                         ) {
+                            let reject = maybe_error_page(
+                                &ctx.state,
+                                req.method(),
+                                path,
+                                host.as_deref(),
+                                ctx.local_port,
+                                &headers,
+                                reject,
+                            )
+                            .await;
                             let outcome = waf_outcome_from_status(reject.status());
                             crate::observability::emit_audit(crate::observability::AuditEvent {
                                 action: "waf.decision",
@@ -779,7 +797,12 @@ async fn serve_connection_inner(
         let needs_module_pipeline = ctx.state.hyper_required_for_modules()
             || needs_compression_pipeline
             || ctx.state.gunzip_configured()
-            || ctx.state.path_requires_module_pipeline(req.uri().path());
+            || ctx.state.path_requires_module_pipeline(req.uri().path())
+            || ctx.state.route_requires_module_pipeline(
+                req.uri().path(),
+                request_host_value.as_deref(),
+                ctx.local_port,
+            );
         let response = if !needs_module_pipeline {
             if ctx.state.wire_cheap_modules_active() {
                 match exyonq_module_api::wire_admit(client_ip.as_str()) {
@@ -1011,8 +1034,18 @@ async fn fast_bench_request(ctx: &ConnectionContext, req: Request<Incoming>) -> 
                         &header_view,
                         client_ip,
                         false,
+                        None,
                     ) {
-                        return reject;
+                        return maybe_error_page(
+                            &ctx.state,
+                            req.method(),
+                            path,
+                            host.as_deref(),
+                            ctx.local_port,
+                            &headers,
+                            reject,
+                        )
+                        .await;
                     }
                     // Cap019: forward Range only (full header pair copy remains avoided).
                     let mut response = static_dispatch_via_service(
@@ -1377,6 +1410,12 @@ async fn handle_core_request(
     ops: &Arc<crate::lifecycle::LifecycleState>,
 ) -> Response<BoxBody> {
     let mut req = req;
+    // F-13: duplicate Host fields are ambiguous. The wire fast path already
+    // leaves them to Hyper; reject them here so Hyper cannot forward one of
+    // the two values upstream.
+    if has_ambiguous_host(req.headers()) {
+        return text_response(StatusCode::BAD_REQUEST, "duplicate Host header");
+    }
     if !canonicalize_request_uri(&mut req) {
         return text_response(StatusCode::BAD_REQUEST, "invalid request path");
     }
@@ -1575,6 +1614,7 @@ async fn handle_core_request_with_body(
         &header_view,
         client_ip,
         false,
+        None,
     ) {
         return reject;
     }
@@ -1975,6 +2015,7 @@ async fn dispatch_core_inner(
                 &header_view,
                 client_ip,
                 false,
+                None,
             ) {
                 return reject;
             }
@@ -2159,6 +2200,7 @@ async fn dispatch_core_inner(
         &header_view,
         client_ip,
         true,
+        None,
     ) {
         return reject;
     }
@@ -4456,6 +4498,7 @@ async fn proxy_route_target(
         &header_view,
         client_ip,
         false,
+        None,
     ) {
         return reject;
     }
@@ -4627,6 +4670,13 @@ fn redirect_response_parts(status: u16, location: &str) -> Response<BoxBody> {
 
 fn redirect_response(redirect: &RedirectConfig) -> Response<BoxBody> {
     redirect_response_parts(redirect.status, redirect.location.as_str())
+}
+
+/// F-13: more than one literal Host field is an ambiguous authority. The wire
+/// fast path already sends it to Hyper; Hyper must reject it before routing or
+/// proxying, never pick one of the values.
+fn has_ambiguous_host(headers: &hyper::HeaderMap) -> bool {
+    headers.get_all(hyper::header::HOST).iter().count() > 1
 }
 
 fn request_host(req: &Request<Incoming>) -> Option<String> {
@@ -5117,6 +5167,7 @@ fn waf_header_gate(
     headers: &dyn exyonq_waf_api::HeaderView,
     client_ip: std::net::IpAddr,
     skip_abuse: bool,
+    request_id: Option<&str>,
 ) -> Option<Response<BoxBody>> {
     if crate::waf::abuse_trace_enabled() {
         tracing::warn!(
@@ -5128,7 +5179,7 @@ fn waf_header_gate(
             "abuse judgement site"
         );
     }
-    match crate::waf::inspect_request_headers(
+    match crate::waf::inspect_request_headers_with_id(
         state.waf.as_ref(),
         method.as_str(),
         host,
@@ -5141,6 +5192,7 @@ fn waf_header_gate(
         skip_abuse,
         state.waf_enforce,
         state.waf_abuse.as_deref(),
+        request_id,
     ) {
         crate::waf::WafHookResult::Continue => {
             if *method == Method::GET || *method == Method::HEAD {
@@ -5396,6 +5448,15 @@ mod tests {
                 .map(|a| a.as_str()),
             Some("example.com:443")
         );
+    }
+
+    #[test]
+    fn f13_duplicate_host_fields_are_ambiguous() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.append(hyper::header::HOST, HeaderValue::from_static("a.local"));
+        assert!(!has_ambiguous_host(&headers));
+        headers.append(hyper::header::HOST, HeaderValue::from_static("b.local"));
+        assert!(has_ambiguous_host(&headers));
     }
     use crate::config::{
         AppConfig, CachePolicyConfig, RouteConfig, RouteMatch, ServerConfig, ServerNames,

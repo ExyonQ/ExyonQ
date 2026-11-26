@@ -650,6 +650,10 @@ fn map_server_tls(server: &ParsedServer, report: &mut CompatibilityReport) -> Op
                 curves: Vec::new(),
                 ocsp_stapling: None,
                 must_staple: false,
+                client_auth: false,
+                client_ca: None,
+                crl: None,
+                min_version: None,
             })
         }
         (Some((_, cert_loc)), None) => {

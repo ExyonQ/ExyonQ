@@ -311,6 +311,18 @@ pub struct TlsConfig {
     /// for must-staple certificates). Rejected without `ocsp_stapling`.
     #[serde(default)]
     pub must_staple: bool,
+    /// F-08: require a client certificate signed by `client_ca`.
+    #[serde(default)]
+    pub client_auth: bool,
+    /// F-08: PEM bundle of trusted client CA certificates.
+    #[serde(default)]
+    pub client_ca: Option<PathBuf>,
+    /// F-08: optional PEM bundle of certificate revocation lists.
+    #[serde(default)]
+    pub crl: Option<PathBuf>,
+    /// F-08: TLS floor (`TLSv1.2` or `TLSv1.3`).
+    #[serde(default)]
+    pub min_version: Option<String>,
 }
 
 /// Automatic certificate management (ACME v2; HTTP-01 default, DNS-01 opt-in).
@@ -3369,6 +3381,10 @@ fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError
         ),
         ("tls.ciphers", |t| !t.ciphers.is_empty()),
         ("tls.curves", |t| !t.curves.is_empty()),
+        ("tls.client_auth", |t| t.client_auth),
+        ("tls.client_ca", |t| t.client_ca.is_some()),
+        ("tls.crl", |t| t.crl.is_some()),
+        ("tls.min_version", |t| t.min_version.is_some()),
     ] {
         if servers
             .iter()
@@ -3456,11 +3472,16 @@ fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError
                 || !t.curves.is_empty()
                 || t.ocsp_stapling.is_some()
                 || t.must_staple
+                || t.client_auth
+                || t.client_ca.is_some()
+                || t.crl.is_some()
+                || t.min_version.is_some()
         })
     {
         return Err(ConfigError::Parse(
             "http3_listen cannot be combined with tls.strict_sni/protocols/ciphers/curves/\
-             ocsp_stapling/must_staple (HTTP/3 providers do not honor them yet)"
+             ocsp_stapling/must_staple/client_auth/client_ca/crl/min_version \
+             (HTTP/3 providers do not honor them yet)"
                 .into(),
         ));
     }
@@ -3469,6 +3490,7 @@ fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError
 
 fn validate_tls_acme(tls: &TlsConfig) -> Result<(), ConfigError> {
     validate_tls_crypto(tls)?;
+    validate_tls_client_auth(tls)?;
     if tls.must_staple && tls.ocsp_stapling.is_none() {
         return Err(ConfigError::Parse(
             "tls.must_staple requires tls.ocsp_stapling (a DER OCSP response path)".into(),
@@ -3514,6 +3536,42 @@ fn validate_tls_acme(tls: &TlsConfig) -> Result<(), ConfigError> {
                     "acme.challenge: unsupported {other:?} (supported: \"http-01\", \"dns-01\")"
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+/// F-08: client-certificate policy and TLS floor validation.
+fn validate_tls_client_auth(tls: &TlsConfig) -> Result<(), ConfigError> {
+    if tls.client_auth && tls.client_ca.is_none() {
+        return Err(ConfigError::Parse(
+            "tls.client_auth requires tls.client_ca".into(),
+        ));
+    }
+    if !tls.client_auth && (tls.client_ca.is_some() || tls.crl.is_some()) {
+        return Err(ConfigError::Parse(
+            "tls.client_ca/tls.crl require tls.client_auth = true".into(),
+        ));
+    }
+    if let Some(min) = &tls.min_version {
+        let floor = match min.trim() {
+            "TLSv1.2" | "TLS1.2" | "1.2" => 12,
+            "TLSv1.3" | "TLS1.3" | "1.3" => 13,
+            other => {
+                return Err(ConfigError::Parse(format!(
+                    "tls.min_version: unsupported {other:?} (supported: TLSv1.2, TLSv1.3)"
+                )));
+            }
+        };
+        if floor == 13
+            && tls
+                .protocols
+                .iter()
+                .any(|p| matches!(p.trim(), "TLSv1.2" | "TLS1.2" | "1.2"))
+        {
+            return Err(ConfigError::Parse(
+                "tls.min_version = TLSv1.3 conflicts with tls.protocols including TLSv1.2".into(),
+            ));
         }
     }
     Ok(())
@@ -6853,5 +6911,51 @@ root = "/tmp"
         let err = AppConfig::parse_str(input).unwrap_err().to_string();
         assert!(err.contains("modules.auth.routes.admnin"), "{err}");
         assert!(err.contains("no matching [[route]].name"), "{err}");
+    }
+
+    #[test]
+    fn f08_client_auth_requires_ca_crl_and_consistent_floor() {
+        let base = r#"
+config_version = 1
+[[server]]
+listen = "127.0.0.1:8443"
+routes = ["site"]
+[server.tls]
+cert = "/tmp/server.pem"
+key = "/tmp/server.key"
+client_auth = true
+client_ca = "/tmp/clients.pem"
+crl = "/tmp/clients.crl"
+min_version = "TLSv1.3"
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/tmp/www"
+"#;
+        let cfg = AppConfig::parse_str(base).expect("valid mTLS policy");
+        let tls = cfg.servers[0].tls.as_ref().expect("tls");
+        assert!(tls.client_auth);
+        assert_eq!(tls.min_version.as_deref(), Some("TLSv1.3"));
+
+        let missing_ca = base.replace("client_ca = \"/tmp/clients.pem\"\n", "");
+        let err = AppConfig::parse_str(&missing_ca).unwrap_err().to_string();
+        assert!(err.contains("client_auth requires tls.client_ca"), "{err}");
+
+        let ca_without_auth = base.replace("client_auth = true", "client_auth = false");
+        let err = AppConfig::parse_str(&ca_without_auth)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("require tls.client_auth = true"), "{err}");
+
+        let bad_floor = base.replace("TLSv1.3", "SSLv3");
+        let err = AppConfig::parse_str(&bad_floor).unwrap_err().to_string();
+        assert!(err.contains("unsupported"), "{err}");
+
+        let conflict = base.replace(
+            "min_version = \"TLSv1.3\"",
+            "min_version = \"TLSv1.3\"\nprotocols = [\"TLSv1.2\"]",
+        );
+        let err = AppConfig::parse_str(&conflict).unwrap_err().to_string();
+        assert!(err.contains("conflicts"), "{err}");
     }
 }

@@ -21,6 +21,8 @@ use thiserror::Error;
 pub enum CtrlError {
     #[error("unauthorized")]
     Unauthorized,
+    #[error("forbidden")]
+    Forbidden,
     #[error("duplicate vhost")]
     DuplicateVhost,
     #[error("precondition failed")]
@@ -52,6 +54,7 @@ impl CtrlError {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Forbidden => StatusCode::FORBIDDEN,
             Self::DuplicateVhost | Self::ReloadRejected { .. } => StatusCode::CONFLICT,
             Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -68,6 +71,7 @@ impl CtrlError {
             Self::BadRequest(_) | Self::NotFound | Self::Json(_) => "EXY-CTRL-0002".to_owned(),
             Self::PreconditionFailed => "EXY-CTRL-0003".to_owned(),
             Self::Unauthorized => "EXY-CTRL-0004".to_owned(),
+            Self::Forbidden => "EXY-CTRL-0006".to_owned(),
             Self::BodyTooLarge
             | Self::ServiceUnavailable(_)
             | Self::Io(_)
@@ -90,6 +94,7 @@ impl CtrlError {
     fn safe_message(&self) -> String {
         match self {
             Self::Unauthorized => "missing, malformed, or invalid server token".to_owned(),
+            Self::Forbidden => "server token lacks the required scope".to_owned(),
             Self::DuplicateVhost => "vhost already exists".to_owned(),
             Self::PreconditionFailed => "missing or stale If-Match revision".to_owned(),
             Self::BodyTooLarge => "request body exceeds 1048576 bytes".to_owned(),

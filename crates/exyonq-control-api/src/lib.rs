@@ -25,7 +25,7 @@ pub mod types;
 
 use crate::auth::validate_configured_token;
 use crate::error::CtrlError;
-use crate::http::{ControlApiBindConfig, ControlApiHandle};
+use crate::http::{ControlApiBindConfig, ControlApiHandle, ControlAuth};
 use crate::service::ControlService;
 use exyonq_module_api::kernel_control::KernelControlPort;
 use std::net::SocketAddr;
@@ -42,6 +42,9 @@ pub struct ControlApiSpawnConfig {
     pub unix_socket: Option<PathBuf>,
     pub tcp_addr: Option<SocketAddr>,
     pub token: String,
+    pub read_token: Option<String>,
+    pub write_token: Option<String>,
+    pub token_file: Option<PathBuf>,
 }
 
 pub async fn spawn_control_api(
@@ -54,13 +57,30 @@ pub async fn spawn_control_api(
         ));
     }
     let token = Arc::<[u8]>::from(validate_configured_token(config.token.as_bytes())?);
+    let read_only = config
+        .read_token
+        .map(|token| validate_configured_token(token.as_bytes()).map(Arc::<[u8]>::from))
+        .transpose()?;
+    let write_only = config
+        .write_token
+        .map(|token| validate_configured_token(token.as_bytes()).map(Arc::<[u8]>::from))
+        .transpose()?;
+    if let Some(path) = &config.token_file {
+        // Fail closed at startup; per-request reads enforce rotation and mode.
+        auth::read_token_file(path)?;
+    }
     let service = ControlService::new(port, config.config_path);
     http::spawn_http(
         service,
         ControlApiBindConfig {
             unix_socket: config.unix_socket,
             tcp_addr: config.tcp_addr,
-            token,
+            auth: ControlAuth {
+                full: token,
+                read_only,
+                write_only,
+                token_file: config.token_file,
+            },
         },
     )
     .await

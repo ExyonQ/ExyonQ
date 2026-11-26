@@ -45,6 +45,9 @@ cat >"$DOCROOT/post.php" <<'PHP'
 header('Content-Type: text/plain');
 echo 'post-body=' . file_get_contents('php://input');
 PHP
+cat >"$DOCROOT/probe.jpg" <<'PHP'
+<?php echo 'jpg-executed'; ?>
+PHP
 chmod -R a+rX "$DOCROOT"
 
 if [[ "$(id -u)" == "0" ]]; then
@@ -69,6 +72,10 @@ listen.mode = 0666
 pm = static
 pm.max_children = 2
 clear_env = no
+; F-06: deliberately let PHP-FPM execute .jpg too. ExyonQ must reject the
+; non-.php script before SCRIPT_FILENAME is sent to this pool; if the server
+; allowlist regresses, FPM answers with jpg-executed instead of 403.
+security.limit_extensions = .php .jpg
 EOF
 
 cat >"$TMP/exyonq.toml" <<EOF
@@ -85,6 +92,7 @@ name = "php"
 address = "$SOCK"
 document_root = "$DOCROOT"
 max_concurrency = 4
+script_extensions = [".php"]
 EOF
 
 FPM_PID=""; EX_PID=""
@@ -106,7 +114,7 @@ if [[ ! -S "$SOCK" ]]; then
   exit 1
 fi
 
-RUST_LOG=info "$EXYONQ_BIN" serve --config "$TMP/exyonq.toml" >"$TMP/ex.log" 2>&1 &
+EXYONQ_CONTROL_SOCKET="$TMP/exyonq.sock" RUST_LOG=info "$EXYONQ_BIN" serve --config "$TMP/exyonq.toml" >"$TMP/ex.log" 2>&1 &
 EX_PID=$!
 for _ in $(seq 1 80); do
   if python3 -c "import socket; s=socket.socket(); s.settimeout(0.2); s.connect(('127.0.0.1', int('$PORT'))); s.close()" 2>/dev/null; then
@@ -131,6 +139,19 @@ else
   e2e_record_fail "POST code=$CODE body='$RESP'"
   cat "$TMP/ex.log" >&2 || true
   cat "$TMP/fpm.out" "$TMP/fpm.log" 2>/dev/null || true
+fi
+
+# F-06: a .jpg carrying PHP must be rejected by ExyonQ's pool allowlist even
+# though PHP-FPM has security.limit_extensions empty.
+JPG_CODE="$(curl -sS -o "$TMP/jpg.out" -w '%{http_code}' \
+  "http://127.0.0.1:${PORT}/probe.jpg" || true)"
+PHP_CODE="$(curl -sS -o "$TMP/php.out" -w '%{http_code}' \
+  "http://127.0.0.1:${PORT}/post.php" || true)"
+if [[ "$JPG_CODE" == "403" && "$PHP_CODE" == "200" ]]; then
+  e2e_record_pass "F-06 non-.php script rejected before SCRIPT_FILENAME (jpg=$JPG_CODE php=$PHP_CODE)"
+else
+  e2e_record_fail "F-06 jpg=$JPG_CODE php=$PHP_CODE body='$(head -c 80 "$TMP/jpg.out" 2>/dev/null || true)'"
+  cat "$TMP/ex.log" >&2 || true
 fi
 
 # Missing script contract: must not succeed as 200 with empty/wrong body.

@@ -35,6 +35,7 @@ pub struct SizeRotatingWriter {
 impl SizeRotatingWriter {
     pub fn open(dir: &Path, prefix: &str, max_bytes: u64, keep: u32) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
+        prune_old(dir, prefix, keep.max(1))?;
         let generation = next_generation(dir, prefix);
         let path = active_path(dir, prefix);
         let current = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -157,5 +158,22 @@ mod tests {
             })
             .collect();
         assert!(!archived.is_empty(), "expected archived generation file");
+    }
+
+    #[test]
+    fn exq033_open_prunes_stale_generations_at_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        for generation in 1..=4 {
+            fs::write(dir.path().join(format!("app.log.{generation}")), b"stale").unwrap();
+        }
+        let _writer = SizeRotatingWriter::open(dir.path(), "app.log", 32, 2).unwrap();
+        let mut names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str().map(ToOwned::to_owned))
+            .filter(|name| name.starts_with("app.log."))
+            .collect();
+        names.sort();
+        assert_eq!(names, ["app.log.3", "app.log.4"]);
     }
 }

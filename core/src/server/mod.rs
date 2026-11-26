@@ -693,11 +693,25 @@ async fn run_on_impl(
         let api_socket = std::env::var("EXYONQ_API_SOCKET").ok();
         let api_tcp = std::env::var("EXYONQ_API_TCP").ok();
         if api_socket.is_some() || api_tcp.is_some() {
+            let token_file = std::env::var("EXYONQ_SERVER_TOKEN_FILE")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from);
             match (
                 std::env::var("EXYONQ_CONFIG"),
                 std::env::var("EXYONQ_SERVER_TOKEN"),
             ) {
-                (Ok(config_path), Ok(token)) => {
+                (Ok(config_path), token) if token.is_ok() || token_file.is_some() => {
+                    let token = match token {
+                        Ok(token) => token,
+                        Err(_) => {
+                            let path = token_file.as_ref().expect("token file checked above");
+                            String::from_utf8(
+                                exyonq_control_api::auth::read_token_file(path)?.to_vec(),
+                            )
+                            .map_err(|_| anyhow::anyhow!("invalid control api token file"))?
+                        }
+                    };
                     let unix_socket = api_socket.map(std::path::PathBuf::from);
                     let control_socket = std::env::var_os("EXYONQ_CONTROL_SOCKET")
                         .filter(|v| !v.is_empty())
@@ -725,6 +739,13 @@ async fn run_on_impl(
                                 unix_socket,
                                 tcp_addr,
                                 token,
+                                read_token: std::env::var("EXYONQ_SERVER_READ_TOKEN")
+                                    .ok()
+                                    .filter(|value| !value.is_empty()),
+                                write_token: std::env::var("EXYONQ_SERVER_WRITE_TOKEN")
+                                    .ok()
+                                    .filter(|value| !value.is_empty()),
+                                token_file,
                             },
                         )
                         .await

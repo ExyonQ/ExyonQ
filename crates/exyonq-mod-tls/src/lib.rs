@@ -18,10 +18,15 @@
 use exyonq_module_api::tls_runtime::TlsListenerBinding;
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::server::{ClientHello, ProducesTickets, ResolvesServerCert, ServerSessionMemoryCache};
+use rustls::pki_types::{
+    CertificateDer, CertificateRevocationListDer, PrivateKeyDer, PrivatePkcs8KeyDer,
+};
+use rustls::server::{
+    ClientHello, ProducesTickets, ResolvesServerCert, ServerSessionMemoryCache,
+    WebPkiClientVerifier,
+};
 use rustls::sign::CertifiedKey;
-use rustls::{CipherSuite, ConfigBuilder, NamedGroup, ServerConfig, WantsVerifier};
+use rustls::{CipherSuite, ConfigBuilder, NamedGroup, RootCertStore, ServerConfig, WantsVerifier};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -159,11 +164,21 @@ pub struct TlsCryptoPolicy {
     pub protocols: Vec<String>,
     pub ciphers: Vec<String>,
     pub curves: Vec<String>,
+    pub client_auth: Option<ClientAuthPolicy>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClientAuthPolicy {
+    pub ca_path: PathBuf,
+    pub crl_path: Option<PathBuf>,
 }
 
 impl TlsCryptoPolicy {
     fn is_default(&self) -> bool {
-        self.protocols.is_empty() && self.ciphers.is_empty() && self.curves.is_empty()
+        self.protocols.is_empty()
+            && self.ciphers.is_empty()
+            && self.curves.is_empty()
+            && self.client_auth.is_none()
     }
 }
 
@@ -322,13 +337,16 @@ pub fn load_rustls_config_multi(
         }
     }
     let default = default.expect("non-empty certs");
-    let mut config = crypto_builder(crypto)?
-        .with_no_client_auth()
-        .with_cert_resolver(Arc::new(SniResolver {
-            by_name,
-            default,
-            strict: strict_sni,
-        }));
+    let builder = crypto_builder(crypto)?;
+    let builder = match &crypto.client_auth {
+        Some(policy) => builder.with_client_cert_verifier(client_verifier(policy)?),
+        None => builder.with_no_client_auth(),
+    };
+    let mut config = builder.with_cert_resolver(Arc::new(SniResolver {
+        by_name,
+        default,
+        strict: strict_sni,
+    }));
     config.alpn_protocols = alpn.iter().map(|proto| proto.to_vec()).collect();
     if let Some(cache) = session_cache {
         config.session_storage = cache.as_arc();
@@ -337,6 +355,42 @@ pub fn load_rustls_config_multi(
         }
     }
     Ok(config)
+}
+
+/// F-08: rustls client-certificate verifier from a PEM CA bundle and optional
+/// PEM CRL bundle. Empty/illegible input fails closed.
+fn client_verifier(
+    policy: &ClientAuthPolicy,
+) -> io::Result<Arc<dyn rustls::server::danger::ClientCertVerifier>> {
+    let mut roots = RootCertStore::empty();
+    let certs = load_certs(&policy.ca_path)?;
+    let (added, ignored) = roots.add_parsable_certificates(certs);
+    if added == 0 || ignored > 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("tls.client_ca: added {added} CA certificates, ignored {ignored}"),
+        ));
+    }
+    let mut builder = WebPkiClientVerifier::builder(Arc::new(roots));
+    if let Some(path) = &policy.crl_path {
+        let crls = CertificateRevocationListDer::pem_file_iter(path)
+            .map_err(pem_io_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(pem_io_error)?;
+        if crls.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "tls.crl: no PEM CRL entries",
+            ));
+        }
+        builder = builder.with_crls(crls);
+    }
+    builder.build().map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("tls.client_auth verifier: {err}"),
+        )
+    })
 }
 
 /// Wildcards are accepted only as `*.` on the leftmost label.
@@ -1145,6 +1199,7 @@ mod tests {
             protocols: vec!["TLSv1.3".into()],
             ciphers: vec!["TLS13_CHACHA20_POLY1305_SHA256".into()],
             curves: vec!["X25519".into()],
+            client_auth: None,
         };
         let config = Arc::new(
             load_rustls_config_multi(&certs, false, &crypto, &[b"http/1.1"], None)
@@ -1293,5 +1348,14 @@ mod tests {
                 io::ErrorKind::InvalidInput
             );
         }
+    }
+
+    #[test]
+    fn f08_client_verifier_fails_closed_without_ca() {
+        let policy = ClientAuthPolicy {
+            ca_path: std::path::PathBuf::from("/nonexistent/f08-client-ca.pem"),
+            crl_path: None,
+        };
+        assert!(client_verifier(&policy).is_err());
     }
 }
