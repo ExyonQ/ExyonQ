@@ -52,6 +52,8 @@ pub enum MatchTarget {
     Path,
     Query,
     Body,
+    /// ISO 3166-1 alpha-2 country from the configured offline MMDB.
+    Country,
     /// Header name compared case-insensitively.
     Header(String),
 }
@@ -112,6 +114,8 @@ pub enum CompileError {
     NoPhases(String),
     #[error("rule {0}: header target name is empty")]
     EmptyHeaderName(String),
+    #[error("rule {0}: country pattern must be ISO 3166-1 alpha-2 codes separated by | or ,")]
+    InvalidCountryPattern(String),
     #[error("ruleset id is empty")]
     EmptyRulesetId,
     #[error("exclusion rule_id is empty")]
@@ -289,6 +293,22 @@ fn compile_rule(rule: RuleInput) -> Result<CompiledRule, CompileError> {
         MatchTarget::Path => LiteralMatcher::Path(rule.pattern),
         MatchTarget::Query => LiteralMatcher::Query(rule.pattern),
         MatchTarget::Body => LiteralMatcher::Body(rule.pattern),
+        MatchTarget::Country => {
+            let mut codes = Vec::new();
+            for code in rule.pattern.split(['|', ',']) {
+                let code = code.trim().to_ascii_uppercase();
+                if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_alphabetic()) {
+                    return Err(CompileError::InvalidCountryPattern(id.to_string()));
+                }
+                if !codes.contains(&code) {
+                    codes.push(code);
+                }
+            }
+            if codes.is_empty() {
+                return Err(CompileError::EmptyPattern(id.to_string()));
+            }
+            LiteralMatcher::Country(codes)
+        }
         MatchTarget::Header(name) => {
             if name.trim().is_empty() {
                 return Err(CompileError::EmptyHeaderName(id.to_string()));

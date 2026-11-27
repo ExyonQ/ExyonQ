@@ -29,9 +29,9 @@ pub const MAX_INCLUDE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 use exyonq_config_ir::{
     endpoint_from_discovery_hostport, endpoint_from_http_target, AppConfig, CachePolicyConfig,
-    ConfigError, EndpointSet, FcgiPoolConfig, FullPageCacheConfig, Http3Config, LoggingConfig,
-    RawConfigInput, RouteConfig, ServerConfig, StreamConfig, TuningConfig, UpstreamConfig,
-    WafConfig, CONFIG_VERSION_V2, DEFAULT_UPSTREAM_TIMEOUT_MS,
+    ConfigError, EndpointSet, FcgiPoolConfig, FullPageCacheConfig, GeoIpConfig, Http3Config,
+    LoggingConfig, RawConfigInput, RouteConfig, ServerConfig, StreamConfig, TuningConfig,
+    UpstreamConfig, WafConfig, CONFIG_VERSION_V2, DEFAULT_UPSTREAM_TIMEOUT_MS,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -79,6 +79,8 @@ struct RawRoot {
     #[serde(default)]
     waf: WafConfig,
     #[serde(default)]
+    geoip: GeoIpConfig,
+    #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
     tuning: TuningConfig,
@@ -86,26 +88,63 @@ struct RawRoot {
     stream: Vec<StreamConfig>,
 }
 
+/// EXQ-090: where a `[[route]]` was defined. `fragment = None` means the root
+/// file; `Some(path)` is the include that supplied it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteOrigin {
+    pub route: String,
+    pub fragment: Option<std::path::PathBuf>,
+}
+
 /// Load IR from path, resolving `include` fragments (config_version = 2).
 pub fn load_with_includes(path: &Path) -> Result<AppConfig, ConfigError> {
+    load_with_includes_reporting(path).map(|(cfg, _origins)| cfg)
+}
+
+/// Like [`load_with_includes`], also returning where each route came from so a
+/// caller can name the include that defined a route the config never uses.
+pub fn load_with_includes_reporting(
+    path: &Path,
+) -> Result<(AppConfig, Vec<RouteOrigin>), ConfigError> {
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let contents = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         path: path.to_path_buf(),
         source,
     })?;
     let raw: RawRoot = toml::from_str(&contents).map_err(ConfigError::parse)?;
+    let root_routes: Vec<String> = raw.route.iter().map(|r| r.name.clone()).collect();
     if raw.include.is_empty() {
-        return AppConfig::from_raw_input(raw_to_ir(raw)).map_err(|e| e.with_path(path));
+        let cfg = AppConfig::from_raw_input(raw_to_ir(raw)).map_err(|e| e.with_path(path))?;
+        let origins = root_routes
+            .into_iter()
+            .map(|route| RouteOrigin {
+                route,
+                fragment: None,
+            })
+            .collect();
+        return Ok((cfg, origins));
     }
     if raw.config_version != CONFIG_VERSION_V2 {
         return Err(
             ConfigError::Parse("include requires config_version = 2".into()).with_path(path),
         );
     }
-    merge_includes(base_dir, raw).map_err(|e| e.with_path(path))
+    let mut origins: Vec<RouteOrigin> = root_routes
+        .into_iter()
+        .map(|route| RouteOrigin {
+            route,
+            fragment: None,
+        })
+        .collect();
+    let cfg = merge_includes(base_dir, raw, &mut origins).map_err(|e| e.with_path(path))?;
+    Ok((cfg, origins))
 }
 
-fn merge_includes(base_dir: &Path, mut root: RawRoot) -> Result<AppConfig, ConfigError> {
+fn merge_includes(
+    base_dir: &Path,
+    mut root: RawRoot,
+    origins: &mut Vec<RouteOrigin>,
+) -> Result<AppConfig, ConfigError> {
     let includes = std::mem::take(&mut root.include);
     for rel in includes {
         let fragment_path = base_dir.join(&rel);
@@ -120,6 +159,12 @@ fn merge_includes(base_dir: &Path, mut root: RawRoot) -> Result<AppConfig, Confi
                 source,
             })?;
         let fragment: RawFragment = toml::from_str(&contents).map_err(ConfigError::parse)?;
+        for route in &fragment.route {
+            origins.push(RouteOrigin {
+                route: route.name.clone(),
+                fragment: Some(fragment_path.clone()),
+            });
+        }
         append_unique(&mut root.route, fragment.route, "route")?;
         append_unique(&mut root.upstream, fragment.upstream, "upstream")?;
         append_unique(&mut root.fcgi_pool, fragment.fcgi_pool, "fcgi_pool")?;
@@ -192,6 +237,7 @@ fn raw_to_ir(raw: RawRoot) -> RawConfigInput {
         full_page_cache: raw.full_page_cache,
         http3: raw.http3,
         waf: raw.waf,
+        geoip: raw.geoip,
         logging: raw.logging,
         tuning: raw.tuning,
         stream: raw.stream,

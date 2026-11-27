@@ -76,7 +76,9 @@ impl AcmeIntegrationService for AcmeIntegrationRuntime {
 
         let mut issued = false;
         for (idx, tls, acme_cfg) in &jobs {
-            match ensure_certificates(tls, acme_cfg, &self.challenges, false).await {
+            match ensure_certificates(tls, acme_cfg, &self.challenges, publication.as_ref(), false)
+                .await
+            {
                 Ok(AcmeRenewalOutcome::Issued(paths)) => {
                     issued = true;
                     info!(
@@ -91,18 +93,25 @@ impl AcmeIntegrationService for AcmeIntegrationRuntime {
             }
         }
         if issued {
-            if let Err(err) = publication.reload_tls_from_config(config) {
-                warn!(%err, "TLS reload after ACME bootstrap failed");
+            match publication.reload_tls_from_config(config) {
+                Ok(()) => info!("TLS acceptor reloaded after ACME bootstrap"),
+                Err(err) => warn!(%err, "TLS reload after ACME bootstrap failed"),
             }
         }
 
         let config = Arc::new(config.clone());
         let jobs = jobs.into_iter().map(|(_, tls, acme)| (tls, acme)).collect();
-        spawn_renewal_loop(jobs, self.challenges.clone(), move || {
-            if publication.reload_tls_from_config(&config).is_ok() {
-                info!("TLS acceptor reloaded after ACME renewal");
-            }
-        })
+        let renewal_publication = Arc::clone(&publication);
+        spawn_renewal_loop(
+            jobs,
+            self.challenges.clone(),
+            renewal_publication,
+            move || {
+                if publication.reload_tls_from_config(&config).is_ok() {
+                    info!("TLS acceptor reloaded after ACME renewal");
+                }
+            },
+        )
         .await;
     }
 }

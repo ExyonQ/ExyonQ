@@ -21,10 +21,40 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
 
 ---
 
-## [Unreleased]
+## [0.9.3] — FastCGI diagnostics, ACME/H3 SNI, GeoIP and the F-13 gate
+
+```text
+VERSION = 0.9.3
+PUBLICATION_STATUS = PREPARED (patch committed as C; signed tag v0.9.3 belongs on seal commit S)
+TAG = v0.9.3 on S (signed annotated tag; see docs/release/v0.9.3.md)
+BASE_TAG = v0.9.2
+DEPENDENCY = wasmtime =49.0.6 (was =49.0.5)
+ADVISORIES = RUSTSEC-2026-0566 .. RUSTSEC-2026-0572, cleared by the bump; none waived
+RELEASE_NOTES = docs/release/v0.9.3.md
+PENDING_OWNER = Docker Hub mirror credential, cosign layer, stability sign-off
+```
 
 ### Added
 
+- Native offline GeoIP country support (issue #112): the new `exyonq-geoip`
+  crate reads any GeoLite2-Country-shaped MMDB into memory, and the top-level
+  `[geoip]` table (`enabled`, `database`, `reload_interval`, `on_missing_db`)
+  feeds country lookups in the route/WAF plan. There is no `provider` field:
+  MaxMind GeoLite2, IP2Location LITE DB1 and DB-IP Country files work as long
+  as they expose the standard country fields. Country entries reuse the
+  existing access precedence (`country:XX` in `access.allow`/`access.deny` or
+  in ordered `access.rules`; deny wins, a non-empty allow list is an
+  allowlist, and the 64/128 ceilings stay on IP/CIDR entries). Country policy
+  fails config validation unless `geoip.enabled` is true and a database is
+  configured; lookups never call a network service, a replaced file is re-read
+  after `reload_interval`, and a failed reload keeps the previous database.
+  Access logs gain `country`/`continent`, WAF rules accept a `country` target,
+  and `exyonqctl config geoip check --ip` diagnoses a lookup.
+- F-13 compile-time gate for the Competitive Frontier H1 dataplane: the `cfd`
+  feature stays OFF in default builds, and `exyonq serve` now rejects
+  `EXYONQ_COMPETITIVE_H1_DATAPLANE` with an explicit error before touching
+  config or ports instead of silently ignoring the request. The opt-in path
+  ships the F-13 dataplane E2E scripts and wire-parity tests.
 - FastCGI pools are probed at startup and structural reload as the service
   user; failures log the pool, endpoint, `errno`, OS error and a PHP-FPM
   ownership hint instead of leaving only a generic `502`. Per-pool
@@ -42,21 +72,28 @@ GitHub immutable release history for the name `ExyonQ/ExyonQ` blocks recreating 
   stays the default). The `quiche` provider still serves only the first pair
   and logs a warning.
 
-## [0.9.3] — wasmtime 49.0.6 (prepared locally, NOT published; owner authorization pending)
-
-```text
-VERSION = 0.9.3
-PUBLICATION_STATUS = NOT_PUBLISHED (patch prepared in the working tree)
-TAG = NONE (no tag created, nothing committed or pushed)
-BASE_TAG = v0.9.2
-DEPENDENCY = wasmtime =49.0.6 (was =49.0.5)
-ADVISORIES = RUSTSEC-2026-0566 .. RUSTSEC-2026-0572, cleared by the bump; none waived
-RELEASE_NOTES = docs/release/v0.9.3.md
-PENDING_OWNER = publish authorization (commit, push, tag, release), cosign layer, Docker Hub secrets, stability sign-off
-```
-
 ### Fixed
 
+- `exact = true` routes now outrank regex and suffix matches, so a single-file
+  exception is no longer shadowed by a generic `^/(.+)\.html$` redirect
+  (issue #91). `dump-ir` re-emits every set arm of `match`, including `regex`,
+  `exact`, `suffix`, header matchers and `listen_port`.
+- A route defined in an include but not listed by any `[[server]].routes` now
+  raises `EXY-CONFIG-0016` naming the fragment; `--strict` turns it into a
+  failure (issue #90).
+- Access events report the listener scheme, so a TLS request logs
+  `protocol=https` instead of the hardcoded `http` (issue #89).
+- `exyonqctl status`/`reload` explain a missing control socket and exit `4`;
+  `reload` validates the config first, prints the TOML diagnostic and exits `3`
+  without contacting the server (issue #92).
+- `exyonq validate` names the exact replacement for the file it was given and
+  the 0.11.0 removal release (issue #88).
+- The package now ships the corrected healthcheck script, environment example,
+  service and timer, and `packaging/config/ratelimit-waf.toml.example` validates
+  with the real binary (issues #81 and #83).
+- Logging/retention, CLI deprecation and route-order guides are published as
+  `docs/architecture/080`–`082`, with the module body ceiling in `083`
+  (issue #87).
 - Access events now carry the request `host`, and WAF violation events carry
   `client_ip`, `host`, `method`, `path` and `user_agent`, so a violation can be
   attributed to a site and correlated with its access line without inferring it
@@ -68,6 +105,18 @@ PENDING_OWNER = publish authorization (commit, push, tag, release), cosign layer
 
 ### Security
 
+- The native WAF now blocks Java expression-language / OGNL / Struts2-WebWork
+  remote-execution shapes (`@java.lang.Runtime@`, commons-io reflection,
+  `com.opensymphony.webwork.`/`xwork2`, `getRuntime().exec(`, OGNL
+  `#name=@class` assignments, `#_memberAccess`, `X-Cmd-Response`, JNDI
+  `jndi:ldap|rmi|dns` and reflective `Class.forName(`) through new
+  `EXY-CMD-1003`–`1012` rules, including percent-encoded forms after
+  normalization. A private report (2026-11-12) showed the probe falling through
+  to the backend and returning 5xx with no `waf violation` line; the request is
+  now rejected with `403` before the upstream and the violation names the rule
+  and field. Every 5xx response also emits one correlated `server error
+  response` line with the internal `request_id`, so a 5xx is no longer
+  triageless.
 - `wasmtime` 49.0.6 replaces 49.0.5, clearing RUSTSEC-2026-0566 through
   -0572; no advisory is waived. This is the only dependency change in the patch,
   so the 0.9.2 artifacts that embed 49.0.5 are superseded rather than patched.

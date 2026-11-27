@@ -8,7 +8,18 @@ This repository is the public product source tree (compile / maintain). Internal
 
 Public releases are published on [GitHub Releases](https://github.com/ExyonQ/ExyonQ/releases/latest) and in GHCR as versioned images (`ghcr.io/exyonq/exyonq`, `ghcr.io/exyonq/exyonq-wordpress`); Docker Hub mirrors use the same version tags. No `:latest` tag is published. A local worktree may diverge; do not treat its HEAD as a published tag.
 
-This README intentionally does not pin a release number; the `releases/latest` link above is the authoritative current release.
+<!-- BEGIN RELEASE_STATUS (generated from RELEASE_STATUS; do not edit) -->
+VERSION = 0.9.3
+PUBLICATION_STATUS = NOT_PUBLISHED
+PREVIOUS_PUBLIC_VERSION = 0.9.2
+PUBLIC_RELEASE = v0.9.2
+RELEASE_NOTE = docs/release/v0.9.3.md
+AUDIT_NOTE = docs/security/audit-v0.9.3.md
+<!-- END RELEASE_STATUS -->
+
+The block above is generated from [`RELEASE_STATUS`](RELEASE_STATUS); the
+workspace version can be a candidate ahead of the latest published release.
+The `releases/latest` link is the authoritative current public release.
 
 ## What's in the 0.9.x line
 

@@ -111,6 +111,16 @@ list scope is covered by `[waf.ip]` and `builtins.ip_filter`.
 | `EXY-PATH-1002` | Sensitive paths | path/query/body |
 | `EXY-CMD-1001` | Command injection | path/query/body |
 | `EXY-CMD-1002` | Shell binaries | path/query/body |
+| `EXY-CMD-1003` | Java `@java.lang.Runtime@` / `@ProcessBuilder@` static access | path/query/body (normalized) |
+| `EXY-CMD-1004` | `@org.apache.commons.io.` reflection | path/query/body (normalized) |
+| `EXY-CMD-1005` | Struts2/WebWork `com.opensymphony.webwork|xwork2.` | path/query/body (normalized) |
+| `EXY-CMD-1006` | `getRuntime().exec(` chain | path/query/body (normalized) |
+| `EXY-CMD-1007` | OGNL `#name=@class` assignment | path/query/body (normalized) |
+| `EXY-CMD-1008` | OGNL internals (`@ognl.`, `#_memberAccess`) | path/query/body (normalized) |
+| `EXY-CMD-1009` | `X-Cmd-Response` exfiltration header | path/query/body (normalized) |
+| `EXY-CMD-1010` | JNDI injection (`jndi:ldap|rmi|dns`, `javax.naming.`) | path/query/body (normalized) |
+| `EXY-CMD-1011` | Reflective `Class.forName(` | path/query/body (normalized) |
+| `EXY-CMD-1012` | `ProcessBuilder(` construction | path/query/body (normalized) |
 | `EXY-HDR-1001` | Header anomaly | missing/empty User-Agent |
 | `EXY-HDR-1002` | Header anomaly | header value > 8 KiB |
 | `EXY-BOT-1001` | Bot UA | User-Agent patterns |

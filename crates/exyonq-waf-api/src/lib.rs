@@ -405,6 +405,9 @@ pub struct WafRequest<'a> {
     /// Already resolved by ExyonQ — do not re-parse untrusted client XFF here.
     pub client_ip: IpAddr,
     pub route_id: Option<&'a str>,
+    /// ISO 3166-1 alpha-2 country resolved from the configured offline MMDB.
+    /// `None` means GeoIP is disabled or the address has no record.
+    pub country: Option<&'a str>,
 }
 
 /// Sync WAF engine. Implementations live in `exyonq-waf`; core depends only on this trait.
@@ -494,6 +497,7 @@ mod tests {
 
     fn sample_req<'a>(headers: &'a dyn HeaderView) -> WafRequest<'a> {
         WafRequest {
+            country: None,
             method: "GET",
             host: Some("example.com"),
             path: "/",

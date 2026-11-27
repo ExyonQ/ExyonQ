@@ -5,7 +5,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$ROOT/packaging/scripts/exyonq-healthcheck.sh"
+# Default to the source copy. HEALTHCHECK_SCRIPT lets the same gate run the
+# script extracted from a built .deb/.rpm, which is the artifact that ships.
+SCRIPT="${HEALTHCHECK_SCRIPT:-$ROOT/packaging/scripts/exyonq-healthcheck.sh}"
+[[ -x "$SCRIPT" ]] || {
+  echo "ERROR: healthcheck script is not executable: $SCRIPT" >&2
+  exit 2
+}
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 BIN="$TMP/bin"

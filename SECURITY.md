@@ -4,7 +4,7 @@
 
 | Version   | Supported |
 | --- | --- |
-| 0.9.x     | Yes (current release) |
+| 0.9.x     | Yes (latest public 0.9.2; 0.9.3 candidate unpublished) |
 | 0.8.x     | Security fixes only until superseded |
 | < 0.8     | No |
 
@@ -24,18 +24,19 @@ cargo xtask security pre-release --version X.Y.Z
 
 Until a release audit is owner-authorized and signed off for a given version, that version remains unpublished.
 
-For **v0.9.1**:
+<!-- BEGIN RELEASE_STATUS (generated from RELEASE_STATUS; do not edit) -->
+VERSION = 0.9.3
+PUBLICATION_STATUS = NOT_PUBLISHED
+PREVIOUS_PUBLIC_VERSION = 0.9.2
+PUBLIC_RELEASE = v0.9.2
+RELEASE_NOTE = docs/release/v0.9.3.md
+AUDIT_NOTE = docs/security/audit-v0.9.3.md
+<!-- END RELEASE_STATUS -->
 
-```text
-CURRENT_RELEASE_AUDIT = docs/security/audit-v0.9.1.md
-PUBLIC_RELEASE = v0.9.1
-RELEASE_AUTHORITY = exyonq-github
-WAIVERS = NONE
-CARGO_AUDIT = 0 vulnerabilities (security.yml deps-audit, 2026-11-06)
-CARGO_DENY = advisories/bans/licenses/sources PASS
-CI = ci.yml 42242829709 PASS; security.yml 42242829750 PASS; crs-diff 42242829711 PASS
-DOCKER_SCOUT = local arm64: 0 critical / 0 high / 0 medium / 0 low; final multiarch digests pending
-```
+The block above is generated from [`RELEASE_STATUS`](RELEASE_STATUS); the
+workspace version can be a candidate ahead of the latest published release.
+The audit artifact for the latest public release is
+[`docs/security/audit-v0.9.2.md`](docs/security/audit-v0.9.2.md).
 
 Canonical security SoT index: [`docs/security/README.md`](docs/security/README.md).
 

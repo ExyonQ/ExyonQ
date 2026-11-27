@@ -17,6 +17,7 @@ FILES=(
   packaging/config/config.toml.example
   packaging/docker/default.toml
   packaging/release/conf/wordpress.toml
+  packaging/config/ratelimit-waf.toml.example
 )
 
 for rel in "${FILES[@]}"; do

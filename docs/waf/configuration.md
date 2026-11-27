@@ -178,7 +178,7 @@ Custom rule fields:
 | `id` | string | Non-empty; unique across all rulesets |
 | `enabled` | bool | default `true` |
 | `pattern` | string | Non-empty regex |
-| `target` | string | `path` \| `query` \| `body` \| `header:<name>` |
+| `target` | string | `path` \| `query` \| `body` \| `country` \| `header:<name>` |
 | `action` | string | `allow` \| `log` \| `block` (not challenge/rate_limit) |
 | `phases` | string[] | At least one of connection / request_headers / request_body_* / response_* |
 

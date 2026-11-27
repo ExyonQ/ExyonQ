@@ -54,6 +54,8 @@ pub enum DiagnosticCode {
     UnsupportedSurfaceConstruct,
     /// EXY-CONFIG-0015
     DeprecatedField,
+    /// EXY-CONFIG-0016
+    UnreferencedRoute,
     /// EXY-RELOAD-0001
     ReloadParseRejected,
     /// EXY-RELOAD-0002
@@ -161,6 +163,7 @@ impl DiagnosticCode {
             Self::SecretSourceError => "EXY-CONFIG-0013",
             Self::UnsupportedSurfaceConstruct => "EXY-CONFIG-0014",
             Self::DeprecatedField => "EXY-CONFIG-0015",
+            Self::UnreferencedRoute => "EXY-CONFIG-0016",
             Self::ReloadParseRejected => "EXY-RELOAD-0001",
             Self::ReloadValidationRejected => "EXY-RELOAD-0002",
             Self::ReloadCompileRejected => "EXY-RELOAD-0003",
@@ -218,6 +221,7 @@ impl DiagnosticCode {
             "EXY-CONFIG-0013" => Self::SecretSourceError,
             "EXY-CONFIG-0014" => Self::UnsupportedSurfaceConstruct,
             "EXY-CONFIG-0015" => Self::DeprecatedField,
+            "EXY-CONFIG-0016" => Self::UnreferencedRoute,
             "EXY-RELOAD-0001" => Self::ReloadParseRejected,
             "EXY-RELOAD-0002" => Self::ReloadValidationRejected,
             "EXY-RELOAD-0003" => Self::ReloadCompileRejected,

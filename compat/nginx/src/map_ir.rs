@@ -408,6 +408,7 @@ pub fn map_to_ir(
         full_page_cache: Default::default(),
         http3: Default::default(),
         waf: Default::default(),
+        geoip: Default::default(),
         logging: Default::default(),
     };
 

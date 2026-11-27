@@ -65,7 +65,8 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `PROJECT_STATUS.md` | Project Status | TRACKED (this commit) | project | status | CANONICAL | — | current | 2026-07-31 | ROADMAP, this index | KEEP_ACTIVE |
+| `PROJECT_STATUS.md` | Project Status | TRACKED (this commit) | project | status | CANONICAL | — | current (0.9.3 candidate; latest public 0.9.2) | 2026-11-26 | ROADMAP, this index | KEEP_ACTIVE |
+| `RELEASE_STATUS` | Canonical release identity | TRACKED | release | source | CANONICAL | — | current (0.9.3 candidate; latest public 0.9.2) | 2026-11-26 | README, SECURITY, release gate | KEEP_ACTIVE |
 | `ROADMAP.md` | Global Roadmap R0–R6 | TRACKED (this commit) | project | roadmap | CANONICAL | — | current | 2026-07-31 | PROJECT_STATUS | KEEP_ACTIVE |
 | `DOCUMENTATION_INDEX.md` | Documentation Index | TRACKED (this commit) | project | index | CANONICAL | — | current | 2026-07-31 | PROJECT_STATUS | KEEP_ACTIVE |
 
@@ -75,11 +76,11 @@ Recommended actions (proposal only): `KEEP_ACTIVE` · `ADD_STATUS_HEADER` · `LI
 
 | PATH | TITLE | TRACKED_OR_LOCAL | AREA | DOCUMENT_TYPE | STATUS | CANONICAL_SUCCESSOR | IMPLEMENTATION_STATUS | LAST_EVIDENCE_DATE | REFERENCED_BY | RECOMMENDED_ACTION |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | v0.4.2 line | 2026-07 | public entry | KEEP_ACTIVE; ADD_STATUS_HEADER linking PROJECT_STATUS |
+| `README.md` | ExyonQ product README | TRACKED | product | overview | IMPLEMENTED_REFERENCE | PROJECT_STATUS for phase | release block generated from RELEASE_STATUS | 2026-11-26 | public entry | KEEP_ACTIVE |
 | `ARCHITECTURE.md` | Source-tree architecture | TRACKED | architecture | overview | IMPLEMENTED_REFERENCE | — | layout current | 2026-07 | README | KEEP_ACTIVE |
 | `CHANGELOG.md` | Changelog | TRACKED | release | changelog | HISTORICAL_EVIDENCE | — | partial vs HEAD | UNKNOWN | packaging | REVIEW vs Changeset A/B |
 | `CONTRIBUTING.md` | Contributing | TRACKED | process | guide | IMPLEMENTED_REFERENCE | — | process | UNKNOWN | README | KEEP_ACTIVE |
-| `SECURITY.md` | Security policy | TRACKED | security | policy | CANONICAL | docs/security/README | current | 2026-08-03 | release | KEEP_ACTIVE |
+| `SECURITY.md` | Security policy | TRACKED | security | policy | CANONICAL | docs/security/README | current (latest public 0.9.2; 0.9.3 candidate) | 2026-11-26 | release | KEEP_ACTIVE |
 | `docs/security/README.md` | Security SoT index | TRACKED | security | index | CANONICAL | — | GRC-R5 | 2026-08-03 | SECURITY.md | KEEP_ACTIVE |
 | `docs/security/audit-template.md` | Release audit template | TRACKED | security | template | CANONICAL | audit-vX.Y.Z | GRC-R5 | 2026-08-03 | xtask, verify-release-audit | KEEP_ACTIVE |
 | `docs/security/release-checklist.md` | Release security checklist | TRACKED | security | checklist | CANONICAL | — | GRC-R5 | 2026-08-03 | SECURITY.md | KEEP_ACTIVE |
@@ -226,7 +227,7 @@ DOCUMENTS_TOTAL ≈ 198 paths matching *.md/*.mdc/*.html in scoped walk
 DOCUMENTS_TRACKED = 29 (before this commit) → 32 after adding 3 canonical
 DOCUMENTS_LOCAL_ONLY ≈ 169 (incl. .cursor, study, ignored docs, graphify, waf cursor)
 
-DOCUMENTS_CANONICAL = 3 (PROJECT_STATUS, ROADMAP, DOCUMENTATION_INDEX)
+DOCUMENTS_CANONICAL = 4 (PROJECT_STATUS, RELEASE_STATUS, ROADMAP, DOCUMENTATION_INDEX)
 DOCUMENTS_IMPLEMENTED_REFERENCE ≈ 20 tracked product/tooling READMEs + local rules
 DOCUMENTS_FUTURE_DESIGN ≈ Cursor plans 13/80/90/91/94 class + examples TBD
 DOCUMENTS_HISTORICAL ≈ P14 ledgers + study reports + realizados plans

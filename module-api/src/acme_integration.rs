@@ -26,6 +26,20 @@ pub const ACME_HTTP01_WELL_KNOWN_PREFIX: &str = "/.well-known/acme-challenge/";
 /// Neutral TLS reload hook after certificate material is published on disk.
 pub trait CertificatePublicationPort: Send + Sync {
     fn reload_tls_from_config(&self, config: &AppConfig) -> Result<(), String>;
+
+    /// Publish an ephemeral RFC 8737 challenge pair for `acme-tls/1`.
+    /// Implementations that do not terminate TLS reject the order explicitly.
+    fn publish_tls_alpn_challenge(
+        &self,
+        _domain: &str,
+        _cert_pem: &str,
+        _key_pem: &str,
+    ) -> Result<(), String> {
+        Err("tls-alpn-01 is not supported by this TLS publisher".into())
+    }
+
+    /// Remove the ephemeral challenge pair after validation.
+    fn clear_tls_alpn_challenge(&self, _domain: &str) {}
 }
 
 /// ACME challenge lookup + bootstrap (implementation in `exyonq-acme`).

@@ -957,6 +957,7 @@ fn process_parsed_request(
         let (path_only, query) = split_path_query(&parsed.path);
         let headers_view = map_headers_from_parsed(&parsed.headers);
         let req = WafRequest {
+            country: None,
             method: &parsed.method,
             host: parsed.host.as_deref(),
             path: path_only,

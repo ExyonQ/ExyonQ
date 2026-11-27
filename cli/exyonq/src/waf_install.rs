@@ -369,6 +369,9 @@ fn map_target(target: &str) -> Result<MatchTarget, String> {
     if t == "body" {
         return Ok(MatchTarget::Body);
     }
+    if t == "country" {
+        return Ok(MatchTarget::Country);
+    }
     if let Some(name) = t.strip_prefix("header:") {
         return Ok(MatchTarget::Header(name.to_string()));
     }

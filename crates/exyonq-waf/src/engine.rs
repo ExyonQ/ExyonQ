@@ -435,6 +435,7 @@ mod tests {
         headers: &'a dyn exyonq_waf_api::HeaderView,
     ) -> WafRequest<'a> {
         WafRequest {
+            country: None,
             method: "GET",
             host: Some("example.com"),
             path,
@@ -718,6 +719,49 @@ mod tests {
         let headers = MapHeaders::from_pairs(&[("X-Evil", "yes-please")]);
         let d = engine.inspect(WafPhase::RequestHeaders, &req("/", None, &headers));
         assert_eq!(d.action, WafAction::Block);
+    }
+
+    #[test]
+    fn country_matcher_blocks_only_listed_codes() {
+        let mut input = base_input();
+        input.rulesets[0].rules = vec![RuleInput {
+            id: "EXY-TEST-COUNTRY-1".into(),
+            enabled: true,
+            phases: vec![WafPhase::RequestHeaders],
+            target: MatchTarget::Country,
+            pattern: "CN|RU".into(),
+            action: WafAction::Block,
+        }];
+        let engine = NativeWafEngine::compile(input).unwrap();
+        let headers = MapHeaders::from_pairs(&[]);
+        let mut request = req("/", None, &headers);
+        request.country = Some("CN");
+        assert_eq!(
+            engine.inspect(WafPhase::RequestHeaders, &request).action,
+            WafAction::Block
+        );
+        request.country = Some("es");
+        assert_eq!(
+            engine.inspect(WafPhase::RequestHeaders, &request).action,
+            WafAction::Allow
+        );
+        request.country = None;
+        assert_eq!(
+            engine.inspect(WafPhase::RequestHeaders, &request).action,
+            WafAction::Allow,
+            "missing country does not match a country denylist"
+        );
+    }
+
+    #[test]
+    fn country_matcher_rejects_invalid_codes_at_compile() {
+        let mut input = base_input();
+        input.rulesets[0].rules[0].target = MatchTarget::Country;
+        input.rulesets[0].rules[0].pattern = "ESP".into();
+        assert!(matches!(
+            NativeWafEngine::compile(input),
+            Err(CompileError::InvalidCountryPattern(_))
+        ));
     }
 
     /// WAF-001: LiteralMatcher usa `from_utf8(...).ok()` → non-UTF8 = no match (fail-open).

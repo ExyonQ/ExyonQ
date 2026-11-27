@@ -61,6 +61,7 @@ fn run_body(
         .split_once('?')
         .map_or((path, None), |(p, q)| (p, Some(q)));
     let req = WafRequest {
+        country: None,
         method,
         host: None,
         path,
@@ -80,6 +81,7 @@ fn run(engine: &FixedWafEngine, name: &str, method: &str, path: &str, pairs: &[(
         .split_once('?')
         .map_or((path, None), |(p, q)| (p, Some(q)));
     let req = WafRequest {
+        country: None,
         method,
         host: None,
         path,

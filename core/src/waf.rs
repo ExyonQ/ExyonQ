@@ -563,7 +563,7 @@ pub(crate) fn inspect_request_headers(
 ) -> WafHookResult {
     inspect_request_headers_with_id(
         waf, method, host, path, query, headers, client_ip, route_id, generation, skip_abuse,
-        enforce, abuse, None,
+        enforce, abuse, None, None,
     )
 }
 
@@ -582,8 +582,10 @@ pub(crate) fn inspect_request_headers_with_id(
     enforce: bool,
     abuse: Option<&dyn WafAbuseGate>,
     request_id: Option<&str>,
+    country: Option<&str>,
 ) -> WafHookResult {
     let req = WafRequest {
+        country,
         method,
         host,
         path,
@@ -648,6 +650,7 @@ pub(crate) fn inspect_response_headers(
     enforce: bool,
 ) -> WafHookResult {
     let req = WafRequest {
+        country: None,
         method,
         host,
         path,
@@ -691,6 +694,7 @@ pub(crate) fn inspect_response_body(
     enforce: bool,
 ) -> WafHookResult {
     let req = WafRequest {
+        country: None,
         method,
         host,
         path,
@@ -751,6 +755,7 @@ impl<'a> RequestBodyInspector<'a> {
         Self {
             waf,
             req: WafRequest {
+                country: None,
                 method,
                 host,
                 path,
@@ -836,6 +841,7 @@ pub(crate) async fn handle_waf_challenge_verify(
 ) -> WafReject {
     // Signature inspect first — Block still applies.
     let req = WafRequest {
+        country: None,
         method,
         host,
         path: WAF_CHALLENGE_VERIFY_PATH,

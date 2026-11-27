@@ -47,7 +47,7 @@ pub use reload::{
 };
 
 use exyonq_config_ir::{render_human, Diagnostic, DiagnosticCode, DiagnosticDocument, Severity};
-use exyonq_config_merge::load_with_includes;
+use exyonq_config_merge::load_with_includes_reporting;
 use std::path::Path;
 
 /// Options shared by lint/test.
@@ -108,7 +108,13 @@ pub fn test_config(path: &Path, opts: &CheckOptions) -> ToolResult {
             return finish_check(diags, opts, false);
         }
     };
-    match exyonq_runtime_plan::compile_runtime_plan_from_ir(0, loaded) {
+    // `config test` validates the declared database path and format even when
+    // runtime startup would degrade under `on_missing_db = fail_open`.
+    let mut to_compile = loaded;
+    if to_compile.geoip.enabled {
+        to_compile.geoip.on_missing_db = exyonq_config_ir::GeoIpMissingPolicy::FailClosed;
+    }
+    match exyonq_runtime_plan::compile_runtime_plan_from_ir(0, to_compile) {
         Ok(plan) => {
             // Explicitly drop — no generation publish, no listen.
             drop(plan);
@@ -125,6 +131,104 @@ pub fn test_config(path: &Path, opts: &CheckOptions) -> ToolResult {
     }
     enforce_diag_cap(&mut diags);
     finish_check(diags, opts, true)
+}
+
+/// `config geoip-check`: load the configured MMDB, report its metadata and
+/// resolve an optional address to country/continent (offline diagnostic).
+pub fn geoip_check(path: &Path, ip: Option<std::net::IpAddr>, opts: &CheckOptions) -> ToolResult {
+    let mut diags = Vec::new();
+    let loaded = match load_for_check(path, &mut diags) {
+        Ok(cfg) => cfg,
+        Err(early) => {
+            if let Some(d) = early {
+                diags.push(*d);
+            }
+            enforce_diag_cap(&mut diags);
+            return finish_check(diags, opts, false);
+        }
+    };
+    if !loaded.geoip.enabled {
+        return ToolResult {
+            exit: CliExit::Ok,
+            stdout: "geoip: disabled\n".into(),
+            stderr: String::new(),
+        };
+    }
+    let database = loaded
+        .geoip
+        .database
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "-".into());
+    let fail_policy = match loaded.geoip.on_missing_db {
+        exyonq_config_ir::GeoIpMissingPolicy::FailClosed => "fail_closed",
+        exyonq_config_ir::GeoIpMissingPolicy::FailOpen => "fail_open",
+    };
+    let reload_interval = loaded.geoip.reload_interval.clone();
+    match exyonq_runtime_plan::compile_runtime_plan_from_ir(0, loaded) {
+        Ok(plan) => {
+            let geo = plan.geoip.as_deref();
+            let info = geo.and_then(|geo| geo.info());
+            let lookup = ip.and_then(|ip| geo.and_then(|geo| geo.country(ip)));
+            if opts.format == OutputFormat::Json {
+                let body = serde_json::json!({
+                    "schema_version": 1,
+                    "geoip": "enabled",
+                    "database_loaded": info.is_some(),
+                    "database": database,
+                    "database_type": info.as_ref().map(|info| info.database_type.as_str()),
+                    "build_epoch": info.as_ref().map(|info| info.build_epoch),
+                    "ip_version": info.as_ref().map(|info| info.ip_version),
+                    "node_count": info.as_ref().map(|info| info.node_count),
+                    "reload_interval": reload_interval,
+                    "on_missing_db": fail_policy,
+                    "query_ip": ip.map(|ip| ip.to_string()),
+                    "country": lookup.as_ref().map(|country| country.iso_code.as_str()),
+                    "continent": lookup
+                        .as_ref()
+                        .and_then(|country| country.continent_code.as_deref()),
+                });
+                return ToolResult {
+                    exit: CliExit::Ok,
+                    stdout: body.to_string(),
+                    stderr: String::new(),
+                };
+            }
+            let mut text = match info.as_ref() {
+                Some(info) => format!(
+                    "geoip: enabled\ndatabase: {database}\ndatabase_type: {}\nbuild_epoch: {}\nip_version: {}\nnode_count: {}\nreload_interval: {reload_interval}\non_missing_db: {fail_policy}\n",
+                    info.database_type,
+                    info.build_epoch,
+                    info.ip_version,
+                    info.node_count
+                ),
+                None => format!(
+                    "geoip: enabled (database unavailable)\ndatabase: {database}\nreload_interval: {reload_interval}\non_missing_db: {fail_policy}\n"
+                ),
+            };
+            if let Some(ip) = ip {
+                let country = lookup.as_ref().map(|country| country.iso_code.as_str());
+                let continent = lookup
+                    .as_ref()
+                    .and_then(|country| country.continent_code.as_deref());
+                text.push_str(&format!(
+                    "query_ip: {ip}\ncountry: {}\ncontinent: {}\n",
+                    country.unwrap_or("unknown"),
+                    continent.unwrap_or("-")
+                ));
+            }
+            ToolResult {
+                exit: CliExit::Ok,
+                stdout: text,
+                stderr: String::new(),
+            }
+        }
+        Err(err) => ToolResult {
+            exit: CliExit::DiagnosticError,
+            stdout: String::new(),
+            stderr: format!("geoip: {}\n", sanitize_control_chars(&err.to_string())),
+        },
+    }
 }
 
 fn load_for_check(
@@ -185,8 +289,11 @@ fn load_for_check(
         }
     } else {
         // TOML IR — prefer include-aware load when path is a file.
-        match load_with_includes(path) {
-            Ok(c) => Ok(c),
+        match load_with_includes_reporting(path) {
+            Ok((c, origins)) => {
+                diags.extend(unreferenced_route_diags(&c, &origins, path));
+                Ok(c)
+            }
             Err(e) => {
                 let mut d = e.to_diagnostic();
                 d.source = Some(path.display().to_string());
@@ -195,6 +302,52 @@ fn load_for_check(
             }
         }
     }
+}
+
+/// EXQ-090: a route no `[[server]].routes` entry names is dead config — it
+/// validates, reloads and appears in `dump-ir`, but never matches. Report it
+/// with the file that defined it (root file or the include fragment). Emitted
+/// as a warning on every check surface, not only with `--warn`, because it is
+/// the only signal that the route is inactive.
+fn unreferenced_route_diags(
+    cfg: &exyonq_config_ir::AppConfig,
+    origins: &[exyonq_config_merge::RouteOrigin],
+    root: &Path,
+) -> Vec<Diagnostic> {
+    let referenced: std::collections::BTreeSet<&str> = cfg
+        .servers
+        .iter()
+        .flat_map(|s| s.routes.iter().map(String::as_str))
+        .collect();
+    cfg.routes
+        .iter()
+        .filter(|route| !referenced.contains(route.name.as_str()))
+        .map(|route| {
+            let fragment = origins
+                .iter()
+                .find(|o| o.route == route.name)
+                .and_then(|o| o.fragment.as_ref());
+            let (source, where_from) = match fragment {
+                Some(path) => (
+                    path.display().to_string(),
+                    format!("defined in include `{}`", path.display()),
+                ),
+                None => (
+                    root.display().to_string(),
+                    "defined in the root file".to_string(),
+                ),
+            };
+            Diagnostic::warning(
+                DiagnosticCode::UnreferencedRoute,
+                format!(
+                    "route `{}` is {where_from} but is not listed in any [[server]].routes, so it never matches; add \"{}\" to server.routes or remove the route",
+                    route.name, route.name
+                ),
+            )
+            .with_source(source)
+            .with_documentation("docs/architecture/082-route-evaluation-order.md")
+        })
+        .collect()
 }
 
 fn finish_check(diags: Vec<Diagnostic>, opts: &CheckOptions, _compiled: bool) -> ToolResult {
@@ -523,6 +676,57 @@ target = "http://127.0.0.1:9001"
         );
         assert_eq!(r.exit, CliExit::DiagnosticError);
         assert!(!r.stderr.contains('\u{0007}'));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unreferenced_route_in_include_is_a_visible_warning() {
+        // EXQ-090: a route from an include that no server lists validated and
+        // reloaded cleanly, so the operator believed it was active.
+        let dir = std::env::temp_dir().join(format!("exy-q090-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("frag")).unwrap();
+        fs::write(
+            dir.join("frag/routes.toml"),
+            r#"[[route]]
+name = "ret_verification"
+match = { path = "/verification-file.html", exact = true }
+root = "/tmp"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("root.toml"),
+            r#"config_version = 2
+include = ["frag/routes.toml"]
+
+[[server]]
+listen = "127.0.0.1:18093"
+routes = ["site"]
+
+[[route]]
+name = "site"
+match = { path = "/" }
+root = "/tmp"
+"#,
+        )
+        .unwrap();
+
+        let human = |strict: bool| CheckOptions {
+            format: OutputFormat::Human,
+            strict,
+            color: false,
+            warn: false,
+        };
+        let r = test_config(&dir.join("root.toml"), &human(false));
+        assert_eq!(r.exit, CliExit::Ok, "{}", r.stderr);
+        assert!(r.stderr.contains("EXY-CONFIG-0016"), "{}", r.stderr);
+        assert!(r.stderr.contains("ret_verification"), "{}", r.stderr);
+        assert!(r.stderr.contains("frag/routes.toml"), "{}", r.stderr);
+
+        // --strict turns the same warning into a failure for CI.
+        let strict = lint(&dir.join("root.toml"), &human(true));
+        assert_eq!(strict.exit, CliExit::DiagnosticError, "{}", strict.stderr);
         let _ = fs::remove_dir_all(dir);
     }
 }

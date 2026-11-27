@@ -24,7 +24,7 @@
 use crate::config::AppConfig;
 use crate::discovery_overlay;
 use crate::server::state::ServerState;
-use crate::tls::{SharedTlsAcceptor, SniCert, TlsSessionCache};
+use crate::tls::{AcmeTlsAlpnStore, SharedTlsAcceptor, SniCert, TlsSessionCache};
 use exyonq_mod_proxy::ProxyClient;
 use exyonq_mod_tls::TlsAcceptor;
 use exyonq_runtime_plan::{compile_runtime_plan, load_config_for_reload};
@@ -167,7 +167,11 @@ pub async fn reload_from_path(
     if candidate_plan.fingerprint.as_str() == current.fingerprint() {
         // File-backed TLS material (cert/key/OCSP staple) is outside the
         // fingerprint: same-path replacement must still take effect on reload.
-        let prepared_tls = prepare_tls_acceptor(&config, tls_session_cache)?;
+        let prepared_tls = prepare_tls_acceptor_with_acme(
+            &config,
+            tls_session_cache,
+            &tls_acceptor.acme_alpn_store(),
+        )?;
         tls_acceptor.install(prepared_tls);
         return Ok(ReloadResult {
             state: current,
@@ -176,7 +180,11 @@ pub async fn reload_from_path(
     }
 
     // Offline TLS prepare — does not mutate the live acceptor.
-    let prepared_tls = prepare_tls_acceptor(&config, tls_session_cache)?;
+    let prepared_tls = prepare_tls_acceptor_with_acme(
+        &config,
+        tls_session_cache,
+        &tls_acceptor.acme_alpn_store(),
+    )?;
 
     let next_generation = current.generation.saturating_add(1);
 
@@ -280,7 +288,11 @@ pub async fn reload_from_path_standalone(
 
     let mut config = load_config_for_reload(path)?;
     config = discovery_overlay::apply_env_discovery_overlay(config);
-    let prepared_tls = prepare_tls_acceptor(&config, tls_session_cache)?;
+    let prepared_tls = prepare_tls_acceptor_with_acme(
+        &config,
+        tls_session_cache,
+        &tls_acceptor.acme_alpn_store(),
+    )?;
     let next_generation = active_runtime_generation().saturating_add(1);
 
     if let Err(err) = crate::waf::prepare_waf_reload(&config) {
@@ -384,11 +396,23 @@ pub fn prepare_tls_acceptor(
     config: &AppConfig,
     tls_session_cache: &TlsSessionCache,
 ) -> anyhow::Result<Option<TlsAcceptor>> {
+    prepare_tls_acceptor_with_acme(config, tls_session_cache, &AcmeTlsAlpnStore::default())
+}
+
+/// F-09: prepare with the persistent TLS-ALPN-01 challenge store. A
+/// `tls-alpn-01` listener starts from zero certificates: it accepts only the
+/// `acme-tls/1` ALPN until the order publishes the first challenge.
+pub fn prepare_tls_acceptor_with_acme(
+    config: &AppConfig,
+    tls_session_cache: &TlsSessionCache,
+    acme_alpn: &AcmeTlsAlpnStore,
+) -> anyhow::Result<Option<TlsAcceptor>> {
     if config.primary_server().tls.is_none() {
         return Ok(None);
     }
     let listen = &config.primary_server().listen;
     let mut certs = Vec::new();
+    let mut tls_alpn01 = false;
     for (idx, server) in config.servers.iter().enumerate() {
         if &server.listen != listen {
             continue;
@@ -398,9 +422,13 @@ pub fn prepare_tls_acceptor(
                 "tls prepare: server[{idx}] shares listen {listen} but has no [server.tls]"
             ));
         };
+        if let Some(acme) = tls.acme.as_ref().filter(|acme| acme.enabled) {
+            tls_alpn01 |= acme.challenge_type() == "tls-alpn-01";
+        }
         // ACME bootstrap-from-zero: with acme.enabled the pair may not exist
-        // yet; the listener serves cleartext (HTTP-01) until the bootstrap
-        // publishes the issued certificate via reload_tls_from_config.
+        // yet. HTTP-01 keeps the listener cleartext so the CA can fetch the
+        // token; TLS-ALPN-01 instead installs an acceptor with only the
+        // challenge ALPN, because validation happens on this TLS port.
         // Without ACME a missing pair stays fail-closed (load error below).
         // Every ACME-enabled block is provisioned, so the exemption is per
         // block instead of primary-only.
@@ -415,7 +443,7 @@ pub fn prepare_tls_acceptor(
             });
         }
     }
-    if certs.is_empty() {
+    if certs.is_empty() && !tls_alpn01 {
         return Ok(None);
     }
     let (strict_sni, crypto) = config
@@ -448,13 +476,23 @@ pub fn prepare_tls_acceptor(
             )
         })
         .unwrap_or_default();
-    let acceptor = SharedTlsAcceptor::prepare_multi(
-        &certs,
-        strict_sni,
-        &crypto,
-        tls_session_cache,
-        &[b"h2", b"http/1.1"],
-    )
+    let alpn: &[&[u8]] = if tls_alpn01 {
+        &[b"acme-tls/1", b"h2", b"http/1.1"]
+    } else {
+        &[b"h2", b"http/1.1"]
+    };
+    let acceptor = if tls_alpn01 {
+        SharedTlsAcceptor::prepare_multi_with_acme(
+            &certs,
+            strict_sni,
+            &crypto,
+            tls_session_cache,
+            alpn,
+            acme_alpn.clone(),
+        )
+    } else {
+        SharedTlsAcceptor::prepare_multi(&certs, strict_sni, &crypto, tls_session_cache, alpn)
+    }
     .map_err(|err| anyhow::anyhow!("tls reload prepare: {err}"))?;
     Ok(Some(acceptor))
 }
@@ -465,7 +503,8 @@ pub fn reload_tls_acceptor(
     tls_acceptor: &SharedTlsAcceptor,
     tls_session_cache: &TlsSessionCache,
 ) -> anyhow::Result<()> {
-    let prepared = prepare_tls_acceptor(config, tls_session_cache)?;
+    let prepared =
+        prepare_tls_acceptor_with_acme(config, tls_session_cache, &tls_acceptor.acme_alpn_store())?;
     tls_acceptor.install(prepared);
     Ok(())
 }

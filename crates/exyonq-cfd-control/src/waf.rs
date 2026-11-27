@@ -97,6 +97,7 @@ pub fn projection_from_compile_input(
                 MatchTarget::Path => (0u8, String::new()),
                 MatchTarget::Query => (1, String::new()),
                 MatchTarget::Header(n) => (2, n.clone()),
+                MatchTarget::Country => (4, String::new()),
                 MatchTarget::Body => return Err(WafProjectError::BodyDeferred(r.id.clone())),
             };
             let mut phases_mask = 0u8;
@@ -157,6 +158,7 @@ pub fn compile_input_from_projection(
             0 => MatchTarget::Path,
             1 => MatchTarget::Query,
             2 => MatchTarget::Header(r.header_name.clone()),
+            4 => MatchTarget::Country,
             _ => return Err(WafProjectError::Proj(WafProjError::InvalidEnum)),
         };
         let mut phases = Vec::new();

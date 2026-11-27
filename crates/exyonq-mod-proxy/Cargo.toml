@@ -19,6 +19,9 @@ p8t-fix-baseline = []
 p8tp-vectored = []
 # P8TP: apply TCP_CORK around progressive response when peer fd + hooks present.
 p8tp-platform-cork = []
+# F-13: experimental raw upstream relay. Default OFF; it does not yet reach
+# header parity with the Hyper wire path, so it is not a product path.
+raw-relay = []
 
 [dependencies]
 regex.workspace = true

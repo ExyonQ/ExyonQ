@@ -24,6 +24,7 @@ mod endpoint_set;
 mod endpoint_set_property_tests;
 mod error;
 mod full_page_cache;
+mod geoip;
 mod logging;
 pub mod modules;
 mod registry;
@@ -54,6 +55,10 @@ pub use error::ConfigError;
 pub use full_page_cache::{
     DistributedCacheConfig, DistributedCacheRedisConfig, DistributedCacheSecurityConfig,
     FpcBypassConfig, FpcKeyConfig, FullPageCacheConfig,
+};
+pub use geoip::{
+    is_country_code, parse_reload_interval, GeoIpConfig, GeoIpMissingPolicy,
+    MAX_GEOIP_RELOAD_SECONDS,
 };
 pub use logging::{
     validate_logging, AccessLoggingConfig, AuditLoggingConfig, ConsoleLoggingConfig, ConsoleStream,
@@ -185,6 +190,8 @@ pub struct AppConfig {
     pub http3: Http3Config,
     /// `[waf]` — native WAF engine, rulesets, exclusions, abuse seam.
     pub waf: WafConfig,
+    /// `[geoip]` — offline MaxMind country database.
+    pub geoip: GeoIpConfig,
     /// `[logging]` — Cap061 production observability (RD-005).
     pub logging: LoggingConfig,
     /// `[tuning]` — worker geometry with measured defaults (NG-21).
@@ -352,6 +359,14 @@ pub struct AcmeConfig {
     /// CA to validate (default 15). Only valid with `challenge = "dns-01"`.
     #[serde(default)]
     pub dns_propagation_secs: Option<u64>,
+    /// F-09: alternate ACME directory (https only), e.g. a local Pebble test
+    /// server. Defaults to Let's Encrypt production or staging.
+    #[serde(default)]
+    pub directory_url: Option<String>,
+    /// F-09: PEM root used to verify the ACME server's HTTPS certificate
+    /// (private/test CAs). This is not the certificate issuer.
+    #[serde(default)]
+    pub ca_cert: Option<PathBuf>,
     /// Path to the persisted ACME account credentials (JSON). Defaults to
     /// `<cert>.acme-account.json` next to `tls.cert`.
     #[serde(default)]
@@ -967,9 +982,16 @@ impl RouteMatch {
         }
     }
 
-    /// kind_rank: regex/suffix (3) > prefix (1) > catch-all `/` (0). ADR-047.
+    /// kind_rank: exact whole-URI (4) > regex/suffix (3) > prefix (1) >
+    /// catch-all `/` (0). ADR-047.
+    ///
+    /// EXQ-091: an `exact` prefix is a whole-URI equality (`location =`), so it
+    /// is strictly more specific than any regex or suffix rule. Ranking it with
+    /// plain prefixes let a generic `^/(.+)\\.html$` rewrite shadow an exact
+    /// route even when the exact route was listed first.
     pub fn kind_rank(&self) -> u8 {
         match self.kind() {
+            Some(RouteMatchKind::Prefix) if self.exact => 4,
             Some(RouteMatchKind::Regex) | Some(RouteMatchKind::Suffix) => 3,
             Some(RouteMatchKind::Prefix) if self.path == "/" => 0,
             Some(RouteMatchKind::Prefix) => 1,
@@ -1322,6 +1344,7 @@ pub struct RawConfigInput {
     pub full_page_cache: FullPageCacheConfig,
     pub http3: Http3Config,
     pub waf: WafConfig,
+    pub geoip: GeoIpConfig,
     pub logging: LoggingConfig,
     pub tuning: TuningConfig,
     pub stream: Vec<StreamConfig>,
@@ -1355,6 +1378,8 @@ struct RawConfig {
     http3: Http3Config,
     #[serde(default)]
     waf: WafConfig,
+    #[serde(default)]
+    geoip: GeoIpConfig,
     #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
@@ -1401,6 +1426,7 @@ impl AppConfig {
             full_page_cache: raw.full_page_cache,
             http3: raw.http3,
             waf: raw.waf,
+            geoip: raw.geoip,
             logging: raw.logging,
             tuning: raw.tuning,
             stream: raw.stream,
@@ -1584,6 +1610,33 @@ impl AppConfig {
         validate_full_page_cache(&raw.full_page_cache)?;
         validate_http3_config(&raw.http3)?;
         waf::validate_waf(&raw.waf)?;
+        raw.geoip.validate()?;
+        if !raw.geoip.enabled {
+            let access_country = routes.iter().any(|route| {
+                route.access.as_ref().is_some_and(|access| {
+                    access
+                        .allow
+                        .iter()
+                        .chain(access.deny.iter())
+                        .any(|entry| entry.trim_start().starts_with("country:"))
+                        || access
+                            .rules
+                            .iter()
+                            .any(|rule| rule.source.trim_start().starts_with("country:"))
+                })
+            });
+            let waf_country = raw.waf.rulesets.iter().any(|ruleset| {
+                ruleset
+                    .rules
+                    .iter()
+                    .any(|rule| rule.target.trim().eq_ignore_ascii_case("country"))
+            });
+            if access_country || waf_country {
+                return Err(ConfigError::Parse(
+                    "country policy requires geoip.enabled = true and a geoip.database".into(),
+                ));
+            }
+        }
         validate_metrics_config(&raw.modules.metrics, &raw.server)?;
         raw.modules.validate()?;
         validate_ratelimit_config(&raw.modules.ratelimit)?;
@@ -1613,6 +1666,7 @@ impl AppConfig {
             full_page_cache: raw.full_page_cache,
             http3: raw.http3,
             waf: raw.waf,
+            geoip: raw.geoip,
             logging: raw.logging,
             tuning: raw.tuning,
             streams: raw.stream,
@@ -3510,8 +3564,15 @@ fn validate_tls_acme(tls: &TlsConfig) -> Result<(), ConfigError> {
                 "tls.acme.domains must not be empty when acme is enabled".into(),
             ));
         }
+        if let Some(directory) = acme.directory_url.as_deref() {
+            if !directory.trim().starts_with("https://") {
+                return Err(ConfigError::Parse(
+                    "acme.directory_url must be an https:// URL".into(),
+                ));
+            }
+        }
         match acme.challenge_type() {
-            "http-01" => {
+            "http-01" | "tls-alpn-01" => {
                 if acme.dns_hook.is_some() || acme.dns_propagation_secs.is_some() {
                     return Err(ConfigError::Parse(
                         "acme.dns_hook/dns_propagation_secs require acme.challenge = \"dns-01\""
@@ -3533,7 +3594,7 @@ fn validate_tls_acme(tls: &TlsConfig) -> Result<(), ConfigError> {
             }
             other => {
                 return Err(ConfigError::Parse(format!(
-                    "acme.challenge: unsupported {other:?} (supported: \"http-01\", \"dns-01\")"
+                    "acme.challenge: unsupported {other:?} (supported: \"http-01\", \"dns-01\", \"tls-alpn-01\")"
                 )));
             }
         }
@@ -6643,7 +6704,7 @@ dns_propagation_secs = 30
     #[test]
     fn q09_rejects_unknown_challenge_and_http01_hook() {
         for extra in [
-            r#"challenge = "tls-alpn-01""#,
+            r#"challenge = "tls-alpn-00""#,
             r#"dns_hook = "/bin/true""#,
             r#"dns_propagation_secs = 5"#,
         ] {
@@ -6652,6 +6713,40 @@ dns_propagation_secs = 30
                 "{extra}"
             );
         }
+    }
+
+    #[test]
+    fn f09_tls_alpn01_accepts_https_directory_and_rejects_wildcard_hook() {
+        let config = AppConfig::parse_str(&q09_toml(
+            r#"["a.test"]"#,
+            r#"challenge = "tls-alpn-01"
+directory_url = "https://acme.test/dir"
+ca_cert = "/tmp/acme-root.pem""#,
+        ))
+        .expect("tls-alpn-01 with a private directory is valid");
+        let acme = config.servers[0]
+            .tls
+            .as_ref()
+            .unwrap()
+            .acme
+            .as_ref()
+            .unwrap();
+        assert_eq!(acme.challenge_type(), "tls-alpn-01");
+        assert_eq!(acme.directory_url.as_deref(), Some("https://acme.test/dir"));
+
+        for extra in [
+            "challenge = \"tls-alpn-01\"\ndns_hook = \"/bin/true\"",
+            "challenge = \"tls-alpn-01\"\ndirectory_url = \"http://acme.test/dir\"",
+        ] {
+            assert!(
+                AppConfig::parse_str(&q09_toml(r#"["a.test"]"#, extra)).is_err(),
+                "{extra}"
+            );
+        }
+        assert!(
+            AppConfig::parse_str(&q09_toml(r#"["*.a.test"]"#, r#"challenge = "tls-alpn-01""#))
+                .is_err()
+        );
     }
 
     #[test]

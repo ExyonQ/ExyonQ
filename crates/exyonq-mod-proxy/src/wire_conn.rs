@@ -169,62 +169,93 @@ fn header_name_present_ci(head: &[u8], needle_lower: &[u8]) -> bool {
     header_field_count_ci(head, needle_lower) > 0
 }
 
-/// First raw value for a header name (case-insensitive), without the leading
-/// whitespace. Scans line starts only, so a header value cannot spoof another
-/// header name.
+/// First value of an exact header field (case-insensitive name).
 fn header_value_ci<'a>(head: &'a [u8], needle_lower: &[u8]) -> Option<&'a [u8]> {
     for line in head.split(|&b| b == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         let Some(prefix) = line.get(..needle_lower.len()) else {
             continue;
         };
-        if !prefix.eq_ignore_ascii_case(needle_lower) {
-            continue;
+        if prefix.eq_ignore_ascii_case(needle_lower) {
+            return line.get(needle_lower.len()..);
         }
-        let mut value = &line[needle_lower.len()..];
-        while value.first().copied() == Some(b' ') || value.first().copied() == Some(b'\t') {
-            value = &value[1..];
-        }
-        return Some(value);
     }
     None
 }
 
-/// Raw-head WebSocket upgrade detection — wire proxy cannot tunnel upgrades.
-/// Cap031 LA-002: Connection is a comma-separated token list (e.g. `close, Upgrade`).
-fn wire_head_is_websocket_upgrade(head: &[u8]) -> bool {
-    let mut upgrade_websocket = false;
-    let mut connection_upgrade = false;
+/// The wire path only frames bodyless GETs. A non-zero `Content-Length` must
+/// reach Hyper, which owns request-body framing; otherwise the upstream waits
+/// for bytes the wire path never sends. Missing/zero/invalid values are not
+/// eligible here (invalid framing is Hyper's fail-closed territory).
+fn content_length_is_zero_or_absent(head: &[u8]) -> bool {
+    let Some(raw) = header_value_ci(head, b"content-length:") else {
+        return true;
+    };
+    let Ok(text) = std::str::from_utf8(raw) else {
+        return false;
+    };
+    text.trim().parse::<u64>().is_ok_and(|len| len == 0)
+}
+
+fn trim_ows(mut value: &[u8]) -> &[u8] {
+    while value.first().is_some_and(|b| *b == b' ' || *b == b'\t') {
+        value = &value[1..];
+    }
+    while value.last().is_some_and(|b| *b == b' ' || *b == b'\t') {
+        value = &value[..value.len() - 1];
+    }
+    value
+}
+
+/// Comma-separated header token match (e.g. `Connection: close, Upgrade`).
+fn header_has_token_ci(head: &[u8], name_lower: &[u8], token: &[u8]) -> bool {
     for line in head.split(|&b| b == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
-        if line.len() >= 8 && line[..8].eq_ignore_ascii_case(b"upgrade:") {
-            let mut v = &line[8..];
-            while v.first().copied() == Some(b' ') || v.first().copied() == Some(b'\t') {
-                v = &v[1..];
-            }
-            if v.eq_ignore_ascii_case(b"websocket") {
-                upgrade_websocket = true;
-            }
-        } else if line.len() >= 11 && line[..11].eq_ignore_ascii_case(b"connection:") {
-            let mut v = &line[11..];
-            while v.first().copied() == Some(b' ') || v.first().copied() == Some(b'\t') {
-                v = &v[1..];
-            }
-            for token in v.split(|&b| b == b',') {
-                let mut t = token;
-                while t.first().copied() == Some(b' ') || t.first().copied() == Some(b'\t') {
-                    t = &t[1..];
-                }
-                while t.last().copied() == Some(b' ') || t.last().copied() == Some(b'\t') {
-                    t = &t[..t.len() - 1];
-                }
-                if t.eq_ignore_ascii_case(b"upgrade") {
-                    connection_upgrade = true;
-                }
-            }
+        let Some(prefix) = line.get(..name_lower.len()) else {
+            continue;
+        };
+        if !prefix.eq_ignore_ascii_case(name_lower) {
+            continue;
+        }
+        let value = &line[name_lower.len()..];
+        if value
+            .split(|&b| b == b',')
+            .any(|candidate| trim_ows(candidate).eq_ignore_ascii_case(token))
+        {
+            return true;
         }
     }
-    upgrade_websocket && connection_upgrade
+    false
+}
+
+/// Any protocol upgrade must be parsed by Hyper, which owns the upgrade state
+/// machine; the raw relay cannot tunnel one.
+fn wire_head_requests_upgrade(head: &[u8]) -> bool {
+    header_name_present_ci(head, b"upgrade:")
+        || header_has_token_ci(head, b"connection:", b"upgrade")
+}
+
+/// RFC 9112 §3.2: exactly one non-empty Host field. Ambiguous authority must
+/// reach Hyper, which rejects it, instead of being frozen by the wire path.
+fn wire_host_header_valid(head: &[u8]) -> bool {
+    if header_field_count_ci(head, b"host:") != 1 {
+        return false;
+    }
+    let Some(value) = header_value_ci(head, b"host:") else {
+        return false;
+    };
+    let value = trim_ows(value);
+    !value.is_empty()
+        && !value
+            .iter()
+            .any(|&b| b <= 0x20 || b == 0x7f || b == b',' || b == b'/')
+}
+
+/// Obsolete line folding is ambiguous between parsers; Hyper handles it.
+fn wire_head_has_obs_fold(head: &[u8]) -> bool {
+    head.split(|&b| b == b'\n')
+        .skip(1)
+        .any(|line| line.first().is_some_and(|b| *b == b' ' || *b == b'\t'))
 }
 
 pub fn might_use_proxy_wire(head: &[u8]) -> bool {
@@ -238,37 +269,28 @@ pub fn might_use_proxy_wire(head: &[u8]) -> bool {
         Some(canonical) if canonical == path => {}
         _ => return false,
     }
-    // F-13: exactly one Host and no obsolete line folding. Both are framing
-    // ambiguities that Hyper rejects; the wire path must not forward them.
-    if header_field_count_ci(head, b"host:") != 1 {
+    // F-13 security parity: admit only the unambiguous bodyless-GET subset.
+    // Everything below is parsed by Hyper, including requests it rejects.
+    if !wire_host_header_valid(head) || wire_head_has_obs_fold(head) {
         return false;
     }
-    if head
-        .split(|&b| b == b'\n')
-        .any(|line| matches!(line.first(), Some(b' ') | Some(b'\t')))
-    {
+    if wire_head_requests_upgrade(head) {
         return false;
     }
-    if wire_head_is_websocket_upgrade(head) {
+    // Any transfer coding means a possible body; the wire path never reads one.
+    if header_name_present_ci(head, b"transfer-encoding:") {
+        return false;
+    }
+    // Wire does not emit `100 Continue`; Hyper owns that handshake.
+    if header_name_present_ci(head, b"expect:") {
         return false;
     }
     // LA-PROXY-TE-CL-CASE-001: header names are case-insensitive (RFC 9110).
     if header_field_count_ci(head, b"content-length:") > 1 {
         return false;
     }
-    // F-07: a GET with a request body must be framed by Hyper, never by the
-    // bodyless wire path. Reject TE/Expect outright and any Content-Length
-    // other than exactly `0` (absent and `0` remain wire-eligible).
-    if header_name_present_ci(head, b"transfer-encoding:") {
+    if !content_length_is_zero_or_absent(head) {
         return false;
-    }
-    if header_name_present_ci(head, b"expect:") {
-        return false;
-    }
-    if let Some(content_length) = header_value_ci(head, b"content-length:") {
-        if content_length != b"0" {
-            return false;
-        }
     }
     true
 }
@@ -1256,8 +1278,12 @@ where
         // F3-R20: a cluster with location_rewrite rules cannot use the raw
         // verbatim relay — the response head must be rewritten first.
         // M-02: the raw relay does not forward Cookie/Authorization/Host/Range.
-        // Keep it disabled until it reaches header parity with the Hyper wire
-        // path; correctness takes precedence over the raw GET benchmark delta.
+        // F-13: compile-time opt-in (`raw-relay`), default OFF until it reaches
+        // header parity with the Hyper wire path; correctness takes precedence
+        // over the raw GET benchmark delta.
+        #[cfg(feature = "raw-relay")]
+        let raw_ok = crate::raw_upstream::raw_upstream_get_enabled();
+        #[cfg(not(feature = "raw-relay"))]
         let raw_ok = false;
         let (last_status, outcome) = if raw_ok {
             let mut counted = CountingWrite {

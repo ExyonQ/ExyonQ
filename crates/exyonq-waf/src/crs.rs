@@ -1366,6 +1366,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = crate::MapHeaders::from_pairs(&[("cookie", "evil")]);
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -1556,6 +1557,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = EmptyHeaders;
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -1591,6 +1593,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = EmptyHeaders;
         let make = |query: &'static str, ip: IpAddr| WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -1625,6 +1628,7 @@ mod tests {
         use std::net::{IpAddr, Ipv4Addr};
         let headers = EmptyHeaders;
         let make = |query: &'static str| WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -1672,6 +1676,7 @@ mod tests {
         let snapshot = crate::compile::compile_waf_with_crs(input, &[ruleset]).unwrap();
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let make = |query: &'static str| WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -1743,6 +1748,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = EmptyHeaders;
         let hit = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -1755,7 +1761,11 @@ mod tests {
             engine.inspect(WafPhase::RequestHeaders, &hit).action,
             exyonq_waf_api::WafAction::Block
         );
-        let safe = WafRequest { query: None, ..hit };
+        let safe = WafRequest {
+            country: None,
+            query: None,
+            ..hit
+        };
         assert_ne!(
             engine.inspect(WafPhase::RequestHeaders, &safe).action,
             exyonq_waf_api::WafAction::Block
@@ -1779,6 +1789,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = crate::MapHeaders::from_pairs(&[("content-type", "application/json")]);
         let req = WafRequest {
+            country: None,
             method: "POST",
             host: None,
             path: "/post",
@@ -1825,6 +1836,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = crate::MapHeaders::from_pairs(&[]);
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/benign",
@@ -1872,6 +1884,7 @@ mod tests {
             ("referer", "https://attacker.example/previous"),
         ]);
         let req = |headers| WafRequest {
+            country: None,
             method: "GET",
             host: Some("myapp.com"),
             path: "/login",
@@ -1925,6 +1938,7 @@ mod tests {
         let denied = crate::MapHeaders::from_pairs(&[("content-type", "my-new-content-type")]);
         let allowed = crate::MapHeaders::from_pairs(&[("content-type", "application/json")]);
         let req = |headers| WafRequest {
+            country: None,
             method: "POST",
             host: None,
             path: "/",
@@ -1967,6 +1981,7 @@ mod tests {
         let snapshot = crate::compile::compile_waf_with_crs(input, &[parsed]).unwrap();
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -2016,6 +2031,7 @@ mod tests {
         let snapshot = crate::compile::compile_waf_with_crs(input, &[ruleset]).unwrap();
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -2029,6 +2045,7 @@ mod tests {
             exyonq_waf_api::WafAction::Block
         );
         let within = WafRequest {
+            country: None,
             query: Some("v=b"),
             ..req
         };
@@ -2067,6 +2084,7 @@ mod tests {
         use std::net::{IpAddr, Ipv4Addr};
         let headers = EmptyHeaders;
         let make_req = || WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -2111,6 +2129,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = EmptyHeaders;
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -2142,6 +2161,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = EmptyHeaders;
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",
@@ -2187,6 +2207,7 @@ mod tests {
         let yes = crate::MapHeaders::from_pairs(&[("x-test", "yes")]);
         let no = EmptyHeaders;
         let base = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/evil",
@@ -2200,6 +2221,7 @@ mod tests {
             exyonq_waf_api::WafAction::Block
         );
         let without = WafRequest {
+            country: None,
             headers: &no,
             ..base
         };
@@ -2226,6 +2248,7 @@ mod tests {
         let engine = crate::FixedWafEngine::from_snapshot(std::sync::Arc::new(snapshot));
         let headers = EmptyHeaders;
         let req = WafRequest {
+            country: None,
             method: "GET",
             host: None,
             path: "/",

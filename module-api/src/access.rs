@@ -27,12 +27,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 enum AccessNet {
     Any,
     Network(IpNetwork),
+    Country(String),
 }
 
 impl AccessNet {
     fn parse(value: &str) -> Result<Self, String> {
         if value.trim().eq_ignore_ascii_case("all") {
             return Ok(Self::Any);
+        }
+        if let Some(code) = value.trim().strip_prefix("country:") {
+            let code = code.trim().to_ascii_uppercase();
+            if exyonq_config_ir::is_country_code(&code) {
+                return Ok(Self::Country(code));
+            }
+            return Err(format!("invalid country code `{value}`"));
         }
         parse_network(value.trim())
             .map(Self::Network)
@@ -43,6 +51,14 @@ impl AccessNet {
         match self {
             Self::Any => true,
             Self::Network(network) => network.contains(ip),
+            Self::Country(_) => false,
+        }
+    }
+
+    fn matches_country(&self, country: Option<&str>) -> bool {
+        match (self, country) {
+            (Self::Country(expected), Some(actual)) => expected.eq_ignore_ascii_case(actual),
+            _ => false,
         }
     }
 }
@@ -60,7 +76,7 @@ pub struct CompiledAccessPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CompiledAccessRule {
     allow: bool,
-    network: AccessNet,
+    source: AccessNet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +143,7 @@ impl CompiledAccessPolicy {
             .map(|rule| {
                 Ok(CompiledAccessRule {
                     allow: matches!(rule.effect, RouteAccessEffect::Allow),
-                    network: AccessNet::parse(&rule.source)?,
+                    source: AccessNet::parse(&rule.source)?,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -154,23 +170,84 @@ impl CompiledAccessPolicy {
 
     /// Evaluate against the current UTC clock.
     pub fn allows(&self, ip: IpAddr, method: &str) -> bool {
-        self.allows_at(ip, method, SystemTime::now())
+        self.allows_with_country(ip, method, None)
     }
 
     /// Deterministic evaluation point used by tests and the request path.
     pub fn allows_at(&self, ip: IpAddr, method: &str, now: SystemTime) -> bool {
+        self.allows_at_with_country(ip, method, None, now)
+    }
+
+    /// Evaluate a route policy with the resolved client country.
+    pub fn allows_with_country(&self, ip: IpAddr, method: &str, country: Option<&str>) -> bool {
+        self.allows_at_with_country(ip, method, country, SystemTime::now())
+    }
+
+    /// Deterministic country-aware evaluation point.
+    pub fn allows_at_with_country(
+        &self,
+        ip: IpAddr,
+        method: &str,
+        country: Option<&str>,
+        now: SystemTime,
+    ) -> bool {
+        if self.requires_country() && country.is_none() {
+            return false;
+        }
+        self.allows_core(ip, method, country, now, false)
+    }
+
+    /// IP/method/schedule evaluation without country rules. Used only for the
+    /// explicit `on_missing_db = "fail_open"` policy.
+    pub fn allows_ignoring_country(&self, ip: IpAddr, method: &str) -> bool {
+        self.allows_core(ip, method, None, SystemTime::now(), true)
+    }
+
+    /// True when this policy needs a resolved country to be evaluated safely.
+    pub fn requires_country(&self) -> bool {
+        self.allow
+            .iter()
+            .chain(self.deny.iter())
+            .any(|entry| matches!(entry, AccessNet::Country(_)))
+            || self
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.source, AccessNet::Country(_)))
+    }
+
+    fn allows_core(
+        &self,
+        ip: IpAddr,
+        method: &str,
+        country: Option<&str>,
+        now: SystemTime,
+        ignore_country: bool,
+    ) -> bool {
         if self.rules.is_empty() {
-            if self.deny.iter().any(|network| network.contains(ip)) {
+            if self
+                .deny
+                .iter()
+                .any(|entry| net_matches(entry, ip, country, ignore_country))
+            {
                 return false;
             }
-            if !self.allow.is_empty() && !self.allow.iter().any(|network| network.contains(ip)) {
+            let ip_entries: Vec<&AccessNet> = self
+                .allow
+                .iter()
+                .filter(|entry| !(ignore_country && matches!(entry, AccessNet::Country(_))))
+                .collect();
+            if !ip_entries.is_empty()
+                && !ip_entries
+                    .iter()
+                    .any(|entry| net_matches(entry, ip, country, ignore_country))
+            {
                 return false;
             }
         } else {
             let allowed = self
                 .rules
                 .iter()
-                .find(|rule| rule.network.contains(ip))
+                .find(|rule| net_matches(&rule.source, ip, country, ignore_country))
                 .map(|rule| rule.allow)
                 .unwrap_or(true);
             if !allowed {
@@ -191,6 +268,17 @@ impl CompiledAccessPolicy {
             }
         }
         true
+    }
+}
+
+/// One allow/deny entry against a request. Country entries compare the resolved
+/// country; when GeoIP is absent and the operator chose `fail_open`,
+/// `ignore_country` skips them instead of treating them as a mismatch.
+fn net_matches(entry: &AccessNet, ip: IpAddr, country: Option<&str>, ignore_country: bool) -> bool {
+    match entry {
+        AccessNet::Country(_) if ignore_country => false,
+        AccessNet::Country(_) => entry.matches_country(country),
+        other => other.contains(ip),
     }
 }
 
@@ -328,5 +416,55 @@ mod tests {
             "GET",
             at(monday_0030 + 3 * 3600)
         ));
+    }
+
+    #[test]
+    fn country_allow_deny_lists_reuse_the_ip_precedence() {
+        let cfg = RouteAccessConfig {
+            allow: vec!["country:es".into(), "country:fr".into()],
+            deny: vec!["country:fr".into()],
+            rules: vec![],
+            methods: vec![],
+            schedule: None,
+        };
+        let p = CompiledAccessPolicy::compile(&cfg).expect("country policy");
+        let ip = "192.0.2.1".parse().unwrap();
+        assert!(p.allows_with_country(ip, "GET", Some("ES")));
+        assert!(!p.allows_with_country(ip, "GET", Some("FR")));
+        assert!(!p.allows_with_country(ip, "GET", Some("US")));
+        assert!(!p.allows_with_country(ip, "GET", None));
+        assert!(p.requires_country());
+        // fail-open path explicitly skips country rules/lists
+        assert!(p.allows_ignoring_country(ip, "GET"));
+    }
+
+    #[test]
+    fn country_rule_is_ordered_with_ip_rules() {
+        let cfg = RouteAccessConfig {
+            allow: vec![],
+            deny: vec![],
+            rules: vec![
+                RouteAccessRule {
+                    effect: RouteAccessEffect::Allow,
+                    source: "country:ES".into(),
+                },
+                RouteAccessRule {
+                    effect: RouteAccessEffect::Deny,
+                    source: "country:CN".into(),
+                },
+                RouteAccessRule {
+                    effect: RouteAccessEffect::Allow,
+                    source: "all".into(),
+                },
+            ],
+            methods: vec![],
+            schedule: None,
+        };
+        let p = CompiledAccessPolicy::compile(&cfg).expect("country rule");
+        let ip = "192.0.2.1".parse().unwrap();
+        assert!(p.allows_with_country(ip, "GET", Some("ES")));
+        assert!(!p.allows_with_country(ip, "GET", Some("CN")));
+        assert!(p.allows_with_country(ip, "GET", Some("US")));
+        assert!(!p.allows_with_country(ip, "GET", None));
     }
 }

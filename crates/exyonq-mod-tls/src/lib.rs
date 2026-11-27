@@ -77,6 +77,95 @@ impl TlsSessionCache {
 #[derive(Clone, Default)]
 pub struct SharedTlsAcceptor {
     inner: Arc<RwLock<Option<TlsAcceptor>>>,
+    acme_alpn: AcmeTlsAlpnStore,
+}
+
+/// Ephemeral TLS-ALPN-01 (RFC 8737) challenge certificates keyed by the exact
+/// ACME identifier. Nothing here is written to disk: the certificate exists
+/// only while an order is being validated.
+#[derive(Clone, Default)]
+pub struct AcmeTlsAlpnStore {
+    inner: Arc<RwLock<HashMap<String, Arc<CertifiedKey>>>>,
+}
+
+impl AcmeTlsAlpnStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A poisoned lock only means a previous holder panicked; the map itself
+    /// is still structurally valid. Recover it instead of panicking the TLS
+    /// listener a second time.
+    fn read_guard(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, Arc<CertifiedKey>>> {
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_guard(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, Arc<CertifiedKey>>> {
+        self.inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Install a PEM certificate/key pair for `name`. RFC 8737 forbids
+    /// wildcards, so only the exact lower-case DNS name is stored.
+    pub fn set_pem(&self, name: &str, cert_pem: &str, key_pem: &str) -> io::Result<()> {
+        let name = normalize_acme_tls_alpn_name(name)?;
+        let certs = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(pem_io_error)?;
+        if certs.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "tls-alpn-01 certificate: no CERTIFICATE blocks",
+            ));
+        }
+        let key = PrivatePkcs8KeyDer::from_pem_slice(key_pem.as_bytes()).map_err(pem_io_error)?;
+        let key = PrivateKeyDer::from(key);
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("tls-alpn-01 key {name}: {err}"),
+            )
+        })?;
+        // Do not call `keys_match`: the RFC 8737 acmeIdentifier extension is
+        // critical and webpki rejects it as unsupported. The pair was generated
+        // together by the ACME module and is ephemeral.
+        let certified = Arc::new(CertifiedKey::new(certs, signing_key));
+        self.write_guard().insert(name, certified);
+        Ok(())
+    }
+
+    pub fn get(&self, name: &str) -> Option<Arc<CertifiedKey>> {
+        let name = normalize_acme_tls_alpn_name(name).ok()?;
+        self.read_guard().get(&name).cloned()
+    }
+
+    pub fn remove(&self, name: &str) {
+        if let Ok(name) = normalize_acme_tls_alpn_name(name) {
+            self.write_guard().remove(&name);
+        }
+    }
+
+    pub fn clear(&self) {
+        self.write_guard().clear();
+    }
+}
+
+fn normalize_acme_tls_alpn_name(name: &str) -> io::Result<String> {
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    if name.is_empty()
+        || name.contains('*')
+        || name.contains('/')
+        || name.chars().any(char::is_whitespace)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("tls-alpn-01: invalid identifier {name:?}"),
+        ));
+    }
+    Ok(name)
 }
 
 impl SharedTlsAcceptor {
@@ -151,6 +240,41 @@ impl SharedTlsAcceptor {
 
     pub fn is_loaded(&self) -> bool {
         self.inner.read().expect("tls acceptor lock").is_some()
+    }
+
+    /// Challenge storage survives acceptor rebuilds, so a renewal can publish
+    /// an `acme-tls/1` certificate into the live listener immediately.
+    pub fn acme_alpn_store(&self) -> AcmeTlsAlpnStore {
+        self.acme_alpn.clone()
+    }
+
+    pub fn set_acme_challenge(&self, name: &str, cert_pem: &str, key_pem: &str) -> io::Result<()> {
+        self.acme_alpn.set_pem(name, cert_pem, key_pem)
+    }
+
+    pub fn clear_acme_challenge(&self, name: &str) {
+        self.acme_alpn.remove(name);
+    }
+
+    /// Build an acceptor that can serve only the `acme-tls/1` challenge ALPN.
+    /// `certs` may be empty: normal handshakes then fail closed by design.
+    pub fn prepare_multi_with_acme(
+        certs: &[SniCert],
+        strict_sni: bool,
+        crypto: &TlsCryptoPolicy,
+        session_cache: &TlsSessionCache,
+        alpn: &[&[u8]],
+        acme_alpn: AcmeTlsAlpnStore,
+    ) -> io::Result<TlsAcceptor> {
+        let config = load_rustls_config_multi_inner(
+            certs,
+            strict_sni,
+            crypto,
+            alpn,
+            Some(session_cache),
+            Some(acme_alpn),
+        )?;
+        Ok(TlsAcceptor::from(Arc::new(config)))
     }
 }
 
@@ -239,20 +363,46 @@ pub struct SniCert {
 /// rustls SNI resolver: exact `server_name` match, then nginx-style `*.suffix`
 /// wildcard, else the first configured certificate (deterministic default,
 /// mirrors the former `servers[0]` cert).
-#[derive(Debug)]
 struct SniResolver {
     by_name: HashMap<String, Arc<CertifiedKey>>,
-    default: Arc<CertifiedKey>,
+    default: Option<Arc<CertifiedKey>>,
     /// AP-02: when true, unknown SNI aborts the handshake instead of
     /// falling back to `default`.
     strict: bool,
+    /// F-09: RFC 8737 challenge certificates, selected only when the client
+    /// negotiates `acme-tls/1` and never as the normal default certificate.
+    acme_alpn: Option<AcmeTlsAlpnStore>,
+}
+
+impl std::fmt::Debug for SniResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SniResolver")
+            .field("names", &self.by_name.len())
+            .field("has_default", &self.default.is_some())
+            .field("strict", &self.strict)
+            .field("acme_alpn", &self.acme_alpn.is_some())
+            .finish()
+    }
 }
 
 impl ResolvesServerCert for SniResolver {
     fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        if let Some(name) = client_hello.server_name() {
-            let lower = name.trim_end_matches('.').to_ascii_lowercase();
-            if let Some(key) = self.by_name.get(lower.as_str()) {
+        let lower = client_hello
+            .server_name()
+            .map(|name| name.trim_end_matches('.').to_ascii_lowercase());
+        let offers_acme_alpn = client_hello
+            .alpn()
+            .is_some_and(|mut protocols| protocols.any(|p| p == b"acme-tls/1"));
+        if offers_acme_alpn {
+            if let Some(store) = &self.acme_alpn {
+                // Never fall back to a normal certificate for the challenge
+                // ALPN, and never accept a challenge without SNI.
+                let name = lower.as_deref()?;
+                return store.get(name);
+            }
+        }
+        if let Some(lower) = lower.as_deref() {
+            if let Some(key) = self.by_name.get(lower) {
                 return Some(Arc::clone(key));
             }
             // RFC 6125: a wildcard covers exactly one label and only in the
@@ -270,7 +420,7 @@ impl ResolvesServerCert for SniResolver {
         if self.strict {
             None
         } else {
-            Some(Arc::clone(&self.default))
+            self.default.clone()
         }
     }
 }
@@ -288,7 +438,18 @@ pub fn load_rustls_config_multi(
     alpn: &[&[u8]],
     session_cache: Option<&TlsSessionCache>,
 ) -> io::Result<ServerConfig> {
-    if certs.is_empty() {
+    load_rustls_config_multi_inner(certs, strict_sni, crypto, alpn, session_cache, None)
+}
+
+fn load_rustls_config_multi_inner(
+    certs: &[SniCert],
+    strict_sni: bool,
+    crypto: &TlsCryptoPolicy,
+    alpn: &[&[u8]],
+    session_cache: Option<&TlsSessionCache>,
+    acme_alpn: Option<AcmeTlsAlpnStore>,
+) -> io::Result<ServerConfig> {
+    if certs.is_empty() && acme_alpn.is_none() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "tls: no certificates configured",
@@ -299,6 +460,7 @@ pub fn load_rustls_config_multi(
         && crypto.is_default()
         && !strict_sni
         && certs[0].ocsp_path.is_none()
+        && acme_alpn.is_none()
     {
         // Identical to the historical single-cert path.
         return load_rustls_config(
@@ -336,7 +498,6 @@ pub fn load_rustls_config_multi(
             }
         }
     }
-    let default = default.expect("non-empty certs");
     let builder = crypto_builder(crypto)?;
     let builder = match &crypto.client_auth {
         Some(policy) => builder.with_client_cert_verifier(client_verifier(policy)?),
@@ -346,6 +507,7 @@ pub fn load_rustls_config_multi(
         by_name,
         default,
         strict: strict_sni,
+        acme_alpn,
     }));
     config.alpn_protocols = alpn.iter().map(|proto| proto.to_vec()).collect();
     if let Some(cache) = session_cache {
@@ -1348,6 +1510,103 @@ mod tests {
                 io::ErrorKind::InvalidInput
             );
         }
+    }
+
+    fn handshake_with_alpn(
+        server_config: Arc<ServerConfig>,
+        client_config: Arc<rustls::ClientConfig>,
+        sni: &str,
+    ) -> bool {
+        use rustls::pki_types::ServerName;
+        use rustls::{ClientConnection, ServerConnection, Stream};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+            let _ = sock.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+            let mut conn = ServerConnection::new(server_config).unwrap();
+            let mut tls = Stream::new(&mut conn, &mut sock);
+            let _ = std::io::Read::read(&mut tls, &mut [0u8; 8]);
+            let _ = std::io::Write::write_all(&mut tls, b"p");
+        });
+        let name = ServerName::try_from(sni.to_string()).unwrap();
+        let mut conn = ClientConnection::new(client_config, name).unwrap();
+        let mut sock = std::net::TcpStream::connect(addr).unwrap();
+        let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+        let _ = sock.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+        let result = {
+            let mut tls = Stream::new(&mut conn, &mut sock);
+            std::io::Write::write_all(&mut tls, b"ping")
+                .and_then(|()| std::io::Read::read_exact(&mut tls, &mut [0u8; 1]))
+        };
+        let _ = sock.shutdown(std::net::Shutdown::Both);
+        server.join().unwrap();
+        result.is_ok()
+    }
+
+    fn client_with_alpn(protocols: &[&[u8]]) -> Arc<rustls::ClientConfig> {
+        use rustls::ClientConfig;
+        let mut config = ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAnyCert))
+            .with_no_client_auth();
+        config.alpn_protocols = protocols.iter().map(|p| p.to_vec()).collect();
+        Arc::new(config)
+    }
+
+    /// F-09: `acme-tls/1` selects the ephemeral challenge certificate and a
+    /// normal handshake cannot use the challenge-only acceptor.
+    #[test]
+    fn f09_acme_alpn_store_serves_only_the_challenge_identity() {
+        install_rustls_provider();
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_path, key_path) = write_ephemeral_pkcs8_pair(dir.path());
+        let cert_pem = std::fs::read_to_string(cert_path).unwrap();
+        let key_pem = std::fs::read_to_string(key_path).unwrap();
+        let store = AcmeTlsAlpnStore::new();
+        store
+            .set_pem("exyonq.test", &cert_pem, &key_pem)
+            .expect("challenge pair");
+        assert!(
+            store.get("exyonq.test").is_some(),
+            "challenge name is stored"
+        );
+        assert!(
+            store.set_pem("*.exyonq.test", &cert_pem, &key_pem).is_err(),
+            "wildcard challenge identifiers are rejected"
+        );
+
+        let server = Arc::new(
+            load_rustls_config_multi_inner(
+                &[],
+                false,
+                &TlsCryptoPolicy::default(),
+                &[b"acme-tls/1"],
+                None,
+                Some(store.clone()),
+            )
+            .expect("challenge-only config"),
+        );
+        assert!(
+            handshake_with_alpn(
+                Arc::clone(&server),
+                client_with_alpn(&[b"acme-tls/1"]),
+                "exyonq.test"
+            ),
+            "acme-tls/1 must reach the challenge certificate"
+        );
+        assert!(
+            !handshake_with_alpn(server, client_with_alpn(&[b"http/1.1"]), "exyonq.test"),
+            "a normal ALPN must not use the challenge certificate"
+        );
+
+        store.remove("exyonq.test");
+        assert!(
+            store.get("exyonq.test").is_none(),
+            "removed challenge is gone"
+        );
     }
 
     #[test]

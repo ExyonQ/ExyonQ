@@ -122,6 +122,7 @@ impl WafBody {
         }
         let start = self.inspected.saturating_sub(RESPONSE_BODY_SCAN_OVERLAP);
         let req = WafRequest {
+            country: None,
             method: &self.method,
             host: self.host.as_deref(),
             path: &self.path,

@@ -41,7 +41,7 @@ pub enum RouteAccessEffect {
 #[serde(deny_unknown_fields)]
 pub struct RouteAccessRule {
     pub effect: RouteAccessEffect,
-    /// IP/CIDR or `all`.
+    /// IP/CIDR, `country:XX`, or `all`.
     pub source: String,
 }
 
@@ -137,6 +137,14 @@ impl RouteAccessConfig {
             }
             let key = if source.eq_ignore_ascii_case("all") {
                 "all".to_string()
+            } else if let Some(code) = source.strip_prefix("country:") {
+                let code = code.trim().to_ascii_uppercase();
+                if !crate::is_country_code(&code) {
+                    return Err(ConfigError::Parse(format!(
+                        "route `{route}`: access.rules source `{source}` is not a country:XX code"
+                    )));
+                }
+                format!("country:{code}")
             } else {
                 parse_network(source)
                     .ok_or_else(|| {
@@ -156,8 +164,8 @@ impl RouteAccessConfig {
                 )));
             }
         }
-        validate_networks(route, "allow", &self.allow)?;
-        validate_networks(route, "deny", &self.deny)?;
+        validate_entries(route, "allow", &self.allow)?;
+        validate_entries(route, "deny", &self.deny)?;
         if self.methods.len() > MAX_ACCESS_METHODS {
             return Err(ConfigError::Parse(format!(
                 "route `{route}`: access.methods exceeds max {MAX_ACCESS_METHODS}"
@@ -219,12 +227,13 @@ impl RouteAccessSchedule {
     }
 }
 
-fn validate_networks(route: &str, field: &str, values: &[String]) -> Result<(), ConfigError> {
-    if values.len() > MAX_ACCESS_NETWORKS {
-        return Err(ConfigError::Parse(format!(
-            "route `{route}`: access.{field} exceeds max {MAX_ACCESS_NETWORKS}"
-        )));
-    }
+/// `access.allow`/`access.deny` entries are `all`, `country:XX` or IP/CIDR.
+/// The 64-entry ceiling applies to IP/CIDR entries only: a country list is at
+/// most a few hundred ISO codes and is not a CIDR expansion. Deny wins; a
+/// non-empty allow list is an allowlist, and country entries participate in
+/// both lists with the same precedence as IP entries.
+fn validate_entries(route: &str, field: &str, values: &[String]) -> Result<(), ConfigError> {
+    let mut networks = 0usize;
     let mut seen = HashSet::new();
     for value in values {
         let value = value.trim();
@@ -235,11 +244,20 @@ fn validate_networks(route: &str, field: &str, values: &[String]) -> Result<(), 
         }
         let key = if value.eq_ignore_ascii_case("all") {
             "all".to_string()
+        } else if let Some(code) = value.strip_prefix("country:") {
+            let code = code.trim().to_ascii_uppercase();
+            if !crate::is_country_code(&code) {
+                return Err(ConfigError::Parse(format!(
+                    "route `{route}`: access.{field} entry `{value}` is not a country:XX code"
+                )));
+            }
+            format!("country:{code}")
         } else {
+            networks += 1;
             parse_network(value)
                 .ok_or_else(|| {
                     ConfigError::Parse(format!(
-                        "route `{route}`: access.{field} entry `{value}` is not an IP/CIDR"
+                        "route `{route}`: access.{field} entry `{value}` is not an IP/CIDR or country:XX"
                     ))
                 })?
                 .to_string()
@@ -249,6 +267,11 @@ fn validate_networks(route: &str, field: &str, values: &[String]) -> Result<(), 
                 "route `{route}`: duplicate access.{field} entry `{value}`"
             )));
         }
+    }
+    if networks > MAX_ACCESS_NETWORKS {
+        return Err(ConfigError::Parse(format!(
+            "route `{route}`: access.{field} exceeds max {MAX_ACCESS_NETWORKS} IP/CIDR entries"
+        )));
     }
     Ok(())
 }
@@ -413,5 +436,51 @@ mod tests {
         let mut cfg = valid();
         cfg.schedule.as_mut().unwrap().start = "24:00".into();
         assert!(cfg.validate("site").is_err());
+    }
+
+    #[test]
+    fn accepts_country_entries_without_network_caps() {
+        let mut cfg = valid();
+        cfg.allow.clear();
+        cfg.deny.clear();
+        // 208 distinct syntactically valid codes: beyond the 64/128 CIDR caps.
+        let mut allow = Vec::new();
+        for first in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+            for second in 'A'..='Z' {
+                allow.push(format!("country:{first}{second}"));
+            }
+        }
+        cfg.allow = allow;
+        cfg.validate("site").expect("no country entry cap");
+
+        cfg.allow = vec!["country:ES".into(), "country:FR".into()];
+        cfg.deny = vec!["country:CN".into()];
+        cfg.validate("site").expect("country lists");
+        cfg.deny.push("country:cn".into());
+        assert!(
+            cfg.validate("site").is_err(),
+            "duplicate is case-insensitive"
+        );
+
+        // The IP/CIDR ceiling still applies to network entries.
+        cfg.allow = (0..=MAX_ACCESS_NETWORKS)
+            .map(|i| format!("10.0.{i}.0/24"))
+            .collect();
+        cfg.deny.clear();
+        assert!(cfg.validate("site").is_err(), "IP entries keep the 64 cap");
+    }
+
+    #[test]
+    fn country_rule_source_is_validated() {
+        let mut cfg = valid();
+        cfg.allow.clear();
+        cfg.deny.clear();
+        cfg.rules = vec![RouteAccessRule {
+            effect: RouteAccessEffect::Deny,
+            source: "country:ESP".into(),
+        }];
+        assert!(cfg.validate("site").is_err());
+        cfg.rules[0].source = "country:es".into();
+        cfg.validate("site").expect("lowercase country accepted");
     }
 }

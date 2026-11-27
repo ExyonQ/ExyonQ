@@ -94,7 +94,16 @@ pub fn ir_json_schema() -> serde_json::Value {
                                         "items": { "type": "string" },
                                         "minItems": 1
                                     },
-                                    "staging": { "type": "boolean", "default": false }
+                                    "staging": { "type": "boolean", "default": false },
+                                    "challenge": {
+                                        "type": "string",
+                                        "enum": ["http-01", "dns-01", "tls-alpn-01"]
+                                    },
+                                    "dns_hook": { "type": "string" },
+                                    "dns_propagation_secs": { "type": "integer", "minimum": 0 },
+                                    "directory_url": { "type": "string", "format": "uri" },
+                                    "ca_cert": { "type": "string" },
+                                    "account_path": { "type": "string" }
                                 }
                             }
                         }
@@ -403,6 +412,20 @@ pub fn ir_json_schema() -> serde_json::Value {
                         }
                     }
                 }
+            },
+            "geoip": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "default": false },
+                    "database": { "type": "string" },
+                    "reload_interval": {
+                        "type": "string",
+                        "pattern": "^[1-9][0-9]*[smhd]$",
+                        "default": "24h"
+                    },
+                    "on_missing_db": { "enum": ["fail_closed", "fail_open"], "default": "fail_closed" }
+                }
             }
         }
     })
@@ -659,6 +682,20 @@ fn render_toml(
             out.push_str(&format!("header = {:?}\n", rip.header));
         }
         out.push('\n');
+    }
+    if config.geoip.enabled {
+        out.push_str("[geoip]\nenabled = true\n");
+        if let Some(database) = &config.geoip.database {
+            out.push_str(&format!("database = {:?}\n", database.display()));
+        }
+        let missing = match config.geoip.on_missing_db {
+            exyonq_config_ir::GeoIpMissingPolicy::FailClosed => "fail_closed",
+            exyonq_config_ir::GeoIpMissingPolicy::FailOpen => "fail_open",
+        };
+        out.push_str(&format!(
+            "reload_interval = {:?}\non_missing_db = {missing:?}\n\n",
+            config.geoip.reload_interval
+        ));
     }
     Ok(out)
 }

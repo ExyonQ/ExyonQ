@@ -224,6 +224,39 @@ The hook is run with `sh -c` and these variables:
 and its apex share the same `_acme-challenge` name. `cleanup` runs after the
 order completes, best-effort.
 
+TLS-ALPN-01 (RFC 8737, no port 80 listener required):
+
+```toml
+[server.tls.acme]
+email = "ops@example.com"
+domains = ["example.com"]
+challenge = "tls-alpn-01"
+```
+
+The CA validates the identifier by connecting to the TLS listener with ALPN
+`acme-tls/1`. ExyonQ generates an ephemeral self-signed certificate with the
+critical `acmeIdentifier` extension, serves it only for that ALPN and exact
+SNI, and never writes the challenge pair to disk. The listener can start with
+no certificate at all (bootstrap from zero); normal HTTPS handshakes fail
+closed until the first pair is issued and the acceptor is rebuilt. Wildcards
+are rejected for this challenge and require DNS-01.
+
+A private or test ACME server can be selected with an HTTPS directory and its
+trust root:
+
+```toml
+[server.tls.acme]
+email = "ops@example.com"
+domains = ["example.com"]
+challenge = "tls-alpn-01"
+directory_url = "https://acme.internal.example/dir"
+ca_cert = "/etc/exyonq/tls/acme-api-root.pem"
+```
+
+`directory_url` overrides `staging`; `ca_cert` verifies the ACME API's HTTPS
+connection and is not the issuer of the issued certificate. Binding port 443
+requires the usual `CAP_NET_BIND_SERVICE` or an equivalent deployment rule.
+
 The ACME account is persisted (`account_path`, or `<cert>.acme-account.json`)
 with mode `0600`, and reused across runs. Renewal uses ACME Renewal Information
 (ARI) when the CA supports it, and otherwise renews 30 days before expiry.

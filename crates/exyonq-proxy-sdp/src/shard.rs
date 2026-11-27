@@ -639,6 +639,7 @@ fn evaluate_waf_admission(
     }
     let headers = HostHdr(host);
     let req = WafRequest {
+        country: None,
         method: "GET",
         host,
         path,

@@ -15,7 +15,10 @@
  */
 
 mod allocator;
+#[cfg(feature = "cfd")]
 mod cfd_dataplane;
+#[cfg(not(feature = "cfd"))]
+mod cfd_gate;
 mod l2_coord_lab;
 mod waf_install;
 
@@ -185,6 +188,11 @@ async fn async_main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Serve { config } => {
+            // F-13: CFD is compile-time opt-in (`cfd`) and default OFF. Fail
+            // closed before touching config/ports when an operator asks for a
+            // path this binary does not contain.
+            #[cfg(not(feature = "cfd"))]
+            cfd_gate::reject_if_requested()?;
             info!(allocator = allocator::ALLOCATOR_NAME, "allocator identity");
             // Cap051: EXYONQ_CONFIG must preserve path identity for reload/control.
             // Path::display().to_string() is lossy — reject non-UTF-8 explicitly.
@@ -338,11 +346,14 @@ async fn async_main() -> anyhow::Result<()> {
                 .map_err(|_| anyhow::anyhow!("reload runtime already registered"))?;
             l2_coord_lab::maybe_install_l2_coord_lab(&app_config)?;
             waf_install::install_native_waf_runtime(&app_config)?;
-            // Competitive Frontier H1 dataplane foundations (default OFF).
-            // Separate process; exclusive listen; no Hyper fallback; no product routing yet.
+            // F-13: Competitive Frontier H1 dataplane is an opt-in feature.
+            // Separate process; exclusive listen; no Hyper fallback; no product
+            // routing yet. Default builds do not compile this block.
+            #[cfg(feature = "cfd")]
             let cfd_child = cfd_dataplane::maybe_start_competitive_h1_dataplane(&app_config)?;
             info!(path = %config.display(), listen = %app_config.primary_listen_addr()?);
             let run_result = exyonq_core::server::run(app_config).await;
+            #[cfg(feature = "cfd")]
             if let Some(child) = cfd_child {
                 child
                     .shutdown()
@@ -358,8 +369,10 @@ async fn async_main() -> anyhow::Result<()> {
                 std::process::exit(2);
             };
             eprintln!(
-                "warning: `exyonq validate` is transitional; prefer `exyonqctl config lint` \
-                 (or `exyonqctl config test` for RuntimePlan compile)"
+                "warning: `exyonq validate {0}` is transitional and is removed in 0.11.0; \
+                 use `exyonqctl config lint {0}` (or `exyonqctl config test {0}` for \
+                 RuntimePlan compile). See docs/architecture/081-cli-deprecations.md",
+                config.display()
             );
             // Historical semantics: parse+validate only (no RuntimePlan) → lint.
             let result = lint(

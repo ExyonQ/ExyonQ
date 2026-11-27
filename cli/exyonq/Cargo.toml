@@ -37,6 +37,12 @@ p8t-fix-baseline = ["exyonq-core/p8t-fix-baseline"]
 p8tp-vectored = ["exyonq-core/p8tp-vectored"]
 # P8TP cork path (needs peer fd capture; inert without box_wire_stream_with_fd).
 p8tp-platform-cork = ["exyonq-core/p8tp-platform-cork"]
+# F-13: experimental Competitive Frontier dataplane. Default OFF; the product
+# binary excludes the path unless this feature is explicitly enabled.
+cfd = ["dep:exyonq-cfd-control"]
+# F-13: experimental raw upstream relay. Default OFF; it does not yet reach
+# header parity with the Hyper wire path, so it is not a product path.
+raw-relay = ["exyonq-mod-proxy/raw-relay"]
 
 [dependencies]
 anyhow.workspace = true
@@ -66,7 +72,7 @@ exyonq-ratelimit = { workspace = true }
 tokio.workspace = true
 tracing.workspace = true
 exyonq-observability = { workspace = true, features = ["full"] }
-exyonq-cfd-control = { path = "../../crates/exyonq-cfd-control" }
+exyonq-cfd-control = { path = "../../crates/exyonq-cfd-control", optional = true }
 # Optional process-wide Rust allocator (compile-time only; not a glibc substitute).
 tikv-jemallocator = { version = "0.7", optional = true }
 

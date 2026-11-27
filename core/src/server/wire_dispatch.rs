@@ -82,7 +82,12 @@ where
 /// - `write_ok == false`: `status=400` is **INTENDED_RESPONSE_STATUS only**;
 ///   `outcome=response_write_failed` means the 400 was **not** successfully written.
 ///   Do not interpret this event as DELIVERED_400_SUCCESS.
-fn emit_wire_reject_access(started: Instant, client_ip: Option<&str>, write_ok: bool) {
+fn emit_wire_reject_access(
+    started: Instant,
+    client_ip: Option<&str>,
+    write_ok: bool,
+    scheme: &'static str,
+) {
     if !observability::access_event_required() {
         return;
     }
@@ -97,10 +102,12 @@ fn emit_wire_reject_access(started: Instant, client_ip: Option<&str>, write_ok: 
         path: "-",
         host: None,
         status: 400,
-        protocol: "http1.1-wire",
+        protocol: scheme,
         duration_ms: observability::duration_ms(started),
         bytes_sent: None,
         client_ip,
+        country: None,
+        continent: None,
         external_request_id: None,
         internal_request_id: &internal,
         upstream: None,
@@ -109,32 +116,55 @@ fn emit_wire_reject_access(started: Instant, client_ip: Option<&str>, write_ok: 
     });
 }
 
-async fn complete_wire_reject<S>(stream: &mut S, started: Instant, client_ip: Option<&str>)
-where
+async fn complete_wire_reject<S>(
+    stream: &mut S,
+    started: Instant,
+    client_ip: Option<&str>,
+    scheme: &'static str,
+) where
     S: AsyncWrite + Unpin,
 {
     match write_wire_reject_bad_request(stream).await {
         Ok(()) => {
-            emit_wire_reject_access(started, client_ip, true);
+            emit_wire_reject_access(started, client_ip, true, scheme);
         }
         Err(err) => {
             WIRE_REJECT_RESPONSE_WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
             warn!(%err, "wire reject 400 response write failed");
-            emit_wire_reject_access(started, client_ip, false);
+            emit_wire_reject_access(started, client_ip, false, scheme);
         }
     }
 }
 
+/// Emit the access event for a request served (or answered) on the wire path.
+///
+/// `scheme` is the listener scheme (`http` / `https`), not the wire transport:
+/// the field answers "was this request TLS?", which `http1.1-wire` could not.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_wire_access(
     head: &[u8],
     status: u16,
     outcome: &str,
     client_ip: Option<&str>,
     duration_ms: u64,
+    scheme: &'static str,
+    country: Option<&str>,
+    continent: Option<&str>,
 ) -> Option<String> {
-    emit_wire_access_with_id(head, status, outcome, client_ip, duration_ms, None)
+    emit_wire_access_with_id(
+        head,
+        status,
+        outcome,
+        client_ip,
+        duration_ms,
+        None,
+        scheme,
+        country,
+        continent,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_wire_access_with_id(
     head: &[u8],
     status: u16,
@@ -142,6 +172,9 @@ fn emit_wire_access_with_id(
     client_ip: Option<&str>,
     duration_ms: u64,
     request_id: Option<&str>,
+    scheme: &'static str,
+    country: Option<&str>,
+    continent: Option<&str>,
 ) -> Option<String> {
     // Cap061/S2: no identity/urandom/formatting when no access consumer is active.
     if !observability::access_event_required() {
@@ -167,10 +200,12 @@ fn emit_wire_access_with_id(
         path,
         host,
         status,
-        protocol: "http1.1-wire",
+        protocol: scheme,
         duration_ms,
         bytes_sent: None,
         client_ip,
+        country,
+        continent,
         external_request_id: external.as_deref(),
         internal_request_id: &internal,
         upstream: None,
@@ -227,12 +262,17 @@ pub(crate) fn install_blocking_wire_handoff(
 /// Cap061: bridge static-wire terminal statuses from module-api into access events.
 pub fn install_static_wire_access_bridge() {
     let _ = exyonq_module_api::static_wire::install_access_notice_hook(|notice| {
+        // The static wire transport is plaintext (`mod-static::wire_conn`
+        // serves the pre-TLS fast path), so `http` is the truthful scheme here.
         emit_wire_access(
             notice.head.as_ref(),
             notice.status,
             notice.outcome,
             None,
             notice.duration_ms,
+            "http",
+            None,
+            None,
         )
     });
 }
@@ -558,6 +598,11 @@ pub(crate) fn evaluate_wire_waf(
         state.waf_enforce,
         state.waf_abuse.as_deref(),
         request_id,
+        state
+            .snapshot
+            .geoip_country(client_ip)
+            .map(|c| c.iso_code)
+            .as_deref(),
     );
     if matches!(decision, crate::waf::WafHookResult::Continue) {
         // CRS phase 2 must run for bodyless methods too (the Hyper path does the
@@ -645,6 +690,7 @@ fn waf_reject_access_outcome(reject: &crate::waf::WafReject) -> &'static str {
 ///
 /// - write Ok → `outcome=waf_*` means the reject was written onto the socket.
 /// - write Err → `outcome=response_write_failed` (status is INTENDED only).
+#[allow(clippy::too_many_arguments)]
 async fn complete_waf_reject_wire<S>(
     stream: &mut S,
     reject: &crate::waf::WafReject,
@@ -652,6 +698,9 @@ async fn complete_waf_reject_wire<S>(
     client_ip: Option<&str>,
     started: Instant,
     request_id: Option<&str>,
+    scheme: &'static str,
+    country: Option<&str>,
+    continent: Option<&str>,
 ) where
     S: AsyncWrite + Unpin,
 {
@@ -665,6 +714,9 @@ async fn complete_waf_reject_wire<S>(
                 client_ip,
                 observability::duration_ms(started),
                 request_id,
+                scheme,
+                country,
+                continent,
             );
         }
         Err(err) => {
@@ -677,6 +729,9 @@ async fn complete_waf_reject_wire<S>(
                 client_ip,
                 observability::duration_ms(started),
                 request_id,
+                scheme,
+                country,
+                continent,
             );
         }
     }
@@ -736,6 +791,7 @@ async fn serve_proxy_wire<S>(
     head: Bytes,
     rest: Bytes,
     x_forwarded_for: HeaderValue,
+    scheme: &'static str,
 ) -> ProxyWireOutcome<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -797,6 +853,9 @@ where
                 "wire_rate_limited",
                 request_xff.to_str().ok(),
                 observability::duration_ms(started),
+                scheme,
+                None,
+                None,
             );
             return ProxyWireOutcome::Handled;
         }
@@ -819,6 +878,15 @@ where
     ) {
         crate::waf::WafHookResult::Reject(reject) => {
             let started = Instant::now();
+            let log_geo = request_xff
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .and_then(|ip| state.snapshot.geoip_country(ip));
+            let country = log_geo.as_ref().map(|country| country.iso_code.as_str());
+            let continent = log_geo
+                .as_ref()
+                .and_then(|country| country.continent_code.as_deref());
             complete_waf_reject_wire(
                 &mut stream,
                 &reject,
@@ -826,6 +894,9 @@ where
                 request_xff.to_str().ok(),
                 started,
                 Some(identity.internal_request_id.as_str()),
+                scheme,
+                country,
+                continent,
             )
             .await;
             return ProxyWireOutcome::Handled;
@@ -864,6 +935,15 @@ where
     // Bench/edge hot path: access logging is usually off — do not Bytes::clone the
     // request head solely for a no-op emit (refcount churn on every P4 wire GET).
     let head_for_access = observability::access_event_required().then(|| head.clone());
+    let log_geo = request_xff
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .and_then(|ip| state.snapshot.geoip_country(ip));
+    let log_country = log_geo.as_ref().map(|country| country.iso_code.as_str());
+    let log_continent = log_geo
+        .as_ref()
+        .and_then(|country| country.continent_code.as_deref());
     match proxy_wire::serve_proxy_wire(
         cluster_id,
         generation,
@@ -886,6 +966,9 @@ where
                     "proxy_wire",
                     request_xff.to_str().ok(),
                     observability::duration_ms(started),
+                    scheme,
+                    log_country,
+                    log_continent,
                 );
             }
         }
@@ -898,6 +981,9 @@ where
                     "proxy_wire_error",
                     request_xff.to_str().ok(),
                     observability::duration_ms(started),
+                    scheme,
+                    log_country,
+                    log_continent,
                 );
             }
         }
@@ -1065,6 +1151,7 @@ async fn execute_wire_plan(plan: WirePlan<TcpStream>, ctx: WireDispatchContext) 
                     head,
                     rest,
                     ctx.x_forwarded_for.clone(),
+                    ctx.scheme,
                 )
                 .await
             })
@@ -1077,6 +1164,7 @@ async fn execute_wire_plan(plan: WirePlan<TcpStream>, ctx: WireDispatchContext) 
                 head,
                 rest,
                 ctx.x_forwarded_for.clone(),
+                ctx.scheme,
             )
             .await;
             match outcome {
@@ -1139,7 +1227,13 @@ async fn execute_wire_plan(plan: WirePlan<TcpStream>, ctx: WireDispatchContext) 
         }
         WirePlan::Reject(mut stream) => {
             let started = Instant::now();
-            complete_wire_reject(&mut stream, started, ctx.x_forwarded_for.to_str().ok()).await;
+            complete_wire_reject(
+                &mut stream,
+                started,
+                ctx.x_forwarded_for.to_str().ok(),
+                ctx.scheme,
+            )
+            .await;
         }
     }
 }
@@ -1221,6 +1315,9 @@ async fn serve_static_tcp(
                             "static_blocking_shed",
                             None,
                             observability::duration_ms(started),
+                            ctx.scheme,
+                            None,
+                            None,
                         );
                     }
                     Err(_err) => {
@@ -1232,6 +1329,9 @@ async fn serve_static_tcp(
                             "response_write_failed",
                             None,
                             observability::duration_ms(started),
+                            ctx.scheme,
+                            None,
+                            None,
                         );
                     }
                 }
@@ -1261,6 +1361,16 @@ where
     if let Some(reject) = wire_waf_reject_bytes(&ctx, head.as_ref()) {
         let started = Instant::now();
         let client_ip = ctx.x_forwarded_for.to_str().ok();
+        let log_geo = ctx
+            .x_forwarded_for
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .and_then(|ip| ctx.state.snapshot.geoip_country(ip));
+        let country = log_geo.as_ref().map(|country| country.iso_code.as_str());
+        let continent = log_geo
+            .as_ref()
+            .and_then(|country| country.continent_code.as_deref());
         let mut stream = stream;
         match stream.write_all(&reject.bytes).await {
             Ok(()) => {
@@ -1272,6 +1382,9 @@ where
                     client_ip,
                     observability::duration_ms(started),
                     reject.request_id.as_deref(),
+                    ctx.scheme,
+                    country,
+                    continent,
                 );
             }
             Err(err) => {
@@ -1284,6 +1397,9 @@ where
                     client_ip,
                     observability::duration_ms(started),
                     reject.request_id.as_deref(),
+                    ctx.scheme,
+                    country,
+                    continent,
                 );
             }
         }
@@ -1392,6 +1508,7 @@ where
                 head,
                 rest,
                 ctx.x_forwarded_for.clone(),
+                ctx.scheme,
             )
             .await
             {
@@ -1409,7 +1526,13 @@ where
         }
         WirePlan::Reject(mut stream) => {
             let started = Instant::now();
-            complete_wire_reject(&mut stream, started, ctx.x_forwarded_for.to_str().ok()).await;
+            complete_wire_reject(
+                &mut stream,
+                started,
+                ctx.x_forwarded_for.to_str().ok(),
+                ctx.scheme,
+            )
+            .await;
         }
     }
 }
@@ -1708,6 +1831,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            geoip: Default::default(),
             streams: Vec::new(),
         }
     }
@@ -2709,6 +2833,7 @@ mod ws_tunnel_tests {
             full_page_cache: Default::default(),
             http3: Default::default(),
             waf: Default::default(),
+            geoip: Default::default(),
             logging: Default::default(),
         }
     }
@@ -3432,5 +3557,45 @@ mod proxy_protocol_e2e_tests {
             resp.contains("xff=127.0.0.1"),
             "untrusted POST must keep socket peer upstream, got: {resp}"
         );
+    }
+
+    #[test]
+    fn wire_access_event_reports_connection_scheme() {
+        // EXQ-089: the wire path hardcoded `protocol: "http1.1-wire"`, so an
+        // HTTPS request looked like plain HTTP in the access log and every
+        // metric built on that field was wrong.
+        let prev = crate::observability::access_logging_enabled();
+        crate::observability::set_access_logging_enabled(true);
+        let head = b"GET /verification-file.html HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        let tls = crate::observability::log_capture::capture(|| {
+            crate::server::wire_dispatch::emit_wire_access(
+                head,
+                200,
+                "proxy_wire",
+                Some("203.0.113.5"),
+                3,
+                "https",
+                None,
+                None,
+            );
+        });
+        let plain = crate::observability::log_capture::capture(|| {
+            crate::server::wire_dispatch::emit_wire_access(
+                head,
+                200,
+                "proxy_wire",
+                Some("203.0.113.5"),
+                3,
+                "http",
+                None,
+                None,
+            );
+        });
+        crate::observability::set_access_logging_enabled(prev);
+
+        assert!(tls.contains("protocol=https"), "{tls}");
+        assert!(!tls.contains("http1.1-wire"), "{tls}");
+        assert!(plain.contains("protocol=http"), "{plain}");
+        assert!(tls.contains("host=\"example.com\""), "{tls}");
     }
 }

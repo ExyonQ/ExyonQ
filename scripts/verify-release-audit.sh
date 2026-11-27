@@ -6,6 +6,7 @@
 #
 # Usage:
 #   verify-release-audit.sh X.Y.Z
+#   verify-release-audit.sh --write-seal X.Y.Z COMMIT40
 #   verify-release-audit.sh --selftest
 #   verify-release-audit.sh --dry-run-infra
 #
@@ -60,7 +61,9 @@ SEAL_NORMALIZE_UNTRACKED="${SEAL_NORMALIZE_UNTRACKED:-}"
 # generating (placeholders) and while verifying (final values), so every other
 # byte changes the fingerprint and the cited values remain stable.
 normalize_seal_stream() {
-  awk -v fp="$SEAL_NORMALIZE_FP" -v df="$SEAL_NORMALIZE_DIFF" -v us="$SEAL_NORMALIZE_UNTRACKED" '
+  # Binary fixtures (e.g. the GeoIP test database) are sealed too; the C locale
+  # keeps awk byte-oriented instead of failing on non-UTF-8 input.
+  LC_ALL=C awk -v fp="$SEAL_NORMALIZE_FP" -v df="$SEAL_NORMALIZE_DIFF" -v us="$SEAL_NORMALIZE_UNTRACKED" '
     function scrub(v, full_token, prefix_token) {
       if (v == "") return
       gsub(v, full_token)
@@ -94,7 +97,15 @@ hash_untracked_file() {
          /^WORKTREE_INTEGRITY_END$/ { skip = 0; next }
          !skip' "$path" | normalize_seal_stream | sha256_stream | awk '{print $1}'
   else
-    normalize_seal_stream <"$path" | sha256_stream | awk '{print $1}'
+    # Bytes outside the printable/space ASCII classes (binary fixtures and any
+    # non-ASCII text) are hashed raw: awk-based normalization is not guaranteed
+    # byte-transparent across BSD awk (generation on macOS) and gawk (the CI
+    # verifier), which would make the same file hash differently on Linux.
+    if LC_ALL=C grep -q '[^[:print:][:space:]]' "$path"; then
+      sha256_stream <"$path" | awk '{print $1}'
+    else
+      normalize_seal_stream <"$path" | sha256_stream | awk '{print $1}'
+    fi
   fi
 }
 
@@ -242,11 +253,97 @@ changed_untracked_paths() {
   printf '%s' "$out"
 }
 
+# Verify a clean checkout (the release tag in CI) through git objects.
+#
+# A clean tree has no `git diff`, so WORKTREE_DIFF_SHA256 cannot be recomputed
+# from the worktree. The audited bytes are still verifiable: the seal names the
+# audited commit, that commit is the first parent of the signed tag (or the tag
+# target itself), every manifest entry can be content-checked against the object
+# store, and the committed patch must modify exactly the sealed number of
+# tracked files. Missing parents or object-store mismatches fail closed.
+verify_clean_tree_binding() {
+  local AUDIT="$1" audit_rel="$2" version="$3"
+  local commit_cell commit_cell_sha release_commit tag_commit head head_candidate parent
+  local sealed_files sealed_uf sealed_total actual_modified manifest path expected hash tmp
+  commit_cell="$(audit_commit_cell "$AUDIT")"
+  commit_cell_sha="$(lower_hex "$commit_cell")"
+  sealed_files="$(audit_worktree_files "$AUDIT")"
+  sealed_uf="$(audit_worktree_untracked_files "$AUDIT")"
+  sealed_total="$(audit_worktree_fingerprint_files "$AUDIT")"
+
+  release_commit="$commit_cell_sha"
+  if tag_commit="$(git -C "$ROOT" rev-parse -q --verify "refs/tags/v${version}^{commit}" 2>/dev/null)"; then
+    tag_commit="$(lower_hex "$tag_commit")"
+    release_commit="$tag_commit"
+  else
+    # Before the tag exists, the seal-only commit S (S^ = C, S changes only the
+    # audit document) is the same release state the tag will point at.
+    head_candidate="$(git -C "$ROOT" rev-parse HEAD)"
+    if [[ "$head_candidate" != "$commit_cell_sha" ]] \
+      && [[ "$(git -C "$ROOT" rev-parse -q --verify HEAD^ 2>/dev/null)" == "$commit_cell_sha" ]] \
+      && [[ "$(git -C "$ROOT" diff --name-only "${commit_cell_sha}" HEAD --)" == "$audit_rel" ]]; then
+      release_commit="$head_candidate"
+    fi
+  fi
+  head="$(git -C "$ROOT" rev-parse HEAD)"
+  [[ "$head" == "$release_commit" ]] \
+    || fail "CONTROL=clean_tree_head clean HEAD ${head} is not the release commit ${release_commit}"
+
+  (( sealed_total > 0 )) \
+    || fail "CONTROL=clean_tree_empty_seal seal declares no tracked and no manifest entries; an empty seal proves nothing"
+  parent="$(git -C "$ROOT" rev-parse -q --verify "${commit_cell_sha}^" 2>/dev/null || true)"
+  [[ -n "$parent" ]] \
+    || fail "CONTROL=clean_tree_parent audited commit ${commit_cell_sha} has no parent commit to diff against"
+  if (( sealed_files > 0 )); then
+    actual_modified="$(git -C "$ROOT" diff --name-only --diff-filter=M "${parent}" "${commit_cell_sha}" -- | wc -l | tr -d ' ')"
+    [[ "$actual_modified" == "$sealed_files" ]] \
+      || fail "CONTROL=clean_tree_tracked_count audited commit ${commit_cell_sha} modifies ${actual_modified} tracked files, seal says ${sealed_files}"
+  fi
+
+  # The committed seal carries final values; normalize them to the same
+  # placeholders generation used for the tokenized document.
+  SEAL_NORMALIZE_FP="$(audit_worktree_fingerprint_sha "$AUDIT")"
+  SEAL_NORMALIZE_DIFF="$(audit_worktree_sha "$AUDIT")"
+  SEAL_NORMALIZE_UNTRACKED="$(audit_worktree_untracked_sha "$AUDIT")"
+
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/exyonq-clean-seal.XXXXXX")"
+  local rc=0
+  while IFS=$'\t' read -r path expected; do
+    [[ -n "$path" ]] || continue
+    if git -C "$ROOT" cat-file -e "${commit_cell_sha}:${path}" 2>/dev/null; then
+      git -C "$ROOT" show "${commit_cell_sha}:${path}" >"$tmp/blob" 2>/dev/null || { rc=1; break; }
+    elif git -C "$ROOT" cat-file -e "HEAD:${path}" 2>/dev/null; then
+      git -C "$ROOT" show "HEAD:${path}" >"$tmp/blob" 2>/dev/null || { rc=1; break; }
+    else
+      fail "CONTROL=clean_tree_manifest_missing sealed manifest entry ${path} is not present in ${commit_cell_sha} or HEAD"
+    fi
+    if [[ "$path" == "$audit_rel" ]]; then
+      hash="$(awk 'BEGIN { skip = 0 }
+           /^WORKTREE_INTEGRITY_BEGIN$/ { skip = 1; next }
+           /^WORKTREE_INTEGRITY_END$/ { skip = 0; next }
+           !skip' "$tmp/blob" | normalize_seal_stream | sha256_stream | awk '{print $1}')"
+    elif LC_ALL=C grep -q '[^[:print:][:space:]]' "$tmp/blob"; then
+      # Same raw-byte rule as hash_untracked_file, so generation on macOS and
+      # verification on Linux agree for binary/non-ASCII files.
+      hash="$(sha256_stream <"$tmp/blob" | awk '{print $1}')"
+    else
+      hash="$(normalize_seal_stream <"$tmp/blob" | sha256_stream | awk '{print $1}')"
+    fi
+    [[ "$hash" == "$expected" ]] \
+      || fail "CONTROL=clean_tree_manifest_mismatch sealed manifest entry ${path} expects ${expected}, object store has ${hash}"
+  done < <(audit_untracked_manifest "$AUDIT")
+  rm -rf "${tmp:?}"
+  (( rc == 0 )) || fail "CONTROL=clean_tree_manifest_read could not read a sealed manifest entry from the object store"
+
+  echo "WORKTREE_FINGERPRINT=CLEAN_TREE_COMMIT_BOUND audited_commit=${commit_cell_sha} release_commit=${release_commit} tracked=${sealed_files} manifest=${sealed_uf} total=${sealed_total}"
+}
+
 # Fail closed when a dirty tree does not match the bytes the seal audited.
-# A clean tree is rejected because there is no diff to check; a legacy seal
-# without the manifest fields is rejected too. There is no PASS-by-omission.
+# A clean tree is verified against the git object store (see
+# verify_clean_tree_binding); a legacy seal without the manifest fields is
+# rejected too. There is no PASS-by-omission.
 verify_worktree_binding() {
-  local AUDIT="$1" audit_rel="${2:-${1#"$ROOT"/}}"
+  local AUDIT="$1" audit_rel="${2:-${1#"$ROOT"/}}" version="${3:-}"
   local sealed_sha sealed_files sealed_us sealed_uf sealed_fp sealed_total
   local current_sha current_files current_us current_uf current_fp current_total changed
   sealed_sha="$(audit_worktree_sha "$AUDIT")"
@@ -266,7 +363,10 @@ verify_worktree_binding() {
   fi
 
   if (cd "$ROOT" && git diff --quiet -- .); then
-    fail "CONTROL=worktree_fingerprint_unverifiable clean tree: git diff is empty, so the sealed WORKTREE_DIFF_SHA256 cannot be checked; run against the audited dirty tree"
+    [[ -n "$version" ]] \
+      || fail "CONTROL=clean_tree_version clean-tree verification needs the release version"
+    verify_clean_tree_binding "$AUDIT" "$audit_rel" "$version"
+    return 0
   fi
 
   SEAL_NORMALIZE_FP="$sealed_fp"
@@ -352,7 +452,7 @@ verify_version_audit() {
 
   verify_commit_binding "$VERSION" "$AUDIT"
 
-  verify_worktree_binding "$AUDIT" "docs/security/audit-v${VERSION}.md"
+  verify_worktree_binding "$AUDIT" "docs/security/audit-v${VERSION}.md" "$VERSION"
   verify_seal_citations "$VERSION" "$AUDIT"
 
   local blockers_section trimmed
@@ -472,10 +572,157 @@ None.
 EOF
 }
 
+# Regenerate the seal for the current dirty tree, then verify it.
+#
+# The audit document must already carry a WORKTREE_INTEGRITY block and may cite
+# the seal through the __EXYONQ_SEAL_* tokens. Existing literal values are
+# tokenized first, so the computation is a stable fixed point: the document
+# cannot hash the bytes that contain its own hash.
+write_seal() {
+  local VERSION="$1" COMMIT="${2:-}"
+  local audit_rel="docs/security/audit-v${VERSION}.md"
+  local AUDIT="$ROOT/$audit_rel"
+  local old_fp old_diff old_us worktree_sha worktree_files
+  local untracked_sha untracked_files fingerprint fingerprint_files
+  local fp8 df8 us8 block doc
+
+  require_file "audit-v${VERSION}" "$AUDIT"
+  [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "write-seal needs a full lowercase 40-hex commit (got: ${COMMIT:-empty})"
+  git -C "$ROOT" cat-file -e "${COMMIT}^{commit}" 2>/dev/null \
+    || fail "write-seal commit does not exist: $COMMIT"
+  grep -q '^WORKTREE_INTEGRITY_BEGIN$' "$AUDIT" \
+    || fail "write-seal needs an existing WORKTREE_INTEGRITY block in $audit_rel"
+  grep -q '^WORKTREE_INTEGRITY_END$' "$AUDIT" \
+    || fail "write-seal needs a closing WORKTREE_INTEGRITY_END in $audit_rel"
+
+  old_fp="$(audit_worktree_fingerprint_sha "$AUDIT")"
+  old_diff="$(audit_worktree_sha "$AUDIT")"
+  old_us="$(audit_worktree_untracked_sha "$AUDIT")"
+
+  # 1. Tokenize the values that are about to change so they are normalized
+  #    identically while generating and while verifying.
+  local tokenized
+  tokenized="$(mktemp "${TMPDIR:-/tmp}/exyonq-seal-tokenized.XXXXXX")"
+  LC_ALL=C awk -v fp="$old_fp" -v df="$old_diff" -v us="$old_us" '
+    function scrub(v, full, prefix) {
+      if (v == "" || v ~ /^0+$/) return
+      gsub(v, full)
+      if (length(v) >= 8) gsub(substr(v, 1, 8), prefix)
+    }
+    {
+      scrub(fp, "__EXYONQ_SEAL_FP__", "__EXYONQ_SEAL_FP8__")
+      scrub(df, "__EXYONQ_SEAL_DIFF__", "__EXYONQ_SEAL_DIFF8__")
+      scrub(us, "__EXYONQ_SEAL_UNTRACKED__", "__EXYONQ_SEAL_UNTRACKED8__")
+      print
+    }' "$AUDIT" >"$tokenized"
+  mv "$tokenized" "$AUDIT"
+
+  # 1b. The release note is tracked, so any literal seal value inside it would
+  #     change the hash that produces that value. Tokenize it with the same old
+  #     values; the final substitution happens after hashing.
+  local note_path="$ROOT/docs/release/v${VERSION}.md"
+  if [[ -f "$note_path" ]]; then
+    local note_tmp
+    note_tmp="$(mktemp "${TMPDIR:-/tmp}/exyonq-seal-note.XXXXXX")"
+    LC_ALL=C awk -v fp="$old_fp" -v df="$old_diff" -v us="$old_us" '
+      function scrub(v, full, prefix) {
+        if (v == "" || v ~ /^0+$/) return
+        gsub(v, full)
+        if (length(v) >= 8) gsub(substr(v, 1, 8), prefix)
+      }
+      {
+        scrub(fp, "__EXYONQ_SEAL_FP__", "__EXYONQ_SEAL_FP8__")
+        scrub(df, "__EXYONQ_SEAL_DIFF__", "__EXYONQ_SEAL_DIFF8__")
+        scrub(us, "__EXYONQ_SEAL_UNTRACKED__", "__EXYONQ_SEAL_UNTRACKED8__")
+        print
+      }' "$note_path" >"$note_tmp"
+    mv "$note_tmp" "$note_path"
+  fi
+
+  # 2. Bind the audited commit before hashing: the Commit row is part of the
+  #    document bytes outside the integrity block.
+  sed -i.bak -E "s/^\| \*\*Commit\*\* \|.*\|$/| **Commit** | \`${COMMIT}\` |/" "$AUDIT"
+  rm -f "${AUDIT}.bak"
+
+  # 3. Compute the components from the tokenized worktree.
+  worktree_sha="$(current_worktree_sha "$ROOT")"
+  worktree_files="$(current_worktree_files "$ROOT")"
+  untracked_sha="$(current_untracked_sha "$ROOT" "$audit_rel")"
+  untracked_files="$(current_untracked_files "$ROOT" "$audit_rel")"
+  (( worktree_files + untracked_files > 0 )) \
+    || fail "write-seal refuses an empty seal: the worktree has no tracked diff and no untracked files"
+  fingerprint="$(printf '%s\n%s\n%s\n%s\n' \
+    "$worktree_sha" "$worktree_files" "$untracked_sha" "$untracked_files" |
+    sha256_stream | awk '{print $1}')"
+  fingerprint_files=$(( worktree_files + untracked_files ))
+  fp8="${fingerprint:0:8}"
+  df8="${worktree_sha:0:8}"
+  us8="${untracked_sha:0:8}"
+
+  # 4. Replace the integrity block with the freshly computed values.
+  block="$(mktemp "${TMPDIR:-/tmp}/exyonq-seal-block.XXXXXX")"
+  {
+    printf 'WORKTREE_DIFF_SHA256 = %s\n' "$worktree_sha"
+    printf 'WORKTREE_DIFF_FILES = %s\n' "$worktree_files"
+    printf 'WORKTREE_UNTRACKED_SHA256 = %s\n' "$untracked_sha"
+    printf 'WORKTREE_UNTRACKED_FILES = %s\n' "$untracked_files"
+    printf 'WORKTREE_FINGERPRINT_SHA256 = %s\n' "$fingerprint"
+    printf 'WORKTREE_FINGERPRINT_FILES = %s\n' "$fingerprint_files"
+    printf 'WORKTREE_UNTRACKED_MANIFEST_BEGIN\n'
+    current_untracked_manifest "$ROOT" "$audit_rel"
+    printf 'WORKTREE_UNTRACKED_MANIFEST_END\n'
+  } >"$block"
+
+  doc="$(mktemp "${TMPDIR:-/tmp}/exyonq-seal-doc.XXXXXX")"
+  awk -v blockfile="$block" '
+    /^WORKTREE_INTEGRITY_BEGIN$/ {
+      print
+      while ((getline line < blockfile) > 0) print line
+      close(blockfile)
+      inblock = 1
+      next
+    }
+    /^WORKTREE_INTEGRITY_END$/ { inblock = 0; print; next }
+    inblock { next }
+    { print }' "$AUDIT" >"$doc"
+  rm -f "$block"
+
+  # 4. Substitute the cited values.
+  sed -i.bak \
+    -e "s|__EXYONQ_SEAL_FP8__|${fp8}|g" \
+    -e "s|__EXYONQ_SEAL_FP__|${fingerprint}|g" \
+    -e "s|__EXYONQ_SEAL_DIFF8__|${df8}|g" \
+    -e "s|__EXYONQ_SEAL_DIFF__|${worktree_sha}|g" \
+    -e "s|__EXYONQ_SEAL_UNTRACKED8__|${us8}|g" \
+    -e "s|__EXYONQ_SEAL_UNTRACKED__|${untracked_sha}|g" "$doc"
+  rm -f "${doc}.bak"
+  mv "$doc" "$AUDIT"
+
+  # 4b. The release note may cite the seal through the same tokens; substitute
+  #     them there too so its sealed bytes and the citation agree.
+  local note="$ROOT/docs/release/v${VERSION}.md"
+  if [[ -f "$note" ]] && grep -q '__EXYONQ_SEAL_' "$note"; then
+    sed -i.bak \
+      -e "s|__EXYONQ_SEAL_FP8__|${fp8}|g" \
+      -e "s|__EXYONQ_SEAL_FP__|${fingerprint}|g" \
+      -e "s|__EXYONQ_SEAL_DIFF8__|${df8}|g" \
+      -e "s|__EXYONQ_SEAL_DIFF__|${worktree_sha}|g" \
+      -e "s|__EXYONQ_SEAL_UNTRACKED8__|${us8}|g" \
+      -e "s|__EXYONQ_SEAL_UNTRACKED__|${untracked_sha}|g" "$note"
+    rm -f "${note}.bak"
+  fi
+
+  # 5. Prove the seal it just wrote passes the real verifier.
+  echo "WORKTREE_FINGERPRINT=${fingerprint} files=${fingerprint_files} tracked=${worktree_sha}/${worktree_files} untracked=${untracked_sha}/${untracked_files}"
+  verify_version_audit "$VERSION"
+  echo "RELEASE_AUDIT_SEAL=WRITTEN_AND_VERIFIED"
+}
+
 run_selftest() {
   local tmp
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/exyonq-release-audit-selftest.XXXXXX")"
-  cleanup() { rm -rf "${tmp:?}"; }
+  cleanup() { local d="${tmp:-}"; [[ -n "$d" ]] && rm -rf "$d"; return 0; }
   trap cleanup EXIT
 
   command -v git >/dev/null 2>&1 || fail "selftest requires git"
@@ -590,16 +837,64 @@ EOF
   fi
   echo "PASS_EXPECT_FAIL github_sha_mismatch"
 
-  # MUST_FAIL: a clean tree has no git diff, so the sealed worktree fingerprint
-  # cannot be checked. This branch must never silently pass a stale seal.
-  write_audit "$tmp/docs/security/audit-v9.9.6.md" "9.9.6" "$base"
+  # MUST_FAIL: a clean tree whose seal names a root commit. There is no parent
+  # commit whose tracked diff could be counted, so the seal is unverifiable.
+  write_audit "$tmp/docs/security/audit-v9.9.6.md" "9.9.6" "$base" "None" \
+    "0000000000000000000000000000000000000000000000000000000000000000" "1"
+  git -C "$tmp" add docs/security/audit-v9.9.6.md
+  git -C "$tmp" commit -qm "selftest root-commit seal"
+  git -C "$tmp" tag -f v9.9.6 HEAD >/dev/null 2>&1
   if (
-    ROOT="$tmp" GITHUB_SHA="$base"
+    ROOT="$tmp" GITHUB_SHA="$(git -C "$tmp" rev-parse HEAD)"
     verify_version_audit "9.9.6"
   ) >/dev/null 2>&1; then
-    fail "selftest expected FAIL on unverifiable clean tree"
+    fail "selftest expected FAIL on clean tree whose audited commit has no parent"
   fi
-  echo "PASS_EXPECT_FAIL clean_tree_unverifiable"
+  echo "PASS_EXPECT_FAIL clean_tree_parent_missing"
+
+  # MUST_PASS: a clean checkout at the release tag (the CI path). The seal names
+  # the audited patch commit, its parent diff has exactly the sealed tracked
+  # count, and the manifest entry is content-checked against the object store.
+  git -C "$tmp" clean -qfd -- docs/security
+  printf '%s\n' 'selftest clean-tree patch byte' >>"$tmp/docs/security/release-checklist.md"
+  printf '%s\n' 'selftest clean-tree added file' >"$tmp/docs/security/selftest-clean-added.txt"
+  git -C "$tmp" add docs/security/release-checklist.md docs/security/selftest-clean-added.txt
+  git -C "$tmp" commit -qm "selftest clean-tree audited patch"
+  local clean_patch clean_seal
+  clean_patch="$(git -C "$tmp" rev-parse HEAD)"
+  write_audit "$tmp/docs/security/audit-v9.9.18.md" "9.9.18" "$clean_patch" "None" \
+    "0000000000000000000000000000000000000000000000000000000000000000" "1"
+  git -C "$tmp" add docs/security/audit-v9.9.18.md
+  git -C "$tmp" commit -qm "selftest clean-tree seal"
+  clean_seal="$(git -C "$tmp" rev-parse HEAD)"
+  git -C "$tmp" tag v9.9.18 "$clean_seal"
+  (
+    ROOT="$tmp" GITHUB_SHA="$clean_seal"
+    verify_version_audit "9.9.18"
+  ) >/dev/null
+  echo "PASS_EXPECT_PASS clean_tree_commit_bound"
+
+  # MUST_FAIL: a clean tree whose sealed manifest content does not match the
+  # object store. The audit document is modified after sealing but before the
+  # seal commit, so the committed blob differs from the sealed hash.
+  printf '%s\n' 'selftest clean-tree manifest byte' >>"$tmp/docs/security/release-checklist.md"
+  git -C "$tmp" commit -qam "selftest clean-tree manifest patch"
+  local clean_patch2 clean_seal2
+  clean_patch2="$(git -C "$tmp" rev-parse HEAD)"
+  write_audit "$tmp/docs/security/audit-v9.9.19.md" "9.9.19" "$clean_patch2" "None" \
+    "0000000000000000000000000000000000000000000000000000000000000000" "1"
+  printf '%s\n' 'tampered after sealing' >>"$tmp/docs/security/audit-v9.9.19.md"
+  git -C "$tmp" add docs/security/audit-v9.9.19.md
+  git -C "$tmp" commit -qm "selftest clean-tree tampered seal"
+  clean_seal2="$(git -C "$tmp" rev-parse HEAD)"
+  git -C "$tmp" tag v9.9.19 "$clean_seal2"
+  if (
+    ROOT="$tmp" GITHUB_SHA="$clean_seal2"
+    verify_version_audit "9.9.19"
+  ) >/dev/null 2>&1; then
+    fail "selftest expected FAIL on clean-tree manifest mismatch"
+  fi
+  echo "PASS_EXPECT_FAIL clean_tree_manifest_mismatch"
 
   # MUST_FAIL: a dirty tree whose bytes do not match the sealed fingerprint.
   printf '%s\n' 'selftest dirty byte' >>"$tmp/docs/security/release-checklist.md"
@@ -836,8 +1131,12 @@ case "${1:-}" in
   --dry-run-infra)
     dry_run_infra
     ;;
+  --write-seal)
+    [[ -n "${2:-}" && -n "${3:-}" ]]       || fail "usage: verify-release-audit.sh --write-seal X.Y.Z <commit40>"
+    write_seal "$2" "$3"
+    ;;
   "")
-    echo "usage: verify-release-audit.sh X.Y.Z | --selftest | --dry-run-infra" >&2
+    echo "usage: verify-release-audit.sh X.Y.Z | --write-seal X.Y.Z COMMIT40 | --selftest | --dry-run-infra" >&2
     exit 2
     ;;
   *)

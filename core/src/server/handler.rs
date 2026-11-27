@@ -263,6 +263,14 @@ async fn serve_http3_request_bytes(
     let state = Arc::clone(&ctx.state);
     let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
     let client_ip = xff.to_str().unwrap_or("unknown").to_string();
+    let log_geo = client_ip
+        .parse()
+        .ok()
+        .and_then(|ip| state.snapshot.geoip_country(ip));
+    let log_country = log_geo.as_ref().map(|country| country.iso_code.as_str());
+    let log_continent = log_geo
+        .as_ref()
+        .and_then(|country| country.continent_code.as_deref());
     let protocol = "http3";
     let span = match (otel_needed, identity.as_ref()) {
         (true, Some(id)) => {
@@ -400,6 +408,8 @@ async fn serve_http3_request_bytes(
         protocol,
         started,
         Some(client_ip.as_str()),
+        log_country,
+        log_continent,
         response,
         outcome,
     );
@@ -600,7 +610,18 @@ async fn serve_connection_inner(
     // NG-11: trusted-peer chain resolution; defaults to the socket peer.
     let xff = effective_xff(&ctx.state, &ctx.x_forwarded_for, req.headers());
     let client_ip = xff.to_str().unwrap_or("unknown").to_string();
-    let protocol = "http"; // Hyper path: HTTP/1.1 or HTTP/2
+    let log_geo = client_ip
+        .parse()
+        .ok()
+        .and_then(|ip| state.snapshot.geoip_country(ip));
+    let log_country = log_geo.as_ref().map(|country| country.iso_code.as_str());
+    let log_continent = log_geo
+        .as_ref()
+        .and_then(|country| country.continent_code.as_deref());
+    // EXQ-089: report the listener scheme. This was hardcoded to "http", so an
+    // HTTPS request over HTTP/1.1 or HTTP/2 logged `protocol=http` and every
+    // metric or audit report built on that field was wrong.
+    let protocol = ctx.scheme;
     let span = match (otel_needed, identity.as_ref()) {
         (true, Some(id)) => {
             crate::observability::request_span(id, method.as_str(), &request_path, protocol)
@@ -622,6 +643,8 @@ async fn serve_connection_inner(
                     protocol,
                     started,
                     Some(client_ip.as_str()),
+                    log_country,
+                    log_continent,
                     response,
                     Some("probe"),
                 );
@@ -636,6 +659,8 @@ async fn serve_connection_inner(
                     protocol,
                     started,
                     Some(client_ip.as_str()),
+                    log_country,
+                    log_continent,
                     probe_ready_response(req.method(), &ctx.ops),
                     Some("probe"),
                 );
@@ -662,6 +687,9 @@ async fn serve_connection_inner(
                 protocol,
                 started,
                 Some(client_ip.as_str()),
+                                            log_country,
+                            log_continent,
+
                 response,
                 Some("draining"),
             );
@@ -679,6 +707,8 @@ async fn serve_connection_inner(
                     protocol,
                     started,
                     Some(client_ip.as_str()),
+                    log_country,
+                    log_continent,
                     response,
                     Some("acme"),
                 );
@@ -757,6 +787,8 @@ async fn serve_connection_inner(
                                 protocol,
                                 started,
                                 Some(client_ip.as_str()),
+                                log_country,
+                    log_continent,
                                 reject,
                                 Some(outcome),
                             );
@@ -783,6 +815,8 @@ async fn serve_connection_inner(
                             protocol,
                             started,
                             Some(client_ip.as_str()),
+                            log_country,
+                    log_continent,
                             response,
                             Some("static"),
                         );
@@ -820,6 +854,8 @@ async fn serve_connection_inner(
                             protocol,
                             started,
                             Some(client_ip.as_str()),
+                            log_country,
+                    log_continent,
                             response,
                             outcome,
                         );
@@ -877,6 +913,9 @@ async fn serve_connection_inner(
             protocol,
             started,
             Some(client_ip.as_str()),
+                                        log_country,
+                            log_continent,
+
             response,
             outcome,
         )
@@ -907,9 +946,29 @@ fn finish_hyper(
     protocol: &str,
     started: std::time::Instant,
     client_ip: Option<&str>,
+    country: Option<&str>,
+    continent: Option<&str>,
     response: Response<BoxBody>,
     outcome: Option<&str>,
 ) -> Response<BoxBody> {
+    // Every 5xx gets one correlated error line (private security report
+    // 2026-11-12: a 500 with no cause and no request_id is hard to triage).
+    // The originating layer keeps its own detail log; this line ties the
+    // response to the access event by request_id.
+    if response.status().is_server_error() {
+        tracing::error!(
+            method,
+            path,
+            host = host.unwrap_or(""),
+            status = response.status().as_u16(),
+            protocol,
+            request_id = identity
+                .map(|identity| identity.internal_request_id.as_str())
+                .unwrap_or(""),
+            outcome = outcome.unwrap_or(""),
+            "server error response"
+        );
+    }
     // emit_access is the admission-time plan — do not re-sample flags here (LA-S2-002).
     if emit_access {
         if let Some(identity) = identity {
@@ -922,6 +981,8 @@ fn finish_hyper(
                 duration_ms: crate::observability::duration_ms(started),
                 bytes_sent: None,
                 client_ip,
+                country,
+                continent,
                 external_request_id: identity.external_request_id.as_deref(),
                 internal_request_id: &identity.internal_request_id,
                 upstream: None,
@@ -945,6 +1006,23 @@ fn finish_hyper(
         response
     } else {
         response
+    }
+}
+
+/// Evaluate a route/htaccess policy with the request's resolved country. When
+/// GeoIP has no record and the operator chose fail-open, country constraints are
+/// skipped; otherwise a missing country fails closed for country-aware policies.
+fn access_allows(
+    state: &ServerState,
+    policy: &exyonq_module_api::CompiledAccessPolicy,
+    client_ip: std::net::IpAddr,
+    method: &str,
+    country: Option<&str>,
+) -> bool {
+    if country.is_none() && state.snapshot.geoip_fail_open() {
+        policy.allows_ignoring_country(client_ip, method)
+    } else {
+        policy.allows_with_country(client_ip, method, country)
     }
 }
 
@@ -1945,6 +2023,7 @@ async fn dispatch_core_inner(
 ) -> Response<BoxBody> {
     let path = uri.path();
     let client_ip = client_ip_from_xff(x_forwarded_for);
+    let client_country = state.snapshot.geoip_country(client_ip).map(|c| c.iso_code);
     let header_view = crate::waf::PairsHeaderView(request_headers);
 
     if *method == Method::GET && (path == "/health" || path == "/live") {
@@ -2062,13 +2141,25 @@ async fn dispatch_core_inner(
     }
     // AP-05: route ACL and inherited .htaccess ACL run before auth/challenge.
     if let Some(policy) = state.snapshot.route_access_policy(route_idx) {
-        if !policy.allows(client_ip, method.as_str()) {
+        if !access_allows(
+            state,
+            policy,
+            client_ip,
+            method.as_str(),
+            client_country.as_deref(),
+        ) {
             return text_response(StatusCode::FORBIDDEN, "forbidden");
         }
     }
     if let Some(site_id) = state.snapshot.htaccess_site_id_for_route(route_idx) {
         if let Some(policy) = htaccess_access_policy(site_id, path) {
-            if !policy.allows(client_ip, method.as_str()) {
+            if !access_allows(
+                state,
+                &policy,
+                client_ip,
+                method.as_str(),
+                client_country.as_deref(),
+            ) {
                 return text_response(StatusCode::FORBIDDEN, "forbidden");
             }
         }
@@ -2296,7 +2387,13 @@ async fn dispatch_core_inner(
         ) {
             if adj.request_path != path {
                 if let Some(policy) = htaccess_access_policy(site_id, &adj.request_path) {
-                    if !policy.allows(client_ip, method.as_str()) {
+                    if !access_allows(
+                        state,
+                        &policy,
+                        client_ip,
+                        method.as_str(),
+                        client_country.as_deref(),
+                    ) {
                         return text_response(StatusCode::FORBIDDEN, "forbidden");
                     }
                 }
@@ -2391,7 +2488,13 @@ async fn dispatch_core_inner(
                 };
                 route_idx = rematch_idx;
                 if let Some(policy) = state.snapshot.route_access_policy(route_idx) {
-                    if !policy.allows(client_ip, method.as_str()) {
+                    if !access_allows(
+                        state,
+                        policy,
+                        client_ip,
+                        method.as_str(),
+                        client_country.as_deref(),
+                    ) {
                         return text_response(StatusCode::FORBIDDEN, "forbidden");
                     }
                 }
@@ -5179,6 +5282,7 @@ fn waf_header_gate(
             "abuse judgement site"
         );
     }
+    let country = state.snapshot.geoip_country(client_ip).map(|c| c.iso_code);
     match crate::waf::inspect_request_headers_with_id(
         state.waf.as_ref(),
         method.as_str(),
@@ -5193,6 +5297,7 @@ fn waf_header_gate(
         state.waf_enforce,
         state.waf_abuse.as_deref(),
         request_id,
+        country.as_deref(),
     ) {
         crate::waf::WafHookResult::Continue => {
             if *method == Method::GET || *method == Method::HEAD {
@@ -5664,6 +5769,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5715,6 +5821,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5768,6 +5875,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5834,6 +5942,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let policy = state
@@ -5928,6 +6037,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -5985,6 +6095,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -6053,6 +6164,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -6120,6 +6232,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let (assets_idx, _assets_route) = state
@@ -6263,6 +6376,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(state.snapshot.static_slot_for_route_backend(0).is_some());
@@ -6320,6 +6434,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(state.snapshot.proxy_cluster_for_route(0).is_none());
@@ -6360,6 +6475,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let response = dispatch_core(
@@ -6416,6 +6532,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let path = "/site/index.html";
@@ -6514,6 +6631,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
 
@@ -6619,6 +6737,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let denied = dispatch_core(
@@ -6751,6 +6870,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         for (idx, expected) in [
@@ -6804,6 +6924,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(
@@ -6856,6 +6977,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         let gate = crate::server::wire_dispatch::build_keepalive_route_gate(&state);
@@ -6914,6 +7036,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
 
@@ -7014,6 +7137,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         assert!(
@@ -7065,6 +7189,7 @@ mod tests {
             waf: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         // FPC is generation-wide → every wire head requires full dispatch.
@@ -7302,6 +7427,7 @@ mod tests {
             http3: Default::default(),
             waf: Default::default(),
             logging: Default::default(),
+            geoip: Default::default(),
         };
         let (state, _static_guard, _proxy_guard) = state_for(config).await;
         for accept in ["text/html", "*/*"] {

@@ -636,7 +636,7 @@ fn validate_exclusion(exclusion: &WafExclusionConfig) -> Result<(), ConfigError>
 fn parse_match_target(raw: &str) -> Result<(), &'static str> {
     let raw = raw.trim();
     match raw {
-        "path" | "query" | "body" => Ok(()),
+        "path" | "query" | "body" | "country" => Ok(()),
         _ if raw.starts_with("header:") => {
             let name = raw.strip_prefix("header:").unwrap_or("").trim();
             if name.is_empty() {
@@ -645,7 +645,7 @@ fn parse_match_target(raw: &str) -> Result<(), &'static str> {
                 Ok(())
             }
         }
-        _ => Err("expected path, query, body, or header:<name>"),
+        _ => Err("expected path, query, body, country, or header:<name>"),
     }
 }
 

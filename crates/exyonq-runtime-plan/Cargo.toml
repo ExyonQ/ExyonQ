@@ -16,6 +16,7 @@ exyonq-config-ir.workspace = true
 exyonq-config-merge.workspace = true
 exyonq-module-api.workspace = true
 exyonq-module-pipeline.workspace = true
+exyonq-geoip.workspace = true
 
 [dev-dependencies]
 

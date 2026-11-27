@@ -688,6 +688,32 @@ const CMD_PATTERNS: &[(&str, &str)] = &[
         r"(?i)(;\s*(ls|cat|id|wget|curl)\b|\|\s*(ls|cat|id)\b|`[^`]+`|\$\([^)]+\))",
     ),
     ("EXY-CMD-1002", r"(?i)(/bin/(?:ba)?sh|cmd\.exe|powershell)"),
+    // Java expression-language / OGNL / Struts2 / WebWork remote-execution
+    // shapes (private report 2026-11-12): static class access, Runtime.exec
+    // chains, commons-io reflection, WebWork context and the OGNL assignment
+    // idiom, plus JNDI injection and reflective class loading.
+    (
+        "EXY-CMD-1003",
+        r"(?i)@java\.lang\.(?:runtime|processbuilder)@",
+    ),
+    ("EXY-CMD-1004", r"(?i)@org\.apache\.commons\.io\."),
+    (
+        "EXY-CMD-1005",
+        r"(?i)com\.opensymphony\.(?:webwork|xwork2)\.",
+    ),
+    (
+        "EXY-CMD-1006",
+        r"(?i)\bgetruntime\s*\(\s*\)\s*\.\s*exec\s*\(",
+    ),
+    ("EXY-CMD-1007", r"(?i)#[a-z_][a-z0-9_]{0,20}\s*=\s*@[a-z]"),
+    ("EXY-CMD-1008", r"(?i)(?:@ognl\.|ognl\.ognl|#_memberaccess)"),
+    ("EXY-CMD-1009", r"(?i)x-cmd-response"),
+    (
+        "EXY-CMD-1010",
+        r"(?i)(?:jndi:(?:ldap|rmi|dns)|javax\.naming\.)",
+    ),
+    ("EXY-CMD-1011", r"(?i)class\.forname\s*\("),
+    ("EXY-CMD-1012", r"(?i)processbuilder\s*\("),
 ];
 
 const BAD_BOT_PATTERNS: &[(&str, &str)] = &[

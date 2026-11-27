@@ -682,4 +682,28 @@ mod tests {
         assert_eq!(index.match_route("/assets/extra/x").unwrap().name, "long");
         assert_eq!(index.match_route("/assets/other/x").unwrap().name, "short");
     }
+
+    #[test]
+    fn exact_prefix_outranks_generic_regex() {
+        // EXQ-091: an `exact` route is a whole-URI equality (`location =`). It
+        // must win over a generic `^/(.+)\\.html$` rule even when the generic
+        // rule is listed first, which is how the reported config looked.
+        let mut exact = route("ret_verification", "/verification-file.html");
+        exact.r#match.exact = true;
+        let regex = route_regex("generic_html", r"^/(.+)\.html$");
+        let index = RouteIndex::new(vec![regex, exact]);
+
+        let (idx, matched) = index
+            .match_route_index_with_host("/verification-file.html", None)
+            .expect("exact route matches");
+        assert_eq!(matched.name, "ret_verification");
+        assert_eq!(idx, 1);
+
+        // A path only the regex covers must still reach the regex route.
+        let (idx, other) = index
+            .match_route_index_with_host("/other.html", None)
+            .expect("regex route matches");
+        assert_eq!(other.name, "generic_html");
+        assert_eq!(idx, 0);
+    }
 }

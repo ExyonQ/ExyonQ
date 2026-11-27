@@ -35,4 +35,19 @@ impl CertificatePublicationPort for CoreCertificatePublicationPort {
         reload::reload_tls_acceptor(&current, &self.tls_acceptor, &self.tls_session_cache)
             .map_err(|err| err.to_string())
     }
+
+    fn publish_tls_alpn_challenge(
+        &self,
+        domain: &str,
+        cert_pem: &str,
+        key_pem: &str,
+    ) -> Result<(), String> {
+        self.tls_acceptor
+            .set_acme_challenge(domain, cert_pem, key_pem)
+            .map_err(|err| err.to_string())
+    }
+
+    fn clear_tls_alpn_challenge(&self, domain: &str) {
+        self.tls_acceptor.clear_acme_challenge(domain);
+    }
 }

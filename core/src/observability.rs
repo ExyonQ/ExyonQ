@@ -220,6 +220,10 @@ pub struct AccessTerminal<'a> {
     pub duration_ms: u64,
     pub bytes_sent: Option<u64>,
     pub client_ip: Option<&'a str>,
+    /// Resolved ISO country code for the terminal access event.
+    pub country: Option<&'a str>,
+    /// Two-letter continent code resolved from the same GeoIP record.
+    pub continent: Option<&'a str>,
     pub external_request_id: Option<&'a str>,
     pub internal_request_id: &'a str,
     pub upstream: Option<&'a str>,
@@ -242,6 +246,8 @@ pub fn emit_access_terminal(ev: AccessTerminal<'_>) {
         duration_ms = ev.duration_ms,
         bytes_sent = ev.bytes_sent,
         client_ip = ev.client_ip,
+        country = ev.country,
+        continent = ev.continent,
         external_request_id = ev.external_request_id,
         request_id = %ev.internal_request_id,
         upstream = ev.upstream,
@@ -443,6 +449,8 @@ mod tests {
             duration_ms: 0,
             bytes_sent: None,
             client_ip: None,
+            country: None,
+            continent: None,
             external_request_id: None,
             internal_request_id: "",
             upstream: None,
@@ -470,6 +478,8 @@ mod tests {
                 duration_ms: 1,
                 bytes_sent: None,
                 client_ip: Some("203.0.113.5"),
+                country: Some("ES"),
+                continent: Some("EU"),
                 external_request_id: Some("req-1"),
                 internal_request_id: "0123456789abcdef0123456789abcdef",
                 upstream: None,
@@ -491,6 +501,10 @@ mod tests {
         assert!(
             out.contains("path=/assets/.env"),
             "access event lost the path: {out}"
+        );
+        assert!(
+            out.contains("country=ES") && out.contains("continent=EU"),
+            "access event lost country/continent: {out}"
         );
     }
 }

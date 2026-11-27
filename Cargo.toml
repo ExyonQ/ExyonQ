@@ -30,6 +30,7 @@ members = [
   "crates/exyonq-mod-static",
   "crates/exyonq-mod-proxy",
   "crates/exyonq-proxy-sdp",
+  "crates/exyonq-geoip",
   "crates/exyonq-mod-tls",
   "crates/exyonq-mod-http3",
   "crates/exyonq-http3-provider-api",
@@ -124,6 +125,7 @@ exyonq-mod-htaccess = { path = "crates/exyonq-mod-htaccess" }
 exyonq-mod-static = { path = "crates/exyonq-mod-static" }
 exyonq-mod-proxy = { path = "crates/exyonq-mod-proxy" }
 exyonq-proxy-sdp = { path = "crates/exyonq-proxy-sdp" }
+exyonq-geoip = { path = "crates/exyonq-geoip" }
 exyonq-mod-tls = { path = "crates/exyonq-mod-tls" }
 exyonq-mod-http3 = { path = "crates/exyonq-mod-http3", default-features = false }
 exyonq-cache = { path = "crates/exyonq-cache" }

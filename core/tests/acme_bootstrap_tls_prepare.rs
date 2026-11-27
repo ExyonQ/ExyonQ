@@ -17,11 +17,12 @@
 //! ACME bootstrap-from-zero: `prepare_tls_acceptor` must not hard-fail when
 //! `acme.enabled` and the cert/key pair is not on disk yet — the listener
 //! serves cleartext (HTTP-01) until the bootstrap publishes the issued
-//! certificate. Without ACME, a missing pair stays fail-closed.
+//! certificate. TLS-ALPN-01 instead gets a challenge-only acceptor. Without
+//! ACME, a missing pair stays fail-closed.
 
 use exyonq_core::config::AppConfig;
-use exyonq_core::reload::prepare_tls_acceptor;
-use exyonq_mod_tls::TlsSessionCache;
+use exyonq_core::reload::{prepare_tls_acceptor, prepare_tls_acceptor_with_acme};
+use exyonq_mod_tls::{AcmeTlsAlpnStore, TlsSessionCache};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -69,6 +70,13 @@ email = "ops@example.test"
 domains = ["example.test"]
 "#;
 
+const ACME_TLS_ALPN: &str = r#"
+[server.tls.acme]
+email = "ops@example.test"
+domains = ["example.test"]
+challenge = "tls-alpn-01"
+"#;
+
 #[test]
 fn acme_enabled_missing_pair_returns_none_acceptor() {
     let dir = TempDir::new().unwrap();
@@ -84,6 +92,29 @@ fn acme_enabled_missing_pair_returns_none_acceptor() {
     assert!(
         acceptor.is_none(),
         "no acceptor until the ACME-issued pair exists"
+    );
+}
+
+#[test]
+fn tls_alpn_pending_pair_builds_challenge_only_acceptor() {
+    exyonq_mod_tls::install_rustls_provider();
+    let dir = TempDir::new().unwrap();
+    let cert = dir.path().join("cert.pem");
+    let key = dir.path().join("key.pem");
+    let config = config_with_tls(
+        &cert.display().to_string(),
+        &key.display().to_string(),
+        ACME_TLS_ALPN,
+    );
+    let acceptor = prepare_tls_acceptor_with_acme(
+        &config,
+        &TlsSessionCache::default(),
+        &AcmeTlsAlpnStore::new(),
+    )
+    .expect("TLS-ALPN bootstrap must not fail prepare");
+    assert!(
+        acceptor.is_some(),
+        "TLS-ALPN needs a challenge-only acceptor before the first certificate"
     );
 }
 

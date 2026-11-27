@@ -48,6 +48,10 @@ scan_repo() {
   local f
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
+    # The detector's own selftest embeds the forbidden constructs as fixtures
+    # and its program text names them in patterns; scanning itself would always
+    # fail. Every other tracked script is still scanned.
+    [[ "$f" == "scripts/gates/portable-shell-gate.sh" ]] && continue
     files=$((files + 1))
     local hits
     hits="$(awk -v F="$f" '

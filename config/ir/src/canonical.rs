@@ -128,6 +128,10 @@ fn canonical_value(config: &AppConfig) -> serde_json::Value {
         serde_json::to_value(&config.waf).expect("waf serialize"),
     );
     root.insert(
+        "geoip".into(),
+        serde_json::to_value(&config.geoip).expect("geoip serialize"),
+    );
+    root.insert(
         "tuning".into(),
         serde_json::to_value(&config.tuning).expect("tuning serialize"),
     );

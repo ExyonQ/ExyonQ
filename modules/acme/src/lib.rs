@@ -18,6 +18,7 @@
 mod challenge;
 mod integration;
 mod manager;
+mod tls_alpn;
 
 pub use challenge::ChallengeStore;
 pub use integration::{

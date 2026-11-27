@@ -41,6 +41,7 @@ fn req<'a>(
     ip: IpAddr,
 ) -> WafRequest<'a> {
     WafRequest {
+        country: None,
         method: "GET",
         host: Some("example.com"),
         path,
@@ -115,10 +116,35 @@ fn golden_block_cmd() {
 }
 
 #[test]
+fn golden_block_ognl_struts_rce() {
+    // Java expression-language / OGNL / Struts2-WebWork injection shapes
+    // (private security report 2026-11-12). Percent-encoding is what reaches
+    // the wire; the engine normalizes before matching.
+    assert_blocks(
+        "/%24%7B%28%23a%3D%40org.apache.commons.io.IOUtils%40toString%28%40java.lang.Runtime%40getRuntime%28%29.exec%28%22id%22%29.getInputStream%28%29%29%7D/",
+        None,
+        "EXY-CMD-",
+    );
+    assert_blocks(
+        "/struts",
+        Some("name=%25%7B%28%23_memberAccess%5B%22allowStaticMethodAccess%22%5D%3Dtrue%29%7D"),
+        "EXY-CMD-",
+    );
+    assert_blocks(
+        "/api",
+        Some("x=${@java.lang.Runtime@getRuntime().exec('id')}"),
+        "EXY-CMD-",
+    );
+    assert_blocks("/api", Some("u=jndi:ldap://127.0.0.1/a"), "EXY-CMD-");
+}
+
+#[test]
 fn golden_allow_benign() {
     assert_allows("/api/users/123/profile", None);
     assert_allows("/docs/selecting-widgets", None); // "select" alone should not trip EXY-SQL-1001
     assert_allows("/blog/about-unions", None);
+    // Plain template/interpolation syntax is not an OGNL static-access shape.
+    assert_allows("/api", Some("q=${user.name}"));
 }
 
 #[test]

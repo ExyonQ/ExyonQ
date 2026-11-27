@@ -88,6 +88,7 @@ mod tests {
         headers: &'a EmptyHeaders,
     ) -> WafRequest<'a> {
         WafRequest {
+            country: None,
             method,
             host,
             path,

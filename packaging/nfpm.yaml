@@ -33,6 +33,33 @@ contents:
     type: config|noreplace
   - src: packaging/systemd/exyonq.service
     dst: /usr/lib/systemd/system/exyonq.service
+  # EXQ-081: ship the corrected healthcheck; it discovers php*fpm* instead of
+  # hardcoding a versioned unit. The timer is installed but not enabled here.
+  - src: packaging/scripts/exyonq-healthcheck.sh
+    dst: /usr/libexec/exyonq/exyonq-healthcheck.sh
+    file_info:
+      owner: root
+      group: root
+      mode: 0755
+  - src: packaging/systemd/exyonq-healthcheck.service
+    dst: /usr/lib/systemd/system/exyonq-healthcheck.service
+    file_info:
+      owner: root
+      group: root
+      mode: 0644
+  - src: packaging/systemd/exyonq-healthcheck.timer
+    dst: /usr/lib/systemd/system/exyonq-healthcheck.timer
+    file_info:
+      owner: root
+      group: root
+      mode: 0644
+  - src: packaging/systemd/exyonq-healthcheck.env.example
+    dst: /etc/exyonq/healthcheck.env
+    type: config|noreplace
+    file_info:
+      owner: root
+      group: root
+      mode: 0640
   - src: packaging/tmpfiles.d/exyonq.conf
     dst: /usr/lib/tmpfiles.d/exyonq.conf
   - src: packaging/logrotate.d/exyonq

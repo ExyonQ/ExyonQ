@@ -17,6 +17,7 @@
 
 use crate::ChallengeStore;
 use exyonq_config_ir::{AcmeConfig, AppConfig, TlsConfig};
+use exyonq_module_api::acme_integration::CertificatePublicationPort;
 use instant_acme::{
     Account, AccountCredentials, AuthorizationStatus, CertificateIdentifier, ChallengeType,
     Identifier, LetsEncrypt, NewAccount, NewOrder, OrderStatus, RetryPolicy,
@@ -50,6 +51,22 @@ fn acme_directory(staging: bool) -> String {
         LetsEncrypt::Staging.url().to_string()
     } else {
         LetsEncrypt::Production.url().to_string()
+    }
+}
+
+/// F-09: an explicit directory wins over the staging/production shortcut.
+fn effective_directory(acme: &AcmeConfig) -> String {
+    acme.directory_url
+        .clone()
+        .unwrap_or_else(|| acme_directory(acme.staging))
+}
+
+/// F-09: `ca_cert` is the trust root for the ACME API connection (a private
+/// or test CA), not the issuer of the issued certificate.
+fn account_builder(acme: &AcmeConfig) -> anyhow::Result<instant_acme::AccountBuilder> {
+    match &acme.ca_cert {
+        Some(path) => Ok(Account::builder_with_root(path)?),
+        None => Ok(Account::builder()?),
     }
 }
 
@@ -114,21 +131,21 @@ async fn load_or_create_account(
     if let Ok(raw) = std::fs::read_to_string(&path) {
         let credentials: AccountCredentials = serde_json::from_str(&raw)
             .map_err(|err| anyhow::anyhow!("acme account file {}: {err}", path.display()))?;
-        let account = Account::builder()?
+        let account = account_builder(acme)?
             .from_credentials(credentials)
             .await
             .map_err(anyhow::Error::from)?;
         return Ok((account, true));
     }
     let contact = format!("mailto:{}", acme.email);
-    let (account, credentials) = Account::builder()?
+    let (account, credentials) = account_builder(acme)?
         .create(
             &NewAccount {
                 contact: &[&contact],
                 terms_of_service_agreed: true,
                 only_return_existing: false,
             },
-            acme_directory(acme.staging),
+            effective_directory(acme),
             None,
         )
         .await?;
@@ -232,6 +249,7 @@ pub async fn ensure_certificates(
     tls: &TlsConfig,
     acme: &AcmeConfig,
     challenges: &ChallengeStore,
+    publication: &dyn CertificatePublicationPort,
     force: bool,
 ) -> anyhow::Result<AcmeRenewalOutcome> {
     if !acme.enabled {
@@ -253,7 +271,7 @@ pub async fn ensure_certificates(
 
     // ARI: link the renewal order to the certificate it replaces (RFC 9773).
     // Only a *reused* account may claim it; a fresh account has no history.
-    let directory = acme_directory(acme.staging);
+    let directory = effective_directory(acme);
     let mut new_order = NewOrder::new(&identifiers);
     if renewing && account_reused && origin_matches(&cert_path, &directory) {
         if let Some((der, _)) = leaf_cert(&cert_path) {
@@ -265,10 +283,14 @@ pub async fn ensure_certificates(
     let mut order = account.new_order(&new_order).await?;
 
     let dns01 = acme.challenge_type() == "dns-01";
+    let tls_alpn01 = acme.challenge_type() == "tls-alpn-01";
     let mut dns_cleanups: Vec<(String, String, String)> = Vec::new();
     // HTTP-01 tokens must stay served until the CA has fetched them, i.e.
     // until `poll_ready` finishes — not just until `set_ready` returns.
+    // TLS-ALPN-01 follows the same lifetime: the CA's handshake may land while
+    // the order is being polled.
     let mut http01_tokens: Vec<String> = Vec::new();
+    let mut tls_alpn_domains: Vec<String> = Vec::new();
     let challenge_result: anyhow::Result<()> = async {
         let mut authorizations = order.authorizations();
         while let Some(result) = authorizations.next().await {
@@ -292,6 +314,19 @@ pub async fn ensure_certificates(
                 info!(%token, %domain, "ACME DNS-01 challenge published");
                 tokio::time::sleep(Duration::from_secs(acme.dns_propagation_secs.unwrap_or(15)))
                     .await;
+                challenge.set_ready().await?;
+            } else if tls_alpn01 {
+                let mut challenge = authz
+                    .challenge(ChallengeType::TlsAlpn01)
+                    .ok_or_else(|| anyhow::anyhow!("no TLS-ALPN-01 challenge for {domain}"))?;
+                let key_auth = challenge.key_authorization().as_str().to_string();
+                let (cert_pem, key_pem) =
+                    crate::tls_alpn::challenge_certificate(&domain, &key_auth)?;
+                publication
+                    .publish_tls_alpn_challenge(&domain, &cert_pem, &key_pem)
+                    .map_err(anyhow::Error::msg)?;
+                tls_alpn_domains.push(domain.clone());
+                info!(%domain, "ACME TLS-ALPN-01 challenge published");
                 challenge.set_ready().await?;
             } else {
                 let mut challenge = authz
@@ -321,12 +356,18 @@ pub async fn ensure_certificates(
         for token in &http01_tokens {
             challenges.remove(token);
         }
+        for domain in &tls_alpn_domains {
+            publication.clear_tls_alpn_challenge(domain);
+        }
         return Err(err);
     }
 
     let ready = order.poll_ready(&RetryPolicy::default()).await;
     for token in &http01_tokens {
         challenges.remove(token);
+    }
+    for domain in &tls_alpn_domains {
+        publication.clear_tls_alpn_challenge(domain);
     }
     if ready? != OrderStatus::Ready {
         anyhow::bail!("ACME order not ready");
@@ -336,7 +377,7 @@ pub async fn ensure_certificates(
     let cert_pem = order.poll_certificate(&RetryPolicy::default()).await?;
 
     write_pem_pair(&cert_path, &key_path, &cert_pem, &key_pem)?;
-    record_origin(&cert_path, &acme_directory(acme.staging))?;
+    record_origin(&cert_path, &directory)?;
     info!(
         cert = %cert_path.display(),
         key = %key_path.display(),
@@ -370,6 +411,7 @@ pub fn acme_jobs(config: &AppConfig) -> Vec<(usize, TlsConfig, AcmeConfig)> {
 pub async fn spawn_renewal_loop(
     jobs: Vec<(TlsConfig, AcmeConfig)>,
     challenges: ChallengeStore,
+    publication: std::sync::Arc<dyn CertificatePublicationPort>,
     on_renewed: impl Fn() + Send + Sync + 'static,
 ) {
     if jobs.is_empty() {
@@ -381,7 +423,15 @@ pub async fn spawn_renewal_loop(
         loop {
             let mut issued = false;
             for (tls, acme) in &jobs {
-                match ensure_certificates(tls, acme, challenges.as_ref(), false).await {
+                match ensure_certificates(
+                    tls,
+                    acme,
+                    challenges.as_ref(),
+                    publication.as_ref(),
+                    false,
+                )
+                .await
+                {
                     Ok(AcmeRenewalOutcome::Issued(_)) => issued = true,
                     Ok(AcmeRenewalOutcome::SkippedExisting) => {}
                     Err(err) => warn!(%err, domains = ?acme.domains, "ACME renewal failed"),
@@ -411,6 +461,8 @@ mod tests {
             challenge: Some("dns-01".into()),
             dns_hook: Some("/bin/true".into()),
             dns_propagation_secs: None,
+            directory_url: None,
+            ca_cert: None,
             account_path: None,
         };
         assert_eq!(

@@ -50,6 +50,10 @@ No hardcoded `/api` routes. No second routing SSOT.
 
 ## Feature gate (default OFF)
 
+Compile-time opt-in: `cargo build -p exyonq --features cfd`. Default builds do
+not link `exyonq-cfd-control` or the launcher, and reject the runtime gate below
+before loading config.
+
 ```text
 EXYONQ_COMPETITIVE_H1_DATAPLANE=1
 EXYONQ_CFD_LISTEN=IP:PORT

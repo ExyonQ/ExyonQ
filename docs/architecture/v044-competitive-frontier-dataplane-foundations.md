@@ -23,7 +23,8 @@
 - Product CLI: `exyonq`
 - Dataplane binary: `exyonq-dataplane` (crate `exyonq-cfd-dataplane`)
 - Same product; not a separately branded project
-- Feature gate (default OFF): `EXYONQ_COMPETITIVE_H1_DATAPLANE=1`
+- Compile gate (default OFF): `cfd` Cargo feature; `exyonq-cfd-control` is optional and absent from default builds.
+- Runtime gate (default OFF): `EXYONQ_COMPETITIVE_H1_DATAPLANE=1`. A default binary rejects this variable before loading config; build with `cargo build -p exyonq --features cfd` to opt in.
 - Required when ON: `EXYONQ_CFD_LISTEN`, `EXYONQ_CFD_GEN_DIR`, optional `EXYONQ_CFD_SHARDS`, `EXYONQ_DATAPLANE_BIN`
 - Process exclusivity: advisory `flock` on `$GEN_DIR/dataplane.lock` (prevents second REUSEPORT owner)
 - READY is published only after all shards successfully bind + register with the poller

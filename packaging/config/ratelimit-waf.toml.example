@@ -1,0 +1,124 @@
+# ExyonQ example configuration — /etc/exyonq/config.toml
+config_version = 2
+
+# Cap061 — production observability (RD-005: IR implemented; not env-only).
+[logging]
+level = "info"
+format = "text"  # or "json"
+queue_capacity = 8192
+
+[logging.console]
+enabled = true
+stream = "stdout"  # stdout | stderr | split
+
+[logging.file]
+enabled = false
+# path = "/var/log/exyonq/exyonq.log"
+# [logging.file.rotation]
+# enabled = true
+# max_bytes = 104857600
+# keep = 7
+
+[logging.syslog]
+enabled = false
+# transport = "unix"  # unix | udp | tcp
+# address = "/dev/log"
+
+[logging.journald]
+enabled = false
+
+[logging.otel]
+enabled = false
+# endpoint = "http://127.0.0.1:4318"
+# protocol = "http_protobuf"  # http_protobuf only in Cap061; grpc not supported
+# service_name = "exyonq"
+# metrics_export = false  # Cap054 Prometheus remains metrics authority
+
+[logging.access]
+enabled = true
+
+[logging.audit]
+enabled = true
+
+[[server]]
+listen = "0.0.0.0:8080"
+routes = ["site", "api"]
+
+[[route]]
+name = "site"
+match = { path = "/site" }
+root = "/var/www/exyonq"
+index = "index.html"
+
+[[route]]
+name = "api"
+match = { path = "/api" }
+upstream = "backend"
+
+[[upstream]]
+name = "backend"
+target = "http://127.0.0.1:9000"
+timeout_ms = 30000
+
+[modules.metrics]
+enabled = true
+path = "/metrics"
+health_path = "/exyonq-metrics-health"
+# Required because the server listens non-loopback (LA-CAP054-008).
+# Generate a real token, e.g. `openssl rand -hex 32` — do not ship this placeholder.
+scrape_bearer_token = "REPLACE-WITH-RANDOM-TOKEN"
+
+[modules.ratelimit]
+enabled = true
+requests_per_second = 100
+burst = 200
+
+[modules.ratelimit.zones.api]
+key = "ip"
+requests_per_second = 50
+burst = 100
+
+# The keys here are `[[route]].name` values, not path patterns: validation
+# rejects a key that has no matching `[[route]].name`.
+[modules.ratelimit.routes]
+api = "api"
+
+[modules.ratelimit.route_options.api]
+burst = 20
+delay = 5
+
+[modules.ratelimit.client]
+enabled = false
+soft_connections_per_ip = 10000
+max_connections_per_ip = 10000
+bandwidth_bytes_per_second = 131072
+input_bandwidth_bytes_per_second = 131072
+static_requests_per_second = 20
+dynamic_requests_per_second = 10
+block_bad_req = false
+ban_seconds = 0
+grace_seconds = 0
+
+# `[waf.abuse]` accepts exactly these fields. `mode = "off"` keeps the gate
+# installed but inactive; the PoW challenge is `mode = "challenge"` with
+# `provider = "native"`, and an external provider needs `site_key` plus the name
+# of the environment variable holding the secret (never the secret itself).
+[waf.abuse]
+mode = "off"
+requests_per_second = 10
+burst = 20
+
+# A ruleset is a table in the `waf.ruleset` array; custom rules live in its
+# `rule` array. Rules are objects, not SecRule strings, and `phases` are
+# lowercase.
+[[waf.ruleset]]
+id = "custom"
+enabled = true
+
+[[waf.ruleset.rule]]
+id = "9001"
+enabled = true
+pattern = "(?i)union\\s+select"
+target = "query"
+action = "block"
+phases = ["request_headers"]

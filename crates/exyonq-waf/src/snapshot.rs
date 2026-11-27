@@ -110,6 +110,7 @@ pub(crate) enum LiteralMatcher {
     Path(String),
     Query(String),
     Body(String),
+    Country(Vec<String>),
     Header { name: String, needle: String },
 }
 
@@ -1510,6 +1511,7 @@ impl LiteralMatcher {
             Self::Path(_) => "path".into(),
             Self::Query(_) => "query".into(),
             Self::Body(_) => "body".into(),
+            Self::Country(_) => "country".into(),
             Self::Header { name, .. } => format!("header:{name}"),
         }
     }
@@ -1530,6 +1532,12 @@ impl LiteralMatcher {
                     !needle.is_empty() && b.windows(needle.len()).any(|w| w == needle)
                 })
                 .unwrap_or(false),
+            Self::Country(codes) => {
+                let Some(country) = req.country else {
+                    return false;
+                };
+                codes.iter().any(|code| code.eq_ignore_ascii_case(country))
+            }
             Self::Header { name, needle } => {
                 let Some(raw) = req.headers.get(name) else {
                     return false;

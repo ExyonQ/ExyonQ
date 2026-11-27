@@ -147,6 +147,12 @@ pub struct RuntimeSnapshot {
     pub route_rewrites: Box<[Option<exyonq_module_api::CompiledRewrite>]>,
     /// AP-05: compiled access policy parallel to IR routes.
     pub route_access: Box<[Option<CompiledAccessPolicy>]>,
+    /// `[geoip]` country database, or `None` when disabled or when a
+    /// fail-open load failed.
+    pub geoip: Option<Arc<exyonq_geoip::GeoIp>>,
+    /// True when `on_missing_db = "fail_open"`: a missing database or an
+    /// address without a record skips country constraints.
+    pub geoip_fail_open: bool,
 }
 
 /// Compiled `[full_page_cache]` (WC2B).
@@ -389,6 +395,16 @@ impl RuntimeSnapshot {
         self.route_access.get(route_idx)?.as_ref()
     }
 
+    /// Resolve the client country from the loaded MMDB, if GeoIP is enabled.
+    pub fn geoip_country(&self, ip: std::net::IpAddr) -> Option<exyonq_geoip::Country> {
+        self.geoip.as_ref()?.country(ip)
+    }
+
+    /// True when the configured missing-database policy is fail-open.
+    pub fn geoip_fail_open(&self) -> bool {
+        self.geoip_fail_open
+    }
+
     pub fn cache_policy_for_route(&self, route_idx: usize) -> Option<&CompiledCachePolicy> {
         let slot = *self.route_cache_policy_ids.get(route_idx)?;
         let slot = slot? as usize;
@@ -621,6 +637,7 @@ pub fn compile_runtime_plan_from_ir(
         })
         .collect::<anyhow::Result<Vec<_>>>()?
         .into_boxed_slice();
+    let (geoip, geoip_fail_open) = compile_geoip(&config.geoip)?;
     if full_page_cache.enabled {
         tracing::info!(
             enabled = true,
@@ -653,9 +670,43 @@ pub fn compile_runtime_plan_from_ir(
         full_page_cache,
         route_rewrites,
         route_access,
+        geoip,
+        geoip_fail_open,
     };
 
     Ok(Arc::new(plan))
+}
+
+fn compile_geoip(
+    cfg: &exyonq_config_ir::GeoIpConfig,
+) -> anyhow::Result<(Option<Arc<exyonq_geoip::GeoIp>>, bool)> {
+    if !cfg.enabled {
+        return Ok((None, false));
+    }
+    let database = cfg
+        .database
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("geoip.database is required when geoip.enabled = true"))?;
+    let seconds = cfg
+        .reload_seconds()
+        .ok_or_else(|| anyhow::anyhow!("geoip.reload_interval is invalid"))?;
+    let fail_closed = cfg.on_missing_db == exyonq_config_ir::GeoIpMissingPolicy::FailClosed;
+    match exyonq_geoip::GeoIp::open(
+        database.clone(),
+        std::time::Duration::from_secs(seconds),
+        fail_closed,
+    ) {
+        Ok(geo) => Ok((Some(Arc::new(geo)), !fail_closed)),
+        Err(err) if fail_closed => Err(anyhow::anyhow!("geoip: {err}")),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                path = %database.display(),
+                "GeoIP database unavailable; on_missing_db = fail_open, country policy disabled"
+            );
+            Ok((None, true))
+        }
+    }
 }
 
 fn compile_route_rewrites(
@@ -993,6 +1044,7 @@ mod tests {
             full_page_cache: Default::default(),
             http3: Default::default(),
             waf: Default::default(),
+            geoip: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
         };
@@ -1036,6 +1088,7 @@ mod tests {
             full_page_cache: Default::default(),
             http3: Default::default(),
             waf: Default::default(),
+            geoip: Default::default(),
             logging: Default::default(),
             streams: Vec::new(),
         };
@@ -1344,5 +1397,60 @@ enabled = true
         assert!(snap.modules_require_hyper_for_request_head(idle));
         let gzip = b"GET /api/ HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n";
         assert!(snap.modules_require_hyper_for_request_head(gzip));
+    }
+
+    fn config_with_geoip(
+        database: std::path::PathBuf,
+        policy: exyonq_config_ir::GeoIpMissingPolicy,
+    ) -> AppConfig {
+        let mut config: AppConfig = include_str!("../../../tests/fixtures/minimal.toml")
+            .parse()
+            .unwrap();
+        config.geoip = exyonq_config_ir::GeoIpConfig {
+            enabled: true,
+            database: Some(database),
+            on_missing_db: policy,
+            ..Default::default()
+        };
+        config
+    }
+
+    #[test]
+    fn geoip_fail_open_without_database_skips_country() {
+        let config = config_with_geoip(
+            "/nonexistent/exyonq-geoip-test.mmdb".into(),
+            exyonq_config_ir::GeoIpMissingPolicy::FailOpen,
+        );
+        let snap = compile_config(config);
+        assert!(snap.geoip.is_none());
+        assert!(snap.geoip_fail_open());
+        assert!(snap.geoip_country("192.0.2.1".parse().unwrap()).is_none());
+    }
+
+    #[test]
+    fn geoip_fail_closed_without_database_rejects_the_plan() {
+        let config = config_with_geoip(
+            "/nonexistent/exyonq-geoip-test.mmdb".into(),
+            exyonq_config_ir::GeoIpMissingPolicy::FailClosed,
+        );
+        let err = match compile_runtime_plan_from_ir(1, config) {
+            Ok(_) => panic!("fail_closed must reject a missing GeoIP database"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("geoip"));
+    }
+
+    #[test]
+    fn geoip_fixture_loads_and_resolves_country_and_continent() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../exyonq-geoip/tests/fixtures/GeoIP2-Country-Test.mmdb");
+        let config = config_with_geoip(fixture, exyonq_config_ir::GeoIpMissingPolicy::FailClosed);
+        let snap = compile_config(config);
+        assert!(!snap.geoip_fail_open());
+        let country = snap
+            .geoip_country("81.2.69.160".parse().unwrap())
+            .expect("GB record");
+        assert_eq!(country.iso_code, "GB");
+        assert_eq!(country.continent_code.as_deref(), Some("EU"));
     }
 }
