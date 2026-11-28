@@ -1,8 +1,25 @@
 #!/usr/bin/env bash
 # EXYONQ-SEC-PRIVATE-MATERIAL-ZERO: fail-closed publication gate.
+# Also rejects AI/bot attribution in the commits being pushed, so a
+# "Generated with ..." footer or a Co-Authored-By naming an assistant never
+# reaches the public history (and the Contributors widget) again.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
-# Consume Git's ref-update stream; the gate does not need it.
-cat >/dev/null || true
+tmp="$(mktemp "${TMPDIR:-/tmp}/exyonq-prepush.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+cat >"$tmp"
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -n "${local_sha:-}" ]] || continue
+  [[ "$local_sha" =~ ^0+$ ]] && continue
+  if [[ -z "${remote_sha:-}" || "$remote_sha" =~ ^0+$ ]]; then
+    # New branch/tag: no remote base to trust, scan the reachable history.
+    range="$local_sha"
+  else
+    range="${remote_sha}..${local_sha}"
+  fi
+  bash "$ROOT/scripts/gates/no-ai-attribution-gate.sh" --repo "$ROOT" --range "$range" || exit 1
+done <"$tmp"
+
 bash "$ROOT/scripts/verify-no-private-paths.sh"
 exec bash "$ROOT/scripts/security/scan-private-material.sh" --publication --repo "$ROOT"

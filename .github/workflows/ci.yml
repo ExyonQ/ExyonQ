@@ -225,3 +225,31 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo build --release -p exyonq --target aarch64-apple-darwin --locked
+
+  attribution:
+    name: commit attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Reject AI/bot attribution
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
+            RANGE="origin/${BASE_REF}..HEAD"
+          elif [[ "$BEFORE_SHA" =~ ^0+$ ]] || ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            # New branch, or a base that no longer resolves (force-push):
+            # scan the whole reachable history instead of trusting the range.
+            RANGE="${HEAD_SHA}"
+          else
+            RANGE="${BEFORE_SHA}..${HEAD_SHA}"
+          fi
+          bash scripts/gates/no-ai-attribution-gate.sh --range "$RANGE"

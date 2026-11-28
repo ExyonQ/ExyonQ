@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Reject AI/bot attribution before a commit is created.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+case "${1:-}" in
+  /*) msg="$1" ;;
+  *) msg="$ROOT/$1" ;;
+esac
+exec bash "$ROOT/scripts/gates/no-ai-attribution-gate.sh" --repo "$ROOT" --message-file "$msg"

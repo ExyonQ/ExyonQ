@@ -22,6 +22,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Reject AI/bot attribution in the tagged history
+        # Published releases must carry no "Generated with ..." footer and no
+        # Co-Authored-By naming an assistant. The gate scans every ancestor of
+        # the tagged commit, so a tag cut from bad history fails before any
+        # build or upload.
+        run: bash scripts/gates/no-ai-attribution-gate.sh --range "${GITHUB_SHA}"
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (pin; preserves toolchain input contract)
         with:
           toolchain: 1.99.1
