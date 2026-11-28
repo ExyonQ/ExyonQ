@@ -190,6 +190,14 @@ ip_filter = { enabled = false }
 [waf]
 enabled = true
 mode = "{mode}"
+# The differential measures the corpus against the reference engine. OWASP CRS
+# 4.25 always contains operators outside ExyonQ's supported subset
+# (@detectSQLi, @detectXSS, @pmFromFile, @unconditionalMatch, ...), so the
+# default closed_for_invalid_rules policy would refuse to start. Use
+# best_effort here and treat the unsupported subset as a documented scope gap;
+# the gate still fails on any differential mismatch and the parser diagnostics
+# are printed. The closed policy remains the product default for native rules.
+fail_policy = "best_effort"
 max_inspection_body_bytes = 1048576
 [[waf.ruleset]]
 id = "diff"
