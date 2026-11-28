@@ -20,21 +20,26 @@ aborts startup/reload; the previous generation remains active.
 | `engine` | string | `"native"` | `native` only | Other values rejected |
 | `max_inspection_body_bytes` | u64 | `67108864` | `>= 1` | Body inspection budget (aligned with the proxy body limit) |
 | `on_inspection_limit` | string | `"block"` | `allow_uninspected` \| `block` \| `log_and_allow` | Behavior when budget exhausted |
-| `fail_policy` | string | `"closed_for_invalid_rules"` | `closed_for_invalid_rules` \| `best_effort` | Closed rejects discarded rules; best-effort keeps valid rules and reports `CompileStats` |
+| `fail_policy` | string | `"closed_for_invalid_rules"` | `closed_for_invalid_rules` \| `best_effort` | Closed rejects malformed rules; scope gaps are reported and never fatal; best-effort keeps valid rules after a malformed line and reports `CompileStats` |
 
-**Full OWASP CRS files need `best_effort` today.** CRS 4.25 (pinned
-`aabf675f`) uses operators outside the supported subset — `@detectSQLi`,
-`@detectXSS`, `@pmFromFile`, `@unconditionalMatch`, `@eq` on `&TX:` — plus
-nested chain forms the parser does not model; 36 `SecRule` lines are reported
-as discarded/unsupported. Under the `closed_for_invalid_rules` default the
-engine refuses to start with that file, which is the opposite of what a CRS
-differential needs. Use `fail_policy = "best_effort"` when loading an upstream
-CRS file (the `scripts/gates/crs-diff.py` gate does exactly that, prints the
-diagnostics and reports `excluded_unsupported=<n>` for the corpus cases of the
-discarded rule ids) and keep the closed default for native rules. The unsupported
-subset is a documented scope gap; see the tracking issue for the parser
-expansion. `best_effort` never silences the gap: `CompileStats` carries one
-diagnostic per discarded line and the install path logs them.
+**OWASP CRS 4.25 loads under the default `closed_for_invalid_rules`.** The
+parser covers the constructs the pinned ruleset (`aabf675f`) uses: the
+operators `@detectSQLi`, `@detectXSS`, `@pmFromFile`, `@unconditionalMatch`
+and `@eq` on `&TX:`; the transforms `utf8toUnicode`, `normalizePathWin`,
+`removeCommentsChar`, `sha1` and the rest of the CRS set; the nested chain
+form of rules such as 901320; and negated collection targets
+(`!REQUEST_COOKIES:/regex/`, `!ARGS_NAMES:/regex/`). `fail_policy` separates
+two cases: a **malformed** `SecRule` line is a defect in the rules file and
+refuses the snapshot under `closed_for_invalid_rules`; a syntactically valid
+construct **outside the supported subset** is reported in `CompileStats`
+(`unsupported`, one diagnostic per line), the rule is skipped, and the
+snapshot still loads — a valid upstream ruleset must never be refused for a
+documented scope gap. `best_effort` remains available when a malformed line
+should not abort a native ruleset. `CompileStats` also lists the ignored CRS
+actions (`initcol`, `multiMatch`, `ctl`, non-`tx` `setvar`, ...) and the
+install path logs both diagnostics. See `scripts/gates/crs-diff.py`, which now
+runs the differential under the closed default and fails if the parser reports
+any discarded or unsupported line.
 
 ### `on_inspection_limit`
 

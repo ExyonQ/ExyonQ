@@ -192,14 +192,11 @@ ip_filter = { enabled = false }
 [waf]
 enabled = true
 mode = "{mode}"
-# The differential measures the corpus against the reference engine. OWASP CRS
-# 4.25 always contains operators outside ExyonQ's supported subset
-# (@detectSQLi, @detectXSS, @pmFromFile, @unconditionalMatch, ...), so the
-# default closed_for_invalid_rules policy would refuse to start. Use
-# best_effort here and treat the unsupported subset as a documented scope gap;
-# the gate still fails on any differential mismatch and the parser diagnostics
-# are printed. The closed policy remains the product default for native rules.
-fail_policy = "best_effort"
+# The differential measures the corpus against the reference engine under the
+# product default: a valid upstream ruleset must load under the closed policy.
+# A construct outside the parser subset is reported, never silently skipped;
+# the gate fails if the parser still reports any discarded or unsupported line.
+fail_policy = "closed_for_invalid_rules"
 max_inspection_body_bytes = 1048576
 [[waf.ruleset]]
 id = "diff"
@@ -399,16 +396,17 @@ def case_key(case: dict, index: int) -> str:
 # reference is collected and the descriptor closes under the child.
 _LOG_HANDLES: list = []
 
-DISCARD_RE = re.compile(r"line \d+: rule (\d+): discarded SecRule")
+DISCARD_RE = re.compile(
+    r"line \d+: (?:rule (\d+): )?(?:discarded|unsupported) SecRule"
+)
 
 
 def unsupported_rule_ids(log: Path) -> set[int]:
-    """Rule ids the parser reported as discarded, from the startup diagnostics.
+    """Rule ids the parser reported as discarded or unsupported at startup.
 
-    A rule using an operator/transform outside the supported subset is a
-    documented scope gap (see #113), not a supported-rule mismatch: the
-    differential reports and excludes its corpus cases instead of pretending
-    the rule ran.
+    The gate fails when this is non-empty: OWASP CRS 4.25 must parse without a
+    documented scope gap (see #113), so a regression cannot be hidden by
+    excluding its corpus cases.
     """
     if not log.exists():
         return set()
@@ -521,6 +519,12 @@ def main() -> int:
     if unsupported:
         listed = ",".join(str(rid) for rid in sorted(unsupported))
         print(f"unsupported_rules={len(unsupported)} ids={listed}")
+        print(
+            "crs-diff: the parser refused or skipped CRS lines; fix the parser "
+            "scope before comparing decisions (see issue #113)",
+            file=sys.stderr,
+        )
+        return 3
     if not args.dry_run:
         start_reference(rules, crs_dir)
     failures = 0

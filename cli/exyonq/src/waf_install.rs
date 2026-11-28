@@ -115,6 +115,19 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
                 "WAF rules compiled"
             );
         }
+        if stats.unsupported > 0 {
+            warn!(
+                unsupported = stats.unsupported,
+                diagnostics = ?stats.unsupported_diagnostics,
+                "WAF CRS rules outside the supported subset reported and not loaded"
+            );
+        }
+        if !stats.ignored_actions.is_empty() {
+            warn!(
+                ignored_actions = ?stats.ignored_actions,
+                "WAF CRS actions ignored by this engine"
+            );
+        }
         Arc::new(engine)
     };
     // Entry-level metrics describe the filter that was just compiled (install or
@@ -133,8 +146,10 @@ fn compile_runtime_binding(config: &AppConfig) -> anyhow::Result<WafRuntimeBindi
 }
 
 /// CRS parser diagnostics are subject to the configured compile policy: a
-/// closed policy refuses the snapshot when any SecRule line was discarded;
-/// best-effort keeps the valid rules and reports the skipped lines in stats.
+/// closed policy refuses the snapshot when any SecRule line is malformed;
+/// `best_effort` keeps the valid rules and reports the skipped lines in stats.
+/// A syntactically valid construct outside the supported subset (unsupported
+/// operator, target or transform) is reported and never refuses the snapshot.
 fn enforce_crs_fail_policy(
     waf: &WafConfig,
     crs: &[exyonq_waf::CrsRulesetInput],

@@ -46,6 +46,16 @@ pub struct CompileStats {
     pub discarded: usize,
     /// One diagnostic per discarded rule (never silently dropped).
     pub diagnostics: Vec<String>,
+    /// CRS rules reported as out of scope because they use a construct this
+    /// engine does not implement (operator, target, transform). They are not
+    /// loaded, but they never refuse the snapshot: a valid upstream ruleset
+    /// must not be rejected for a documented scope gap.
+    pub unsupported: usize,
+    /// One diagnostic per unsupported CRS rule (never silently dropped).
+    pub unsupported_diagnostics: Vec<String>,
+    /// Actions found in loaded rules that this engine ignores, aggregated as
+    /// `(name, occurrences)`. The rule still loads; the omission is reported.
+    pub ignored_actions: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -728,6 +738,9 @@ impl CrsMatcher {
             CrsTarget::CookieName => "cookie_names".into(),
             CrsTarget::CookieNamed(pattern) => format!("cookies:/{pattern}/"),
             CrsTarget::CookieNameNamed(pattern) => format!("cookie_names:/{pattern}/"),
+            CrsTarget::CookieNamedExcept(pattern) => format!("!cookies:/{pattern}/"),
+            CrsTarget::CookieNameNamedExcept(pattern) => format!("!cookie_names:/{pattern}/"),
+            CrsTarget::ArgNameExcept(pattern) => format!("!args_names:/{pattern}/"),
             CrsTarget::Body => "body".into(),
             CrsTarget::ResponseStatus => "response_status".into(),
             CrsTarget::ResponseHeader(name) => format!("response_header:{name}"),
@@ -1269,6 +1282,21 @@ fn request_target_values(
             .into_iter()
             .filter(|(name, _)| cookie_name_matches(pattern, name))
             .map(|(name, _)| named(&format!("REQUEST_COOKIES_NAMES:{name}"), name))
+            .collect(),
+        CrsTarget::CookieNamedExcept(pattern) => cookie_pairs(req)
+            .into_iter()
+            .filter(|(name, _)| !cookie_name_matches(pattern, name))
+            .map(|(name, value)| named(&format!("REQUEST_COOKIES:{name}"), value))
+            .collect(),
+        CrsTarget::CookieNameNamedExcept(pattern) => cookie_pairs(req)
+            .into_iter()
+            .filter(|(name, _)| !cookie_name_matches(pattern, name))
+            .map(|(name, _)| named(&format!("REQUEST_COOKIES_NAMES:{name}"), name))
+            .collect(),
+        CrsTarget::ArgNameExcept(pattern) => all_args(req, views)
+            .into_iter()
+            .filter(|(name, _)| !cookie_name_matches(pattern, name))
+            .map(|(name, _)| named(&format!("ARGS_NAMES:{name}"), name))
             .collect(),
         CrsTarget::Body => views
             .body
