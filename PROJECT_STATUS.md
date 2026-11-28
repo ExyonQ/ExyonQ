@@ -8,7 +8,7 @@ AUTHORITY = SOLE for the current release identity and public-release state
 
 <!-- BEGIN RELEASE_STATUS (generated from RELEASE_STATUS; do not edit) -->
 VERSION = 0.9.3
-PUBLICATION_STATUS = NOT_PUBLISHED
+PUBLICATION_STATUS = PUBLISHED
 PREVIOUS_PUBLIC_VERSION = 0.9.2
 PUBLIC_RELEASE = v0.9.2
 RELEASE_NOTE = docs/release/v0.9.3.md

@@ -2,7 +2,7 @@
 # README.md, SECURITY.md and PROJECT_STATUS.md carry a generated block from
 # this file; scripts/gates/readme-release-version-gate.sh enforces it.
 VERSION = 0.9.3
-PUBLICATION_STATUS = NOT_PUBLISHED
+PUBLICATION_STATUS = PUBLISHED
 PREVIOUS_PUBLIC_VERSION = 0.9.2
 RELEASE_NOTE = docs/release/v0.9.3.md
 AUDIT_NOTE = docs/security/audit-v0.9.3.md
