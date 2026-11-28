@@ -268,6 +268,25 @@ pub fn compile_waf_with_crs(
             .stats
             .diagnostics
             .extend(ruleset.diagnostics.iter().cloned());
+        snapshot.stats.unsupported += ruleset.unsupported;
+        snapshot
+            .stats
+            .unsupported_diagnostics
+            .extend(ruleset.unsupported_diagnostics.iter().cloned());
+        for (name, occurrences) in &ruleset.ignored_actions {
+            match snapshot
+                .stats
+                .ignored_actions
+                .iter_mut()
+                .find(|(known, _)| known == name)
+            {
+                Some((_, total)) => *total += occurrences,
+                None => snapshot
+                    .stats
+                    .ignored_actions
+                    .push((name.clone(), *occurrences)),
+            }
+        }
         snapshot
             .rulesets
             .push(compile_crs_ruleset(ruleset.clone())?);
@@ -414,14 +433,38 @@ mod tests {
     }
 
     #[test]
-    fn f02_unsupported_transform_discards_the_whole_rule() {
+    fn f02_unsupported_transform_is_reported_not_discarded() {
         let crs = crate::crs::parse_rule_file(
             "crs",
             "SecRule REQUEST_URI \"@contains attack\" \"id:990002,deny,t:notARealTransform\"\n",
             0,
         );
         assert!(crs.rules.is_empty(), "a half-applied rule must not load");
-        assert_eq!(crs.discarded, 1);
-        assert!(crs.diagnostics[0].contains("line 1"));
+        assert_eq!(crs.discarded, 0, "a scope gap is not a malformed line");
+        assert_eq!(crs.unsupported, 1);
+        assert!(crs.diagnostics.is_empty());
+        assert!(crs.unsupported_diagnostics[0].contains("line 1"));
+        assert!(crs.unsupported_diagnostics[0].contains("notARealTransform"));
+
+        // The closed policy must not refuse a valid ruleset just because a
+        // construct is outside the subset: it loads the rest and reports it.
+        let snapshot = compile_waf_with_crs(WafCompileInput::default(), &[crs])
+            .expect("closed policy keeps the valid rules");
+        assert_eq!(snapshot.compile_stats().unsupported, 1);
+        assert_eq!(snapshot.compile_stats().discarded, 0);
+        assert_eq!(snapshot.compile_stats().unsupported_diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn f02_unsupported_target_is_reported_not_discarded() {
+        let crs = crate::crs::parse_rule_file(
+            "crs",
+            "SecRule NOT_A_REAL_TARGET \"@contains attack\" \"id:990003,deny\"\n",
+            0,
+        );
+        assert!(crs.rules.is_empty());
+        assert_eq!(crs.discarded, 0);
+        assert_eq!(crs.unsupported, 1);
+        assert!(crs.unsupported_diagnostics[0].contains("NOT_A_REAL_TARGET"));
     }
 }

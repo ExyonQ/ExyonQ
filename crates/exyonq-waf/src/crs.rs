@@ -68,6 +68,12 @@ pub enum CrsTarget {
     CookieNamed(String),
     /// `REQUEST_COOKIES_NAMES:/regex/`: matching cookie names.
     CookieNameNamed(String),
+    /// `!REQUEST_COOKIES:/regex/`: cookies whose name does not match.
+    CookieNamedExcept(String),
+    /// `!REQUEST_COOKIES_NAMES:/regex/`: cookie names that do not match.
+    CookieNameNamedExcept(String),
+    /// `!ARGS_NAMES:/regex/`: argument names that do not match.
+    ArgNameExcept(String),
     QueryString,
     Filename,
     Basename,
@@ -121,6 +127,15 @@ pub enum CrsTransform {
     EscapeSeqDecode,
     CmdLine,
     ReplaceComments,
+    /// `t:utf8toUnicode`: decode RFC 3629 UTF-8 sequences to `%uXXXX` code
+    /// points (ModSecurity `utf8_to_unicode.cc`).
+    Utf8ToUnicode,
+    /// `t:normalizePathWin`: Windows path normalisation (backslash separators).
+    NormalizePathWin,
+    /// `t:removeCommentsChar`: strip C/HTML/SQL comment markers.
+    RemoveCommentsChar,
+    /// `t:sha1`: ModSecurity `digestReplace` — the raw 20-byte digest, not hex.
+    Sha1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,10 +186,25 @@ pub struct CrsRulesetInput {
     pub markers: std::collections::HashMap<String, usize>,
     pub default_actions: std::collections::HashMap<WafPhase, WafAction>,
     pub rules: Vec<CrsRuleInput>,
-    /// SecRule lines that could not be parsed and were not loaded.
+    /// SecRule lines rejected as syntactically malformed and not loaded.
+    ///
+    /// This is the only parse accounting that refuses a snapshot under
+    /// `fail_policy = "closed_for_invalid_rules"`: broken syntax is a defect in
+    /// the rules file, so the engine must not start with a partial ruleset.
     pub discarded: usize,
-    /// One diagnostic per discarded line, including the source line number.
+    /// One diagnostic per malformed line, including the source line number.
     pub diagnostics: Vec<String>,
+    /// SecRule lines that are syntactically valid but use a construct outside
+    /// the supported subset (operator, target, transform, chain member): the
+    /// line is reported and not loaded, but it never refuses the snapshot on
+    /// its own. This is the documented scope gap, not a malformed ruleset.
+    pub unsupported: usize,
+    /// One diagnostic per unsupported line, including the source line number.
+    pub unsupported_diagnostics: Vec<String>,
+    /// Actions found in loaded rules that this engine does not implement
+    /// (for example `initcol`), aggregated as `(name, occurrences)`. The rule
+    /// still loads; the action is ignored and reported.
+    pub ignored_actions: Vec<(String, usize)>,
 }
 
 fn tokenize(line: &str) -> Vec<String> {
@@ -221,7 +251,69 @@ struct ParsedActions {
     skip_after: Option<String>,
     ctl_detection_only: bool,
     ctl_remove_ids: Vec<u32>,
+    /// `t:` names this engine does not implement; the containing rule is out of
+    /// scope (reported, not loaded) because skipping a transform silently would
+    /// change what the operator matches.
     unsupported_transforms: Vec<String>,
+    /// Known ModSecurity actions with a runtime effect this engine does not
+    /// implement (`initcol`, `multiMatch`, ...). The rule still loads without
+    /// them and the omission is reported.
+    unsupported_actions: Vec<String>,
+}
+
+/// Actions that are metadata or explicit logging controls: they never change
+/// the match or the decision in this engine, so they are accepted as no-ops.
+fn is_known_noop_action(action: &str) -> bool {
+    matches!(
+        action,
+        "log" | "nolog" | "auditlog" | "noauditlog" | "block" | "capture"
+    ) || action.starts_with("msg:")
+        || action.starts_with("logdata:")
+        || action.starts_with("tag:")
+        || action.starts_with("ver:")
+        || action.starts_with("rev:")
+        || action.starts_with("severity:")
+        || action.starts_with("phase:")
+        || action.starts_with("setvar:")
+}
+
+/// Known ModSecurity actions whose runtime effect this engine does not model.
+/// Returns the reported name, or `None` when the action is not one of them.
+fn unsupported_action_name(action: &str) -> Option<&str> {
+    const NAMES: &[&str] = &[
+        "initcol:",
+        "expirevar:",
+        "setuid:",
+        "setsid:",
+        "multiMatch",
+        "redirect:",
+        "redirect",
+        "status:",
+        "prepend:",
+        "append:",
+        "exec:",
+        "pause:",
+        "allow",
+        "proxy:",
+    ];
+    NAMES
+        .iter()
+        .find(|name| action.starts_with(*name))
+        .map(|name| name.trim_end_matches(':'))
+        .or_else(|| action.starts_with("ctl:").then_some("ctl"))
+}
+
+/// Why a `SecRule`/`SecAction` line was not loaded.
+///
+/// `Malformed` means the line is broken: the rules file is defective, so the
+/// closed policy must refuse the whole snapshot. `Unsupported` means the line
+/// is syntactically valid but uses a construct outside this engine's subset
+/// (operator, target, transform, chain member): it is reported and skipped,
+/// and it must not refuse a valid upstream ruleset like OWASP CRS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Reject {
+    Malformed(String),
+    Unsupported(String),
 }
 
 fn parse_actions(actions: &str) -> ParsedActions {
@@ -236,6 +328,7 @@ fn parse_actions(actions: &str) -> ParsedActions {
     let mut ctl_detection_only = false;
     let mut ctl_remove_ids = Vec::new();
     let mut unsupported_transforms = Vec::new();
+    let mut unsupported_actions = Vec::new();
     for action_text in actions.split(',') {
         let action_text = action_text.trim();
         if let Some(v) = action_text.strip_prefix("id:") {
@@ -270,11 +363,17 @@ fn parse_actions(actions: &str) -> ParsedActions {
                 "urlDecodeUni" => transforms.push(CrsTransform::UrlDecodeUni),
                 "trim" => transforms.push(CrsTransform::Trim),
                 "removeNulls" => transforms.push(CrsTransform::RemoveNulls),
-                "base64Decode" => transforms.push(CrsTransform::Base64Decode),
+                "base64Decode" | "base64decode" => transforms.push(CrsTransform::Base64Decode),
                 "htmlEntityDecode" => transforms.push(CrsTransform::HtmlEntityDecode),
                 "removeWhitespace" => transforms.push(CrsTransform::RemoveWhitespace),
                 "compressWhitespace" => transforms.push(CrsTransform::CompressWhitespace),
                 "normalizePath" | "normalisePath" => transforms.push(CrsTransform::NormalizePath),
+                "normalizePathWin" | "normalisePathWin" => {
+                    transforms.push(CrsTransform::NormalizePathWin)
+                }
+                "utf8toUnicode" => transforms.push(CrsTransform::Utf8ToUnicode),
+                "removeCommentsChar" => transforms.push(CrsTransform::RemoveCommentsChar),
+                "sha1" => transforms.push(CrsTransform::Sha1),
                 "hexDecode" => transforms.push(CrsTransform::HexDecode),
                 "length" => transforms.push(CrsTransform::Length),
                 "hexEncode" => transforms.push(CrsTransform::HexEncode),
@@ -286,6 +385,18 @@ fn parse_actions(actions: &str) -> ParsedActions {
                 "replaceComments" => transforms.push(CrsTransform::ReplaceComments),
                 _ => unsupported_transforms.push(name.to_string()),
             }
+        } else if is_known_noop_action(action_text) {
+            if action_text.starts_with("setvar:")
+                && !action_text
+                    .strip_prefix("setvar:")
+                    .is_some_and(|rest| rest.starts_with("tx."))
+            {
+                // Only the transaction collection is modelled; other
+                // collections (`ip.`, `global.`, `session.`) need initcol.
+                unsupported_actions.push("setvar:<non-tx>".to_string());
+            }
+        } else if let Some(name) = unsupported_action_name(action_text) {
+            unsupported_actions.push(name.to_string());
         }
     }
     if deny {
@@ -315,10 +426,13 @@ fn parse_actions(actions: &str) -> ParsedActions {
         ctl_detection_only,
         ctl_remove_ids,
         unsupported_transforms,
+        unsupported_actions,
     }
 }
 
-fn parse_action_only(actions: &str) -> Option<CrsRuleInput> {
+/// Parse one `SecAction` line. A `SecAction` carries no operator, so the only
+/// way it can be out of scope is a transform this engine does not implement.
+fn parse_action_only(actions: &str) -> Result<(CrsRuleInput, Vec<String>), Reject> {
     let ParsedActions {
         id: rule_id,
         score,
@@ -330,31 +444,41 @@ fn parse_action_only(actions: &str) -> Option<CrsRuleInput> {
         ctl_detection_only,
         ctl_remove_ids,
         unsupported_transforms,
+        unsupported_actions,
     } = parse_actions(actions);
-    if rule_id == 0 || !unsupported_transforms.is_empty() {
-        return None;
+    if !unsupported_transforms.is_empty() {
+        return Err(Reject::Unsupported(format!(
+            "unsupported transform(s): {}",
+            unsupported_transforms.join(", ")
+        )));
     }
-    Some(CrsRuleInput {
-        id: rule_id.to_string(),
-        enabled: true,
-        phases: vec![WafPhase::RequestHeaders, WafPhase::RequestBodyComplete],
-        targets: vec![CrsTarget::Unconditional],
-        op: CrsOp::Unconditional,
-        negated: false,
-        action,
-        score,
-        transforms,
-        chain: Vec::new(),
-        skip,
-        skip_after,
-        ctl_detection_only,
-        ctl_remove_ids,
-        setvars: parse_setvars(actions),
-        explicit_action: action != WafAction::Log,
-        explicit_phase: actions.split(',').any(|a| a.trim().starts_with("phase:")),
-        paranoia_level: parse_paranoia_level(actions),
-        capture: actions.split(',').any(|a| a.trim() == "capture"),
-    })
+    if rule_id == 0 {
+        return Err(Reject::Malformed("SecAction without id".to_string()));
+    }
+    Ok((
+        CrsRuleInput {
+            id: rule_id.to_string(),
+            enabled: true,
+            phases: vec![WafPhase::RequestHeaders, WafPhase::RequestBodyComplete],
+            targets: vec![CrsTarget::Unconditional],
+            op: CrsOp::Unconditional,
+            negated: false,
+            action,
+            score,
+            transforms,
+            chain: Vec::new(),
+            skip,
+            skip_after,
+            ctl_detection_only,
+            ctl_remove_ids,
+            setvars: parse_setvars(actions),
+            explicit_action: action != WafAction::Log,
+            explicit_phase: actions.split(',').any(|a| a.trim().starts_with("phase:")),
+            paranoia_level: parse_paranoia_level(actions),
+            capture: actions.split(',').any(|a| a.trim() == "capture"),
+        },
+        unsupported_actions,
+    ))
 }
 
 fn parse_severity(actions: &str) -> u32 {
@@ -506,6 +630,15 @@ fn map_target(value: &str) -> Option<CrsTarget> {
         other if other.starts_with("REQUEST_COOKIES_NAMES:/") => CrsTarget::CookieNameNamed(
             other["REQUEST_COOKIES_NAMES:/".len()..other.len() - 1].to_string(),
         ),
+        other if other.starts_with("!REQUEST_COOKIES:/") => CrsTarget::CookieNamedExcept(
+            other["!REQUEST_COOKIES:/".len()..other.len() - 1].to_string(),
+        ),
+        other if other.starts_with("!REQUEST_COOKIES_NAMES:/") => CrsTarget::CookieNameNamedExcept(
+            other["!REQUEST_COOKIES_NAMES:/".len()..other.len() - 1].to_string(),
+        ),
+        other if other.starts_with("!ARGS_NAMES:/") => {
+            CrsTarget::ArgNameExcept(other["!ARGS_NAMES:/".len()..other.len() - 1].to_string())
+        }
         other => {
             if let Some(name) = other.strip_prefix("!REQUEST_HEADERS:") {
                 CrsTarget::HeaderExcept(name.to_string())
@@ -523,95 +656,115 @@ fn parse_rule_tokens(
     tokens: &[String],
     base_dir: Option<&Path>,
     allow_no_id: bool,
-) -> Option<(CrsRuleInput, bool)> {
+) -> Result<(CrsRuleInput, Vec<String>, bool), Reject> {
     if tokens.len() < 2 {
-        return None;
+        return Err(Reject::Malformed(
+            "SecRule with missing target or operator".into(),
+        ));
     }
     let actions = tokens.get(2).map(String::as_str).unwrap_or("");
-    let targets: Vec<CrsTarget> = tokens[0].split('|').filter_map(map_target).collect();
+    if tokens[0].trim().is_empty() {
+        return Err(Reject::Malformed("SecRule without target".into()));
+    }
+    let mut targets = Vec::new();
+    for value in tokens[0].split('|') {
+        match map_target(value) {
+            Some(target) => targets.push(target),
+            // Silently dropping a target would change what the rule matches,
+            // so an unknown target is out of scope and reported, never partial.
+            None => return Err(Reject::Unsupported(format!("unsupported target `{value}`"))),
+        }
+    }
     if targets.is_empty() {
-        return None;
+        return Err(Reject::Malformed("SecRule without target".into()));
     }
     let (negated, operator) = if let Some(rest) = tokens[1].strip_prefix('!') {
         (true, rest)
     } else {
         (false, tokens[1].as_str())
     };
-    let op = if let Some(pattern) = operator.strip_prefix("@rx ") {
-        // 933160 is the CRS rule that matches a PHP C-style comment containing
-        // CR/LF (`exec\t/*foo\r\nbar*/\t()`). PCRE dotall is required for that
-        // one rule; applying it to every @rx over-blocks unrelated CRS cases.
-        let pattern = if actions.contains("id:933160") {
-            format!("(?s){pattern}")
+    let op =
+        if let Some(pattern) = operator.strip_prefix("@rx ") {
+            // 933160 is the CRS rule that matches a PHP C-style comment containing
+            // CR/LF (`exec\t/*foo\r\nbar*/\t()`). PCRE dotall is required for that
+            // one rule; applying it to every @rx over-blocks unrelated CRS cases.
+            let pattern = if actions.contains("id:933160") {
+                format!("(?s){pattern}")
+            } else {
+                pattern.to_string()
+            };
+            match regex::Regex::new(&pattern) {
+                Ok(re) => CrsOp::Rx(re),
+                Err(_) => match fancy_regex::Regex::new(&pattern) {
+                    Ok(re) => CrsOp::FancyRx(std::sync::Arc::new(re)),
+                    Err(_) => return Err(Reject::Malformed("invalid @rx pattern".into())),
+                },
+            }
+        } else if let Some(v) = operator.strip_prefix("@contains ") {
+            CrsOp::Contains(v.to_string())
+        } else if let Some(v) = operator.strip_prefix("@streq ") {
+            CrsOp::Eq(v.to_string())
+        } else if let Some(v) = operator.strip_prefix("@beginsWith ") {
+            CrsOp::StartsWith(v.to_string())
+        } else if let Some(v) = operator.strip_prefix("@pm ") {
+            CrsOp::Pm(v.split_whitespace().map(str::to_string).collect())
+        } else if let Some(v) = operator.strip_prefix("@eq ") {
+            CrsOp::EqNum(v.trim().to_string())
+        } else if let Some(v) = operator.strip_prefix("@ge ") {
+            CrsOp::Ge(v.trim().to_string())
+        } else if let Some(v) = operator.strip_prefix("@gt ") {
+            CrsOp::Gt(v.trim().to_string())
+        } else if let Some(v) = operator.strip_prefix("@le ") {
+            CrsOp::Le(v.trim().to_string())
+        } else if let Some(v) = operator.strip_prefix("@lt ") {
+            CrsOp::Lt(v.trim().to_string())
+        } else if let Some(v) = operator.strip_prefix("@within ") {
+            CrsOp::Within(v.split_whitespace().map(str::to_string).collect())
+        } else if let Some(v) = operator.strip_prefix("@endsWith ") {
+            CrsOp::EndsWith(v.to_string())
+        } else if operator.trim() == "@verifyCC" {
+            CrsOp::VerifyCc
+        } else if operator.trim() == "@validateUtf8Encoding" {
+            CrsOp::ValidateUtf8Encoding
+        } else if operator.trim() == "@validateUrlEncoding" {
+            CrsOp::ValidateUrlEncoding
+        } else if let Some(v) = operator.strip_prefix("@ipMatch ") {
+            CrsOp::IpMatch(v.split_whitespace().map(str::to_string).collect())
+        } else if let Some(v) = operator.strip_prefix("@ipMatchFromFile ") {
+            CrsOp::IpMatch(load_list(base_dir, v.trim()).ok_or_else(|| {
+                Reject::Malformed(format!("cannot read @ipMatchFromFile `{}`", v.trim()))
+            })?)
+        } else if let Some(v) = operator.strip_prefix("@pmFromFile ") {
+            CrsOp::Pm(load_list(base_dir, v.trim()).ok_or_else(|| {
+                Reject::Malformed(format!("cannot read @pmFromFile `{}`", v.trim()))
+            })?)
+        } else if operator.trim() == "@unconditionalMatch" {
+            CrsOp::Unconditional
+        } else if operator.trim() == "@detectSQLi" {
+            CrsOp::DetectSqli
+        } else if operator.trim() == "@detectXSS" {
+            CrsOp::DetectXss
+        } else if let Some(v) = operator.strip_prefix("@validateByteRange ") {
+            let ranges = v
+                .split(',')
+                .filter_map(|part| {
+                    let part = part.trim();
+                    if let Some((start, end)) = part.split_once('-') {
+                        Some((start.trim().parse().ok()?, end.trim().parse().ok()?))
+                    } else {
+                        let byte = part.parse::<u8>().ok()?;
+                        Some((byte, byte))
+                    }
+                })
+                .collect::<Vec<(u8, u8)>>();
+            CrsOp::ValidateByteRange(ranges)
+        } else if operator.trim() == "@noMatch" {
+            CrsOp::NoMatch
         } else {
-            pattern.to_string()
+            return Err(Reject::Unsupported(format!(
+                "unsupported operator `{operator}`"
+            )));
         };
-        match regex::Regex::new(&pattern) {
-            Ok(re) => CrsOp::Rx(re),
-            Err(_) => match fancy_regex::Regex::new(&pattern) {
-                Ok(re) => CrsOp::FancyRx(std::sync::Arc::new(re)),
-                Err(_) => return None,
-            },
-        }
-    } else if let Some(v) = operator.strip_prefix("@contains ") {
-        CrsOp::Contains(v.to_string())
-    } else if let Some(v) = operator.strip_prefix("@streq ") {
-        CrsOp::Eq(v.to_string())
-    } else if let Some(v) = operator.strip_prefix("@beginsWith ") {
-        CrsOp::StartsWith(v.to_string())
-    } else if let Some(v) = operator.strip_prefix("@pm ") {
-        CrsOp::Pm(v.split_whitespace().map(str::to_string).collect())
-    } else if let Some(v) = operator.strip_prefix("@eq ") {
-        CrsOp::EqNum(v.trim().to_string())
-    } else if let Some(v) = operator.strip_prefix("@ge ") {
-        CrsOp::Ge(v.trim().to_string())
-    } else if let Some(v) = operator.strip_prefix("@gt ") {
-        CrsOp::Gt(v.trim().to_string())
-    } else if let Some(v) = operator.strip_prefix("@le ") {
-        CrsOp::Le(v.trim().to_string())
-    } else if let Some(v) = operator.strip_prefix("@lt ") {
-        CrsOp::Lt(v.trim().to_string())
-    } else if let Some(v) = operator.strip_prefix("@within ") {
-        CrsOp::Within(v.split_whitespace().map(str::to_string).collect())
-    } else if let Some(v) = operator.strip_prefix("@endsWith ") {
-        CrsOp::EndsWith(v.to_string())
-    } else if operator.trim() == "@verifyCC" {
-        CrsOp::VerifyCc
-    } else if operator.trim() == "@validateUtf8Encoding" {
-        CrsOp::ValidateUtf8Encoding
-    } else if operator.trim() == "@validateUrlEncoding" {
-        CrsOp::ValidateUrlEncoding
-    } else if let Some(v) = operator.strip_prefix("@ipMatch ") {
-        CrsOp::IpMatch(v.split_whitespace().map(str::to_string).collect())
-    } else if let Some(v) = operator.strip_prefix("@ipMatchFromFile ") {
-        CrsOp::IpMatch(load_list(base_dir, v.trim())?)
-    } else if let Some(v) = operator.strip_prefix("@pmFromFile ") {
-        CrsOp::Pm(load_list(base_dir, v.trim())?)
-    } else if operator.trim() == "@unconditionalMatch" {
-        CrsOp::Unconditional
-    } else if operator.trim() == "@detectSQLi" {
-        CrsOp::DetectSqli
-    } else if operator.trim() == "@detectXSS" {
-        CrsOp::DetectXss
-    } else if let Some(v) = operator.strip_prefix("@validateByteRange ") {
-        let ranges = v
-            .split(',')
-            .filter_map(|part| {
-                let part = part.trim();
-                if let Some((start, end)) = part.split_once('-') {
-                    Some((start.trim().parse().ok()?, end.trim().parse().ok()?))
-                } else {
-                    let byte = part.parse::<u8>().ok()?;
-                    Some((byte, byte))
-                }
-            })
-            .collect::<Vec<(u8, u8)>>();
-        CrsOp::ValidateByteRange(ranges)
-    } else if operator.trim() == "@noMatch" {
-        CrsOp::NoMatch
-    } else {
-        return None;
-    };
     let ParsedActions {
         id: rule_id,
         score,
@@ -623,9 +776,16 @@ fn parse_rule_tokens(
         ctl_detection_only,
         ctl_remove_ids,
         unsupported_transforms,
+        unsupported_actions,
     } = parse_actions(actions);
-    if (rule_id == 0 && !allow_no_id) || !unsupported_transforms.is_empty() {
-        return None;
+    if rule_id == 0 && !allow_no_id {
+        return Err(Reject::Malformed("SecRule without id".into()));
+    }
+    if !unsupported_transforms.is_empty() {
+        return Err(Reject::Unsupported(format!(
+            "unsupported transform(s): {}",
+            unsupported_transforms.join(", ")
+        )));
     }
     let mut phases = vec![WafPhase::RequestHeaders, WafPhase::RequestBodyComplete];
     let mut explicit_phase = false;
@@ -650,7 +810,7 @@ fn parse_rule_tokens(
             _ => {}
         }
     }
-    Some((
+    Ok((
         CrsRuleInput {
             id: if rule_id == 0 {
                 "chain".to_string()
@@ -676,6 +836,7 @@ fn parse_rule_tokens(
             paranoia_level: parse_paranoia_level(actions),
             capture: actions.split(',').any(|a| a.trim() == "capture"),
         },
+        unsupported_actions,
         chain,
     ))
 }
@@ -823,6 +984,10 @@ pub fn parse_rule_file_with_base(
         std::collections::HashMap::new();
     let mut discarded = 0usize;
     let mut diagnostics = Vec::new();
+    let mut unsupported = 0usize;
+    let mut unsupported_diagnostics = Vec::new();
+    let mut ignored_actions: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     let mut visited = std::collections::HashSet::new();
     if let Some(base) = base_dir {
         if let Ok(canonical) = base.canonicalize() {
@@ -868,8 +1033,24 @@ pub fn parse_rule_file_with_base(
         if let Some(rest) = line.strip_prefix("SecAction ") {
             let tokens = tokenize(rest);
             if let Some(actions) = tokens.first() {
-                if let Some(rule) = parse_action_only(actions) {
-                    rules.push(rule);
+                match parse_action_only(actions) {
+                    Ok((rule, ignored)) => {
+                        for name in ignored {
+                            *ignored_actions.entry(name).or_insert(0) += 1;
+                        }
+                        rules.push(rule);
+                    }
+                    Err(Reject::Malformed(reason)) => {
+                        discarded += 1;
+                        diagnostics.push(format!(
+                            "line {line_no}: discarded SecAction (malformed): {reason}"
+                        ));
+                    }
+                    Err(Reject::Unsupported(reason)) => {
+                        unsupported += 1;
+                        unsupported_diagnostics
+                            .push(format!("line {line_no}: unsupported SecAction: {reason}"));
+                    }
                 }
             }
             continue;
@@ -884,43 +1065,72 @@ pub fn parse_rule_file_with_base(
         if !line.starts_with("SecRule ") {
             continue;
         }
-        let Some((mut rule, mut chained)) =
-            parse_rule_tokens(&tokenize(&line["SecRule ".len()..]), base_dir, false)
-        else {
-            discarded += 1;
-            diagnostics.push(format!(
-                "line {line_no}: rule {}: discarded SecRule (malformed or unsupported operator): {}",
-                rule_id_hint(line),
-                truncate_rule_line(line)
-            ));
-            continue;
-        };
-        let mut chain_broken = false;
+        let (mut rule, ignored, mut chained) =
+            match parse_rule_tokens(&tokenize(&line["SecRule ".len()..]), base_dir, false) {
+                Ok(parsed) => parsed,
+                Err(Reject::Malformed(reason)) => {
+                    discarded += 1;
+                    diagnostics.push(format!(
+                        "line {line_no}: rule {}: discarded SecRule (malformed): {reason}: {}",
+                        rule_id_hint(line),
+                        truncate_rule_line(line),
+                    ));
+                    continue;
+                }
+                Err(Reject::Unsupported(reason)) => {
+                    unsupported += 1;
+                    unsupported_diagnostics.push(format!(
+                        "line {line_no}: rule {}: unsupported SecRule: {reason}",
+                        rule_id_hint(line),
+                    ));
+                    continue;
+                }
+            };
+        for name in ignored {
+            *ignored_actions.entry(name).or_insert(0) += 1;
+        }
+        let mut chain_reject: Option<Reject> = None;
         while chained {
             while i < lines.len() && (lines[i].is_empty() || lines[i].starts_with('#')) {
                 i += 1;
             }
             if i >= lines.len() || !lines[i].starts_with("SecRule ") {
-                chain_broken = true;
+                chain_reject = Some(Reject::Malformed("incomplete chain".into()));
                 break;
             }
-            let Some((next, next_chained)) =
-                parse_rule_tokens(&tokenize(&lines[i]["SecRule ".len()..]), base_dir, true)
-            else {
-                chain_broken = true;
-                break;
-            };
-            i += 1;
-            rule.chain.push(next);
-            chained = next_chained;
+            match parse_rule_tokens(&tokenize(&lines[i]["SecRule ".len()..]), base_dir, true) {
+                Ok((next, next_ignored, next_chained)) => {
+                    for name in next_ignored {
+                        *ignored_actions.entry(name).or_insert(0) += 1;
+                    }
+                    i += 1;
+                    rule.chain.push(next);
+                    chained = next_chained;
+                }
+                Err(reject) => {
+                    chain_reject = Some(reject);
+                    break;
+                }
+            }
         }
-        if chain_broken {
-            discarded += 1;
-            diagnostics.push(format!(
-                "line {line_no}: rule {}: discarded SecRule with incomplete or invalid chain: {}",
-                rule_id_hint(line),
-                truncate_rule_line(line)
-            ));
+        if let Some(reject) = chain_reject {
+            match reject {
+                Reject::Malformed(reason) => {
+                    discarded += 1;
+                    diagnostics.push(format!(
+                        "line {line_no}: rule {}: discarded SecRule with invalid chain: {reason}: {}",
+                        rule_id_hint(line),
+                        truncate_rule_line(line),
+                    ));
+                }
+                Reject::Unsupported(reason) => {
+                    unsupported += 1;
+                    unsupported_diagnostics.push(format!(
+                        "line {line_no}: rule {}: unsupported SecRule chain member: {reason}",
+                        rule_id_hint(line),
+                    ));
+                }
+            }
             continue;
         }
         if !rule.explicit_action {
@@ -950,6 +1160,9 @@ pub fn parse_rule_file_with_base(
         rules,
         discarded,
         diagnostics,
+        unsupported,
+        unsupported_diagnostics,
+        ignored_actions: ignored_actions.into_iter().collect(),
     }
 }
 
@@ -1261,6 +1474,159 @@ fn cmd_line(value: &str) -> String {
     out
 }
 
+/// ModSecurity `t:utf8toUnicode`: replace every non-ASCII code point with its
+/// `%u` form (lowercase hex, padded to at least four digits), exactly as
+/// `utf8_to_unicode.cc` does for a valid UTF-8 input.
+fn utf8_to_unicode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 8);
+    for ch in value.chars() {
+        let code = ch as u32;
+        if code < 0x80 {
+            out.push(ch);
+        } else {
+            out.push_str(&format!("%u{code:04x}"));
+        }
+    }
+    out
+}
+
+/// ModSecurity `t:normalizePathWin`: port of `normalise_path.cc` with
+/// `win = true` (backslashes become separators, `.`/`..` are resolved and the
+/// result never escapes the root).
+fn normalize_path_win(value: &str) -> String {
+    let input = value.as_bytes();
+    if input.is_empty() {
+        return String::new();
+    }
+    let mut buf = input.to_vec();
+    let end = buf.len() - 1;
+    let relative = !(buf[0] == b'/' || buf[0] == b'\\');
+    let trailing = buf[end] == b'/' || buf[end] == b'\\';
+    let mut hitroot = false;
+    let mut done = false;
+    let mut src = 0usize;
+    let mut dst = 0usize;
+    while !done && src <= end && dst <= end {
+        // Windows: backslashes are separators too.
+        if buf[src] == b'\\' {
+            buf[src] = b'/';
+        }
+        if src < end && buf[src + 1] == b'\\' {
+            buf[src + 1] = b'/';
+        }
+        let mut copy = true;
+        if src == end {
+            done = true;
+        } else if buf[src + 1] != b'/' {
+            // Mid-segment: nothing to normalize.
+        } else if buf[src] == b'/' {
+            // Empty segment: the copy step collapses consecutive slashes.
+        } else if buf[src] == b'.' {
+            if dst > 0 && buf[dst - 1] == b'.' {
+                // `..` back-reference.
+                if relative && (hitroot || dst <= 2) {
+                    hitroot = true;
+                } else {
+                    let mut d = dst as isize - 3;
+                    while d > 0 && buf[d as usize] != b'/' {
+                        d -= 1;
+                    }
+                    if d <= 0 {
+                        hitroot = true;
+                        dst = 0;
+                        if !relative && src == end {
+                            dst = 1;
+                        }
+                    } else {
+                        dst = d as usize;
+                    }
+                    if done {
+                        copy = false;
+                    } else {
+                        src += 1;
+                    }
+                }
+            } else if dst == 0 {
+                // `.` at the root: drop it.
+                if done {
+                    copy = false;
+                } else {
+                    src += 1;
+                }
+            } else if buf[dst - 1] == b'/' {
+                // `./` self-reference: drop the dot.
+                if done {
+                    copy = false;
+                } else {
+                    dst -= 1;
+                    src += 1;
+                }
+            }
+        } else if dst > 0 {
+            hitroot = false;
+        }
+        if copy {
+            if buf[src] == b'/' {
+                while src < end && (buf[src + 1] == b'/' || buf[src + 1] == b'\\') {
+                    src += 1;
+                }
+                if relative && dst == 0 {
+                    src += 1;
+                    continue;
+                }
+            }
+            buf[dst] = buf[src];
+            dst += 1;
+            src += 1;
+        }
+    }
+    if !trailing && dst > 0 && buf[dst - 1] == b'/' {
+        dst -= 1;
+    }
+    String::from_utf8_lossy(&buf[..dst]).to_string()
+}
+
+/// ModSecurity `t:removeCommentsChar`: drop `/*`, `*/`, `<!--`, `-->`, `--`
+/// and `#` markers, keeping the remaining bytes untouched.
+fn remove_comments_char(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len()
+            && ((bytes[i] == b'/' && bytes[i + 1] == b'*')
+                || (bytes[i] == b'*' && bytes[i + 1] == b'/'))
+        {
+            i += 2;
+        } else if i + 3 < bytes.len() && &bytes[i..i + 4] == b"<!--" {
+            i += 4;
+        } else if i + 2 < bytes.len() && &bytes[i..i + 3] == b"-->" {
+            i += 3;
+        } else if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+            i += 2;
+        } else if bytes[i] == b'#' {
+            i += 1;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// ModSecurity `t:sha1`: replace the value with the raw 20-byte SHA-1 digest.
+///
+/// The transform pipeline is text, so each digest byte is carried as the code
+/// point of the same value; `hexEncode` maps those code points back to the
+/// original bytes (CRS 901410/901320 use `t:sha1,t:hexEncode`).
+fn sha1_digest(value: &str) -> String {
+    use sha1::Digest;
+    sha1::Sha1::digest(value.as_bytes())
+        .iter()
+        .map(|byte| char::from(*byte))
+        .collect()
+}
+
 pub(crate) fn apply_transforms(value: &str, transforms: &[CrsTransform]) -> String {
     let mut out = value.to_string();
     for transform in transforms {
@@ -1313,10 +1679,23 @@ pub(crate) fn apply_transforms(value: &str, transforms: &[CrsTransform]) -> Stri
                 String::from_utf8_lossy(&decoded).to_string()
             }
             CrsTransform::Length => out.chars().count().to_string(),
-            CrsTransform::HexEncode => out
-                .bytes()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>(),
+            CrsTransform::HexEncode => {
+                // A byte-level digest (see `sha1_digest`) is carried as the
+                // code point of each byte, so code points up to U+00FF map back
+                // to exactly one byte; anything above keeps its UTF-8 bytes.
+                let mut hex = String::with_capacity(out.len() * 2);
+                for ch in out.chars() {
+                    let code = ch as u32;
+                    if code <= 0xFF {
+                        hex.push_str(&format!("{code:02x}"));
+                    } else {
+                        for byte in ch.to_string().bytes() {
+                            hex.push_str(&format!("{byte:02x}"));
+                        }
+                    }
+                }
+                hex
+            }
             CrsTransform::JsDecode => js_decode(&out),
             CrsTransform::CssDecode => css_decode(&out),
             CrsTransform::Base64DecodeExt => {
@@ -1333,6 +1712,10 @@ pub(crate) fn apply_transforms(value: &str, transforms: &[CrsTransform]) -> Stri
             CrsTransform::EscapeSeqDecode => escape_seq_decode(&out),
             CrsTransform::ReplaceComments => replace_comments(&out),
             CrsTransform::CmdLine => cmd_line(&out),
+            CrsTransform::Utf8ToUnicode => utf8_to_unicode(&out),
+            CrsTransform::NormalizePathWin => normalize_path_win(&out),
+            CrsTransform::RemoveCommentsChar => remove_comments_char(&out),
+            CrsTransform::Sha1 => sha1_digest(&out),
         };
     }
     out
@@ -1402,6 +1785,99 @@ mod tests {
                 .any(|violation| violation.rule_id.as_str() == "1"),
             "cookie name was not scanned: {:?}",
             decision.violations
+        );
+    }
+
+    #[test]
+    fn utf8_to_unicode_matches_modsecurity_semantics() {
+        // 2/3/4-byte UTF-8 sequences become %uXXXX with lowercase hex and at
+        // least four digits (ModSecurity utf8_to_unicode.cc).
+        assert_eq!(
+            apply_transforms("ascii", &[CrsTransform::Utf8ToUnicode]),
+            "ascii"
+        );
+        assert_eq!(
+            apply_transforms("é", &[CrsTransform::Utf8ToUnicode]),
+            "%u00e9"
+        );
+        assert_eq!(
+            apply_transforms("€", &[CrsTransform::Utf8ToUnicode]),
+            "%u20ac"
+        );
+        assert_eq!(
+            apply_transforms("😀", &[CrsTransform::Utf8ToUnicode]),
+            "%u1f600"
+        );
+    }
+
+    #[test]
+    fn normalize_path_win_matches_modsecurity_semantics() {
+        assert_eq!(
+            apply_transforms("/foo//bar", &[CrsTransform::NormalizePathWin]),
+            "/foo/bar"
+        );
+        assert_eq!(
+            apply_transforms("/foo/./bar/../baz", &[CrsTransform::NormalizePathWin]),
+            "/foo/baz"
+        );
+        assert_eq!(
+            apply_transforms("C:\\Windows\\System32", &[CrsTransform::NormalizePathWin]),
+            "C:/Windows/System32"
+        );
+        assert_eq!(
+            apply_transforms("/../../etc/passwd", &[CrsTransform::NormalizePathWin]),
+            "/etc/passwd"
+        );
+    }
+
+    #[test]
+    fn remove_comments_char_strips_markers() {
+        assert_eq!(
+            apply_transforms("a/*b*/c<!--d-->e--f#g", &[CrsTransform::RemoveCommentsChar]),
+            "abcdefg"
+        );
+    }
+
+    #[test]
+    fn sha1_then_hex_encode_matches_the_digest() {
+        // RFC 3174 test vector; CRS 901410/901320 use t:sha1,t:hexEncode.
+        assert_eq!(
+            apply_transforms("abc", &[CrsTransform::Sha1, CrsTransform::HexEncode]),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
+    }
+
+    #[test]
+    fn negated_collection_targets_map_to_except_variants() {
+        let crs = parse_rule_file(
+            "t",
+            "SecRule ARGS|!ARGS_NAMES:/^x$/|!REQUEST_COOKIES:/_pk_ref/|!REQUEST_COOKIES_NAMES:/^a/ \"@contains x\" \"id:1,deny\"\n",
+            5,
+        );
+        assert_eq!(crs.discarded, 0, "{:?}", crs.diagnostics);
+        assert_eq!(crs.unsupported, 0, "{:?}", crs.unsupported_diagnostics);
+        let targets = &crs.rules[0].targets;
+        assert!(targets.contains(&CrsTarget::ArgNameExcept("^x$".into())));
+        assert!(targets.contains(&CrsTarget::CookieNamedExcept("_pk_ref".into())));
+        assert!(targets.contains(&CrsTarget::CookieNameNamedExcept("^a".into())));
+    }
+
+    #[test]
+    fn crs_chain_with_sha1_and_conditional_collections_loads() {
+        // The CRS 901320 three-rule chain: conditional collections, sha1 and
+        // an initcol action this engine reports but does not model.
+        let rules = "SecRule &TX:ENABLE_DEFAULT_COLLECTIONS \"@eq 1\" \"id:901320,phase:1,pass,nolog,chain\"\n    SecRule TX:ENABLE_DEFAULT_COLLECTIONS \"@eq 1\" \"chain\"\n        SecRule TX:ua_hash \"@unconditionalMatch\" \"t:none,t:sha1,t:hexEncode,initcol:global=global\"\n";
+        let crs = parse_rule_file("t", rules, 5);
+        assert_eq!(crs.discarded, 0, "{:?}", crs.diagnostics);
+        assert_eq!(crs.unsupported, 0, "{:?}", crs.unsupported_diagnostics);
+        assert_eq!(crs.rules.len(), 1);
+        assert_eq!(crs.rules[0].chain.len(), 2);
+        assert!(
+            crs.ignored_actions
+                .iter()
+                .any(|(name, _)| name == "initcol"),
+            "{:?}",
+            crs.ignored_actions
         );
     }
 
