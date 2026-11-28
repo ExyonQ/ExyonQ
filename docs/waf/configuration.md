@@ -29,8 +29,9 @@ nested chain forms the parser does not model; 36 `SecRule` lines are reported
 as discarded/unsupported. Under the `closed_for_invalid_rules` default the
 engine refuses to start with that file, which is the opposite of what a CRS
 differential needs. Use `fail_policy = "best_effort"` when loading an upstream
-CRS file (the `scripts/gates/crs-diff.py` gate does exactly that and prints the
-diagnostics) and keep the closed default for native rules. The unsupported
+CRS file (the `scripts/gates/crs-diff.py` gate does exactly that, prints the
+diagnostics and reports `excluded_unsupported=<n>` for the corpus cases of the
+discarded rule ids) and keep the closed default for native rules. The unsupported
 subset is a documented scope gap; see the tracking issue for the parser
 expansion. `best_effort` never silences the gap: `CompileStats` carries one
 diagnostic per discarded line and the install path logs them.

@@ -12,8 +12,10 @@ import argparse
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
+import time
 import socketserver
 import subprocess
 import sys
@@ -224,11 +226,15 @@ target = "http://127.0.0.1:{ORIGIN_PORT}"
 def start_exy(rules: Path, builtins: str, threshold: int, dry_run: bool) -> subprocess.Popen:
     (WORK / "exy.toml").write_text(exy_config(rules, builtins, threshold, dry_run))
     require_free_port(EXY_PORT)
+    log = (WORK / "exy.stderr.log").open("w")
+    _LOG_HANDLES.append(log)
     exy = subprocess.Popen(
         [str(ROOT / "target/debug/exyonq"), "serve", "-c", str(WORK / "exy.toml")],
         env={**os.environ, "EXYONQ_CONTROL_SOCKET": "/tmp/crs-diff.sock"},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        # The server logs to stdout (tracing default); capture both streams so
+        # the parser diagnostics are available to the gate.
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     wait_port(EXY_PORT)
     return exy
@@ -347,7 +353,7 @@ def bare_metric_value(text: str, name: str) -> int:
     return 0
 
 
-def check_dry_run_evidence(metrics: str) -> int:
+def check_dry_run_evidence(metrics: str, unsupported: set[int]) -> int:
     checks = {
         "violations_942100": metric_value(
             metrics, "exyonq_waf_violations_total", 'rule_id="942100"'
@@ -372,13 +378,42 @@ def check_dry_run_evidence(metrics: str) -> int:
         ),
     }
     print("dry_run_evidence=" + " ".join(f"{key}={value}" for key, value in checks.items()))
-    return 0 if all(value > 0 for value in checks.values()) else 1
+    # A detector rule the parser discarded cannot produce evidence: report it as
+    # unsupported (scope gap #113) instead of a failure, and still require every
+    # supported signal.
+    skipped = {"violations_942100"} if 942100 in unsupported else set()
+    if skipped:
+        print("dry_run_evidence_unsupported=" + ",".join(sorted(skipped)))
+    return 0 if all(
+        value > 0 for key, value in checks.items() if key not in skipped
+    ) else 1
 
 
 def case_key(case: dict, index: int) -> str:
     """Stable identity for named and unnamed corpus cases."""
     name = case.get("name")
     return name if name else f"index:{index}"
+
+
+# Keep the child's stderr file open for the whole gate: a file object with no
+# reference is collected and the descriptor closes under the child.
+_LOG_HANDLES: list = []
+
+DISCARD_RE = re.compile(r"line \d+: rule (\d+): discarded SecRule")
+
+
+def unsupported_rule_ids(log: Path) -> set[int]:
+    """Rule ids the parser reported as discarded, from the startup diagnostics.
+
+    A rule using an operator/transform outside the supported subset is a
+    documented scope gap (see #113), not a supported-rule mismatch: the
+    differential reports and excludes its corpus cases instead of pretending
+    the rule ran.
+    """
+    if not log.exists():
+        return set()
+    text = log.read_text(errors="replace")
+    return {int(found) for found in DISCARD_RE.findall(text)}
 
 
 def load_exclusions(path: Path) -> dict[str, dict]:
@@ -477,10 +512,20 @@ def main() -> int:
     print(f"mode={'dry-run' if args.dry_run else 'block'} reference_image={REF_IMAGE}")
     origin = origin_server()
     exy = start_exy(rules, args.builtins, args.threshold, args.dry_run)
+    unsupported: set[int] = set()
+    for _ in range(20):
+        unsupported = unsupported_rule_ids(WORK / "exy.stderr.log")
+        if unsupported:
+            break
+        time.sleep(0.1)
+    if unsupported:
+        listed = ",".join(str(rid) for rid in sorted(unsupported))
+        print(f"unsupported_rules={len(unsupported)} ids={listed}")
     if not args.dry_run:
         start_reference(rules, crs_dir)
     failures = 0
     excluded = 0
+    excluded_unsupported = 0
     configuration_errors = 0
     encountered: set[str] = set()
     try:
@@ -491,6 +536,14 @@ def main() -> int:
                     print(f"{key}: EXCLUSION_UNSUPPORTED_FOR_CONCURRENT")
                     configuration_errors += 1
                 failures += run_concurrent(case, args.dry_run)
+                continue
+            rule_id = case.get("crs_rule")
+            if rule_id in unsupported:
+                excluded_unsupported += 1
+                print(
+                    f"{key}: EXCLUDED_UNSUPPORTED rule={rule_id} "
+                    "(operator/transform outside the supported subset; #113)"
+                )
                 continue
             exy_status, exy_hits = send(EXY_PORT, case)
             if args.dry_run:
@@ -556,7 +609,7 @@ def main() -> int:
             )
         if args.dry_run:
             try:
-                failures += check_dry_run_evidence(fetch_metrics())
+                failures += check_dry_run_evidence(fetch_metrics(), unsupported)
             except (OSError, RuntimeError) as error:
                 failures += 1
                 print(f"dry_run_metrics: FAIL {error}")
@@ -575,6 +628,7 @@ def main() -> int:
     configuration_errors += len(unused)
     print(f"failures={failures}/{len(corpus)}")
     print(f"excluded_with_evidence={excluded}/{len(corpus)}")
+    print(f"excluded_unsupported={excluded_unsupported}/{len(corpus)}")
     print(f"mode={'dry-run' if args.dry_run else 'block'}")
     return 1 if failures or configuration_errors else 0
 

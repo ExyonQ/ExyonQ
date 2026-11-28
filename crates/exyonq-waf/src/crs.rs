@@ -889,7 +889,8 @@ pub fn parse_rule_file_with_base(
         else {
             discarded += 1;
             diagnostics.push(format!(
-                "line {line_no}: discarded SecRule (malformed or unsupported operator): {}",
+                "line {line_no}: rule {}: discarded SecRule (malformed or unsupported operator): {}",
+                rule_id_hint(line),
                 truncate_rule_line(line)
             ));
             continue;
@@ -916,7 +917,8 @@ pub fn parse_rule_file_with_base(
         if chain_broken {
             discarded += 1;
             diagnostics.push(format!(
-                "line {line_no}: discarded SecRule with incomplete or invalid chain: {}",
+                "line {line_no}: rule {}: discarded SecRule with incomplete or invalid chain: {}",
+                rule_id_hint(line),
                 truncate_rule_line(line)
             ));
             continue;
@@ -948,6 +950,23 @@ pub fn parse_rule_file_with_base(
         rules,
         discarded,
         diagnostics,
+    }
+}
+
+/// Best-effort `id:NNN` extracted from a raw rule line, for diagnostics that
+/// are truncated before the action list is reached.
+fn rule_id_hint(line: &str) -> String {
+    let Some(pos) = line.find("id:") else {
+        return "unknown".into();
+    };
+    let digits: String = line[pos + 3..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        "unknown".into()
+    } else {
+        digits
     }
 }
 
