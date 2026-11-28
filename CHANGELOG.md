@@ -28,7 +28,7 @@ VERSION = 0.9.3
 PUBLICATION_STATUS = PREPARED (patch committed as C; signed tag v0.9.3 belongs on seal commit S)
 TAG = v0.9.3 on S (signed annotated tag; see docs/release/v0.9.3.md)
 BASE_TAG = v0.9.2
-DEPENDENCY = wasmtime =49.0.6 (was =49.0.5)
+DEPENDENCY = wasmtime =51.0.0 (0.9.2 shipped =49.0.5; includes the 49.0.6 fix for RUSTSEC-2026-0566..0572)
 ADVISORIES = RUSTSEC-2026-0566 .. RUSTSEC-2026-0572, cleared by the bump; none waived
 RELEASE_NOTES = docs/release/v0.9.3.md
 PENDING_OWNER = Docker Hub mirror credential, cosign layer, stability sign-off
@@ -117,7 +117,8 @@ PENDING_OWNER = Docker Hub mirror credential, cosign layer, stability sign-off
   and field. Every 5xx response also emits one correlated `server error
   response` line with the internal `request_id`, so a 5xx is no longer
   triageless.
-- `wasmtime` 49.0.6 replaces 49.0.5, clearing RUSTSEC-2026-0566 through
+- `wasmtime` 51.0.0 ships (0.9.2 had 49.0.5; the 49.0.6 patch cleared
+  RUSTSEC-2026-0566 through
   -0572; no advisory is waived. This is the only dependency change in the patch,
   so the 0.9.2 artifacts that embed 49.0.5 are superseded rather than patched.
 - The local verification of this patch (toolchain, wasm-host and workspace
