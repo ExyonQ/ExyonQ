@@ -24,7 +24,7 @@ ARG EXYONQ_SOURCE_TAG=""
 
 # Wolfi builder with the workspace-pinned rustc 1.99.1. The -dev variant carries
 # apk so the build can add perl/git when a crate's build script needs them.
-FROM cgr.dev/chainguard/rust:latest-dev@sha256:fc2f649f494a11960920b7bd776770b89a22251e3dc6f3ffc47fa9d5b5f9a2ef AS builder
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:f7e4d2660ff90a84a9cc510a96c3a90c555961b9b92b9bcd74e56667b2f3e8e6 AS builder
 # Chainguard images default to nonroot; the build stage needs root for apk and
 # for installing cargo-auditable under /usr/local. The runtime stays nonroot.
 USER root
@@ -80,7 +80,7 @@ RUN cargo install cargo-auditable --locked --root /usr/local \
 
 # Wolfi runtime: no shell, no package manager — minimal CVE surface.
 # Provides glibc, ca-certificates and the nonroot user (uid 65532).
-FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:671a621016fb33812136dea6182b1db957996d3c8c618187aaf86abd9b14af53 AS runtime
+FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:db4aee413b04fe11b03de02385e3ae184eaf5c91d92ec413daf71416561a79e8 AS runtime
 ARG EXYONQ_VERSION
 ARG EXYONQ_GIT_REVISION
 COPY --from=builder /app/target/release/exyonq /usr/local/bin/exyonq

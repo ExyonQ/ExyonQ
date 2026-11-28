@@ -557,6 +557,85 @@ jobs:
           tags: |
             ghcr.io/exyonq/exyonq-wordpress:${{ needs.docker.outputs.version }}
 
+  scout-server:
+    # Owner rule: no image is published before Docker Scout reports zero fixable
+    # vulnerabilities. GHCR is the staging registry; the mirror and the GitHub
+    # Release wait for this job.
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Docker Scout CLI (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          ver=1.29.0
+          curl -fsSL -o /tmp/docker-scout.tar.gz \
+            "https://github.com/docker/scout-cli/releases/download/v${ver}/docker-scout_${ver}_linux_amd64.tar.gz"
+          echo "9157cdc9372b478a8cd51dd53f5e9c74a7e34056ea291c65520bf76016fa72f4  /tmp/docker-scout.tar.gz" | sha256sum -c -
+          sudo mkdir -p /usr/local/lib/docker/cli-plugins
+          sudo tar -xzf /tmp/docker-scout.tar.gz -C /usr/local/lib/docker/cli-plugins docker-scout
+          sudo chmod 0755 /usr/local/lib/docker/cli-plugins/docker-scout
+          docker scout version
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker Scout gate (server image)
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/exyonq/exyonq:${{ needs.docker.outputs.version }}"
+          docker pull "$ref"
+          bash scripts/release/scout-gate.sh --image "$ref" --policy fixable \
+            --report "scout-server.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: scout-server
+          path: scout-server.txt
+          if-no-files-found: ignore
+
+  scout-wordpress:
+    needs: [docker, docker-wordpress]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Docker Scout CLI (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          ver=1.29.0
+          curl -fsSL -o /tmp/docker-scout.tar.gz \
+            "https://github.com/docker/scout-cli/releases/download/v${ver}/docker-scout_${ver}_linux_amd64.tar.gz"
+          echo "9157cdc9372b478a8cd51dd53f5e9c74a7e34056ea291c65520bf76016fa72f4  /tmp/docker-scout.tar.gz" | sha256sum -c -
+          sudo mkdir -p /usr/local/lib/docker/cli-plugins
+          sudo tar -xzf /tmp/docker-scout.tar.gz -C /usr/local/lib/docker/cli-plugins docker-scout
+          sudo chmod 0755 /usr/local/lib/docker/cli-plugins/docker-scout
+          docker scout version
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker Scout gate (WordPress image)
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/exyonq/exyonq-wordpress:${{ needs.docker.outputs.version }}"
+          docker pull "$ref"
+          bash scripts/release/scout-gate.sh --image "$ref" --policy fixable \
+            --report "scout-wordpress.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: scout-wordpress
+          path: scout-wordpress.txt
+          if-no-files-found: ignore
+
   dockerhub-credential:
     # The Docker Hub mirror is part of the image contract (AGENTS.md §9), but
     # this repository has never carried DOCKERHUB_* secrets: 0.9.1 and 0.9.2
@@ -593,7 +672,7 @@ jobs:
     # local retagging) so both registries resolve to the same index. Runs only
     # when the repository actually has the Docker Hub credential; see
     # dockerhub-credential above.
-    needs: [docker, docker-wordpress, dockerhub-credential]
+    needs: [docker, docker-wordpress, dockerhub-credential, scout-server, scout-wordpress]
     if: needs.dockerhub-credential.outputs.present == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -657,7 +736,7 @@ jobs:
     # GitHub Release must not depend on a secret this repository never had. The
     # mirror is copied by digest with scripts/release/mirror-to-dockerhub.sh and
     # verified before the release is declared complete.
-    needs: [security-release, build, checksums, package-linux, docker, docker-wordpress, compliance-artifacts]
+    needs: [security-release, build, checksums, package-linux, docker, docker-wordpress, compliance-artifacts, scout-server, scout-wordpress]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -688,6 +767,32 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+      - name: Select public release notes
+        id: notes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          NOTES="docs/release/notes/v${VERSION}.md"
+          LEGACY="docs/release/v${VERSION}.md"
+          # 0.9.4 and later publish the short public note only. The audit record
+          # in docs/release/v${VERSION}.md is a repository document, not a
+          # release page: 0.9.3 shipped it as a 612-line release body.
+          if [[ -f "$NOTES" ]]; then
+            BODY="$NOTES"
+            bash scripts/gates/release-notes-gate.sh --version "$VERSION" --notes "$BODY"
+          elif [[ "$(printf '%s\n0.9.4\n' "$VERSION" | sort -V | head -n 1)" == "$VERSION" && "$VERSION" != "0.9.4" ]]; then
+            # Historical tags keep the body they were published with.
+            BODY="$LEGACY"
+            if [[ ! -f "$BODY" ]]; then
+              echo "ERROR: missing $BODY" >&2
+              exit 1
+            fi
+          else
+            echo "ERROR: missing $NOTES: 0.9.4 and later publish the short note only" >&2
+            exit 1
+          fi
+          echo "body_path=${BODY}" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-compliance
@@ -756,7 +861,7 @@ jobs:
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ExyonQ v${{ steps.ver.outputs.version }}
-          body_path: docs/release/v${{ steps.ver.outputs.version }}.md
+          body_path: ${{ steps.notes.outputs.body_path }}
           files: |
             release-assets/SHA256SUMS.txt
             release-assets/release-manifest.json

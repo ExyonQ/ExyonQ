@@ -14,7 +14,7 @@ FROM ${EXYONQ_IMAGE} AS exyonqbin
 
 # WordPress payload is fetched in a builder stage so the runtime image carries
 # no downloader (curl/unzip).
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:771146c2dfc880902a185f060c3db5571473c46b267edd98c3119c83068dfb61 AS fetcher
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:5172a213d2bba8b1c9ca11957db65562b52b0f9844583a0347318ea5fd8e3aa5 AS fetcher
 ARG WORDPRESS_VERSION=7.1.4
 ARG WORDPRESS_SHA256=881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835
 ARG SQLITE_INTEGRATION_VERSION=3.1.3
@@ -40,7 +40,7 @@ RUN rm -rf /staging/wp-content/plugins/exyonq-cache/tests \
 # exif, zip, mysqli, pdo_mysql, pdo_sqlite, sodium, iconv, ctype, phar); opcache
 # is built into php-8.5. mysqlnd is installed explicitly because the Wolfi
 # mysqli/pdo_mysql metadata does not pull it and both fail to load without it.
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:771146c2dfc880902a185f060c3db5571473c46b267edd98c3119c83068dfb61
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:5172a213d2bba8b1c9ca11957db65562b52b0f9844583a0347318ea5fd8e3aa5
 ARG EXYONQ_VERSION
 ARG EXYONQ_GIT_REVISION
 RUN set -eux; \

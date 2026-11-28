@@ -8,12 +8,12 @@ This file lists permissive licenses of Rust crates linked into ExyonQ release bi
 
 ## License overview
 
-- **Apache License 2.0** (333 crates)
-- **MIT License** (66 crates)
+- **Apache License 2.0** (332 crates)
+- **MIT License** (65 crates)
 - **Unicode License v3** (19 crates)
 - **BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License** (12 crates)
-- **ISC License** (9 crates)
-- **BSD 2-Clause &quot;Simplified&quot; License** (2 crates)
+- **ISC License** (10 crates)
+- **BSD 2-Clause &quot;Simplified&quot; License** (3 crates)
 - **BSD Zero Clause License** (1 crates)
 - **Boost Software License 1.0** (1 crates)
 - **Creative Commons Zero v1.0 Universal** (1 crates)
@@ -900,20 +900,20 @@ Used by:
 
 Used by:
 
-- cranelift-bforest 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-codegen-meta 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-codegen-shared 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-codegen 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-control 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-entity 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-frontend 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-native 0.136.5 — https://github.com/bytecodealliance/wasmtime
+- cranelift-bforest 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-codegen-meta 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-codegen-shared 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-codegen 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-control 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-entity 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-frontend 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-native 0.138.0 — https://github.com/bytecodealliance/wasmtime
 - regalloc2 0.15.2 — https://github.com/bytecodealliance/regalloc2
 - target-lexicon 0.13.5 — https://github.com/bytecodealliance/target-lexicon
-- wasmtime-environ 49.0.5 — https://github.com/bytecodealliance/wasmtime
-- wasmtime-internal-cranelift 49.0.5 — https://github.com/bytecodealliance/wasmtime
-- wasmtime-internal-unwinder 49.0.5 — https://github.com/bytecodealliance/wasmtime
-- wasmtime 49.0.5 — https://github.com/bytecodealliance/wasmtime
+- wasmtime-environ 51.0.0 — https://github.com/bytecodealliance/wasmtime
+- wasmtime-internal-cranelift 51.0.0 — https://github.com/bytecodealliance/wasmtime
+- wasmtime-internal-unwinder 51.0.0 — https://github.com/bytecodealliance/wasmtime
+- wasmtime 51.0.0 — https://github.com/bytecodealliance/wasmtime
 
 ```
 
@@ -1146,17 +1146,13 @@ Used by:
 - windows-link 0.2.1 — https://github.com/microsoft/windows-rs
 - windows-sys 0.48.0 — https://github.com/microsoft/windows-rs
 - windows-sys 0.59.0 — https://github.com/microsoft/windows-rs
-- windows-sys 0.60.2 — https://github.com/microsoft/windows-rs
 - windows-sys 0.61.2 — https://github.com/microsoft/windows-rs
 - windows-targets 0.48.5 — https://github.com/microsoft/windows-rs
 - windows-targets 0.52.6 — https://github.com/microsoft/windows-rs
-- windows-targets 0.53.5 — https://github.com/microsoft/windows-rs
 - windows_x86_64_gnu 0.48.5 — https://github.com/microsoft/windows-rs
 - windows_x86_64_gnu 0.52.6 — https://github.com/microsoft/windows-rs
-- windows_x86_64_gnu 0.53.1 — https://github.com/microsoft/windows-rs
 - windows_x86_64_msvc 0.48.5 — https://github.com/microsoft/windows-rs
 - windows_x86_64_msvc 0.52.6 — https://github.com/microsoft/windows-rs
-- windows_x86_64_msvc 0.53.1 — https://github.com/microsoft/windows-rs
 
 ```
                                  Apache License
@@ -2005,10 +2001,15 @@ Used by:
 
 Used by:
 
-- clap 4.6.7 — https://github.com/clap-rs/clap
+- clap 4.6.9 — https://github.com/clap-rs/clap
 - clap_builder 4.6.7 — https://github.com/clap-rs/clap
-- clap_derive 4.6.7 — https://github.com/clap-rs/clap
+- clap_derive 4.6.9 — https://github.com/clap-rs/clap
 - clap_lex 1.1.1 — https://github.com/clap-rs/clap
+- serde_spanned 1.1.3 — https://github.com/toml-rs/toml
+- toml 1.2.2+spec-1.1.0 — https://github.com/toml-rs/toml
+- toml_datetime 1.1.3+spec-1.1.0 — https://github.com/toml-rs/toml
+- toml_parser 1.1.6+spec-1.1.0 — https://github.com/toml-rs/toml
+- toml_writer 1.2.0+spec-1.1.0 — https://github.com/toml-rs/toml
 
 ```
                                  Apache License
@@ -2220,7 +2221,7 @@ Used by:
 
 Used by:
 
-- ipnetwork 0.20.0 — https://github.com/achanda/ipnetwork
+- ipnetwork 0.21.1 — https://github.com/achanda/ipnetwork
 - winapi 0.3.9 — https://github.com/retep998/winapi-rs
 
 ```
@@ -2447,11 +2448,6 @@ Used by:
 - is_terminal_polyfill 1.70.2 — https://github.com/polyfill-rs/is_terminal_polyfill
 - once_cell_polyfill 1.70.2 — https://github.com/polyfill-rs/once_cell_polyfill
 - openssl-macros 0.1.1
-- serde_spanned 0.6.9 — https://github.com/toml-rs/toml
-- toml 0.8.23 — https://github.com/toml-rs/toml
-- toml_datetime 0.6.11 — https://github.com/toml-rs/toml
-- toml_edit 0.22.27 — https://github.com/toml-rs/toml
-- toml_write 0.1.2 — https://github.com/toml-rs/toml
 
 ```
                                  Apache License
@@ -4148,7 +4144,7 @@ limitations under the License.
 
 Used by:
 
-- rustls-pki-types 1.15.1 — https://github.com/rustls/pki-types
+- rustls-pki-types 1.16.0 — https://github.com/rustls/pki-types
 
 ```
                               Apache License
@@ -4782,7 +4778,7 @@ limitations under the License.
 Used by:
 
 - arbitrary 1.5.0 — https://github.com/rust-fuzz/arbitrary/
-- arc-swap 1.9.3 — https://github.com/vorner/arc-swap
+- arc-swap 1.9.5 — https://github.com/vorner/arc-swap
 - asn1-rs-derive 0.6.0 — https://github.com/rusticata/asn1-rs.git
 - asn1-rs 0.7.2 — https://github.com/rusticata/asn1-rs.git
 - atomic-waker 1.1.2 — https://github.com/smol-rs/atomic-waker
@@ -4806,9 +4802,9 @@ Used by:
 - errno 0.3.14 — https://github.com/lambda-fairy/rust-errno
 - fastrand 2.5.0 — https://github.com/smol-rs/fastrand
 - find-msvc-tools 0.1.15 — https://github.com/rust-lang/cc-rs
-- flate2 1.1.10 — https://github.com/rust-lang/flate2-rs
+- flate2 1.1.11 — https://github.com/rust-lang/flate2-rs
 - fnv 1.0.7 — https://github.com/servo/rust-fnv
-- form_urlencoded 1.2.2 — https://github.com/servo/rust-url
+- form_urlencoded 1.2.3 — https://github.com/servo/rust-url
 - gimli 0.33.0 — https://github.com/gimli-rs/gimli
 - glob 0.3.4 — https://github.com/rust-lang/glob
 - hashbrown 0.14.5 — https://github.com/rust-lang/hashbrown
@@ -4846,13 +4842,13 @@ Used by:
 - postcard 1.1.3 — https://github.com/jamesmunns/postcard
 - prost-derive 0.14.4 — https://github.com/tokio-rs/prost
 - prost 0.14.4 — https://github.com/tokio-rs/prost
-- regex-automata 0.4.18 — https://github.com/rust-lang/regex
-- regex-syntax 0.8.11 — https://github.com/rust-lang/regex
-- regex 1.13.1 — https://github.com/rust-lang/regex
+- regex-automata 0.4.19 — https://github.com/rust-lang/regex
+- regex-syntax 0.8.12 — https://github.com/rust-lang/regex
+- regex 1.13.2 — https://github.com/rust-lang/regex
 - ring 0.17.14 — https://github.com/briansmith/ring
 - rustc_version 0.4.1 — https://github.com/djc/rustc-version-rs
 - rusticata-macros 4.1.0 — https://github.com/rusticata/rusticata-macros.git
-- rustix 1.1.5 — https://github.com/bytecodealliance/rustix
+- rustix 1.1.6 — https://github.com/bytecodealliance/rustix
 - rustls-native-certs 0.8.5 — https://github.com/rustls/rustls-native-certs
 - rustls 0.23.46 — https://github.com/rustls/rustls
 - scopeguard 1.2.0 — https://github.com/bluss/scopeguard
@@ -4865,14 +4861,13 @@ Used by:
 - symlink 0.1.0 — https://gitlab.com/chris-morgan/symlink
 - thread_local 1.1.10 — https://github.com/Amanieu/thread_local-rs
 - unicode-width 0.2.2 — https://github.com/unicode-rs/unicode-width
-- url 2.5.8 — https://github.com/servo/rust-url
+- url 2.5.9 — https://github.com/servo/rust-url
 - version_check 0.9.5 — https://github.com/SergioBenitez/version_check
-- wasm-encoder 0.258.3 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-encoder
-- wasm-encoder 0.261.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-encoder
-- wasmparser 0.258.3 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser
-- wasmprinter 0.258.3 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmprinter
-- wast 261.0.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wast
-- wat 1.261.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wat
+- wasm-encoder 0.263.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-encoder
+- wasmparser 0.263.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser
+- wasmprinter 0.263.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmprinter
+- wast 263.0.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wast
+- wat 1.263.0 — https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wat
 - x509-parser 0.18.1 — https://github.com/rusticata/x509-parser.git
 - yasna 0.6.0 — https://github.com/qnighy/yasna.rs
 
@@ -5300,9 +5295,9 @@ Used by:
 
 - block-buffer 0.10.4 — https://github.com/RustCrypto/utils
 - block-buffer 0.12.1 — https://github.com/RustCrypto/utils
-- blowfish 0.9.1 — https://github.com/RustCrypto/block-ciphers
+- blowfish 0.10.0 — https://github.com/RustCrypto/block-ciphers
 - chacha20 0.10.2 — https://github.com/RustCrypto/stream-ciphers
-- cipher 0.4.4 — https://github.com/RustCrypto/traits
+- cipher 0.5.2 — https://github.com/RustCrypto/traits
 - const-oid 0.10.2 — https://github.com/RustCrypto/formats
 - cpufeatures 0.2.17 — https://github.com/RustCrypto/utils
 - cpufeatures 0.3.1 — https://github.com/RustCrypto/utils
@@ -5313,7 +5308,7 @@ Used by:
 - hex-literal 1.1.0 — https://github.com/RustCrypto/utils
 - hmac 0.13.0 — https://github.com/RustCrypto/MACs
 - hybrid-array 0.4.15 — https://github.com/RustCrypto/hybrid-array
-- inout 0.1.4 — https://github.com/RustCrypto/utils
+- inout 0.2.6 — https://github.com/RustCrypto/utils
 - sha1 0.10.7 — https://github.com/RustCrypto/hashes
 - sha2 0.10.9 — https://github.com/RustCrypto/hashes
 - sha2 0.11.1 — https://github.com/RustCrypto/hashes
@@ -6361,70 +6356,72 @@ limitations under the License.
 Used by:
 
 - exyonq-addon-api 1.0.0
-- exyonq-addon-sdk 0.9.0
-- exyonq 0.9.0
-- exyonq-compat-cli 0.9.0
-- exyonqctl 0.9.0
-- exyonq-compat-apache 0.9.0
-- exyonq-compat-common 0.9.0
-- exyonq-compat-nginx 0.9.0
-- exyonq-config-cli 0.9.0
-- exyonq-config-ir 0.9.0
-- exyonq-config-merge 0.9.0
-- exyonq-config-schema 0.9.0
-- exyonq-config-surface 0.9.0
-- exyonq-core 0.9.0
-- exyonq-cache 0.9.0
-- exyonq-cache-redis 0.9.0
-- exyonq-cfd-control 0.9.0
-- exyonq-cfd-dataplane 0.9.0
-- exyonq-cfd-gen 0.9.0
-- exyonq-control-api 0.9.0
-- exyonq-control-api-client 0.9.0
-- exyonq-discovery-runtime 0.9.0
-- exyonq-fastcgi-wire 0.9.0
-- exyonq-http3-provider-api 0.9.0
-- exyonq-http3-provider-quiche 0.9.0
-- exyonq-http3-provider-s2n 0.9.0
+- exyonq-addon-sdk 0.9.3
+- exyonq 0.9.3
+- exyonq-compat-cli 0.9.3
+- exyonqctl 0.9.3
+- exyonq-compat-apache 0.9.3
+- exyonq-compat-common 0.9.3
+- exyonq-compat-nginx 0.9.3
+- exyonq-compat-openlitespeed 0.9.3
+- exyonq-config-cli 0.9.3
+- exyonq-config-ir 0.9.3
+- exyonq-config-merge 0.9.3
+- exyonq-config-schema 0.9.3
+- exyonq-config-surface 0.9.3
+- exyonq-core 0.9.3
+- exyonq-cache 0.9.3
+- exyonq-cache-redis 0.9.3
+- exyonq-cfd-control 0.9.3
+- exyonq-cfd-dataplane 0.9.3
+- exyonq-cfd-gen 0.9.3
+- exyonq-control-api 0.9.3
+- exyonq-control-api-client 0.9.3
+- exyonq-discovery-runtime 0.9.3
+- exyonq-fastcgi-wire 0.9.3
+- exyonq-geoip 0.9.3 — https://github.com/ExyonQ/ExyonQ
+- exyonq-http3-provider-api 0.9.3
+- exyonq-http3-provider-quiche 0.9.3
+- exyonq-http3-provider-s2n 0.9.3
 - exyonq-kernel-contract-consumer 0.0.0
-- exyonq-linux-ffi 0.9.0
-- exyonq-mime 0.9.0
-- exyonq-mod-fastcgi 0.9.0
-- exyonq-mod-htaccess 0.9.0
-- exyonq-mod-http3 0.9.0
-- exyonq-mod-proxy 0.9.0
-- exyonq-mod-static 0.9.0
-- exyonq-mod-tls 0.9.0
-- exyonq-module-pipeline 0.9.0
-- exyonq-observability 0.9.0
-- exyonq-ops-runtime 0.9.0
+- exyonq-linux-ffi 0.9.3
+- exyonq-mime 0.9.3
+- exyonq-mod-fastcgi 0.9.3
+- exyonq-mod-htaccess 0.9.3
+- exyonq-mod-http3 0.9.3
+- exyonq-mod-proxy 0.9.3
+- exyonq-mod-static 0.9.3
+- exyonq-mod-tls 0.9.3
+- exyonq-module-pipeline 0.9.3
+- exyonq-observability 0.9.3
+- exyonq-ops-runtime 0.9.3
 - exyonq-platform-boundary-spike-harness 0.0.0
 - exyonq-platform-boundary-spike-kernel 0.0.0
 - exyonq-platform-linux 0.0.0
-- exyonq-proxy-sdp 0.9.0
-- exyonq-reload-runtime 0.9.0
-- exyonq-runtime-plan 0.9.0
-- exyonq-waf 0.9.0
-- exyonq-waf-api 0.9.0
-- exyonq-module-api 0.9.0
-- exyonq-acme 0.9.0
-- exyonq-compression 0.9.0
-- exyonq-metrics 0.9.0
-- exyonq-ratelimit 0.9.0
+- exyonq-proxy-sdp 0.9.3
+- exyonq-reload-runtime 0.9.3
+- exyonq-runtime-plan 0.9.3
+- exyonq-waf 0.9.3
+- exyonq-waf-api 0.9.3
+- exyonq-module-api 0.9.3
+- exyonq-acme 0.9.3
+- exyonq-compression 0.9.3
+- exyonq-metrics 0.9.3
+- exyonq-ratelimit 0.9.3
 - exyonq-integration-tests 0.0.0
-- exyonq-wasm-host 0.9.0
-- xtask 0.9.0
+- exyonq-wasm-host 0.9.3
+- xtask 0.9.3
 - allocator-api2 0.2.21 — https://github.com/zakarumych/allocator-api2
 - anyhow 1.0.104 — https://github.com/dtolnay/anyhow
 - asn1-rs-impl 0.2.0 — https://github.com/rusticata/asn1-rs.git
 - async-trait 0.1.92 — https://github.com/dtolnay/async-trait
 - aws-lc-sys 0.46.0 — https://github.com/aws/aws-lc-rs
 - boring 4.22.0 — https://github.com/cloudflare/boring
-- cranelift-assembler-x64-meta 0.136.5
-- cranelift-assembler-x64 0.136.5
-- cranelift-bitset 0.136.5 — https://github.com/bytecodealliance/wasmtime
-- cranelift-isle 0.136.5 — https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle
-- cranelift-srcgen 0.136.5 — https://github.com/bytecodealliance/wasmtime
+- cranelift-assembler-x64-meta 0.138.0
+- cranelift-assembler-x64 0.138.0
+- cranelift-bitset 0.138.0 — https://github.com/bytecodealliance/wasmtime
+- cranelift-isle 0.138.0 — https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle
+- cranelift-srcgen 0.138.0 — https://github.com/bytecodealliance/wasmtime
 - dunce 1.0.5 — https://gitlab.com/kornelski/dunce
 - enum_dispatch 0.3.13 — https://gitlab.com/antonok/enum_dispatch
 - itoa 1.0.18 — https://github.com/dtolnay/itoa
@@ -6432,14 +6429,16 @@ Used by:
 - mach2 0.6.0 — https://github.com/JohnTitor/mach2
 - miniz_oxide 0.9.1 — https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
 - num-conv 0.2.2 — https://github.com/jhpratt/num-conv
+- objc2-core-foundation 0.3.2 — https://github.com/madsmtm/objc2
+- objc2-core-services 0.3.2 — https://github.com/madsmtm/objc2
 - opentelemetry-http 0.33.1 — https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-http
 - opentelemetry-otlp 0.33.1 — https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-otlp
 - opentelemetry 0.33.1 — https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry
 - opentelemetry_sdk 0.33.1 — https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-sdk
 - pin-project-lite 0.2.17 — https://github.com/taiki-e/pin-project-lite
 - proc-macro2 1.0.107 — https://github.com/dtolnay/proc-macro2
-- pulley-interpreter 49.0.5 — https://github.com/bytecodealliance/wasmtime/tree/main/pulley
-- pulley-macros 49.0.5 — https://github.com/bytecodealliance/wasmtime/tree/main/pulley/macros
+- pulley-interpreter 51.0.0 — https://github.com/bytecodealliance/wasmtime/tree/main/pulley
+- pulley-macros 51.0.0 — https://github.com/bytecodealliance/wasmtime/tree/main/pulley/macros
 - quote 1.0.47 — https://github.com/dtolnay/quote
 - rand 0.10.3 — https://github.com/rust-random/rand
 - rand 0.9.5 — https://github.com/rust-random/rand
@@ -6449,15 +6448,15 @@ Used by:
 - rustc-hash 2.1.3 — https://github.com/rust-lang/rustc-hash
 - rustversion 1.0.23 — https://github.com/dtolnay/rustversion
 - ryu 1.0.23 — https://github.com/dtolnay/ryu
-- s2n-codec 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic-core 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic-crypto 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic-platform 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic-rustls 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic-tls-default 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic-tls 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic-transport 0.91.0 — https://github.com/aws/s2n-quic
-- s2n-quic 1.91.0 — https://github.com/aws/s2n-quic
+- s2n-codec 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic-core 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic-crypto 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic-platform 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic-rustls 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic-tls-default 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic-tls 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic-transport 0.92.0 — https://github.com/aws/s2n-quic
+- s2n-quic 1.92.0 — https://github.com/aws/s2n-quic
 - s2n-tls-sys 0.3.45 — https://github.com/aws/s2n-tls
 - s2n-tls 0.3.45 — https://github.com/aws/s2n-tls
 - semver 1.0.28 — https://github.com/dtolnay/semver
@@ -6468,7 +6467,7 @@ Used by:
 - shlex 1.3.0 — https://github.com/comex/rust-shlex
 - shlex 2.0.1 — https://github.com/comex/rust-shlex
 - syn 2.0.119 — https://github.com/dtolnay/syn
-- syn 3.0.9 — https://github.com/dtolnay/syn
+- syn 3.0.10 — https://github.com/dtolnay/syn
 - sync_wrapper 1.0.2 — https://github.com/Actyx/sync_wrapper
 - thiserror-impl 2.0.21 — https://github.com/dtolnay/thiserror
 - thiserror 2.0.21 — https://github.com/dtolnay/thiserror
@@ -6477,10 +6476,10 @@ Used by:
 - time 0.3.55 — https://github.com/time-rs/time
 - unicode-ident 1.0.27 — https://github.com/dtolnay/unicode-ident
 - utf8parse 0.2.2 — https://github.com/alacritty/vte
-- wasmtime-internal-component-util 49.0.5 — https://github.com/bytecodealliance/wasmtime
-- wasmtime-internal-core 49.0.5
-- wasmtime-internal-jit-icache-coherence 49.0.5 — https://github.com/bytecodealliance/wasmtime
-- wasmtime-internal-versioned-export-macros 49.0.5 — https://github.com/bytecodealliance/wasmtime
+- wasmtime-internal-component-util 51.0.0 — https://github.com/bytecodealliance/wasmtime
+- wasmtime-internal-core 51.0.0
+- wasmtime-internal-jit-icache-coherence 51.0.0 — https://github.com/bytecodealliance/wasmtime
+- wasmtime-internal-versioned-export-macros 51.0.0 — https://github.com/bytecodealliance/wasmtime
 
 ```
 Apache License
@@ -6593,6 +6592,45 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ```
 
+### BSD 2-Clause &quot;Simplified&quot; License
+
+Used by:
+
+- zstd-sys 2.2.0+zstd.1.6.0 — https://github.com/gyscos/zstd-rs
+
+```
+The decoders for legacy formats, in zstd/lib/legacy/, include code under the
+2-clause BSD license:
+
+BSD 2-Clause License
+
+Copyright (C) 2013-2016, Yann Collet.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+&quot;AS IS&quot; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+```
+
 ### BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License
 
 Used by:
@@ -6675,9 +6713,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- zstd-safe 8.2.0 — https://github.com/gyscos/zstd-rs
-- zstd-sys 2.1.2+zstd.1.5.7 — https://github.com/gyscos/zstd-rs
-- zstd 0.14.3 — https://github.com/gyscos/zstd-rs
+- zstd-safe 8.4.0 — https://github.com/gyscos/zstd-rs
+- zstd-sys 2.2.0+zstd.1.6.0 — https://github.com/gyscos/zstd-rs
+- zstd 0.14.5 — https://github.com/gyscos/zstd-rs
 
 ```
 BSD 3-Clause License
@@ -6715,8 +6753,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- alloc-no-stdlib 2.0.4 — https://github.com/dropbox/rust-alloc-no-stdlib
-- brotli 8.0.4 — https://github.com/dropbox/rust-brotli
+- alloc-no-stdlib 3.0.0 — https://github.com/dropbox/rust-alloc-no-stdlib
+- brotli 9.1.3 — https://github.com/dropbox/rust-brotli
 
 ```
 Copyright (c) 2016 Dropbox, Inc.
@@ -6777,7 +6815,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- redis 1.7.1 — https://github.com/redis-rs/redis-rs
+- redis 1.8.2 — https://github.com/redis-rs/redis-rs
 
 ```
 Copyright (c) 2022 by redis-rs contributors
@@ -6820,7 +6858,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- alloc-stdlib 0.2.4 — https://github.com/dropbox/rust-alloc-no-stdlib
+- alloc-stdlib 0.3.0 — https://github.com/dropbox/rust-alloc-no-stdlib
 - aws-lc-sys 0.46.0 — https://github.com/aws/aws-lc-rs
 - sha1_smol 1.0.1 — https://github.com/mitsuhiko/sha1-smol
 
@@ -6876,7 +6914,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- notify 8.2.0 — https://github.com/notify-rs/notify.git
+- notify 8.2.2 — https://github.com/notify-rs/notify.git
 
 ```
 Creative Commons CC0 1.0 Universal
@@ -7069,6 +7107,31 @@ third-party/chromium/LICENSE.
 
 Used by:
 
+- maxminddb 0.33.0 — https://github.com/oschwald/maxminddb-rust
+
+```
+ISC License
+
+Copyright (c) 2015, Gregory J. Oschwald &lt;oschwald@gmail.com&gt;
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot; AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+```
+
+### ISC License
+
+Used by:
+
 - aws-lc-rs 1.18.2 — https://github.com/aws/aws-lc-rs
 - aws-lc-sys 0.46.0 — https://github.com/aws/aws-lc-rs
 
@@ -7088,7 +7151,7 @@ THE SOFTWARE IS PROVIDED &quot;AS IS&quot; AND ISC DISCLAIMS ALL WARRANTIES WITH
 
 Used by:
 
-- brotli 8.0.4 — https://github.com/dropbox/rust-brotli
+- brotli 9.1.3 — https://github.com/dropbox/rust-brotli
 
 ```
 Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
@@ -7352,7 +7415,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- bytes 1.12.1 — https://github.com/tokio-rs/bytes
+- bytes 1.12.2 — https://github.com/tokio-rs/bytes
 
 ```
 Copyright (c) 2018 Carl Lerche
@@ -7992,7 +8055,7 @@ SOFTWARE.
 
 Used by:
 
-- brotli-decompressor 5.0.3 — https://github.com/dropbox/rust-brotli-decompressor
+- brotli-decompressor 6.3.2 — https://github.com/dropbox/rust-brotli-decompressor
 - libm 0.2.16 — https://github.com/rust-lang/compiler-builtins
 
 ```
@@ -8118,7 +8181,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- winnow 0.7.15 — https://github.com/winnow-rs/winnow
+- winnow 1.0.5 — https://github.com/winnow-rs/winnow
 
 ```
 Permission is hereby granted, free of charge, to any person obtaining
@@ -8277,38 +8340,6 @@ THE SOFTWARE.
 
 Used by:
 
-- fsevent-sys 4.1.0 — https://github.com/octplane/fsevent-rust/tree/master/fsevent-sys
-
-```
-The MIT License (MIT)
-
-Copyright (c) 2015 Pierre Baillet
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-```
-
-### MIT License
-
-Used by:
-
 - data-encoding 2.11.1 — https://github.com/ia0/data-encoding
 
 ```
@@ -8436,7 +8467,7 @@ THE SOFTWARE.
 
 Used by:
 
-- bcrypt 0.18.0 — https://github.com/Keats/rust-bcrypt
+- bcrypt 0.19.3 — https://github.com/Keats/rust-bcrypt
 
 ```
 The MIT License (MIT)
