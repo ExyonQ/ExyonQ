@@ -87,7 +87,15 @@ index = "index.html"
     std::fs::write(path, body).unwrap();
 }
 
-fn write_config_with_http3_listen(path: &std::path::Path, listen: &str, http3: &str) {
+fn write_config_with_http3_listen(
+    path: &std::path::Path,
+    listen: &str,
+    http3: &str,
+    cert: &std::path::Path,
+    key: &std::path::Path,
+) {
+    let cert = cert.display();
+    let key = key.display();
     let body = format!(
         r#"config_version = 1
 
@@ -95,6 +103,10 @@ fn write_config_with_http3_listen(path: &std::path::Path, listen: &str, http3: &
 listen = "{listen}"
 http3_listen = "{http3}"
 routes = ["site"]
+
+[server.tls]
+cert = "{cert}"
+key = "{key}"
 
 [[route]]
 name = "site"
@@ -394,7 +406,8 @@ async fn http3_listen_bind_change_rejects_with_exy_reload_0005() {
     reset_reload_test_hooks();
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("exyonq.toml");
-    write_config_with_http3_listen(&path, "127.0.0.1:8080", "127.0.0.1:8443");
+    let (cert, key) = write_ephemeral_pkcs8_pair(dir.path());
+    write_config_with_http3_listen(&path, "127.0.0.1:8080", "127.0.0.1:8443", &cert, &key);
 
     let config = exyonq_runtime_plan::load_config_for_reload(&path).unwrap();
     let proxy = build_incoming_client();
@@ -404,7 +417,7 @@ async fn http3_listen_bind_change_rejects_with_exy_reload_0005() {
     let tls = SharedTlsAcceptor::new();
     let cache = TlsSessionCache::default();
 
-    write_config_with_http3_listen(&path, "127.0.0.1:8080", "127.0.0.1:9443");
+    write_config_with_http3_listen(&path, "127.0.0.1:8080", "127.0.0.1:9443", &cert, &key);
     let err = reload_from_path(&path, &shared, &proxy, &tls, &cache)
         .await
         .expect_err("http3_listen change must reject");
