@@ -60,6 +60,16 @@ routes = ["b"]
 [server.tls]
 cert = "/etc/exyonq/b.pem"
 key = "/etc/exyonq/b.key"
+
+[[route]]
+name = "a"
+match = { path = "/", host = "a.example" }
+root = "/var/www/a"
+
+[[route]]
+name = "b"
+match = { path = "/", host = "b.example" }
+root = "/var/www/b"
 ```
 
 Both hosts answer HTTP/3 on UDP/443 from the same socket; `a.example` and

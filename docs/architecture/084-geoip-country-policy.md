@@ -43,6 +43,12 @@ policy. There is no third model and no separate `access.countries` block.
 `all`:
 
 ```toml
+config_version = 2
+
+[geoip]
+enabled = true
+database = "/var/lib/GeoIP/GeoLite2-Country.mmdb"
+
 [[route]]
 name = "spain-first"
 match = { path = "/es" }
@@ -54,6 +60,10 @@ name = "no-sanctioned"
 match = { path = "/app" }
 upstream = "app"
 access = { deny = ["country:CN", "country:RU"] }
+
+[[upstream]]
+name = "app"
+target = "http://127.0.0.1:9000"
 ```
 
 - `deny` wins over `allow`.

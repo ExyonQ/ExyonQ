@@ -9,9 +9,23 @@ most specific matcher wins regardless of list order.
 A `[[route]]` block is only reachable through a `[[server]]` that names it:
 
 ```toml
+config_version = 2
+
 [[server]]
 listen = "0.0.0.0:443"
-routes = ["site", "ret_verification"]   # both names must appear here
+routes = ["html_pages", "ret_verification"]   # both names must appear here
+
+# Redirect every .html page …
+[[route]]
+name = "html_pages"
+match = { regex = "^/(.+)\\.html$" }
+redirect = { status = 301, location = "/index.php?p=$1" }
+
+# … except one verification file served from disk.
+[[route]]
+name = "ret_verification"
+match = { path = "/verification-file.html", exact = true }
+root = "/srv/verification"
 ```
 
 A route defined in the root file or in an `include` fragment but listed by no
