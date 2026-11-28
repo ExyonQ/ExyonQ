@@ -334,6 +334,13 @@ pub async fn reload_from_path_standalone(
 }
 
 fn reject_listen_bind_changes(current: &AppConfig, candidate: &AppConfig) -> anyhow::Result<()> {
+    if current.http3.listen != candidate.http3.listen {
+        return Err(anyhow::anyhow!(
+            "EXY-RELOAD-0005: http3.listen bind change requires restart ({} → {})",
+            current.http3.listen.as_deref().unwrap_or("<none>"),
+            candidate.http3.listen.as_deref().unwrap_or("<none>")
+        ));
+    }
     if current.servers.len() != candidate.servers.len() {
         return Err(anyhow::anyhow!(
             "EXY-RELOAD-0005: listen/http3 bind change requires restart (server count changed)"

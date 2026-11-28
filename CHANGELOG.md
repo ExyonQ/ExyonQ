@@ -311,6 +311,11 @@ This is the first 0.9.x changelog entry; 0.9.0 and 0.9.1 are documented in
 
 ### Added
 
+- **HTTP/3 per-listener sockets:** `http3_listen` is no longer limited to the first
+  `[[server]]` block. A new global `[http3] listen` sets the QUIC endpoint for the
+  TLS listeners, any block may override it per listener, and every host of one TCP
+  listen shares a single UDP socket with SNI certificate selection (QUIC is UDP, so
+  it may reuse the TCP port). See `docs/architecture/086-http3-shared-listeners.md`.
 - **AP-05 route ACL:** `[[route]] access` supports `allow`/`deny` IP/CIDR entries, ordered first-match `rules`, an HTTP-method allowlist, and a UTC `schedule` (including overnight windows). For the list form, `deny` wins and a non-empty `allow` list is an allowlist. Denials return `403` before auth/content dispatch and are rechecked after internal rewrites. Common Apache `Require ip`/`method` and `Order`/`Allow`/`Deny` forms, nginx `allow`/`deny` with exact first-match order, and `.htaccess` `Require ip`/`method` now map to the same policy; unrepresentable forms fail closed.
 
 ### Fixed

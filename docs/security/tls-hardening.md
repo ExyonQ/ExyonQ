@@ -286,7 +286,9 @@ provider every pair is loaded into the s2n certificate store and the
 certificate is chosen from the client's SNI (matching the certificate SANs,
 not the `server_name` list); the first block's pair is the default for an
 unmatched name. `exyonq validate` therefore accepts `http3_listen` with
-several TLS blocks on one listen.
+several TLS blocks on one listen, and since 0.9.4 a global `[http3] listen` (or a
+per-listener `http3_listen` declared on any block) shares one UDP socket for every
+host of that listen: see `docs/architecture/086-http3-shared-listeners.md`.
 
 The `quiche` provider loads a single chain and logs a warning when more than
 one pair is configured: it always serves the first block's certificate. Use

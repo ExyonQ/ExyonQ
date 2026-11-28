@@ -59,9 +59,24 @@ pub fn ir_json_schema() -> serde_json::Value {
                 "items": { "$ref": "#/definitions/stream" }
             },
             "modules": { "$ref": "#/definitions/modules" },
-            "static": { "$ref": "#/definitions/static" }
+            "static": { "$ref": "#/definitions/static" },
+            "http3": { "$ref": "#/definitions/http3" }
         },
         "definitions": {
+            "http3": {
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean", "default": true },
+                    "provider": { "type": "string", "enum": ["s2n", "s2n-quic", "quiche"] },
+                    "listen": {
+                        "type": "string",
+                        "description": "Global QUIC UDP address shared by every TLS host; per-server http3_listen overrides it"
+                    },
+                    "max_ack_delay_ms": { "type": "integer", "minimum": 0, "maximum": 25000 },
+                    "request_body_drain_cap_bytes": { "type": "integer", "minimum": 1 },
+                    "qlog": { "type": "boolean", "default": false }
+                }
+            },
             "server": {
                 "type": "object",
                 "required": ["listen"],

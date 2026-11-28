@@ -851,63 +851,77 @@ async fn run_on_impl(
     }
 
     if config.http3.enabled {
-        if let Some(http3_listen) = config.primary_server().http3_listen.as_deref() {
-            if let Ok(addr) = http3_listen.parse::<SocketAddr>() {
-                let primary = config.primary_server();
-                if primary.tls.is_some() {
-                    // Every [[server]] sharing the primary listen contributes
-                    // its pair; the first is the QUIC default and s2n selects
-                    // the rest by SNI. ACME bootstrap-from-zero: H3 has no
-                    // hot-reload, so spawn only with the complete set on disk
-                    // (restart after the first issuance to enable H3).
-                    let mut tls_certs = Vec::new();
-                    let mut missing = Vec::new();
-                    for server in &config.servers {
-                        if server.listen != primary.listen {
-                            continue;
-                        }
-                        let Some(tls) = server.tls.as_ref() else {
-                            continue;
-                        };
-                        if tls.cert.exists() && tls.key.exists() {
-                            tls_certs.push(TlsSettings {
-                                cert_path: tls.cert.clone(),
-                                key_path: tls.key.clone(),
-                            });
-                        } else {
-                            missing.push(tls.cert.display().to_string());
-                        }
-                    }
-                    if tls_certs.is_empty() || !missing.is_empty() {
-                        warn!(
-                            listen = %primary.listen,
-                            missing = ?missing,
-                            "http3_listen skipped: every TLS certificate on the shared listen \
-                             must be on disk (restart after ACME issuance to enable HTTP/3)"
-                        );
-                    } else {
-                        let settings = exyonq_mod_http3::Http3Settings {
-                            listen: addr,
-                            tls_certs,
-                            // Neutral IR string only — no provider types in core.
-                            provider: config.http3.provider.clone(),
-                            max_ack_delay_ms: config.http3.max_ack_delay_ms,
-                            request_body_drain_cap_bytes: config
-                                .http3
-                                .request_body_drain_cap_bytes
-                                .min(usize::MAX as u64)
-                                as usize,
-                            qlog_enabled: config.http3.qlog,
-                        };
-                        http3_runtime_registry::spawn_http3_listener(
-                            settings,
-                            reload::SharedServerState::clone(&shared),
-                            proxy_client.clone(),
-                            Arc::clone(&ops),
-                        );
-                    }
+        // QUIC is UDP and belongs to the listener, not to the first [[server]]:
+        // every server that resolves to the same http3 address shares one UDP
+        // socket, and the endpoint carries the TLS pairs of all those hosts
+        // (s2n/quiche select the certificate by SNI). The config validator
+        // guarantees that servers sharing a TCP listen agree on the address.
+        let mut endpoints: std::collections::BTreeMap<String, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (idx, server) in config.servers.iter().enumerate() {
+            if let Some(addr) = config.http3.effective_listen_for(server) {
+                endpoints.entry(addr.to_string()).or_default().push(idx);
+            }
+        }
+        for (listen, indexes) in endpoints {
+            let Ok(addr) = listen.parse::<SocketAddr>() else {
+                continue;
+            };
+            // Every host on the socket contributes its pair; the first is the
+            // QUIC default and the provider selects the rest by SNI. ACME
+            // bootstrap-from-zero: H3 has no hot reload, so spawn only with the
+            // complete set on disk (restart after the first issuance to enable H3).
+            let mut tls_certs = Vec::new();
+            let mut missing = Vec::new();
+            let mut hosts = Vec::new();
+            for idx in &indexes {
+                let server = &config.servers[*idx];
+                hosts.extend(server.server_name_list());
+                let Some(tls) = server.tls.as_ref() else {
+                    continue;
+                };
+                if tls.cert.exists() && tls.key.exists() {
+                    tls_certs.push(TlsSettings {
+                        cert_path: tls.cert.clone(),
+                        key_path: tls.key.clone(),
+                    });
+                } else {
+                    missing.push(tls.cert.display().to_string());
                 }
             }
+            if tls_certs.is_empty() || !missing.is_empty() {
+                warn!(
+                    listen = %listen,
+                    missing = ?missing,
+                    "http3_listen skipped: every TLS certificate on the shared UDP socket \
+                     must be on disk (restart after ACME issuance to enable HTTP/3)"
+                );
+                continue;
+            }
+            info!(
+                listen = %listen,
+                hosts = ?hosts,
+                certs = tls_certs.len(),
+                "http3 listener starting on the shared UDP socket"
+            );
+            let settings = exyonq_mod_http3::Http3Settings {
+                listen: addr,
+                tls_certs,
+                // Neutral IR string only — no provider types in core.
+                provider: config.http3.provider.clone(),
+                max_ack_delay_ms: config.http3.max_ack_delay_ms,
+                request_body_drain_cap_bytes: config
+                    .http3
+                    .request_body_drain_cap_bytes
+                    .min(usize::MAX as u64) as usize,
+                qlog_enabled: config.http3.qlog,
+            };
+            http3_runtime_registry::spawn_http3_listener(
+                settings,
+                reload::SharedServerState::clone(&shared),
+                proxy_client.clone(),
+                Arc::clone(&ops),
+            );
         }
     }
 

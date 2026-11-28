@@ -121,6 +121,35 @@ fn render_canonical_toml(cfg: &AppConfig) -> String {
         out.push('\n');
     }
 
+    if cfg.http3 != exyonq_config_ir::Http3Config::default() {
+        out.push_str("[http3]\n");
+        if !cfg.http3.enabled {
+            out.push_str("enabled = false\n");
+        }
+        if let Some(provider) = &cfg.http3.provider {
+            out.push_str(&format!("provider = {provider:?}\n"));
+        }
+        if let Some(listen) = &cfg.http3.listen {
+            out.push_str(&format!("listen = {listen:?}\n"));
+        }
+        if cfg.http3.max_ack_delay_ms != 1 {
+            out.push_str(&format!(
+                "max_ack_delay_ms = {}\n",
+                cfg.http3.max_ack_delay_ms
+            ));
+        }
+        if cfg.http3.request_body_drain_cap_bytes != 64 * 1024 {
+            out.push_str(&format!(
+                "request_body_drain_cap_bytes = {}\n",
+                cfg.http3.request_body_drain_cap_bytes
+            ));
+        }
+        if cfg.http3.qlog {
+            out.push_str("qlog = true\n");
+        }
+        out.push('\n');
+    }
+
     for server in &cfg.servers {
         out.push_str("[[server]]\n");
         out.push_str(&format!("listen = {:?}\n", server.listen));

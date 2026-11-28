@@ -210,6 +210,14 @@ pub struct Http3Config {
     /// when a modern provider is compiled (Quinn-only builds ignore this field).
     #[serde(default)]
     pub provider: Option<String>,
+    /// Global HTTP/3 UDP listen address.
+    ///
+    /// QUIC is UDP, so it may reuse the TCP port number. Every server that
+    /// shares a TCP `listen` shares this UDP socket too (one QUIC endpoint,
+    /// certificate chosen by SNI); a per-server `[[server]].http3_listen`
+    /// overrides this value for that listener group.
+    #[serde(default)]
+    pub listen: Option<String>,
     #[serde(default = "default_http3_max_ack_delay_ms")]
     pub max_ack_delay_ms: u64,
     #[serde(default = "default_http3_drain_cap")]
@@ -223,10 +231,23 @@ impl Default for Http3Config {
         Self {
             enabled: true,
             provider: None,
+            listen: None,
             max_ack_delay_ms: default_http3_max_ack_delay_ms(),
             request_body_drain_cap_bytes: default_http3_drain_cap(),
             qlog: false,
         }
+    }
+}
+
+impl Http3Config {
+    /// Effective HTTP/3 listen for one server: the per-server override wins over
+    /// the global `[http3] listen`.
+    #[must_use]
+    pub fn effective_listen_for<'a>(&'a self, server: &'a ServerConfig) -> Option<&'a str> {
+        server
+            .http3_listen
+            .as_deref()
+            .or_else(|| self.listen.as_deref().filter(|_| server.tls.is_some()))
     }
 }
 
@@ -1533,6 +1554,7 @@ impl AppConfig {
             }
         }
         validate_shared_listeners(&raw.server)?;
+        validate_http3_listeners(&raw.http3, &raw.server)?;
 
         for route in &routes {
             validate_route_match(&route.r#match)?;
@@ -1589,7 +1611,7 @@ impl AppConfig {
             // Endpoint set already validated in UpstreamConfig::try_from_parts.
             let _ = upstream.user_backend_id()?;
         }
-        validate_streams(&raw.stream, &raw.server, &upstreams)?;
+        validate_streams(&raw.stream, &raw.server, &upstreams, &raw.http3)?;
 
         for pool in pools_fcgi.values() {
             validate_fcgi_pool_address(&pool.name, &pool.address)?;
@@ -1637,7 +1659,7 @@ impl AppConfig {
                 ));
             }
         }
-        validate_metrics_config(&raw.modules.metrics, &raw.server)?;
+        validate_metrics_config(&raw.modules.metrics, &raw.server, &raw.http3)?;
         raw.modules.validate()?;
         validate_ratelimit_config(&raw.modules.ratelimit)?;
         raw.modules.real_ip.validate()?;
@@ -2025,11 +2047,11 @@ fn listen_is_loopback(listen: &str) -> bool {
 }
 
 /// True when any TCP or HTTP/3 data-plane bind is non-loopback (LA-CAP054-008).
-fn metrics_binds_public_listener(servers: &[ServerConfig]) -> bool {
+fn metrics_binds_public_listener(servers: &[ServerConfig], http3: &Http3Config) -> bool {
     servers.iter().any(|s| {
         !listen_is_loopback(&s.listen)
-            || s.http3_listen
-                .as_deref()
+            || http3
+                .effective_listen_for(s)
                 .is_some_and(|h3| !listen_is_loopback(h3))
     })
 }
@@ -2037,6 +2059,7 @@ fn metrics_binds_public_listener(servers: &[ServerConfig]) -> bool {
 fn validate_metrics_config(
     metrics: &MetricsConfig,
     servers: &[ServerConfig],
+    http3: &Http3Config,
 ) -> Result<(), ConfigError> {
     // Always validate paths so defaults stay coherent even when disabled.
     let reserved = ["/health", "/live", "/ready"];
@@ -2073,7 +2096,7 @@ fn validate_metrics_config(
         }
     }
     // LA-CAP054-008: fail closed — public (non-loopback) metrics scrape requires a bearer.
-    if metrics.enabled && metrics_binds_public_listener(servers) {
+    if metrics.enabled && metrics_binds_public_listener(servers, http3) {
         match metrics.scrape_bearer_token.as_deref() {
             Some(t) if !t.is_empty() => {}
             _ => {
@@ -2583,6 +2606,13 @@ fn validate_htaccess_overlay(
 }
 
 fn validate_http3_config(http3: &Http3Config) -> Result<(), ConfigError> {
+    if let Some(listen) = http3.listen.as_deref() {
+        listen.parse::<std::net::SocketAddr>().map_err(|_| {
+            ConfigError::Parse(format!(
+                "http3.listen `{listen}` is not a socket address (QUIC is UDP, so it may reuse the TCP port)"
+            ))
+        })?;
+    }
     if let Some(provider) = http3.provider.as_deref() {
         match provider {
             "s2n" | "s2n-quic" | "quiche" => {}
@@ -3336,6 +3366,7 @@ fn validate_streams(
     streams: &[StreamConfig],
     servers: &[ServerConfig],
     upstreams: &HashMap<String, UpstreamConfig>,
+    http3: &Http3Config,
 ) -> Result<(), ConfigError> {
     if streams.len() > MAX_STREAMS {
         return Err(ConfigError::Parse(format!(
@@ -3352,7 +3383,7 @@ fn validate_streams(
     let mut udp_bound = HashSet::new();
     for server in servers {
         tcp_bound.insert(parse_listen(&server.listen)?);
-        if let Some(http3) = &server.http3_listen {
+        if let Some(http3) = http3.effective_listen_for(server) {
             if let Ok(addr) = parse_listen(http3) {
                 udp_bound.insert(addr);
             }
@@ -3413,12 +3444,92 @@ fn validate_streams(
     Ok(())
 }
 
-fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError> {
-    if servers.iter().skip(1).any(|s| s.http3_listen.is_some()) {
-        return Err(ConfigError::Parse(
-            "http3_listen is only honored on the first [[server]] block".into(),
-        ));
+/// HTTP/3 endpoints are UDP sockets shared by every server of one TCP listen.
+///
+/// QUIC is UDP, so an `http3_listen` may reuse the TCP port. Servers bound to
+/// the same TCP `listen` must agree on the effective HTTP/3 address (the
+/// per-server `http3_listen` or the global `[http3] listen`) because the
+/// runtime spawns exactly one QUIC endpoint per address and selects the
+/// certificate by SNI; two listen groups cannot share one UDP address.
+fn validate_http3_listeners(
+    http3: &Http3Config,
+    servers: &[ServerConfig],
+) -> Result<(), ConfigError> {
+    let mut groups: std::collections::BTreeMap<&str, Vec<&ServerConfig>> =
+        std::collections::BTreeMap::new();
+    for server in servers {
+        groups
+            .entry(server.listen.as_str())
+            .or_default()
+            .push(server);
     }
+
+    for (tcp, members) in &groups {
+        // A listener group has at most one explicit HTTP/3 address; peers that
+        // omit it share the group's UDP socket. This keeps the historical
+        // "declare it on the first block" shape working and lets any block of
+        // the group declare it.
+        let mut explicit: Option<&str> = None;
+        for server in members {
+            let Some(value) = server.http3_listen.as_deref() else {
+                continue;
+            };
+            match explicit {
+                None => explicit = Some(value),
+                Some(previous) if previous == value => {}
+                Some(previous) => {
+                    return Err(ConfigError::Parse(format!(
+                        "servers sharing listen {tcp} must declare the same http3_listen \
+                         (found {previous:?} and {value:?}); every host of a port shares one UDP socket"
+                    )));
+                }
+            }
+        }
+        // The global `[http3] listen` is the default endpoint for the TLS
+        // listeners of the config; plain-HTTP groups have no QUIC to serve.
+        let effective = explicit.or_else(|| {
+            http3
+                .listen
+                .as_deref()
+                .filter(|_| members.iter().all(|server| server.tls.is_some()))
+        });
+        let Some(addr) = effective else {
+            continue;
+        };
+        addr.parse::<std::net::SocketAddr>().map_err(|_| {
+            ConfigError::Parse(format!(
+                "http3_listen `{addr}` on listen {tcp} is not a socket address"
+            ))
+        })?;
+        for server in members {
+            let Some(tls) = server.tls.as_ref() else {
+                return Err(ConfigError::Parse(format!(
+                    "http3_listen {addr} requires tls on every server sharing listen {tcp}"
+                )));
+            };
+            if tls.strict_sni
+                || !tls.protocols.is_empty()
+                || !tls.ciphers.is_empty()
+                || !tls.curves.is_empty()
+                || tls.ocsp_stapling.is_some()
+                || tls.must_staple
+                || tls.client_auth
+                || tls.client_ca.is_some()
+                || tls.crl.is_some()
+                || tls.min_version.is_some()
+            {
+                return Err(ConfigError::Parse(format!(
+                    "http3_listen cannot be combined with tls.strict_sni/protocols/ciphers/curves/\
+                     ocsp_stapling/must_staple/client_auth/client_ca/crl/min_version \
+                     (HTTP/3 providers do not honor them yet; server on listen {tcp})"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError> {
     if servers
         .iter()
         .skip(1)
@@ -3515,29 +3626,6 @@ fn validate_shared_listeners(servers: &[ServerConfig]) -> Result<(), ConfigError
                 }
             }
         }
-    }
-    // HTTP/3 providers consume only cert/key: strict_sni, crypto policy and
-    // OCSP options would be silently ignored on the QUIC path — reject.
-    if servers[0].http3_listen.is_some()
-        && servers[0].tls.as_ref().is_some_and(|t| {
-            t.strict_sni
-                || !t.protocols.is_empty()
-                || !t.ciphers.is_empty()
-                || !t.curves.is_empty()
-                || t.ocsp_stapling.is_some()
-                || t.must_staple
-                || t.client_auth
-                || t.client_ca.is_some()
-                || t.crl.is_some()
-                || t.min_version.is_some()
-        })
-    {
-        return Err(ConfigError::Parse(
-            "http3_listen cannot be combined with tls.strict_sni/protocols/ciphers/curves/\
-             ocsp_stapling/must_staple/client_auth/client_ca/crl/min_version \
-             (HTTP/3 providers do not honor them yet)"
-                .into(),
-        ));
     }
     Ok(())
 }
@@ -5740,6 +5828,9 @@ config_version = 1
 listen = "127.0.0.1:8080"
 http3_listen = "0.0.0.0:8443"
 routes = ["r"]
+[server.tls]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
 [[route]]
 name = "r"
 match = { path = "/" }
@@ -6189,21 +6280,127 @@ routes = ["r"]
     }
 
     #[test]
-    fn ng15_rejects_http3_listen_on_non_primary_server() {
-        let toml = ng15_config(
+    fn http3_listen_is_honored_on_any_server_block() {
+        // QUIC is UDP and per-listener: two TCP listeners may each carry their
+        // own HTTP/3 socket, including on a non-primary [[server]] block.
+        let toml = ng15_config(&format!(
             r#"
 [[server]]
 listen = "0.0.0.0:8080"
 routes = ["r"]
+http3_listen = "0.0.0.0:8443"
+{NG15_TLS}
 [[server]]
 listen = "0.0.0.0:8081"
 server_name = ["b.test"]
 routes = ["r"]
+http3_listen = "0.0.0.0:9443"
+{NG15_TLS}
+"#
+        ));
+        let config = AppConfig::parse_str(&toml).expect("http3_listen on any server block");
+        assert_eq!(
+            config.http3.effective_listen_for(&config.servers[1]),
+            Some("0.0.0.0:9443")
+        );
+    }
+
+    #[test]
+    fn http3_global_listen_is_shared_by_every_host() {
+        // One global [http3] listen serves every TLS host, even across TCP
+        // listen groups: it is one QUIC endpoint with SNI certificate selection.
+        let toml = format!(
+            r#"
+config_version = 1
+[http3]
+listen = "0.0.0.0:443"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:8443"
+server_name = ["b.test"]
+routes = ["r"]
+{NG15_TLS}
+[[route]]
+name = "r"
+match = {{ path = "/" }}
+redirect = {{ status = 301, location = "https://example/" }}
+"#
+        );
+        let config = AppConfig::parse_str(&toml).expect("global http3 listen");
+        for server in &config.servers {
+            assert_eq!(
+                config.http3.effective_listen_for(server),
+                Some("0.0.0.0:443")
+            );
+        }
+    }
+
+    #[test]
+    fn http3_per_server_override_wins_over_global_listen() {
+        let toml = format!(
+            r#"
+config_version = 1
+[http3]
+listen = "0.0.0.0:443"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
 http3_listen = "0.0.0.0:8443"
+{NG15_TLS}
+[[route]]
+name = "r"
+match = {{ path = "/" }}
+redirect = {{ status = 301, location = "https://example/" }}
+"#
+        );
+        let config = AppConfig::parse_str(&toml).expect("per-server override");
+        assert_eq!(
+            config.http3.effective_listen_for(&config.servers[0]),
+            Some("0.0.0.0:8443")
+        );
+    }
+
+    #[test]
+    fn http3_listen_must_agree_within_one_tcp_listen() {
+        // Every host of one port shares one UDP socket, so conflicting values
+        // on the same TCP listen are a config error.
+        let toml = ng15_config(&format!(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["a.test"]
+routes = ["r"]
+http3_listen = "0.0.0.0:8443"
+{NG15_TLS}
+[[server]]
+listen = "0.0.0.0:443"
+server_name = ["b.test"]
+routes = ["r"]
+http3_listen = "0.0.0.0:9443"
+{NG15_TLS}
+"#
+        ));
+        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
+        assert!(err.contains("same http3_listen"), "{err}");
+    }
+
+    #[test]
+    fn http3_listen_requires_tls_and_rejects_unsupported_crypto() {
+        let no_tls = ng15_config(
+            r#"
+[[server]]
+listen = "0.0.0.0:443"
+routes = ["r"]
+http3_listen = "0.0.0.0:443"
 "#,
         );
-        let err = AppConfig::parse_str(&toml).unwrap_err().to_string();
-        assert!(err.contains("http3_listen"), "{err}");
+        let err = AppConfig::parse_str(&no_tls).unwrap_err().to_string();
+        assert!(err.contains("requires tls"), "{err}");
     }
 
     #[test]
