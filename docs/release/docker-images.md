@@ -92,3 +92,28 @@ on both registries, verified after the final tags were created. Functional
 checks on the rebuilt images: server `/health` 200 + root page, WordPress
 `/health` 200 + `/` 302 to the installer + PHP 8.5.13, and both binaries report
 `source_tag=v0.9.3` / `source_revision=b0d25ed…`.
+
+## Registry hygiene after a re-publish
+
+Moving a tag leaves the previous index and its child manifests in the registry.
+GHCR exposes them as untagged package versions and the API can delete them; do
+not delete a version that a current tag still references (compute the digest
+closure of every tagged index first, e.g. with `docker buildx imagetools
+inspect --raw` recursively).
+
+```bash
+gh api --paginate /users/ExyonQ/packages/container/exyonq/versions \
+  --jq '.[] | "\(.id) \(.name) tags=\(.metadata.container.tags|join(","))"'
+gh api -X DELETE /users/ExyonQ/packages/container/exyonq/versions/<id>
+```
+
+Docker Hub's API only deletes tags; an untagged manifest has no public delete
+endpoint, so old digests remain pullable by digest even though no tag reaches
+them. Physical removal needs Docker Hub support (or deleting the repository,
+which is not acceptable for a released version).
+
+2026-11-28 purge: the four staging tags were deleted after publishing, and the
+7 server + 5 WordPress GHCR versions of the vulnerable images were removed
+(verified `not found` by digest; the `0.9.3` tags still resolve and scan clean).
+On Docker Hub the old digests (`40873f66…`, `fe410132…`) still answer by digest
+because there is no manifest-delete API; they are unreachable from any tag.
