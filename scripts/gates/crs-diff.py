@@ -539,6 +539,13 @@ def main() -> int:
                 continue
             rule_id = case.get("crs_rule")
             if rule_id in unsupported:
+                # Still deliver the request to both engines: CRS keeps per-IP
+                # anomaly scores and counters, so skipping traffic would change
+                # the classification of later cases and turn a scope gap into
+                # false mismatches. The result is not compared.
+                send(EXY_PORT, case)
+                if not args.dry_run:
+                    send(REF_PORT, case)
                 excluded_unsupported += 1
                 print(
                     f"{key}: EXCLUDED_UNSUPPORTED rule={rule_id} "
